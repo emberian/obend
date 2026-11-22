@@ -121,6 +121,10 @@ private theorem mkCounterDischarges (priv : Ty) (extra : Nat)
     by_cases hj : j = 0
     · simp [singleTySubst, hj, θ_counter, hSh]
     · simp [singleTySubst, hj, θ_counter, Ty.shareable]
+  custody j := by
+    by_cases hj : j = 0
+    · simpa [singleTySubst, hj] using Ty.bearsCustody_of_shareableUnder hSh
+    · simp [singleTySubst, hj]
   pure j := by by_cases hj : j = 0 <;> simp [singleTySubst, hj, Ty.kinded, Ty.isComputation]
   holes _ _ h := by simp [θ_counter] at h
 

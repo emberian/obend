@@ -263,6 +263,15 @@ theorem armsShareable_chk {ctx : Context} {row result : Ty} :
     simp only [Obend.Core.Bidirectional.armsShareable, List.all_cons, hm, Bool.and_eq_true] at tail ⊢
     exact ⟨by simpa using hs, tail⟩
 
+theorem armsCustody_chk {ctx : Context} {row result : Ty} :
+    ∀ {sub : Ty} {arms : List (String × Term)}, ArmsChk ctx row result sub arms →
+      Obend.Core.Bidirectional.armsCustody row arms = false
+  | _, _, .nil => rfl
+  | _, _, .cons hm hs _ rest => by
+    have tail := armsCustody_chk rest
+    simp only [Obend.Core.Bidirectional.armsCustody, List.any_cons, hm, Bool.or_eq_false_iff] at tail ⊢
+    exact ⟨Ty.bearsCustody_of_shareable hs, tail⟩
+
 theorem checkArms_ok {ctx : Context} {row result : Ty} (hctx : Clean ctx) :
     ∀ {sub : Ty} {arms : List (String × Term)}, ArmsChk ctx row result sub arms →
       ∀ path idx, ∃ typed, checkArms {} noAnn ctx .unrestricted path idx row result arms = .ok typed ∧
@@ -274,7 +283,7 @@ theorem checkArms_ok {ctx : Context} {row result : Ty} (hctx : Clean ctx) :
     obtain ⟨t, ht, hr, hq⟩ := checkArms_ok hctx rest path (idx + 1)
     have hl := Obend.Core.MachineTyping.source_uses_length a.derivation
     simp only [checkArms, hm, bind, Except.bind]
-    rw [need_ok (by simpa [validContext] using hs)]
+    rw [need_ok (by simp [validContext, hs])]
     simp only [ha]
     rw [need_ok (safeUses_clean hc hl), need_ok (show Quantity.unrestricted.fits (a.uses.headD 0) = true from rfl)]
     simp only [ht, pure, Except.pure, need_ok (show (_ || branchesAgree ctx a.uses.tail t.uses) = true by
@@ -295,7 +304,7 @@ public theorem chk_case {ctx : Context} {s : Term} {arms : List (String × Term)
     have vl := Obend.Core.MachineTyping.source_uses_length v.derivation
     have quantity : Obend.Core.Bidirectional.caseQuantityAt {} noAnn path ctx v.uses row ((name, body) :: rest) = .unrestricted := by
       simp [Obend.Core.Bidirectional.caseQuantityAt, noAnn, caseQuantity, linearFree_noLinear hctx.noLinear, reusable_clean hctx vl,
-        armsShareable_chk ha]
+        armsShareable_chk ha, armsCustody_chk ha]
     simp only [elaborate, noAnn, hv, bind, Except.bind]
     rw [need_ok hd]
     have hw : representativeHead {} noAnn path v.type = .variant row := by rw [hvT]; exact hV

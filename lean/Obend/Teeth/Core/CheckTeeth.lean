@@ -84,12 +84,14 @@ macro_rules
     simp only [sameType_refl, bind, Except.bind, pure, Except.pure, Except.toOption, Functor.map, Except.map,
       ↓reduceIte, ↓reduceDIte, dite_true, Bool.not_false, Option.isSome_some, $second,*]
     simp (config := {decide := true}) only [linearFree, variableUses, zeroUses, addUses, safeUses, safeQuantity,
-      Quantity.fits, validContext, reusableAllowed, reusableCaptures, Ty.isComputation, Assumptions.valid, overlay,
+      Quantity.fits, validContext, mustBeLinear, Ty.bearsCustody, reusableAllowed, reusableCaptures, Ty.isComputation,
+      Assumptions.valid, overlay,
       sameType_refl, List.range_succ, List.range_zero, List.map_cons, List.map_nil,
       List.nil_append, List.cons_append, List.zipWith_cons_cons, List.zipWith_nil_left, List.zip_cons_cons,
       List.zip_nil_left, List.all_cons, List.all_nil, List.length_cons, List.length_nil, List.headD_cons,
       List.tail_cons, List.replicate_succ, List.replicate_zero, Bool.not_false, dite_true, ↓reduceIte,
-      ↓reduceDIte, Bool.and_true, Bool.true_and, Bool.or_true, Bool.true_or, beq_self_eq_true,
+      ↓reduceDIte, Bool.and_true, Bool.true_and, Bool.or_true, Bool.true_or, Bool.false_or, Bool.or_false,
+      beq_self_eq_true,
       Option.isSome_some, Option.get_some, Except.toOption, bind, Except.bind, pure, Except.pure, $first,*]))
 
 @[local simp] def reusableNaturalCapture : AnnotatedTerm :=
@@ -163,7 +165,9 @@ theorem future_row_instantiation_accepted (self super : Ty)
   have row : isRowV [] [] super = true := (isRowV_iff _ _).2 ⟨64, superRow⟩
   have selfUnder : self.shareableUnder [] = true := Ty.shareableUnder_of_shareable [] selfShareable
   have superUnder : super.shareableUnder [] = true := Ty.shareableUnder_of_shareable [] superShareable
-  future_reduce [futureRowInstantiation, futureRowSource, selfUnder, superUnder] [row]
+  have selfCust : self.bearsCustody = false := Ty.bearsCustody_of_shareable selfShareable
+  have superCust : super.bearsCustody = false := Ty.bearsCustody_of_shareable superShareable
+  future_reduce [futureRowInstantiation, futureRowSource, selfUnder, superUnder, selfCust, superCust] [row]
 
 /-- A total law provider proves a law ABOUT the partial runtime term; source
 law names alone cannot construct this evidence. Compatible retention is chosen
@@ -193,7 +197,9 @@ theorem future_row_typed : FutureRowTyped futureRowInstantiation := by
   have row : isRowV [] [] super = true := (isRowV_iff _ _).2 ⟨64, hr⟩
   have selfUnder : self.shareableUnder [] = true := Ty.shareableUnder_of_shareable [] hs
   have superUnder : super.shareableUnder [] = true := Ty.shareableUnder_of_shareable [] ht
-  future_reduce [futureRowInstanceChecked, futureRowInstantiation, futureRowSource, selfUnder, superUnder] [row]
+  have selfCust : self.bearsCustody = false := Ty.bearsCustody_of_shareable hs
+  have superCust : super.bearsCustody = false := Ty.bearsCustody_of_shareable ht
+  future_reduce [futureRowInstanceChecked, futureRowInstantiation, futureRowSource, selfUnder, superUnder, selfCust, superCust] [row]
 
 /-- Independently authored code changes a self-sensitive method type at every
 future Self instantiation, including negative arrow occurrences. -/

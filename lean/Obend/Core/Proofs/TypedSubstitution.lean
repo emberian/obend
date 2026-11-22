@@ -285,8 +285,8 @@ private theorem validContext_cons_unrestricted {asm : Assumptions} {Γ : Context
     (valid : validContext asm.shareableVariables Γ = true)
     (share : type.shareableUnder asm.shareableVariables = true) :
     validContext asm.shareableVariables (⟨type, .unrestricted⟩ :: Γ) = true := by
-  simp [validContext, validContext] at valid ⊢
-  exact ⟨share, valid⟩
+  simp [validContext] at valid ⊢
+  exact ⟨⟨share, Ty.bearsCustody_of_shareableUnder share⟩, valid⟩
 
 /-- Simultaneous substitution on typing evidence. The mutual recursor also handles
 fields and arms; conversions and their types are retained without consulting a checker. -/

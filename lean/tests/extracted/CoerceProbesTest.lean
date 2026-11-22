@@ -51,15 +51,17 @@ def projection (q : Quantity) (kept : List String) : Bool :=
       fun path => if path = [] then some ⟨custodyRow, target, q, .once⟩ else none, {}⟩
     [] (.arrow .once q custodyRow target)).toBool
 
--- one kept field consumes the receiver once: accepted with an affine binder
-#guard projection .affine ["handle"]
-#guard projection .affine ["tag"]
--- two kept fields mention it twice; it cannot be unrestricted: refused at every quantity
+-- custody-bearing records must be bound `linear` (`mustBeLinear`), and `.get` refuses `linear`
+-- projection (dropping siblings), so width projection of `custodyRow` is refused at every quantity
+#guard quantities.all fun q => !projection q ["handle"]
+#guard quantities.all fun q => !projection q ["tag"]
 #guard quantities.all fun q => !projection q ["handle", "tag"]
 
--- `coerce` agrees: the one-field width coercion is emitted and checks, the two-field one is the
--- named sharing obstruction
-#guard (coerce {} custodyRow (.field "handle" (.custody 0) .emptyRow)).toBool
+-- `coerce` agrees: identity on `custodyRow` checks (`linear`), one-field width projection is
+-- refused by the checker (`invalidContext` on the `affine` binder), and two-field is `needsSharing`
+#guard (coerce {} custodyRow custodyRow).toBool
+#guard (match coerce {} custodyRow (.field "handle" (.custody 0) .emptyRow) with
+  | .error (.checker (.invalidContext [])) => true | _ => false)
 #guard (match coerce {} custodyRow (.field "handle" (.custody 0) (.field "tag" .natural .emptyRow)) with
   | .error (.needsSharing _) => true | _ => false)
 

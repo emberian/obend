@@ -507,13 +507,13 @@ theorem settle_resume_runBounded {state resumed : State} {response : Term}
   exact ⟨resumed', again, agree_runBounded limits ticks _ _ agree⟩
 
 /-- The self origin is typed at the cell's own assigned type: the closure `bound 0`
-over the one-address environment `[address]`, its binding affine (read at most once). -/
+over the one-address environment `[address]`, its binding linear (read once, valid for custody too). -/
 public def selfOriginTyping (assumptions : Assumptions) {types : AddressTypes} {address : Nat} {type : Ty}
     (assigned : types[address]? = some type) : ClosureTyping assumptions types (selfOrigin address) type where
-  context := [⟨type, .affine⟩]
-  uses := variableUses [⟨type, .affine⟩] 0
-  environment := (EnvironmentTyping.empty types).cons (binding := ⟨type, .affine⟩) assigned
-  source := .bound (binding := ⟨type, .affine⟩) rfl
+  context := [⟨type, .linear⟩]
+  uses := variableUses [⟨type, .linear⟩] 0
+  environment := (EnvironmentTyping.empty types).cons (binding := ⟨type, .linear⟩) assigned
+  source := .bound (binding := ⟨type, .linear⟩) rfl
   safe := by simp [safeUses, variableUses, safeQuantity]
   contextValid := by simp [validContext]
 

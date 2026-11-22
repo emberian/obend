@@ -113,8 +113,12 @@ structure Component where
   and its captures reusable. -/
   shared : Bool
 
+def identityQuantity (source : Ty) : Quantity :=
+  if source.bearsCustody then .linear else .affine
+
 def identityEmitted (source target : Ty) : Emitted :=
-  ⟨.lam (.bound 0), .node (some ⟨source, target, .affine, .reusable⟩) [.node none []], .affine⟩
+  let q := identityQuantity source
+  ⟨.lam (.bound 0), .node (some ⟨source, target, q, .reusable⟩) [.node none []], q⟩
 
 mutual
 def emit (a : Assumptions) : Nat → Ty → Ty → Except CoercionRefusal Emitted
@@ -228,15 +232,20 @@ theorem emit_identity_checks {a : Assumptions} {source target : Ty} (valid : a.v
     ∃ checked, checkAgainst ⟨(identityEmitted source target).term,
       treeAnnotations (identityEmitted source target).tree, a⟩ []
       ((identityEmitted source target).type source target) = .ok checked := by
-  have safe : safeUses [⟨source, .affine⟩] [1] = true := rfl
-  have validCtx : validContext a.shareableVariables [⟨source, .affine⟩] = true := rfl
+  have safe : safeUses [⟨source, identityQuantity source⟩] [1] = true := by
+    unfold identityQuantity; split <;> rfl
+  have validCtx : validContext a.shareableVariables [⟨source, identityQuantity source⟩] = true := by
+    unfold identityQuantity; split <;> simp_all [validContext]
   have captures : reusableAllowed a .reusable [] [] = true := rfl
-  have fits : Quantity.affine.fits 1 = true := rfl
+  have fits : (identityQuantity source).fits 1 = true := by
+    unfold identityQuantity; split <;> rfl
+  have validNil : validContext a.shareableVariables [] = true := rfl
+  have safeNil : safeUses [] [] = true := rfl
   simp [checkAgainst, checkAt, elaborate, identityEmitted, Emitted.type, treeAnnotations,
-    AnnotationTree.lookup, AnnotationTree.child, emptyTree, finish, agrees, sameType_refl, need_ok, safe,
-    validCtx, captures, need_ok fits, valid, bind, Except.bind, pure, Except.pure, variableUses, checkedSynth,
-    safeUses, validContext, zeroUses, List.getElem?_cons_zero, List.range_succ, safeQuantity, reusableAllowed,
-    reusableCaptures, Except.map, Functor.map]
+    AnnotationTree.lookup, finish, agrees, sameType_refl,
+    variableUses, List.getElem?_cons_zero, List.range_succ, List.tail_cons, checkedSynth,
+    need_ok safe, need_ok validCtx, need_ok captures, need_ok fits, need_ok safeNil, need_ok validNil,
+    need_ok valid, bind, Except.bind, pure, Except.pure]
 
 /-! ### Width and representative record coercions check, by proof -/
 
@@ -322,7 +331,7 @@ names each field once): then the emitted record of
 projections is accepted at `source ⇒ target` without running the checker. -/
 theorem width_checks {a : Assumptions} {source : Ty} {fields : List (String × Ty)} (valid : a.valid = true)
     (kept : KeptAgree a source fields)
-    (sharing : fields.length ≤ 1 ∨ source.shareableUnder a.shareableVariables = true)
+    (sharing : (fields.length ≤ 1 ∧ source.bearsCustody = false) ∨ source.shareableUnder a.shareableVariables = true)
     (distinct : labelsDistinct (fields.map fun (name, _) => (name, Term.get (.bound 0) name)) = true) :
     ∃ checked, checkAgainst ⟨widthTerm fields, treeAnnotations (widthTree source (rowOf fields) fields), a⟩ []
       (.arrow .reusable (widthQuantity fields) source (rowOf fields)) = .ok checked := by
@@ -334,10 +343,18 @@ theorem width_checks {a : Assumptions} {source : Ty} {fields : List (String × T
   have safe : safeUses [⟨source, widthQuantity fields⟩] members.uses = true := by
     rw [membersUses]; unfold widthQuantity; split <;> simp_all [safeUses, safeQuantity]
   have validCtx : validContext a.shareableVariables [⟨source, widthQuantity fields⟩] = true := by
+    have noCustody : source.bearsCustody = false := by
+      rcases sharing with ⟨_, hc⟩ | hs
+      · exact hc
+      · exact Ty.bearsCustody_of_shareableUnder hs
     unfold widthQuantity; split
-    · simp [validContext]
+    · simp [validContext, noCustody]
     · rename_i long
-      simp [validContext, sharing.resolve_left long]
+      have hs : source.shareableUnder a.shareableVariables = true := by
+        rcases sharing with ⟨hle, _⟩ | hs
+        · exact False.elim (long hle)
+        · exact hs
+      simp [validContext, hs, noCustody]
   have captures : reusableAllowed a .reusable [] members.uses.tail = true := by
     rw [membersUses]; rfl
   have fits : (widthQuantity fields).fits (members.uses.headD 0) = true := by
@@ -346,7 +363,6 @@ theorem width_checks {a : Assumptions} {source : Ty} {fields : List (String × T
   have topValid : validContext a.shareableVariables [] = true := rfl
   simp [checkAgainst, checkAt, elaborate, widthTerm, root, recordRoot, introduce, membersOk, finish,
     checkedSynth, sameType_refl, need_ok safe, need_ok validCtx, need_ok captures, need_ok fits, need_ok valid, hint,
-    need_ok top, need_ok topValid, need_ok distinct, bind, Except.bind, pure, Except.pure, annotations, Except.map,
-    Functor.map]
+    need_ok top, need_ok topValid, need_ok distinct, bind, Except.bind, pure, Except.pure, annotations]
 
 end Obend.Elab.Coerce

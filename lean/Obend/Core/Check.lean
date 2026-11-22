@@ -391,27 +391,32 @@ def argumentAllowed (assumptions : Assumptions) (quantity : Quantity)
 it), so this is `argumentAllowed`'s quantity clauses. A scrutinee that uses a `linear` hypothesis
 binds a `linear` payload, which the arm uses exactly once; one whose captures are not all reusable
 binds at most `affine`; an `unrestricted` payload needs reusable captures (and, per arm, a
-shareable payload type: `validContext`). -/
+shareable payload type: `validContext`). A custody-bearing payload is bound `linear` whatever the
+scrutinee: `validContext` includes `mustBeLinear` (`ArmsTyping.custody_linear`). -/
 def caseAllowed (assumptions : Assumptions) (quantity : Quantity) (context : Context) (uses : Uses) : Bool :=
   (quantity == .linear || linearFree context uses) &&
     (quantity != .unrestricted || reusableCaptures assumptions.shareableVariables context uses)
 
-/-- The quantity a `case` binds its payload at when no annotation names one: `linear` for a
-scrutinee that uses a `linear` hypothesis, `unrestricted` for one whose captures are reusable when
-every payload is shareable, `affine` otherwise. The most permissive quantity `caseAllowed` admits. -/
-def caseQuantity (assumptions : Assumptions) (context : Context) (uses : Uses) (shareable : Bool) : Quantity :=
-  if !linearFree context uses then .linear
+/-- The quantity a `case` binds its payload at when no annotation names one: `linear` when an arm
+payload bears custody or the scrutinee uses a `linear` hypothesis, `unrestricted` for one whose
+captures are reusable when every payload is shareable, `affine` otherwise. -/
+def caseQuantity (assumptions : Assumptions) (context : Context) (uses : Uses)
+    (shareable : Bool) (custody : Bool := false) : Quantity :=
+  if custody || !linearFree context uses then .linear
   else if reusableCaptures assumptions.shareableVariables context uses && shareable then .unrestricted
   else .affine
 
-theorem caseQuantity_allowed (assumptions : Assumptions) (context : Context) (uses : Uses) (shareable : Bool) :
-    caseAllowed assumptions (caseQuantity assumptions context uses shareable) context uses = true := by
+theorem caseQuantity_allowed (assumptions : Assumptions) (context : Context) (uses : Uses)
+    (shareable : Bool) (custody : Bool := false) :
+    caseAllowed assumptions (caseQuantity assumptions context uses shareable custody) context uses = true := by
   unfold caseQuantity caseAllowed
-  by_cases hl : linearFree context uses = true
-  · by_cases hr : (reusableCaptures assumptions.shareableVariables context uses && shareable) = true
-    · simp [hl, hr]; simp at hr; exact hr.1
-    · simp [hl, hr]
-  · simp [hl]
+  by_cases hc : (custody || !linearFree context uses) = true
+  · simp [hc]
+  · simp only [Bool.not_eq_true, Bool.or_eq_false_iff, Bool.not_eq_false'] at hc
+    by_cases hr : (reusableCaptures assumptions.shareableVariables context uses && shareable) = true
+    · simp only [hc.1, hc.2, Bool.not_true, Bool.or_self, Bool.false_eq_true, ↓reduceIte, hr]
+      simpa using (Bool.and_eq_true_iff.mp hr).1
+    · simp [hc.1, hc.2, hr]
 
 def overlay : Ty → Ty → Ty
   | .field name member rest, inherited => .field name member (overlay rest inherited)
@@ -460,7 +465,7 @@ parameter takes a shareable member. What remains after the last name is `result`
         sameType assumptions found member = true) ∧
       member.isComputation = false ∧
       caseAllowed assumptions quantity context uses = true ∧
-      (quantity != .unrestricted || member.shareableUnder assumptions.shareableVariables) = true ∧
+      validContext assumptions.shareableVariables [⟨member, quantity⟩] = true ∧
       SplitSpine assumptions context uses row names codomain result
 
 /-- `SplitSpine` without the target's uses, its members listed: what the machine's destructor frame
@@ -472,7 +477,7 @@ needs of its function. -/
       (∃ fuel found, row.lookup assumptions.bounds fuel name = some found ∧
         sameType assumptions found member = true) ∧
       member.isComputation = false ∧
-      (quantity != .unrestricted || member.shareableUnder assumptions.shareableVariables) = true ∧
+      validContext assumptions.shareableVariables [⟨member, quantity⟩] = true ∧
       SplitShape assumptions row names members codomain result
   | _, _, _, _ => False
 
@@ -793,6 +798,46 @@ def responseType : Ty := .variant (.field "written" .emptyRow (.field "refused" 
 unrestricted binder either. -/
 theorem computation_not_shareable (plan response result : Ty) (variables : List Nat) :
     (Ty.computation plan response result).shareableUnder variables = false := rfl
+
+/-! ## Custody is bound `linear` (`mustBeLinear`, gate G1) -/
+
+/-- Every arm of a `case` binds a custody-bearing payload `linear`: `ArmsTyping.cons` requires
+`validContext` of the payload binding, which includes `mustBeLinear`. -/
+theorem ArmsTyping.custody_linear {assumptions : Assumptions} {context : Context} {q : Quantity} :
+    ∀ {arms : List (String × Term)} {row result : Ty} {uses : Uses},
+      ArmsTyping assumptions context q arms row result uses → row.bearsCustody = true → q = .linear
+  | _, _, _, _, .nil _ _ _, h => by simp at h
+  | _, _, _, _, @ArmsTyping.cons _ _ _ _ _ _ payload _ _ _ _ _ _ valid _ rest _, h => by
+    simp only [Ty.bearsCustody, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact validContext_custody_linear (binding := ⟨payload, q⟩) valid List.mem_cons_self h
+    · exact ArmsTyping.custody_linear rest h
+
+/-- `effectCase` binds a custody-bearing result payload `linear`: its arms are an `ArmsTyping`
+at the case's quantity (`PartialTyping.effectCase`, second premise). -/
+theorem effectCase_custody_linear {assumptions : Assumptions} {context : Context}
+    {arms : List (String × Term)} {planType response row result : Ty} {au : Uses} {q : Quantity}
+    (armsTyped : ArmsTyping assumptions context q arms row (.computation planType response result) au)
+    (custody : row.bearsCustody = true) : q = .linear :=
+  ArmsTyping.custody_linear armsTyped custody
+
+/-- A response is first-order data, so `perform` never hands a custody-bearing response to an
+`effectCase` arm (before `.perform` is widened beyond `Ty.isData`). -/
+theorem perform_response_custody_free {response : Ty} (data : response.isData = true) :
+    response.bearsCustody = false :=
+  Ty.bearsCustody_of_isData data
+
+/-- A `Checked` term's context binds custody `linear`. -/
+theorem Checked.custody_linear {source : AnnotatedTerm} {context : Context} (checked : Checked source context)
+    {binding : Binding} (member : binding ∈ context) (custody : binding.type.bearsCustody = true) :
+    binding.quantity = .linear :=
+  validContext_custody_linear checked.contextValid member custody
+
+/-- A lambda whose parameter is custody-bearing takes it `linear`. -/
+theorem lambda_custody_linear {assumptions : Assumptions} {context : Context} {annotation : LambdaAnnotation}
+    (valid : validContext assumptions.shareableVariables (⟨annotation.domain, annotation.parameter⟩ :: context) = true)
+    (custody : annotation.domain.bearsCustody = true) : annotation.parameter = .linear :=
+  validContext_custody_linear (binding := ⟨annotation.domain, annotation.parameter⟩) valid List.mem_cons_self custody
 
 end Obend.Core.Check
 

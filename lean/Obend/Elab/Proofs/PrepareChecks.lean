@@ -25,8 +25,12 @@ set_option autoImplicit false
 greatest-fixed-point shareability over `a.bounds`. Evaluates to `true` by `rfl` on empty bounds
 (`{}`) and holds on non-empty equi-recursive sum, function, prototype, and row bounds. -/
 @[expose] public def ShareableComplete (a : Assumptions) : Bool :=
-  a.bounds.all fun (index, _) =>
-    a.shareableVariables.contains index == Obend.Core.RecursiveRows.shareable a (.variable index)
+  (a.bounds.all fun (index, _) =>
+    a.shareableVariables.contains index == Obend.Core.RecursiveRows.shareable a (.variable index)) &&
+  (a.bounds.all fun (index, _) =>
+    match a.bounds.lookup index with
+    | some bound => !bound.bearsCustody
+    | none => true)
 
 public theorem shareableComplete_empty : ShareableComplete {} = true := rfl
 
@@ -128,20 +132,23 @@ public theorem valid_shareableUnder_semantic {a : Assumptions} (valid : a.valid 
 public theorem shareableComplete_of_all_shareable {a : Assumptions} (valid : a.valid = true)
     (allDeclared : ∀ p ∈ a.bounds, a.shareableVariables.contains p.1 = true) :
     ShareableComplete a = true := by
-  simp only [ShareableComplete, List.all_eq_true, beq_iff_eq]
-  intro ⟨index, bound⟩ hmem
-  have hc : a.shareableVariables.contains index = true := allDeclared (index, bound) hmem
-  have hsem : Obend.Core.RecursiveRows.shareable a (.variable index) = true :=
-    valid_shareableUnder_semantic valid (by simpa [Ty.shareableUnder] using hc)
-  rw [hc, hsem]
+  simp only [ShareableComplete, Bool.and_eq_true, List.all_eq_true, beq_iff_eq]
+  refine ⟨fun ⟨index, bound⟩ hmem => ?_, fun ⟨index, _⟩ hmem => ?_⟩
+  · have hc : a.shareableVariables.contains index = true := allDeclared (index, bound) hmem
+    have hsem : Obend.Core.RecursiveRows.shareable a (.variable index) = true :=
+      valid_shareableUnder_semantic valid (by simpa [Ty.shareableUnder] using hc)
+    rw [hc, hsem]
+  · have hc : a.shareableVariables.contains index = true := allDeclared _ hmem
+    obtain ⟨bound, hlook, hsh⟩ := valid_lookup_shareable valid hc
+    simp [hlook, Ty.bearsCustody_of_shareableUnder hsh]
 
 theorem semantic_variable {a : Assumptions} (sc : ShareableComplete a = true) (index : Nat) :
     Obend.Core.RecursiveRows.shareable a (.variable index) = a.shareableVariables.contains index := by
   cases h : a.bounds.lookup index with
   | some bound =>
     have hmem := mem_of_lookup h
-    simp only [ShareableComplete, List.all_eq_true, beq_iff_eq] at sc
-    exact (sc (index, bound) hmem).symm
+    simp only [ShareableComplete, Bool.and_eq_true, List.all_eq_true, beq_iff_eq] at sc
+    exact (sc.1 (index, bound) hmem).symm
   | none =>
     have hAlias : a.alias index = none := by
       cases ha : a.alias index with
@@ -181,6 +188,371 @@ public theorem shareable_congr {a : Assumptions} (sc : ShareableComplete a = tru
     t.shareableUnder a.shareableVariables = u.shareableUnder a.shareableVariables := by
   rw [shareable_semantic sc, shareable_semantic sc]
   exact equivalent_shareable ((sameType_iff _ _ _).mp agrees)
+
+/-! ### Custody-Freedom Invariance (`bearsCustody_congr`) Under `ShareableComplete` -/
+
+theorem bound_custodyFree {a : Assumptions} (sc : ShareableComplete a = true) {index : Nat} {bound : Ty}
+    (hlook : a.bounds.lookup index = some bound) : bound.bearsCustody = false := by
+  have hmem := mem_of_lookup hlook
+  simp only [ShareableComplete, Bool.and_eq_true, List.all_eq_true] at sc
+  have hb := sc.2 (index, bound) hmem
+  simpa [hlook] using hb
+
+theorem aliasChain_bearsCustody {a : Assumptions} (sc : ShareableComplete a = true)
+    {start finish : Ty} {path : List Nat} (chain : AliasChain a start path finish) :
+    start.bearsCustody = finish.bearsCustody := by
+  induction chain with
+  | nil => rfl
+  | @cons index body _ _ aliased _ _ ih =>
+    have hb := bound_custodyFree sc (Assumptions.alias_bound aliased)
+    rw [← ih, hb]; rfl
+
+def labelCustodyFree : Label → Bool
+  | .ordinary (.custody _) _ => false
+  | _ => true
+
+def labelStopsCustody : Label → Bool
+  | .ordinary (.arrow _ _) _ | .ordinary .computation _ => true
+  | _ => false
+
+def custodyFreeGraph (a : Assumptions) : Obend.Core.FinitePresentation.Graph Node Bool where
+  label := fun n => labelCustodyFree ((graph a).label n)
+  successors := fun n => if labelStopsCustody ((graph a).label n) then [] else (graph a).successors n
+
+theorem children_mem_right {α : Type} {R : α → α → Prop} :
+    ∀ {xs ys : List α}, Obend.Core.FiniteBisimulation.Children R xs ys →
+      ∀ y ∈ ys, ∃ x ∈ xs, R x y
+  | [], [], _, _, hy => by cases hy
+  | _ :: _, [], h, _, _ => False.elim h
+  | [], _ :: _, h, _, _ => False.elim h
+  | x :: xs, _ :: ys, ⟨hxy, hrest⟩, z, hz => by
+    rcases List.mem_cons.mp hz with rfl | hmem
+    · exact ⟨x, List.mem_cons_self, hxy⟩
+    · obtain ⟨w, hw, hr⟩ := children_mem_right hrest z hmem
+      exact ⟨w, List.mem_cons_of_mem _ hw, hr⟩
+
+theorem bisimilar_custodyFree {a : Assumptions} {n₁ n₂ : Node}
+    (hbisim : FP.Bisimilar (graph a) n₁ n₂)
+    (hsafe : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) n₁) :
+    Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) n₂ := by
+  refine ⟨fun m => ∃ n, FP.Bisimilar (graph a) n m ∧ Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) n,
+    ?_, ⟨n₁, hbisim, hsafe⟩⟩
+  rintro m ⟨n, hrel, hnSafe⟩
+  obtain ⟨hlab, hsucc⟩ := Obend.Core.FinitePresentation.bisimilar_closed (graph a) n m hrel
+  obtain ⟨hnLab, hnChildren⟩ := Obend.Core.FiniteSafety.safe_closed (custodyFreeGraph a) n hnSafe
+  refine ⟨by simpa [custodyFreeGraph, hlab] using hnLab, ?_⟩
+  intro child' hmem'
+  simp only [custodyFreeGraph, ← hlab] at hmem'
+  split at hmem'
+  · cases hmem'
+  · rename_i hnotStop
+    obtain ⟨child, hmem, hcRel⟩ := children_mem_right hsucc child' hmem'
+    have hcMem : child ∈ (custodyFreeGraph a).successors n := by
+      simp [custodyFreeGraph, hnotStop, hmem]
+    exact ⟨child, hcRel, hnChildren child hcMem⟩
+
+theorem scanStream_bearsCustody_false {a : Assumptions} (sc : ShareableComplete a = true)
+    (remaining : List Ty) (label : String) (first : Bool) {row m tl : Ty}
+    (hrow : row.bearsCustody = false)
+    (hemit : Obend.Core.RecursiveRows.scanStream a remaining label first row = .emit m tl) :
+    m.bearsCustody = false ∧ tl.bearsCustody = false := by
+  rw [Obend.Core.RecursiveRows.scanStream] at hemit
+  split at hemit
+  · cases hemit
+  · cases hemit
+  · rename_i obs hexp
+    split at hemit
+    · cases hemit
+    · rename_i fname fmem ftail htag hch
+      have hshape : obs = ⟨.field fname, [fmem, ftail]⟩ := by cases obs; simp_all
+      rw [hshape] at hexp
+      obtain ⟨src, path, chain, raw⟩ := Obend.Core.TypeGraph.expose_constructor_chain a row _ hexp
+      have hsrc : src = .field fname fmem ftail := by cases src <;> simp_all [constructorHead]
+      subst hsrc
+      have hbc := (aliasChain_bearsCustody sc chain).symm.trans hrow
+      simp only [Ty.bearsCustody, Bool.or_eq_false_iff] at hbc
+      split at hemit
+      · split at hemit
+        · cases hemit; exact hbc
+        · exact scanStream_bearsCustody_false sc (remaining.erase row) label first hbc.2 hemit
+      · cases hemit
+    · cases hemit
+termination_by remaining.length
+decreasing_by
+  have present : row ∈ remaining := by assumption
+  rw [List.length_erase_of_mem present]
+  have positive := List.length_pos_of_mem present
+  omega
+
+theorem scanResidual_bearsCustody_false {a : Assumptions} (sc : ShareableComplete a = true)
+    (remaining : List Ty) {row res : Ty} (hrow : row.bearsCustody = false)
+    (hres : Obend.Core.RecursiveRows.scanResidual a remaining row = .nonRow res) :
+    res.bearsCustody = false := by
+  rw [Obend.Core.RecursiveRows.scanResidual] at hres
+  split at hres
+  · cases hres
+  · cases hres
+  · rename_i obs hexp
+    split at hres
+    · cases hres
+    · rename_i fname fmem ftail htag hch
+      have hshape : obs = ⟨.field fname, [fmem, ftail]⟩ := by cases obs; simp_all
+      rw [hshape] at hexp
+      obtain ⟨src, path, chain, raw⟩ := Obend.Core.TypeGraph.expose_constructor_chain a row _ hexp
+      have hsrc : src = .field fname fmem ftail := by cases src <;> simp_all [constructorHead]
+      subst hsrc
+      have hbc := (aliasChain_bearsCustody sc chain).symm.trans hrow
+      simp only [Ty.bearsCustody, Bool.or_eq_false_iff] at hbc
+      split at hres
+      · exact scanResidual_bearsCustody_false sc (remaining.erase row) hbc.2 hres
+      · cases hres
+    · cases hres; exact hrow
+termination_by remaining.length
+decreasing_by
+  have present : row ∈ remaining := by assumption
+  rw [List.length_erase_of_mem present]
+  have positive := List.length_pos_of_mem present
+  omega
+
+theorem safe_of_bearsCustody_false {a : Assumptions} (sc : ShareableComplete a = true)
+    {t : Ty} (ht : t.bearsCustody = false) :
+    Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.type t) := by
+  let P : Node → Prop := fun
+    | .type u => u.bearsCustody = false
+    | .stream row _ _ => row.bearsCustody = false
+  have hRow {u : Ty} {obs : Constructor} (hu : u.bearsCustody = false)
+      (hexp : expose a u = .constructor obs) (hrowTag : rowTag obs.tag = true) :
+      (custodyFreeGraph a).label (.type u) = true ∧
+        ∀ child ∈ (custodyFreeGraph a).successors (.type u), P child := by
+    refine ⟨by simp [custodyFreeGraph, graph, observe, hexp, hrowTag, rowObservation, labelCustodyFree], ?_⟩
+    intro child hmem
+    simp only [custodyFreeGraph, graph, observe, hexp, hrowTag, ↓reduceIte, rowObservation,
+      labelStopsCustody, Bool.false_eq_true, rowChildren, List.mem_append, List.mem_map] at hmem
+    rcases hmem with ⟨lbl, _, rfl⟩ | htail
+    · exact hu
+    · cases hres : RR.residual a u with
+      | nonRow res =>
+        simp only [hres, tailChildren, List.mem_cons, List.not_mem_nil, or_false] at htail
+        subst child
+        exact scanResidual_bearsCustody_false sc _ hu hres
+      | _ => simp [hres, tailChildren] at htail
+  refine ⟨P, ?_, ht⟩
+  intro n hn
+  cases n with
+  | stream row label first =>
+    change row.bearsCustody = false at hn
+    cases hstep : RR.streamStep a row label first with
+    | «end» _ => simp [custodyFreeGraph, graph, observe, hstep, labelCustodyFree, labelStopsCustody]
+    | emit m tl =>
+      obtain ⟨hm, htl⟩ := scanStream_bearsCustody_false sc _ label first hn hstep
+      refine ⟨by simp [custodyFreeGraph, graph, observe, hstep, labelCustodyFree], ?_⟩
+      intro child hmem
+      simp only [custodyFreeGraph, graph, observe, hstep, labelStopsCustody,
+        Bool.false_eq_true, ↓reduceIte, List.mem_cons, List.not_mem_nil, or_false] at hmem
+      rcases hmem with rfl | rfl <;> assumption
+  | type u =>
+    change u.bearsCustody = false at hn
+    cases hexp : expose a u with
+    | nominal idx => simp [custodyFreeGraph, graph, observe, hexp, labelCustodyFree, labelStopsCustody]
+    | unproductive idx => simp [custodyFreeGraph, graph, observe, hexp, labelCustodyFree, labelStopsCustody]
+    | constructor obs =>
+      obtain ⟨src, path, chain, hhead⟩ := Obend.Core.TypeGraph.expose_constructor_chain a u _ hexp
+      have hsrc : src.bearsCustody = false := (aliasChain_bearsCustody sc chain).symm.trans hn
+      cases src with
+      | «variable» _ => simp [constructorHead] at hhead
+      | custody _ => simp [Ty.bearsCustody] at hsrc
+      | natural | label | boolean =>
+        cases hhead; simp [custodyFreeGraph, graph, observe, hexp, rowTag, labelCustodyFree, labelStopsCustody]
+      | arrow _ _ _ _ =>
+        cases hhead; simp [custodyFreeGraph, graph, observe, hexp, rowTag, labelCustodyFree, labelStopsCustody]
+      | computation _ _ _ =>
+        cases hhead; simp [custodyFreeGraph, graph, observe, hexp, rowTag, labelCustodyFree, labelStopsCustody]
+      | specification m e =>
+        cases hhead
+        simp only [Ty.bearsCustody, Bool.or_eq_false_iff] at hsrc
+        refine ⟨by simp [custodyFreeGraph, graph, observe, hexp, rowTag, labelCustodyFree], ?_⟩
+        intro child hmem
+        simp only [custodyFreeGraph, graph, observe, hexp, rowTag, Bool.false_eq_true, ↓reduceIte,
+          labelStopsCustody, List.map, List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with rfl | rfl
+        · exact hsrc.1
+        · exact hsrc.2
+      | prototype s g =>
+        cases hhead
+        simp only [Ty.bearsCustody, Bool.or_eq_false_iff] at hsrc
+        refine ⟨by simp [custodyFreeGraph, graph, observe, hexp, rowTag, labelCustodyFree], ?_⟩
+        intro child hmem
+        simp only [custodyFreeGraph, graph, observe, hexp, rowTag, Bool.false_eq_true, ↓reduceIte,
+          labelStopsCustody, List.map, List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with rfl | rfl
+        · exact hsrc.1
+        · exact hsrc.2
+      | variant row =>
+        cases hhead
+        simp only [Ty.bearsCustody] at hsrc
+        refine ⟨by simp [custodyFreeGraph, graph, observe, hexp, rowTag, labelCustodyFree], ?_⟩
+        intro child hmem
+        simp only [custodyFreeGraph, graph, observe, hexp, rowTag, Bool.false_eq_true, ↓reduceIte,
+          labelStopsCustody, List.map, List.mem_cons, List.not_mem_nil, or_false] at hmem
+        subst child; exact hsrc
+      | emptyRow =>
+        cases hhead; exact hRow hn hexp rfl
+      | field _ _ _ =>
+        cases hhead; exact hRow hn hexp rfl
+
+theorem safe_stream_false_to_true {a : Assumptions} (sc : ShareableComplete a = true)
+    {row : Ty} {name : String}
+    (h : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.stream row name false)) :
+    Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.stream row name true) := by
+  cases hemit : RR.streamStep a row name true with
+  | «end» _ =>
+    exact Obend.Core.FiniteSafety.safe_of_children
+      (by simp [custodyFreeGraph, graph, observe, hemit, labelCustodyFree])
+      (by simp [custodyFreeGraph, graph, observe, hemit, labelStopsCustody])
+  | emit m tl =>
+    cases hsh : RR.shareable a m with
+    | false =>
+      exact bisimilar_custodyFree (hide_emit_resourceful a row m tl name hsh hemit) h
+    | true =>
+      have hmSh : m.shareableUnder a.shareableVariables = true := by
+        rw [shareable_semantic sc]; exact hsh
+      have hmSafe : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.type m) :=
+        safe_of_bearsCustody_false sc (Ty.bearsCustody_of_shareableUnder hmSh)
+      have htlSafe : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.stream tl name false) :=
+        bisimilar_custodyFree (RowHit.hide_emit_shareable a name row m tl hemit hsh) h
+      refine Obend.Core.FiniteSafety.safe_of_children
+        (by simp [custodyFreeGraph, graph, observe, hemit, labelCustodyFree]) ?_
+      intro child hmem
+      simp only [custodyFreeGraph, graph, observe, hemit, labelStopsCustody,
+        Bool.false_eq_true, ↓reduceIte, List.mem_cons, List.not_mem_nil, or_false] at hmem
+      rcases hmem with rfl | rfl
+      · exact hmSafe
+      · exact htlSafe
+
+theorem safe_field_components {a : Assumptions} (sc : ShareableComplete a = true)
+    {name : String} {member tail : Ty}
+    (h : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.type (.field name member tail))) :
+    Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.type member) ∧
+      Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.type tail) := by
+  let r := Ty.field name member tail
+  have hObsR : observe a (.type r) = rowObservation a r := by
+    simp [r, observe, raw_field_observation, rowTag]
+  have hClosedR := (Obend.Core.FiniteSafety.safe_closed (custodyFreeGraph a) (.type r) h).2
+  have hSuccR : ∀ c ∈ (RR.labels a r).map (fun l => Node.stream r l true) ++ tailChildren (RR.residual a r),
+      Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) c := by
+    intro c hc
+    apply hClosedR
+    simpa [custodyFreeGraph, graph, hObsR, rowObservation, labelStopsCustody, rowChildren] using hc
+  have hNameIn : name ∈ RR.labels a r := by
+    dsimp only [r]; rw [Obend.Core.RecursiveRows.labels_field]
+    exact (Obend.Core.RecursiveRows.mem_insertLabel name name _).mpr (.inl rfl)
+  have hStreamR : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.stream r name true) :=
+    hSuccR _ (List.mem_append_left _ (List.mem_map.mpr ⟨name, hNameIn, rfl⟩))
+  have hEmitR : observe a (.stream r name true) = (.streamEmit, [.type member, .stream tail name false]) :=
+    RowHit.stream_emit_observe_eq a name true r member tail (by simp [r, RowHit.step, raw_field_observation])
+  have hEmitChildren := (Obend.Core.FiniteSafety.safe_closed (custodyFreeGraph a) (.stream r name true) hStreamR).2
+  have hmSafe : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.type member) :=
+    hEmitChildren _ (by simp [custodyFreeGraph, graph, hEmitR, labelStopsCustody])
+  have htlFalse : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.stream tail name false) :=
+    hEmitChildren _ (by simp [custodyFreeGraph, graph, hEmitR, labelStopsCustody])
+  have htlName : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.stream tail name true) :=
+    safe_stream_false_to_true sc htlFalse
+  refine ⟨hmSafe, ?_⟩
+  cases hexp : expose a tail with
+  | nominal _ =>
+    exact Obend.Core.FiniteSafety.safe_of_children
+      (by simp [custodyFreeGraph, graph, observe, hexp, labelCustodyFree])
+      (by simp [custodyFreeGraph, graph, observe, hexp, labelStopsCustody])
+  | unproductive _ =>
+    exact Obend.Core.FiniteSafety.safe_of_children
+      (by simp [custodyFreeGraph, graph, observe, hexp, labelCustodyFree])
+      (by simp [custodyFreeGraph, graph, observe, hexp, labelStopsCustody])
+  | constructor obs =>
+    by_cases hrow : rowTag obs.tag = true
+    · refine Obend.Core.FiniteSafety.safe_of_children
+        (by simp [custodyFreeGraph, graph, observe, hexp, hrow, rowObservation, labelCustodyFree]) ?_
+      intro child hmem
+      simp only [custodyFreeGraph, graph, observe, hexp, hrow, ↓reduceIte, rowObservation,
+        labelStopsCustody, Bool.false_eq_true, rowChildren, List.mem_append, List.mem_map] at hmem
+      rcases hmem with ⟨lbl, hlbl, rfl⟩ | htail
+      · by_cases hsame : lbl = name
+        · subst hsame; exact htlName
+        · have hLblInR : lbl ∈ RR.labels a r := by
+            dsimp only [r]; rw [Obend.Core.RecursiveRows.labels_field]
+            exact (Obend.Core.RecursiveRows.mem_insertLabel name lbl _).mpr (.inr hlbl)
+          have hStreamRL : Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.stream r lbl true) :=
+            hSuccR _ (List.mem_append_left _ (List.mem_map.mpr ⟨lbl, hLblInR, rfl⟩))
+          have hSkip : observe a (.stream r lbl true) = observe a (.stream tail lbl true) :=
+            RowHit.stream_skip_observe_eq a lbl true r tail
+              (by simp [r, RowHit.step, raw_field_observation, Ne.symm hsame])
+          obtain ⟨hLabL, hChL⟩ := Obend.Core.FiniteSafety.safe_closed (custodyFreeGraph a) _ hStreamRL
+          have hLEq : (custodyFreeGraph a).label (.stream tail lbl true) =
+              (custodyFreeGraph a).label (.stream r lbl true) := by
+            change labelCustodyFree (observe a (.stream tail lbl true)).1 =
+              labelCustodyFree (observe a (.stream r lbl true)).1
+            rw [hSkip]
+          have hCEq : ∀ c, c ∈ (custodyFreeGraph a).successors (.stream tail lbl true) →
+              c ∈ (custodyFreeGraph a).successors (.stream r lbl true) := by
+            intro c hc
+            change c ∈ (if labelStopsCustody (observe a (.stream tail lbl true)).1 = true then []
+              else (observe a (.stream tail lbl true)).2) at hc
+            change c ∈ (if labelStopsCustody (observe a (.stream r lbl true)).1 = true then []
+              else (observe a (.stream r lbl true)).2)
+            rwa [hSkip]
+          exact Obend.Core.FiniteSafety.safe_of_children
+            (hLEq.trans hLabL)
+            (fun c hc => hChL c (hCEq c hc))
+      · rw [← Obend.Core.RecursiveRows.residual_field a name member tail] at htail
+        exact hSuccR child (List.mem_append_right _ htail)
+    · have hresTail : RR.residual a tail = .nonRow tail :=
+        (nonrow_scans a tail obs hexp hrow).2
+      have hresR : RR.residual a r = .nonRow tail := by
+        dsimp only [r]; rw [Obend.Core.RecursiveRows.residual_field, hresTail]
+      exact hSuccR (.type tail) (List.mem_append_right _ (by simp [hresR, tailChildren]))
+
+theorem bearsCustody_false_of_safe {a : Assumptions} (sc : ShareableComplete a = true) :
+    ∀ {t : Ty}, Obend.Core.FiniteSafety.Safe (custodyFreeGraph a) (.type t) → t.bearsCustody = false
+  | .natural, _ | .label, _ | .boolean, _ | .variable _, _ | .arrow .., _ | .emptyRow, _
+  | .computation .., _ => rfl
+  | .custody id, h => by
+    have hlab := (Obend.Core.FiniteSafety.safe_closed (custodyFreeGraph a) _ h).1
+    simp [custodyFreeGraph, graph, observe, expose, exposeWalk, constructorHead, rowTag, labelCustodyFree] at hlab
+  | .specification m e, h => by
+    have hch := (Obend.Core.FiniteSafety.safe_closed (custodyFreeGraph a) _ h).2
+    have hm := bearsCustody_false_of_safe sc (hch (.type m)
+      (by simp [custodyFreeGraph, graph, observe_specification, labelStopsCustody]))
+    have he := bearsCustody_false_of_safe sc (hch (.type e)
+      (by simp [custodyFreeGraph, graph, observe_specification, labelStopsCustody]))
+    simp [Ty.bearsCustody, hm, he]
+  | .prototype s g, h => by
+    have hch := (Obend.Core.FiniteSafety.safe_closed (custodyFreeGraph a) _ h).2
+    have hs := bearsCustody_false_of_safe sc (hch (.type s)
+      (by simp [custodyFreeGraph, graph, observe_prototype, labelStopsCustody]))
+    have hg := bearsCustody_false_of_safe sc (hch (.type g)
+      (by simp [custodyFreeGraph, graph, observe_prototype, labelStopsCustody]))
+    simp [Ty.bearsCustody, hs, hg]
+  | .variant row, h => by
+    have hch := (Obend.Core.FiniteSafety.safe_closed (custodyFreeGraph a) _ h).2
+    have hr := bearsCustody_false_of_safe sc (hch (.type row)
+      (by simp [custodyFreeGraph, graph, observe_variant, labelStopsCustody]))
+    simp [Ty.bearsCustody, hr]
+  | .field _ _ _, h => by
+    obtain ⟨hm, htl⟩ := safe_field_components sc h
+    simp [Ty.bearsCustody, bearsCustody_false_of_safe sc hm, bearsCustody_false_of_safe sc htl]
+
+/-- Under `ShareableComplete`, `bearsCustody` is invariant under equi-recursive agreement `sameType`. -/
+public theorem bearsCustody_congr {a : Assumptions} (sc : ShareableComplete a = true) {t u : Ty}
+    (agrees : sameType a t u = true) :
+    t.bearsCustody = u.bearsCustody := by
+  have hEqv := (sameType_iff _ _ _).mp agrees
+  cases ht : t.bearsCustody <;> cases hu : u.bearsCustody
+  · rfl
+  · have hSafeU := bisimilar_custodyFree hEqv (safe_of_bearsCustody_false sc ht)
+    rw [bearsCustody_false_of_safe sc hSafeU] at hu; cases hu
+  · have hSafeT := bisimilar_custodyFree ((FP.bisimilar_equivalence (graph a)).symm hEqv)
+      (safe_of_bearsCustody_false sc hu)
+    rw [bearsCustody_false_of_safe sc hSafeT] at ht; cases ht
+  · rfl
 
 /-! ### Unconditional Weak-Head (`whnf`) Inversion Over Arbitrary `Assumptions` -/
 
@@ -747,7 +1119,8 @@ public theorem exposeCallable_transport {a : Assumptions} {target t : Ty}
 /-! ## 3. Context Refinement (`Refines`) Under `ShareableComplete` -/
 
 public def QuantityRefines (a : Assumptions) (b' b : Binding) : Prop :=
-  b'.quantity = b.quantity ∨ (b'.quantity = .affine ∧ b.quantity ≠ .unrestricted) ∨
+  b'.quantity = b.quantity ∨
+    (b'.quantity = .affine ∧ b'.type.bearsCustody = false ∧ b.quantity ≠ .unrestricted) ∨
     (b'.quantity = .unrestricted ∧ b'.type.shareableUnder a.shareableVariables = true)
 
 public def BindingRefines (a : Assumptions) (b' b : Binding) : Prop :=
@@ -787,7 +1160,7 @@ public theorem refines_getElem {a : Assumptions} {Γ' Γ : Context} (h : Refines
 theorem safeQuantity_refines {a : Assumptions} {b' b : Binding} (h : QuantityRefines a b' b)
     {count : Nat} (safe : safeQuantity b.quantity count = true) :
     safeQuantity b'.quantity count = true := by
-  rcases h with same | ⟨affine, notU⟩ | ⟨unrestricted, _⟩
+  rcases h with same | ⟨affine, _, notU⟩ | ⟨unrestricted, _⟩
   · rw [same]; exact safe
   · rw [affine]; cases hq : b.quantity <;> simp_all [safeQuantity] <;> omega
   · rw [unrestricted]; rfl
@@ -816,10 +1189,12 @@ public theorem validContext_refines {a : Assumptions} (sc : ShareableComplete a 
     simp only [validContext, List.all_cons, Bool.and_eq_true] at valid ⊢
     refine ⟨?_, ih valid.2⟩
     have hb := valid.1
-    rcases head with ⟨agrees, same | ⟨affine, _⟩ | ⟨unrestricted, share⟩⟩
-    · rw [same, shareable_congr sc agrees]; exact hb
-    · simp [affine]
-    · simp [share]
+    rcases head with ⟨agrees, same | ⟨affine, noCust, _⟩ | ⟨unrestricted, share⟩⟩
+    · simp only [mustBeLinear] at hb ⊢
+      rw [same, shareable_congr sc agrees, bearsCustody_congr sc agrees]
+      exact hb
+    · simp [affine, mustBeLinear, noCust]
+    · simp [unrestricted, share, mustBeLinear, Ty.bearsCustody_of_shareableUnder share]
 
 public theorem reusableCaptures_refines {a : Assumptions} (sc : ShareableComplete a = true)
     {Γ' Γ : Context} (h : Refines a Γ' Γ) {uses : Uses}
@@ -837,7 +1212,7 @@ public theorem reusableCaptures_refines {a : Assumptions} (sc : ShareableComplet
       simp only [reusableCaptures, Bool.and_eq_true, beq_iff_eq] at tail
       refine ⟨tail.1, ?_, tail.2⟩
       have hb := captures.2.1
-      rcases head with ⟨agrees, same | ⟨affine, notU⟩ | ⟨unrestricted, share⟩⟩
+      rcases head with ⟨agrees, same | ⟨affine, _, notU⟩ | ⟨unrestricted, share⟩⟩
       · rw [same, shareable_congr sc agrees]; exact hb
       · simp only [Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true] at hb ⊢
         rcases hb with zero | ⟨isU, _⟩
@@ -867,7 +1242,7 @@ public theorem linearFree_refines {a : Assumptions} {Γ' Γ : Context} (h : Refi
       rcases free.1 with zero | notLinear
       · exact .inl zero
       · refine .inr ?_
-        rcases q with same | ⟨affine, _⟩ | ⟨unrestricted, _⟩
+        rcases q with same | ⟨affine, _, _⟩ | ⟨unrestricted, _⟩
         · rw [same]; exact notLinear
         · rw [affine]; decide
         · rw [unrestricted]; decide
@@ -888,7 +1263,7 @@ public theorem branchesAgree_refines {a : Assumptions} {Γ' Γ : Context} (h : R
         refine ⟨?_, ih agreeing.2⟩
         have q := head.2
         have here := agreeing.1
-        rcases q with same | ⟨affine, _⟩ | ⟨unrestricted, _⟩
+        rcases q with same | ⟨affine, _, _⟩ | ⟨unrestricted, _⟩
         · rw [same]; exact here
         · rw [affine]; rfl
         · rw [unrestricted]; rfl
@@ -1460,6 +1835,20 @@ theorem motive_application (sc : ShareableComplete a = true) {Γ : Context} {fun
       have notFree : ¬ (linearFree Γ au = true) := fun free => used (linearFree_refines r free)
       simp only [argumentAllowed, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq] at allowed
       exact allowed.1.2.resolve_right notFree
+    have linear_of_not_affine : ∀ argumentType, sameType a argumentType domain = true →
+        ¬ ((!argumentType.bearsCustody && linearFree Γ' (occurrences Γ'.length argument)) = true) →
+        q0 = .linear := by
+      intro argumentType agrees notAff
+      cases hcust : argumentType.bearsCustody with
+      | true =>
+        have hd0Cust : d0.bearsCustody = true := by
+          rw [← bearsCustody_congr sc (sameType_trans agrees (sameType_symm hd1))]
+          exact hcust
+        exact validContext_custody_linear valid List.mem_cons_self hd0Cust
+      | false =>
+        have used : ¬ (linearFree Γ' (occurrences Γ'.length argument) = true) :=
+          fun hf => notAff (by simp [hcust, hf])
+        exact linear_of_used used
     have binderOf : ∀ argumentType, sameType a argumentType domain = true →
         BindingRefines a ⟨argumentType, letQuantity a Γ' argumentType argument⟩ ⟨d0, q0⟩ := by
       intro argumentType agrees
@@ -1470,28 +1859,32 @@ theorem motive_application (sc : ShareableComplete a = true) {Γ : Context} {fun
         exact .inr (.inr ⟨rfl, (Bool.and_eq_true_iff.mp condition).1⟩)
       · rename_i condition
         split
-        · refine .inr (.inl ⟨rfl, fun unrestricted => condition ?_⟩)
+        · rename_i affCond
+          have hNoCust : argumentType.bearsCustody = false := by
+            simpa using (Bool.and_eq_true_iff.mp affCond).1
+          refine .inr (.inl ⟨rfl, hNoCust, fun unrestricted => condition ?_⟩)
           simp only at unrestricted
           subst unrestricted
           simp only [argumentAllowed, Bool.and_eq_true, bne_self_eq_false, Bool.false_or] at allowed
           rw [Bool.and_eq_true_iff, shareable_congr sc agrees, lengths, ← argumentUses]
           exact ⟨allowed.2.1, reusableCaptures_refines sc r allowed.2.2⟩
-        · rename_i used
-          exact .inl (linear_of_used used).symm
-    have qOf : ∀ argumentType, letQuantity a Γ' argumentType argument = .linear → q0 = .linear := by
-      intro argumentType isLinear
+        · rename_i notAff
+          exact .inl (linear_of_not_affine argumentType agrees notAff).symm
+    have qOf : ∀ argumentType, sameType a argumentType domain = true →
+        letQuantity a Γ' argumentType argument = .linear → q0 = .linear := by
+      intro argumentType agrees isLinear
       unfold letQuantity at isLinear
       split at isLinear
       · cases isLinear
       · split at isLinear
         · cases isLinear
-        · rename_i used; exact linear_of_used used
+        · rename_i notAff; exact linear_of_not_affine argumentType agrees notAff
     have fitsOf : ∀ argumentType, sameType a argumentType domain = true →
         (letQuantity a Γ' argumentType argument).fits (bodyUses.headD 0) = true := by
       intro argumentType agrees
       have refines := (binderOf argumentType agrees).2
       cases hq : letQuantity a Γ' argumentType argument with
-      | linear => rw [qOf argumentType hq] at fits0; exact fits0
+      | linear => rw [qOf argumentType agrees hq] at fits0; exact fits0
       | unrestricted => rfl
       | erased =>
         unfold letQuantity at hq
@@ -1501,7 +1894,7 @@ theorem motive_application (sc : ShareableComplete a = true) {Γ : Context} {fun
       | affine =>
         rw [hq] at refines
         have head := safeUses_head safe
-        rcases refines with same' | ⟨_, notU⟩ | ⟨h, _⟩
+        rcases refines with same' | ⟨_, _, notU⟩ | ⟨h, _⟩
         · rw [← same'] at head; simpa [Quantity.fits, safeQuantity] using head
         · cases q0 <;> simp_all [Quantity.fits, safeQuantity]
         · cases h
@@ -1520,8 +1913,10 @@ theorem motive_application (sc : ShareableComplete a = true) {Γ : Context} {fun
           Bool.or_true]
         exact condition
       · split
-        · rename_i free
-          rw [lengths, ← argumentUses] at free
+        · rename_i affCond
+          have free : linearFree Γ' au = true := by
+            have hf := (Bool.and_eq_true_iff.mp affCond).2
+            rwa [lengths, ← argumentUses] at hf
           simp [argumentAllowed, notActivity, free]
         · simp [argumentAllowed, notActivity]
     have once : ∀ Γ'' uses, reusableAllowed a .once Γ'' uses = true := by intros; rfl
@@ -2353,13 +2748,17 @@ theorem membersAgree_of_rowAgrees {Γ : Context} :
       (membersAgree_of_rowAgrees restTyped distinct.2 ht)
 
 public def ArmRefines (a : Assumptions) (q' q : Quantity) (row' : Ty) (arms : List (String × Term)) : Prop :=
-  q' = q ∨ (q' = .affine ∧ q ≠ .unrestricted) ∨ (q' = .unrestricted ∧ armsShareable a row' arms = true)
+  q' = q ∨
+    (q' = .affine ∧ armsCustody row' arms = false ∧ q ≠ .unrestricted) ∨
+    (q' = .unrestricted ∧ armsShareable a row' arms = true)
 
 theorem armRefines_tail {q' q : Quantity} {row' : Ty} {arm : String × Term} {rest : List (String × Term)}
     (h : ArmRefines a q' q row' (arm :: rest)) : ArmRefines a q' q row' rest := by
-  rcases h with same | affine | ⟨unr, sh⟩
+  rcases h with same | ⟨affine, noCust, notU⟩ | ⟨unr, sh⟩
   · exact .inl same
-  · exact .inr (.inl affine)
+  · refine .inr (.inl ⟨affine, ?_, notU⟩)
+    simp only [armsCustody, List.any_cons, Bool.or_eq_false_iff] at noCust
+    exact noCust.2
   · refine .inr (.inr ⟨unr, ?_⟩)
     simp only [armsShareable, List.all_cons, Bool.and_eq_true] at sh
     simpa [armsShareable] using sh.2
@@ -2424,7 +2823,7 @@ theorem armsMotive_cons (sc : ShareableComplete a = true) {Γ : Context} {name :
       rw [ub]; exact safeUses_refines binder safe
     have fits' : q'.fits (vb.uses.headD 0) = true := by
       rw [ub]
-      rcases headQ with same' | ⟨affine, notU⟩ | ⟨unr, _⟩
+      rcases headQ with same' | ⟨affine, _, notU⟩ | ⟨unr, _⟩
       · simp only at same'; rw [same']; exact fits
       · simp only at affine notU; rw [affine]
         cases q <;> simp_all [Quantity.fits] <;> omega
@@ -2441,9 +2840,11 @@ theorem armsMotive_cons (sc : ShareableComplete a = true) {Γ : Context} {name :
       ArmRefines a q' q row' ((name, body) :: rest) →
       QuantityRefines a ⟨payload', q'⟩ ⟨payload, q⟩ := by
     intro row' payload' q' found qr
-    rcases qr with same' | ⟨affine, notU⟩ | ⟨unr, sh⟩
+    rcases qr with same' | ⟨affine, noCust, notU⟩ | ⟨unr, sh⟩
     · exact .inl same'
-    · exact .inr (.inl ⟨affine, notU⟩)
+    · refine .inr (.inl ⟨affine, ?_, notU⟩)
+      simp only [armsCustody, List.any_cons, Bool.or_eq_false_iff, found] at noCust
+      exact noCust.1
     · refine .inr (.inr ⟨unr, ?_⟩)
       simp only [armsShareable, List.all_cons, Bool.and_eq_true, found] at sh
       exact sh.1
@@ -2479,32 +2880,52 @@ theorem armsShareable_of_unrestricted (sc : ShareableComplete a = true) {Γ : Co
     obtain ⟨⟨payload', found, same⟩, agreesRest⟩ := agrees
     simp only [labelsDistinct, Bool.and_eq_true] at distinct
     have tail := armsShareable_of_unrestricted sc restTyped agreesRest distinct.2
-    simp only [validContext, List.all_cons, List.all_nil, Bool.and_true] at share
+    simp only [validContext, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true] at share
     simp only [armsShareable, List.all_cons, found, Bool.and_eq_true] at tail ⊢
     refine ⟨?_, tail⟩
-    rw [shareable_congr sc same]; simpa using share
+    rw [shareable_congr sc same]; simpa using share.1
+
+theorem linear_of_armsCustody (sc : ShareableComplete a = true) {Γ : Context} {row' : Ty} :
+    ∀ {q : Quantity} {arms : List (String × Term)} {row result : Ty} {uses : Uses},
+      ArmsTyping a Γ q arms row result uses → MembersAgree a row' row →
+      armsCustody row' arms = true → q = .linear
+  | _, [], _, _, _, .nil .., _, h => by simp [armsCustody] at h
+  | _, (name, body) :: rest, _, _, _, .cons (payload := payload) _ _ share _ restTyped _, agrees, h => by
+    obtain ⟨⟨payload', found, same⟩, agreesRest⟩ := agrees
+    simp only [armsCustody, List.any_cons, found, Bool.or_eq_true] at h
+    rcases h with hhead | htail
+    · have hcust : payload.bearsCustody = true := by
+        rw [← bearsCustody_congr sc same]; exact hhead
+      exact validContext_custody_linear share List.mem_cons_self hcust
+    · exact linear_of_armsCustody sc restTyped agreesRest htail
 
 theorem caseQuantity_refines (sc : ShareableComplete a = true) {Γ Γ' : Context} (r : Refines a Γ' Γ) {q : Quantity}
     {su : Uses} (allowed : caseAllowed a q Γ su = true) {arms : List (String × Term)} {row result row' : Ty}
     {uses : Uses} (typed : ArmsTyping a Γ q arms row result uses) (agrees : MembersAgree a row' row)
     (distinct : labelsDistinct arms = true) :
-    ArmRefines a (caseQuantity a Γ' su (armsShareable a row' arms)) q row' arms := by
+    ArmRefines a (caseQuantity a Γ' su (armsShareable a row' arms) (armsCustody row' arms)) q row' arms := by
   simp only [caseAllowed, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, bne_iff_ne, ne_eq] at allowed
   unfold caseQuantity
-  by_cases hl : linearFree Γ' su = true
+  by_cases hc : (armsCustody row' arms || !linearFree Γ' su) = true
+  · simp only [hc, ↓reduceIte]
+    rcases Bool.or_eq_true_iff.mp hc with hcust | hnotFree
+    · exact .inl (linear_of_armsCustody sc typed agrees hcust).symm
+    · rcases allowed.1 with isL | free
+      · exact .inl isL.symm
+      · exact absurd (linearFree_refines r free) (by simpa using hnotFree)
   · by_cases hr : (reusableCaptures a.shareableVariables Γ' su && armsShareable a row' arms) = true
-    · simp only [hl, hr, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+    · simp only [hc, hr, Bool.false_eq_true, ↓reduceIte]
       exact .inr (.inr ⟨rfl, (Bool.and_eq_true_iff.mp hr).2⟩)
-    · simp only [hl, hr, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
-      refine .inr (.inl ⟨rfl, fun isU => hr ?_⟩)
+    · simp only [hc, hr, Bool.false_eq_true, ↓reduceIte]
+      have hnoCust : armsCustody row' arms = false := by
+        cases h : armsCustody row' arms with
+        | false => rfl
+        | true => simp [h] at hc
+      refine .inr (.inl ⟨rfl, hnoCust, fun isU => hr ?_⟩)
       subst isU
       have captures := allowed.2.resolve_left (by simp)
       rw [Bool.and_eq_true]
       exact ⟨reusableCaptures_refines sc r captures, armsShareable_of_unrestricted sc typed agrees distinct⟩
-  · simp only [hl, Bool.not_false, ↓reduceIte]
-    rcases allowed.1 with isL | free
-    · exact .inl isL.symm
-    · exact absurd (linearFree_refines r free) hl
 
 theorem motive_case (sc : ShareableComplete a = true) {Γ : Context} {scrutinee : Term} {arms : List (String × Term)}
     {row result : Ty} {su au : Uses} {q : Quantity}
@@ -2565,7 +2986,8 @@ theorem motive_case (sc : ShareableComplete a = true) {Γ : Context} {scrutinee 
       obtain ⟨row', foundRow, rowAgrees⟩ := lookupRow_arms_agrees typed distinct rawRow
         (fun nm member _ fnd => lookupV_transport hrow fnd)
       have ma : MembersAgree a row' row := membersAgree_of_rowAgrees typed distinct rowAgrees
-      let q' := caseQuantity a Γ' (occurrences Γ'.length scrutinee) (armsShareable a row' ((name, body) :: rest))
+      let q' := caseQuantity a Γ' (occurrences Γ'.length scrutinee)
+        (armsShareable a row' ((name, body) :: rest)) (armsCustody row' ((name, body) :: rest))
       have hqr : ArmRefines a q' q row' ((name, body) :: rest) := by
         dsimp only [q']
         rw [← suOcc]
@@ -2591,7 +3013,7 @@ theorem motive_case (sc : ShareableComplete a = true) {Γ : Context} {scrutinee 
         have hQAt : caseQuantityAt a annotations path Γ' su row' ((name, body) :: rest) = q' := by
           simp [caseQuantityAt, root, ann]
         have allowed' : caseAllowed a ta.quantity Γ' su = true := by
-          rw [qA, suOcc]; exact caseQuantity_allowed _ _ _ _
+          rw [qA, suOcc]; exact caseQuantity_allowed _ _ _ _ _
         have finishSame : sameType a expectedHead expected = true := whnf_sameType a expected
         change Yields (elaborate a annotations Γ' path (.case scrutinee ((name, body) :: rest)) (.check expected)) _
         rw [elaborate]
@@ -2611,7 +3033,8 @@ theorem motive_case (sc : ShareableComplete a = true) {Γ : Context} {scrutinee 
     have ma : MembersAgree a row' row := membersAgree_of_rowAgrees typed distinct rowAgrees
     have suOcc : su = occurrences Γ'.length scrutinee := by
       rw [refines_length r]; exact uses_determined scrutineeTyped
-    let q' := caseQuantity a Γ' (occurrences Γ'.length scrutinee) (armsShareable a row' ((name, body) :: rest))
+    let q' := caseQuantity a Γ' (occurrences Γ'.length scrutinee)
+      (armsShareable a row' ((name, body) :: rest)) (armsCustody row' ((name, body) :: rest))
     have hqr : ArmRefines a q' q row' ((name, body) :: rest) := by
       dsimp only [q']
       rw [← suOcc]
@@ -2645,7 +3068,7 @@ theorem motive_case (sc : ShareableComplete a = true) {Γ : Context} {scrutinee 
       have hQAt : caseQuantityAt a annotations path Γ' su row' ((name, body) :: rest) = q' := by
         simp [caseQuantityAt, root, ann]
       have allowed' : caseAllowed a ta.quantity Γ' su = true := by
-        rw [qA, suOcc]; exact caseQuantity_allowed _ _ _ _
+        rw [qA, suOcc]; exact caseQuantity_allowed _ _ _ _ _
       constructor
       · change Yields (elaborate a annotations Γ' path (.case scrutinee ((name, body) :: rest)) .synth) _
         rw [elaborate]
@@ -2744,7 +3167,8 @@ theorem motive_effectCase (sc : ShareableComplete a = true) {Γ : Context} {scru
       obtain ⟨row', foundRow, rowAgrees⟩ := lookupRow_arms_agrees typed distinct rawRow
         (fun nm member _ fnd => lookupV_transport hrow fnd)
       have ma : MembersAgree a row' row := membersAgree_of_rowAgrees typed distinct rowAgrees
-      let q' := caseQuantity a Γ' (occurrences Γ'.length scrutinee) (armsShareable a row' ((name, body) :: rest))
+      let q' := caseQuantity a Γ' (occurrences Γ'.length scrutinee)
+        (armsShareable a row' ((name, body) :: rest)) (armsCustody row' ((name, body) :: rest))
       have hqr : ArmRefines a q' q row' ((name, body) :: rest) := by
         dsimp only [q']
         rw [← suOcc]
@@ -2778,7 +3202,7 @@ theorem motive_effectCase (sc : ShareableComplete a = true) {Γ : Context} {scru
         have hQAt : caseQuantityAt a annotations path Γ' su row' ((name, body) :: rest) = q' := by
           simp [caseQuantityAt, root, ann]
         have allowed' : caseAllowed a ta.quantity Γ' su = true := by
-          rw [qA, suOcc]; exact caseQuantity_allowed _ _ _ _
+          rw [qA, suOcc]; exact caseQuantity_allowed _ _ _ _ _
         change Yields (elaborate a annotations Γ' path (.case scrutinee ((name, body) :: rest)) (.check expected)) _
         rw [elaborate]
         simp [root, ann, scrutRep, expectedHead, ok, Except.map, checkedSynth, need_ok distinct,
@@ -2798,7 +3222,8 @@ theorem motive_effectCase (sc : ShareableComplete a = true) {Γ : Context} {scru
     have ma : MembersAgree a row' row := membersAgree_of_rowAgrees typed distinct rowAgrees
     have suOcc : su = occurrences Γ'.length scrutinee := by
       rw [refines_length r]; exact uses_determined scrutineeTyped
-    let q' := caseQuantity a Γ' (occurrences Γ'.length scrutinee) (armsShareable a row' ((name, body) :: rest))
+    let q' := caseQuantity a Γ' (occurrences Γ'.length scrutinee)
+      (armsShareable a row' ((name, body) :: rest)) (armsCustody row' ((name, body) :: rest))
     have hqr : ArmRefines a q' q row' ((name, body) :: rest) := by
       dsimp only [q']
       rw [← suOcc]
@@ -2846,7 +3271,7 @@ theorem motive_effectCase (sc : ShareableComplete a = true) {Γ : Context} {scru
       have hQAt : caseQuantityAt a annotations path Γ' su row' ((name, body) :: rest) = q' := by
         simp [caseQuantityAt, root, ann]
       have allowed' : caseAllowed a ta.quantity Γ' su = true := by
-        rw [qA, suOcc]; exact caseQuantity_allowed _ _ _ _
+        rw [qA, suOcc]; exact caseQuantity_allowed _ _ _ _ _
       constructor
       · change Yields (elaborate a annotations Γ' path (.case scrutinee ((name, body) :: rest)) .synth) _
         rw [elaborate]

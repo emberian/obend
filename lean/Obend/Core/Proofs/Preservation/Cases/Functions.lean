@@ -163,12 +163,14 @@ composition does not make an affine captured environment duplicable. -/
       (.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inherited provided)) := by
   let selfBinding : Binding := ⟨self,.unrestricted⟩
   let inheritedBinding : Binding := ⟨inherited,.unrestricted⟩
-  have selfValid : validContext assumptions.shareableVariables [selfBinding] = true := by simp [validContext,selfBinding,selfShare]
-  have inheritedValid : validContext assumptions.shareableVariables [inheritedBinding] = true := by simp [validContext,inheritedBinding,inheritedShare]
+  have selfValid : validContext assumptions.shareableVariables [selfBinding] = true := by
+    simp [validContext,selfBinding,selfShare,Ty.bearsCustody_of_shareableUnder selfShare]
+  have inheritedValid : validContext assumptions.shareableVariables [inheritedBinding] = true := by
+    simp [validContext,inheritedBinding,inheritedShare,Ty.bearsCustody_of_shareableUnder inheritedShare]
   have oneValid : validContext assumptions.shareableVariables (selfBinding :: context) = true := by
-    simpa [validContext,selfBinding,selfShare] using contextValid
+    simpa [validContext,selfBinding,selfShare,Ty.bearsCustody_of_shareableUnder selfShare] using contextValid
   have twoValid : validContext assumptions.shareableVariables (inheritedBinding :: selfBinding :: context) = true := by
-    simpa [validContext,inheritedBinding,inheritedShare] using oneValid
+    simpa [validContext,inheritedBinding,inheritedShare,Ty.bearsCustody_of_shareableUnder inheritedShare] using oneValid
   have lowerCaptures := reusable_add_uses_left assumptions.shareableVariables context lu uu (source_uses_length lowerTyped) (source_uses_length upperTyped) captures
   have upperCaptures := reusable_add_uses_left assumptions.shareableVariables context uu lu (source_uses_length upperTyped) (source_uses_length lowerTyped) (by simpa only [add_uses_comm] using captures)
   let lowerReusable : ReusableTerm assumptions context lower lowerType := ⟨lu,lowerTyped,lowerCaptures⟩
@@ -203,7 +205,8 @@ termination of that knot is required by this construction. -/
       reusableCaptures assumptions.shareableVariables context iu = true) := by
     simpa [argumentAllowed] using seedAllowed
   let binding : Binding := ⟨target,.unrestricted⟩
-  have valid : validContext assumptions.shareableVariables [binding] = true := by simp [validContext,binding,targetShare]
+  have valid : validContext assumptions.shareableVariables [binding] = true := by
+    simp [validContext,binding,targetShare,Ty.bearsCustody_of_shareableUnder targetShare]
   let specReusable : ReusableTerm assumptions context spec specType := ⟨su,specTyped,specCaptures⟩
   let seedReusable : ReusableTerm assumptions context seed inherited := ⟨iu,seedTyped,seedFacts.2⟩
   let selfTerm : ReusableTerm assumptions (binding :: context) (.bound 0) target :=
@@ -308,7 +311,7 @@ public theorem typed_fix_preserved {assumptions : Assumptions} {types : AddressT
       rw [← typed.heap.length]
       simp [after]
     have valid : validContext assumptions.shareableVariables (⟨target,.unrestricted⟩ :: origin.context) = true := by
-      simpa [validContext,share] using origin.contextValid
+      simpa [validContext,share,Ty.bearsCustody_of_shareableUnder share] using origin.contextValid
     let next : ClosureTyping assumptions after
         ⟨.app (.app (spec.rename Nat.succ) (.bound 0)) (seed.rename Nat.succ),state.heap.size :: environment⟩ target :=
       ⟨⟨target,.unrestricted⟩ :: origin.context,expanded.uses,

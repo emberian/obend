@@ -207,6 +207,16 @@ theorem shareableUnder_instantiate {vars vars' : List Nat}
   | variant r ih => simp [Ty.instantiate, Ty.shareableUnder, ih]
   | _ => simp [Ty.instantiate, Ty.shareableUnder, Ty.shareable]
 
+theorem bearsCustody_instantiate (custody : ∀ j, (σ j).bearsCustody = false) (type : Ty) :
+    (type.instantiate σ).bearsCustody = type.bearsCustody := by
+  induction type with
+  | «variable» j => simpa [Ty.instantiate] using custody j
+  | field _ m t ihm iht => simp [Ty.instantiate, Ty.bearsCustody, ihm, iht]
+  | specification m e ihm ihe => simp [Ty.instantiate, Ty.bearsCustody, ihm, ihe]
+  | prototype s t ihs iht => simp [Ty.instantiate, Ty.bearsCustody, ihs, iht]
+  | variant r ih => simp [Ty.instantiate, Ty.bearsCustody, ih]
+  | _ => simp [Ty.instantiate, Ty.bearsCustody]
+
 theorem instantiate_of_isData {type : Ty} (data : type.isData = true) : type.instantiate σ = type := by
   induction type with
   | field _ m t ihm iht =>
@@ -271,12 +281,13 @@ theorem reusableCaptures_instantiate {vars vars' : List Nat}
   simp [shareableUnder_instantiate shareable]
 
 public theorem validContext_instantiate {vars vars' : List Nat}
-    (shareable : ∀ j, (σ j).shareableUnder vars' = vars.contains j) (context : Context) :
+    (shareable : ∀ j, (σ j).shareableUnder vars' = vars.contains j)
+    (custody : ∀ j, (σ j).bearsCustody = false) (context : Context) :
     validContext vars' (instantiateContext σ context) = validContext vars context := by
   simp only [validContext, instantiateContext, List.all_map]
   congr 1
   funext binding
-  simp [shareableUnder_instantiate shareable]
+  simp [shareableUnder_instantiate shareable, bearsCustody_instantiate custody]
 
 theorem getElem?_instantiateContext (context : Context) (index : Nat) :
     (instantiateContext σ context)[index]? =
@@ -399,7 +410,7 @@ theorem Discharges.caseAllowed_instantiate (quantity : Quantity) (context : Cont
 theorem Discharges.validBinder_instantiate (payload : Ty) (quantity : Quantity) :
     validContext instance_.shareableVariables [⟨payload.instantiate σ, quantity⟩] =
       validContext template.shareableVariables [⟨payload, quantity⟩] := by
-  simp [validContext, shareableUnder_instantiate D.shareable]
+  simp [validContext, shareableUnder_instantiate D.shareable, bearsCustody_instantiate D.custody]
 
 theorem Discharges.reusableAllowed_instantiate (reuse : Reuse) (context : Context) (uses : Uses) :
     reusableAllowed instance_ reuse (instantiateContext σ context) uses = reusableAllowed template reuse context uses := by
@@ -420,7 +431,7 @@ theorem Discharges.splitSpine_instantiate (instanceValid : instance_.valid = tru
         D.sameType_instantiate instanceValid same⟩,
       by rw [instantiate_isComputation D.pure]; exact pure,
       by rw [D.caseAllowed_instantiate]; exact allowed,
-      by rw [shareableUnder_instantiate D.shareable]; exact share,
+      by rw [D.validBinder_instantiate]; exact share,
       Discharges.splitSpine_instantiate instanceValid rest⟩
 
 /-- **The template theorem on the typing relation** (MODULAR-TYPING §6): a derivation under rigid
@@ -456,7 +467,7 @@ public theorem Discharges.partialTyping_instantiate (instanceValid : instance_.v
     intro Γ body annotation bodyUses _ safe valid captures fits ih
     exact .lambda (annotation := instantiateAnnotation σ annotation) ih
       ((safeUses_instantiate (σ := σ) (⟨annotation.domain, annotation.parameter⟩ :: Γ) bodyUses).trans safe)
-      ((validContext_instantiate D.shareable (⟨annotation.domain, annotation.parameter⟩ :: Γ)).trans valid)
+      ((validContext_instantiate D.shareable D.custody (⟨annotation.domain, annotation.parameter⟩ :: Γ)).trans valid)
       (by rw [D.reusableAllowed_instantiate]; exact captures) fits
   case conversion =>
     intro Γ term actual expected uses _ agreement ih
@@ -633,6 +644,10 @@ public theorem coloured_discharges : Discharges colouredSelf templateAssumptions
     by_cases e : j = 5
     · subst e; simp [colouredSelf, colouredRow, Ty.shareableUnder, Ty.shareable, templateAssumptions]
     · simp [colouredSelf, e, Ty.shareableUnder, Ty.shareable, templateAssumptions]
+  custody j := by
+    by_cases e : j = 5
+    · subst e; simp [colouredSelf, colouredRow]
+    · simp [colouredSelf, e]
   pure j := by
     by_cases e : j = 5
     · subst e; simp [colouredSelf, colouredRow, Ty.isComputation]

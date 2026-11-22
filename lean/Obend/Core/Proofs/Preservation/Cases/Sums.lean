@@ -218,9 +218,9 @@ public theorem typed_case_preserved {assumptions : Assumptions} {types : Address
     have freshAssigned : after[state.heap.size]? = some armMember := by
       rw [← typed.heap.length]
       simp [after]
-    let bindingContext : Context := [⟨actual,.affine⟩]
+    let bindingContext : Context := [⟨actual,.linear⟩]
     have bindingSource : PartialTyping assumptions bindingContext (.bound 0) armMember (variableUses bindingContext 0) :=
-      source_convert_path (PartialTyping.bound (context := bindingContext) (binding := ⟨actual,.affine⟩) rfl) toPayload
+      source_convert_path (PartialTyping.bound (context := bindingContext) (binding := ⟨actual,.linear⟩) rfl) toPayload
     have bindingSafe : safeUses bindingContext (variableUses bindingContext 0) = true := by
       simp [bindingContext,safeUses,variableUses,safeQuantity]
     have bindingValid : validContext assumptions.shareableVariables bindingContext = true := by
@@ -229,8 +229,8 @@ public theorem typed_case_preserved {assumptions : Assumptions} {types : Address
       ⟨bindingContext,variableUses bindingContext 0,(EnvironmentTyping.empty after).cons addressAssigned,
         bindingSource,bindingSafe,bindingValid⟩
     have bodyValid : validContext assumptions.shareableVariables (⟨armMember,q⟩ :: context) = true := by
-      simp only [validContext,List.all_cons,List.all_nil,Bool.and_true] at valid shareable ⊢
-      simp [shareable,valid]
+      simp only [validContext,List.all_cons,List.all_nil,Bool.and_true,Bool.and_eq_true] at valid shareable ⊢
+      exact ⟨shareable,valid⟩
     have pure : armMember.isComputation = false := by
       rw [← conversionPath_isComputation toPayload]; exact heap_type_pure typed.heap assigned
     let next : ClosureTyping assumptions after ⟨body,state.heap.size :: environment⟩ branchType :=

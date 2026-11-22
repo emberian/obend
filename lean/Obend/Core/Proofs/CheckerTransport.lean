@@ -68,7 +68,7 @@ public theorem Discharges.checked_instantiate {σ : Nat → Ty} {instance_ : Ass
   have safe : safeUses (instantiateContext σ context) checked.uses = true :=
     (safeUses_instantiate (σ := σ) context checked.uses).trans checked.safe
   have contextValid : validContext instance_.shareableVariables (instantiateContext σ context) = true :=
-    (validContext_instantiate D.shareable context).trans checked.contextValid
+    (validContext_instantiate D.shareable D.custody context).trans checked.contextValid
   exact annotated_complete (source := ⟨source.term, fun _ => none, instance_⟩) typed safe contextValid valid
 
 /-- **The template theorem for the checker** (`check_instantiate` restated over `checkAgainst`): a

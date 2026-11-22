@@ -43,12 +43,21 @@ example :
       | .error (.linearBinderUnused []) => true
       | _ => false) = true := by decide
 
-/-- The same program with an `affine` custody is accepted: dropping is within "at most once". -/
+/-- Under Gate G1 (`mustBeLinear`), binding custody at `affine` is refused (`invalidContext`),
+whereas a custody-free `affine` binder may still be dropped. -/
 example :
-    (checkAgainst (droppedCustody .affine) [] (droppedCustodyType .affine)).toBool = true := by decide
+    (match checkAgainst (droppedCustody .affine) [] (droppedCustodyType .affine) with
+      | .error (.invalidContext []) => true
+      | _ => false) = true := by decide
+
+example :
+    (checkAgainst ⟨.lam (.nat 0), fun path => if path = [] then some ⟨.natural, .natural, .affine, .once⟩ else none, {}⟩
+      [] (.arrow .once .affine .natural .natural)).toBool = true := by decide
 
 /-- `λ(h : Custody). (λ(z : Custody). 0) h`: the custody is passed to a callee whose parameter has
-quantity `q`. -/
+quantity `q`. At `affine`, G1 already refuses the callee's `affine` custody binder at `[0, 0]`;
+for a custody-free `linear` binder (`handedLinearNat`), the checker reaches `[0, 1]` and refuses
+`linearArgumentDropped`. -/
 def handedCustody (q : Quantity) : AnnotatedTerm :=
   ⟨.lam (.app (.lam (.nat 0)) (.bound 0)), fun path =>
     if path = [] then some ⟨.custody 0, .natural, .linear, .once⟩
@@ -56,11 +65,23 @@ def handedCustody (q : Quantity) : AnnotatedTerm :=
     else if path = [0, 0] then some ⟨.custody 0, .natural, q, .once⟩
     else none, {}⟩
 
+def handedLinearNat (q : Quantity) : AnnotatedTerm :=
+  ⟨.lam (.app (.lam (.nat 0)) (.bound 0)), fun path =>
+    if path = [] then some ⟨.natural, .natural, .linear, .once⟩
+    else if path = [0] then some ⟨.arrow .once q .natural .natural, .natural, .affine, .once⟩
+    else if path = [0, 0] then some ⟨.natural, .natural, q, .once⟩
+    else none, {}⟩
+
+example :
+    (match checkAgainst (handedCustody .affine) [] (droppedCustodyType .linear) with
+      | .error (.invalidContext [0, 0]) => true
+      | _ => false) = true := by decide
+
 /-- TOOTH (a `linear` hypothesis handed to an `affine` callee, which drops it, is refused by name:
 the argument at `[0, 1]` uses hypothesis `0`). The binder count is one, so exact discharge at the
 binder alone would have accepted it. -/
 example :
-    (match checkAgainst (handedCustody .affine) [] (droppedCustodyType .linear) with
+    (match checkAgainst (handedLinearNat .affine) [] (.arrow .once .linear .natural .natural) with
       | .error (.linearArgumentDropped [0, 1] 0 .affine) => true
       | _ => false) = true := by decide
 
@@ -265,7 +286,7 @@ theorem case_quantity_of_linear_use (a : Assumptions) (ctx : Context) (uses : Us
     (shareable : Bool) (h : linearFree ctx uses = false) :
     caseQuantity a ctx uses shareable = .linear := by simp [caseQuantity, h]
 
-#tooth case_quantity_of_linear_use by mutation caseQuantity := fun _ _ _ _ => .affine
+#tooth case_quantity_of_linear_use by mutation caseQuantity := fun _ _ _ _ _ => .affine
 
 /-- The same arm duplicating the payload, `case l h of l x. x + x`, is a copy of `h` in one step. -/
 example :
@@ -349,6 +370,64 @@ example :
         else none, {}⟩ [] oneField with
       | .error (.typeMismatch [] expected actual) => expected == oneField && actual == .emptyRow
       | _ => false) = true := by decide
+
+/-! ## Custody is bound `linear` (`mustBeLinear`, gate G1)
+
+`validContext` requires `mustBeLinear` of every binding: a custody-bearing binder is `linear`, so
+custody is never dropped (`erased`, `affine`) or shared (`unrestricted`). The lambda rule, the arms
+of a `case`/`effectCase` (`ArmsTyping.cons`), `SplitSpine` and `Checked` all require `validContext`. -/
+
+example : validContext [] [⟨.custody 7, .affine⟩] = false := by decide
+example : validContext [] [⟨.custody 7, .erased⟩] = false := by decide
+example : validContext [] [⟨.custody 7, .unrestricted⟩] = false := by decide
+example : validContext [] [⟨.custody 7, .linear⟩] = true := by decide
+/-- Custody under a record field or a sum is still custody. -/
+example : validContext [] [⟨.field "c" (.custody 7) .emptyRow, .affine⟩] = false := by decide
+example : validContext [] [⟨.variant (.field "c" (.custody 7) .emptyRow), .affine⟩] = false := by decide
+/-- A custody-free record may still be `affine`. -/
+example : validContext [] [⟨.field "n" .natural .emptyRow, .affine⟩] = true := by decide
+
+/-- The checker refuses a top-level context with an `affine` custody binding... -/
+example :
+    (match checkAgainst ⟨.nat 0, fun _ => none, {}⟩ [⟨.custody 7, .affine⟩] .natural with
+      | .error (.invalidContext []) => true
+      | _ => false) = true := by decide
+/-- ...and accepts the same term over a `linear` one. -/
+example :
+    (match checkAgainst ⟨.nat 0, fun _ => none, {}⟩ [⟨.custody 7, .linear⟩] .natural with
+      | .ok _ => true
+      | _ => false) = true := by decide
+
+/-- A lambda that takes custody at `affine` is refused; at `linear` it checks. -/
+example :
+    (match checkAgainst ⟨.lam (.bound 0), fun p =>
+        if p = [] then some ⟨.custody 7, .custody 7, .affine, .once⟩ else none, {}⟩
+        [] (.arrow .once .affine (.custody 7) (.custody 7)) with
+      | .error (.invalidContext _) => true
+      | _ => false) = true := by decide
+example :
+    (match checkAgainst ⟨.lam (.bound 0), fun p =>
+        if p = [] then some ⟨.custody 7, .custody 7, .linear, .once⟩ else none, {}⟩
+        [] (.arrow .once .linear (.custody 7) (.custody 7)) with
+      | .ok _ => true
+      | _ => false) = true := by decide
+
+theorem caseQuantity_custody_linear (a : Assumptions) (ctx : Context) (uses : Uses) (sh : Bool) :
+    caseQuantity a ctx uses sh true = .linear := by
+  simp [caseQuantity]
+
+-- Without `mustBeLinear` (and `custody` in `caseQuantity`) the stored proofs fail: an `affine`
+-- custody context would be valid, and an unannotated `case` could bind a custody payload `affine`.
+#tooth Obend.Core.Ty.validContext_refuses_affine_custody by mutation Obend.Core.Ty.mustBeLinear :=
+  fun _ => true
+#tooth Obend.Core.Ty.validContext_custody_linear by mutation Obend.Core.Ty.mustBeLinear :=
+  fun _ => true
+#tooth Obend.Core.Check.lambda_custody_linear by mutation Obend.Core.Ty.mustBeLinear :=
+  fun _ => true
+#tooth caseQuantity_custody_linear by mutation caseQuantity := fun a ctx uses sh _ =>
+  if !linearFree ctx uses then .linear
+  else if reusableCaptures a.shareableVariables ctx uses && sh then .unrestricted
+  else .affine
 
 end Obend.Teeth.Core.LinearTeeth
 end

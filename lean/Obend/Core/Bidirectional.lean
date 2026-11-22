@@ -218,12 +218,18 @@ def armsShareable (assumptions : Assumptions) (row : Ty) (arms : List (String ×
     | some payload => payload.shareableUnder assumptions.shareableVariables
     | none => true
 
+/-- Any arm whose resolved payload bears custody forces a `linear` payload binding (`mustBeLinear`). -/
+def armsCustody (row : Ty) (arms : List (String × Term)) : Bool :=
+  arms.any fun arm => match rowMember row arm.1 with
+    | some payload => payload.bearsCustody
+    | none => false
+
 /-- The case's payload quantity: its annotation's, else `caseQuantity`. -/
 def caseQuantityAt (assumptions : Assumptions) (annotations : Annotations) (path : List Nat) (context : Context)
     (uses : Uses) (row : Ty) (arms : List (String × Term)) : Quantity :=
   match annotations path with
   | some annotation => annotation.parameter
-  | none => caseQuantity assumptions context uses (armsShareable assumptions row arms)
+  | none => caseQuantity assumptions context uses (armsShareable assumptions row arms) (armsCustody row arms)
 
 theorem caseQuantityAt_some {assumptions : Assumptions} {annotations : Annotations} {path : List Nat}
     {annotation : LambdaAnnotation} (h : annotations path = some annotation) (context : Context) (uses : Uses)
@@ -252,7 +258,7 @@ def checkSpine (assumptions : Assumptions) (context : Context) (path : List Nat)
         if agrees : sameType assumptions actual member = true then do
           let ⟨hc⟩ ← need (!member.isComputation) (.activityMisplaced (path ++ [1]) member)
           let ⟨ha⟩ ← need (caseAllowed assumptions quantity context uses) (caseRefusal path quantity context uses)
-          let ⟨hu⟩ ← need (quantity != .unrestricted || member.shareableUnder assumptions.shareableVariables)
+          let ⟨hu⟩ ← need (validContext assumptions.shareableVariables [⟨member, quantity⟩])
             (.notShareable (path ++ [1]) member)
           let rest ← checkSpine assumptions context path uses row names codomain
           pure ⟨rest.1, reuse, quantity, member, codomain, shape,

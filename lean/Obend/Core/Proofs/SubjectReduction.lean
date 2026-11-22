@@ -135,7 +135,8 @@ theorem captures_below {V : List Nat} {Γ : Context} {x y : Uses} (valid : valid
       refine ⟨q, ?_⟩
       unfold validContext at valid
       have := List.all_eq_true.mp valid b (List.mem_of_getElem? hb)
-      simpa [q] using this
+      have h' : b.type.shareableUnder V = true ∧ b.type.bearsCustody = false := by simpa [q] using this
+      exact h'.1
   · rcases hc j b hb with z | r
     · left; have := h j b hb q; omega
     · exact absurd r.1 q
@@ -626,8 +627,8 @@ theorem split_apply_typed {a : Assumptions} {Γ : Context} {fields : List (Strin
             Bool.not_eq_true']
           refine ⟨⟨noAct, lin.imp id (fun free => linearFree_below free len below)⟩, ?_⟩
           by_cases qu : q = .unrestricted
-          · subst qu; simp at share
-            exact .inr ⟨share, captures_below valid (unr rfl) len below⟩
+          · subst qu; simp [validContext] at share
+            exact .inr ⟨share.1, captures_below valid (unr rfl) len below⟩
           · exact .inl qu
         have happ : PartialTyping a Γ (.app function value) c (addUses fu bu) :=
           .application hfun (.conversion hb (sameType_trans s0 same)) shape rfl argAllowed

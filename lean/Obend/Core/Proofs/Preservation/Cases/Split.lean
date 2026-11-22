@@ -102,23 +102,23 @@ theorem split_frames_typed {assumptions : Assumptions} {types : AddressTypes} {r
   | [], [], _, _, [], shape, .nil, restTyped => by cases shape; simpa [splitFrames] using restTyped
   | _ :: _, member :: _, _, _, address :: fresh, ⟨reuse, quantity, codomain, callable, _, pure, share, shape⟩,
       .cons assigned related, restTyped => by
-    let binder : Quantity := if quantity = .unrestricted then .unrestricted else .affine
+    let binder : Quantity := if quantity = .erased then .affine else quantity
     let context : Context := [⟨member, binder⟩]
     have valid : validContext assumptions.shareableVariables context = true := by
-      by_cases u : quantity = .unrestricted
-      · subst u; simp at share; simp [context, binder, validContext, share]
-      · simp [context, binder, u, validContext]
+      cases quantity <;> simp_all [context, binder, validContext]
     have safe : safeUses context (variableUses context 0) = true := by
-      by_cases u : quantity = .unrestricted <;> simp [context, binder, u, safeUses, variableUses, safeQuantity]
+      cases quantity <;> simp [context, binder, safeUses, variableUses, safeQuantity]
     let argument : ClosureTyping assumptions types ⟨.bound 0, [address]⟩ member :=
       ⟨context, variableUses context 0, (EnvironmentTyping.empty types).cons assigned,
         PartialTyping.bound (binding := ⟨member, binder⟩) rfl, safe, valid⟩
     have allowed : argumentAllowed assumptions quantity argument.context member argument.uses = true := by
       change argumentAllowed assumptions quantity context member (variableUses context 0) = true
-      by_cases u : quantity = .unrestricted
-      · subst u; simp at share
-        simp [argumentAllowed, context, binder, pure, share, linearFree, reusableCaptures, variableUses]
-      · cases quantity <;> simp_all [argumentAllowed, context, binder, linearFree, variableUses]
+      cases quantity
+      · simp [argumentAllowed, context, binder, pure, linearFree, variableUses]
+      · simp [argumentAllowed, context, binder, pure, linearFree, variableUses]
+      · simp [argumentAllowed, context, binder, pure, linearFree, variableUses]
+      · simp [validContext] at share
+        simp [argumentAllowed, context, binder, pure, share.1, linearFree, reusableCaptures, variableUses]
     exact .cons (.argument argument callable allowed)
       (by simpa [splitFrames] using split_frames_typed fresh shape related restTyped)
   | [], _ :: _, _, _, _, h, _, _ | _ :: _, [], _, _, _, h, _, _ => h.elim
@@ -135,14 +135,14 @@ theorem split_cells_typed {assumptions : Assumptions} {types : AddressTypes} :
     ∀ (cells : List (Address × Ty)) (members : List Ty) (offset : Nat) (context : Context),
       Both (fun cell member => types[cell.1]? = some cell.2 ∧ ConversionPath assumptions cell.2 member)
         cells members →
-      (∀ i cell, cells[i]? = some cell → context[offset + i]? = some ⟨cell.2, .affine⟩) →
-      (∀ binding ∈ context, binding.quantity = .affine) →
+      (∀ i cell, cells[i]? = some cell → context[offset + i]? = some ⟨cell.2, .linear⟩) →
+      (∀ binding ∈ context, binding.quantity = .linear) →
       (∀ member ∈ members, member.isComputation = false) →
       Both (fun cell type => ∃ uses, PartialTyping assumptions context cell.2 type uses ∧
         safeUses context uses = true ∧ type.isComputation = false)
         ((List.range' offset cells.length).map fun index => ("", Term.bound index)) members
   | [], [], _, _, .nil, _, _, _ => by simp only [List.length_nil, List.range'_zero, List.map_nil]; exact .nil
-  | cell :: cells, member :: members, offset, context, .cons ⟨_, path⟩ rest, at_, affine, pure => by
+  | cell :: cells, member :: members, offset, context, .cons ⟨_, path⟩ rest, at_, linear, pure => by
     simp only [List.length_cons, List.range'_succ, List.map_cons]
     refine .cons ⟨variableUses context offset, source_convert_path (.bound (by simpa using at_ 0 cell rfl)) path,
       ?_, ?_⟩ ?_
@@ -152,14 +152,14 @@ theorem split_cells_typed {assumptions : Assumptions} {types : AddressTypes} :
       refine List.all_eq_true.mpr fun pair member => ?_
       obtain ⟨⟨binding, count⟩, hm, rfl⟩ : ∃ p ∈ context.zip ((List.range context.length).map
           fun position => if position = offset then 1 else 0), p = pair := ⟨pair, member, rfl⟩
-      have q := affine binding (List.of_mem_zip hm).1
+      have q := linear binding (List.of_mem_zip hm).1
       have c : count ≤ 1 := by
         obtain ⟨k, hk, he⟩ := List.mem_iff_getElem.mp (List.of_mem_zip hm).2
         rw [← he]; simp; split <;> omega
       simp [safeQuantity, q, c]
     · exact pure member (by simp)
     · exact split_cells_typed cells members (offset + 1) context rest
-        (fun i c h => by simpa [Nat.add_assoc, Nat.add_comm 1] using at_ (i + 1) c h) affine
+        (fun i c h => by simpa [Nat.add_assoc, Nat.add_comm 1] using at_ (i + 1) c h) linear
         (fun m hm => pure m (by simp [hm]))
   | [], _ :: _, _, _, h, _, _, _ | _ :: _, [], _, _, h, _, _, _ => by cases h
 
@@ -214,7 +214,7 @@ public theorem typed_split_preserved {assumptions : Assumptions} {types : Addres
   obtain ⟨fuel, isRow⟩ := closed_isRow (bounds := assumptions.bounds) closed
   obtain ⟨fields, rfl⟩ := record_value_form rowTyped fuel isRow
   obtain ⟨cells, values, related⟩ := split_lookups rowTyped shape
-  let context : Context := cells.map fun cell => ⟨cell.2, .affine⟩
+  let context : Context := cells.map fun cell => ⟨cell.2, .linear⟩
   have environmentTyped : EnvironmentTyping types context (cells.map Prod.fst) := by
     refine ⟨by simp [context], fun i binding found => ?_⟩
     simp only [context, List.getElem?_map, Option.map_eq_some_iff] at found

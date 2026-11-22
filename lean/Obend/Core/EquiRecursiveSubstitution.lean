@@ -266,6 +266,7 @@ public structure Discharges (σ : Nat → Ty) (template instance_ : Assumptions)
   row : ∀ k bound, k ∈ template.rigid → template.bounds.lookup k = some bound →
     ∀ fuel, bound.isRow template.bounds fuel = true → (σ k).isRow instance_.bounds (fuel + extra) = true
   shareable : ∀ j, (σ j).shareableUnder instance_.shareableVariables = template.shareableVariables.contains j
+  custody : ∀ j, (σ j).bearsCustody = false
   pure : ∀ j, (σ j).isComputation = false
   /-- A hole the template declares, the instance declares at the instantiated types. -/
   holes : ∀ n decl, template.holes.lookup n = some decl →

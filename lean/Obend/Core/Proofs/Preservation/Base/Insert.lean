@@ -201,7 +201,8 @@ theorem valid_context_insert (variables : List Nat) (context : Context) (depth :
       | nil => simp at bound
       | cons first context =>
           have tailBound : depth ≤ context.length := by simpa using bound
-          have facts : (first.quantity != .unrestricted || first.type.shareableUnder variables) = true ∧ validContext variables context = true := by
+          have facts : ((first.quantity != .unrestricted || first.type.shareableUnder variables) &&
+              mustBeLinear first) = true ∧ validContext variables context = true := by
             simpa [validContext] using valid
           simpa [validContext,List.insertIdx_succ_cons] using And.intro facts.1 (ih context facts.2 tailBound)
 

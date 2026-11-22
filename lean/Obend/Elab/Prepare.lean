@@ -92,7 +92,7 @@ def letQuantity (assumptions : Assumptions) (context : Context) (argumentType : 
   if argumentType.shareableUnder assumptions.shareableVariables &&
       reusableCaptures assumptions.shareableVariables context (occurrences context.length argument)
   then .unrestricted
-  else if linearFree context (occurrences context.length argument) then .affine else .linear
+  else if !argumentType.bearsCustody && linearFree context (occurrences context.length argument) then .affine else .linear
 
 /-- The lambda annotation that makes an introduction form in synthesis position
 check against its own predicted type in both modes. -/
@@ -445,6 +445,7 @@ def prepare (assumptions : Assumptions) (hints : Annotations) (context : Context
       -- the payload quantity the checker computes for the resolved arm row (`caseQuantityAt`)
       let q := caseQuantity assumptions context (occurrences context.length scrutinee)
         (armsShareable assumptions row ((name, body) :: rest))
+        (armsCustody row ((name, body) :: rest))
       match mode with
       | .check expected => do
         let expectedHead := whnf assumptions expected

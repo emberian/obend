@@ -374,8 +374,79 @@ at every quantity, so the uses of a term stay a function of the term alone (`use
   uses.length == context.length && (context.zip uses).all (fun pair =>
     pair.2 == 0 || (pair.1.quantity == .unrestricted && pair.1.type.shareableUnder variables))
 
+/-- The type holds custody where a value of it can carry it: `custody` itself, or a record,
+specification, prototype or sum with a custody-bearing member. An arrow is not inspected (what a
+closure captures is checked at its own binder), and an activity is never bound (`Ty.computation`
+is not shareable and no cell-allocating rule admits it). A rigid variable is custody-free here
+and discharged custody-free by `Templates.Discharges.custody`. -/
+@[expose, simp] def Ty.bearsCustody : Ty → Bool
+  | .custody _ => true
+  | .field _ member tail => member.bearsCustody || tail.bearsCustody
+  | .specification metadata extension => metadata.bearsCustody || extension.bearsCustody
+  | .prototype spec target => spec.bearsCustody || target.bearsCustody
+  | .variant row => row.bearsCustody
+  | .natural | .label | .boolean | .variable _ | .arrow _ _ _ _ | .emptyRow | .computation _ _ _ => false
+
+/-- A shareable type bears no custody (`Ty.shareable` refuses `custody` under every wrapper). -/
+theorem Ty.bearsCustody_of_shareableUnder {variables : List Nat} :
+    ∀ {type : Ty}, type.shareableUnder variables = true → type.bearsCustody = false
+  | .field _ member tail, h => by
+    simp only [Ty.shareableUnder, Bool.and_eq_true] at h
+    simp [Ty.bearsCustody_of_shareableUnder h.1, Ty.bearsCustody_of_shareableUnder h.2]
+  | .specification m e, h => by
+    simp only [Ty.shareableUnder, Bool.and_eq_true] at h
+    simp [Ty.bearsCustody_of_shareableUnder h.1, Ty.bearsCustody_of_shareableUnder h.2]
+  | .prototype s t, h => by
+    simp only [Ty.shareableUnder, Bool.and_eq_true] at h
+    simp [Ty.bearsCustody_of_shareableUnder h.1, Ty.bearsCustody_of_shareableUnder h.2]
+  | .variant row, h => by
+    simp only [Ty.shareableUnder] at h
+    simp [Ty.bearsCustody_of_shareableUnder h]
+  | .custody _, h => by simp [Ty.shareableUnder, Ty.shareable] at h
+  | .natural, _ | .label, _ | .boolean, _ | .variable _, _ | .arrow _ _ _ _, _ | .emptyRow, _
+  | .computation _ _ _, _ => rfl
+
+@[simp] theorem Ty.bearsCustody_of_shareable {type : Ty} (h : type.shareable = true) :
+    type.bearsCustody = false :=
+  Ty.bearsCustody_of_shareableUnder (variables := []) (by simpa using h)
+
+/-- First-order data never bears custody: a response (`Ty.isData`) is custody-free. -/
+@[simp] theorem Ty.bearsCustody_of_isData : ∀ {type : Ty}, type.isData = true → type.bearsCustody = false
+  | .natural, _ | .label, _ | .boolean, _ | .emptyRow, _ => rfl
+  | .field _ member tail, h => by
+    simp only [Ty.isData, Bool.and_eq_true] at h
+    simp [Ty.bearsCustody_of_isData h.1, Ty.bearsCustody_of_isData h.2]
+  | .variant row, h => by
+    simp only [Ty.isData] at h
+    simp [Ty.bearsCustody_of_isData h]
+  | .variable _, h | .arrow _ _ _ _, h | .specification _ _, h | .prototype _ _, h | .custody _, h
+  | .computation _ _ _, h => by simp [Ty.isData] at h
+
+/-- Custody is held `linear`: a binder of a custody-bearing type is neither droppable (`erased`,
+`affine`) nor shareable (`unrestricted`). -/
+@[expose, simp] def mustBeLinear (binding : Binding) : Bool :=
+  !binding.type.bearsCustody || binding.quantity == .linear
+
+/-- A context is valid when every `unrestricted` binding is shareable and every custody-bearing
+binding is `linear` (`mustBeLinear`). -/
 @[expose] def validContext (variables : List Nat) (context : Context) : Bool :=
-  context.all (fun binding => binding.quantity != .unrestricted || binding.type.shareableUnder variables)
+  context.all (fun binding =>
+    (binding.quantity != .unrestricted || binding.type.shareableUnder variables) &&
+      mustBeLinear binding)
+
+/-- A valid context binds custody `linear`. -/
+theorem validContext_custody_linear {variables : List Nat} {context : Context} {binding : Binding}
+    (valid : validContext variables context = true) (member : binding ∈ context)
+    (custody : binding.type.bearsCustody = true) : binding.quantity = .linear := by
+  unfold validContext at valid
+  have h := (List.all_eq_true.mp valid) binding member
+  simp only [Bool.and_eq_true, mustBeLinear, custody, Bool.not_true, Bool.false_or, beq_iff_eq] at h
+  exact h.2
+
+/-- An `affine` custody binding is refused. -/
+theorem validContext_refuses_affine_custody (variables : List Nat) (identity : Nat) (context : Context) :
+    validContext variables (⟨.custody identity, .affine⟩ :: context) = false := by
+  simp [validContext]
 
 /-- No affine/linear binding can occur twice in a checked computation. This
 is syntactic safety; machine conservation and terminal discharge are separate. -/

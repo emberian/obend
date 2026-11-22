@@ -114,7 +114,8 @@ theorem TypedHandler.opFn_typed {θ Γ kQty P R P' R' A B}
   have hvK : validContext θ.shareableVariables (⟨ResumpTy R P' R' B, kQty⟩ :: ⟨P, H.opPlanQty⟩ :: Γ) = true := by
     have hk : (kQty != .unrestricted || (ResumpTy R P' R' B).shareableUnder θ.shareableVariables) = true := by
       rcases H.oneShot with rfl | rfl <;> rfl
-    simp only [validContext, List.all_cons, Bool.and_eq_true] at hvP ⊢; exact ⟨hk, hvP⟩
+    have hml : mustBeLinear ⟨ResumpTy R P' R' B, kQty⟩ = true := rfl
+    simp only [validContext, List.all_cons, Bool.and_eq_true] at hvP ⊢; exact ⟨⟨hk, hml⟩, hvP⟩
   have hSafeTail : safeUses (⟨P, H.opPlanQty⟩ :: Γ) H.opUses.tail = true := by
     have hlen := source_uses_length H.opTyped
     cases hu : H.opUses with
@@ -303,7 +304,7 @@ theorem yields_typed_reify_resumption {θ : Assumptions} {m plan : Term} {ctx : 
             ((Obend.Core.TypeGraph.equivalent_equivalence θ).refl _))
         obtain ⟨hcc, hpT, hPlugInner⟩ := ihS rfl hScrutSame hr rfl hys
         have hb0Valid : validContext θ.shareableVariables [⟨R0, .unrestricted⟩] = true := by
-          simp [validContext, isData_shareableUnder _ hr]
+          simp [validContext, isData_shareableUnder _ hr, hr]
         have haWeak := weaken_closed_arms hb0Valid haT
         let rec convArms {arms0 : List (String × Term)} {r0 : Ty} {u0 : Uses} :
             ArmsTyping θ [⟨R0, .unrestricted⟩] q arms0 r0 (.computation pTy rTy res) u0 →
@@ -343,14 +344,16 @@ theorem yields_typed_reify_resumption {θ : Assumptions} {m plan : Term} {ctx : 
       cases hy with | split _ _ hyt => exact False.elim (typed_pure_never_yields htT (Obend.Core.Proofs.Preservation.tail_empty_not_computation hr) hyt)
   obtain ⟨hcc, hpT, hPlugT⟩ := aux hTyped (sameType_refl θ _) hRData hAPure hYield
   have hvR : validContext θ.shareableVariables [⟨R, .unrestricted⟩] = true := by
-    simp [validContext, isData_shareableUnder _ hRData]
+    simp [validContext, isData_shareableUnder _ hRData, hRData]
   exact ⟨hcc, hpT, .lambda (annotation := ⟨R, .computation P R A, .unrestricted, .once⟩) hPlugT rfl hvR rfl rfl⟩
 
 private theorem closed_app_typed {θ : Assumptions} {f a : Term} {r : Reuse} {q : Quantity} {dom cod : Ty}
     (hf : PartialTyping θ [] f (.arrow r q dom cod) []) (ha : PartialTyping θ [] a dom [])
     (haPure : dom.isComputation = false) (hv : validContext θ.shareableVariables [⟨dom, q⟩] = true) :
     PartialTyping θ [] (.app f a) cod [] := by
-  have hsh : (q != .unrestricted || dom.shareableUnder θ.shareableVariables) = true := by simpa [validContext] using hv
+  have h' : (q != .unrestricted || dom.shareableUnder θ.shareableVariables) = true ∧
+      mustBeLinear ⟨dom, q⟩ = true := by simpa [validContext] using hv
+  have hsh := h'.1
   have hall : argumentAllowed θ q [] dom [] = true := by
     cases q <;> simp [argumentAllowed, haPure, linearFree, reusableCaptures] at hsh ⊢ <;> exact hsh
   exact .application hf ha rfl rfl hall
@@ -426,7 +429,7 @@ theorem multi_turn_shallow_trace_preserves_typing {θ : Assumptions} {kQty : Qua
       rcases H.oneShot with rfl | rfl <;> rfl
     have hDisp := closed_app_typed (closed_app_typed hOpFn hpT (isPlan_shareableUnder θ.shareableVariables H.planValid).2 H.opValidP) hkT rfl hvK
     have hvR : validContext θ.shareableVariables [⟨R, .unrestricted⟩] = true := by
-      simp [validContext, isData_shareableUnder _ H.respData]
+      simp [validContext, isData_shareableUnder _ H.respData, H.respData]
     obtain ⟨_, hallD, hallT⟩ := ih (closed_app_typed hkT hResp (isData_not_computation H.respData) hvR)
     refine ⟨by simp, fun d hm => ?_, fun pr hm => ?_⟩
     · rcases List.mem_cons.mp hm with rfl | hm'
@@ -594,7 +597,7 @@ private theorem allUnrestricted_valid {vars : List Nat} {Γ : Context} (hΓ : Al
     obtain ⟨hq, hsh⟩ := hΓ b (List.mem_cons_self ..)
     have hrest := ih (fun x hx => hΓ x (List.mem_cons_of_mem _ hx))
     simp only [validContext, List.all_cons, Bool.and_eq_true] at hrest ⊢
-    exact ⟨by simp [hq, hsh], hrest⟩
+    exact ⟨by simp [hq, hsh, Ty.bearsCustody_of_shareableUnder hsh], hrest⟩
 
 private theorem allUnrestricted_safe {vars : List Nat} {Γ : Context} (hΓ : AllUnrestricted vars Γ)
     {u : Uses} (hlen : u.length = Γ.length) : safeUses Γ u = true := by
@@ -624,7 +627,8 @@ private theorem weaken_closed_ctx {θ : Assumptions} {t : Term} {τ : Ty}
   | [], _ => ht
   | b :: _, hΓ => by
       obtain ⟨hq, hsh⟩ := hΓ b (List.mem_cons_self ..)
-      have hbV : validContext θ.shareableVariables [b] = true := by simp [validContext, hq, hsh]
+      have hbV : validContext θ.shareableVariables [b] = true := by
+        simp [validContext, hq, hsh, Ty.bearsCustody_of_shareableUnder hsh]
       have hw := Obend.Core.Proofs.Preservation.source_weaken
         (weaken_closed_ctx ht (fun x hx => hΓ x (List.mem_cons_of_mem _ hx))) b hbV
       rw [closed_rename_id (source_scoped ht) Nat.succ] at hw
@@ -732,12 +736,14 @@ private theorem compileDeep_typing_aux {θ : Assumptions} {kQty : Quantity} {P R
     (fun {Γ tag body rest payload row _ _ C} hPayData _ _ ihB ihR hP hR hΓ rowFull {kRet ku} hRowData hkT => by
       subst hP hR
       have hPaySh := isData_shareableUnder θ.shareableVariables hPayData
-      have hbPayValid : validContext θ.shareableVariables [⟨payload, .unrestricted⟩] = true := by simp [validContext, hPaySh]
+      have hbPayValid : validContext θ.shareableVariables [⟨payload, .unrestricted⟩] = true := by
+        simp [validContext, hPaySh, Ty.bearsCustody_of_shareableUnder hPaySh]
       have hΓPay := allUnrestricted_cons hPaySh hΓ
       obtain ⟨bu, hbT⟩ := ihB rfl rfl hΓPay (Obend.Core.Proofs.Preservation.source_weaken hkT ⟨payload, .unrestricted⟩ hbPayValid)
       have hVarSh : (Ty.variant rowFull).shareableUnder θ.shareableVariables = true := by
         simpa [Ty.shareableUnder] using isData_shareableUnder θ.shareableVariables hRowData
-      have hbVarValid : validContext θ.shareableVariables [⟨.variant rowFull, .unrestricted⟩] = true := by simp [validContext, hVarSh]
+      have hbVarValid : validContext θ.shareableVariables [⟨.variant rowFull, .unrestricted⟩] = true := by
+        simp [validContext, hVarSh, hRowData]
       have hshift1 : Obend.Core.Proofs.Preservation.shiftIndex 1 = liftRename Nat.succ := by
         funext idx; cases idx <;> simp [Obend.Core.Proofs.Preservation.shiftIndex, liftRename, Nat.succ_eq_add_one]
       have hbIns := Obend.Core.Proofs.Preservation.source_insert_binding hbT 1 ⟨.variant rowFull, .unrestricted⟩ (by simp) hbVarValid
