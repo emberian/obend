@@ -2,7 +2,7 @@ module
 import all Obend.Hardware.ArrayKernel
 public import Obend.Hardware.Gpu.BlockLower
 public import Obend.Hardware.ArrayKernelOwnership
-@[expose] public section
+public section
 
 /-! Pointwise semantics for the actual ArrayKernel phase evaluator.
 These lemmas expose simultaneous, unique scatters without introducing a second
@@ -17,7 +17,7 @@ set_option autoImplicit false
 abbrev valueAt (mem : Memory) (a i : Nat) : Word :=
   (mem.getD a #[]).getD i 0#64
 
-def writeLoc (w : Nat × Nat × Word) : Nat × Nat := (w.1, w.2.1)
+@[expose] def writeLoc (w : Nat × Nat × Word) : Nat × Nat := (w.1, w.2.1)
 
 /-- One valid store changes exactly its destination, preserving every other cell. -/
 theorem applyWrite_value (p : Program) (mem : Memory) (w : Nat × Nat × Word)

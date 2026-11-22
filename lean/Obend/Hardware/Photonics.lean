@@ -15,7 +15,7 @@ Formalizes coherent complex optical field transfer matrices over $\mathbb{Z}[i]$
 3. **Thermo-Optic Crosstalk Pre-Distortion & 2-Boson Hong–Ou–Mandel Photonics Exports (`Obend.Analysis`)**.
 -/
 public import Obend.Analysis.Equitable
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Photonics
 open Obend.Analysis
@@ -52,7 +52,7 @@ def sub (z w : ComplexField) : ComplexField :=
   ⟨z.re - w.re, z.im - w.im⟩
 
 /-- Complex multiplication $(a + ib)(c + id) = (ac - bd) + i(ad + bc)$ of two optical phasors. -/
-def mul (z w : ComplexField) : ComplexField :=
+@[expose] def mul (z w : ComplexField) : ComplexField :=
   ⟨z.re * w.re - z.im * w.im, z.re * w.im + z.im * w.re⟩
 
 /-- Real scalar field attenuation or gain $c \cdot (E_{\text{re}} + i E_{\text{im}})$. -/
@@ -64,7 +64,7 @@ def mulI (z : ComplexField) : ComplexField :=
   ⟨-z.im, z.re⟩
 
 /-- Optical intensity / power $|E|^2 = E_{\text{re}}^2 + E_{\text{im}}^2$ of a complex field phasor. -/
-def normSq (z : ComplexField) : Int :=
+@[expose] def normSq (z : ComplexField) : Int :=
   z.re * z.re + z.im * z.im
 
 end ComplexField
@@ -114,7 +114,7 @@ $$\begin{pmatrix} E_{\text{out},1} \\ E_{\text{out},2} \end{pmatrix}
   = \begin{pmatrix} t & i \kappa \\ i \kappa & t \end{pmatrix}
     \begin{pmatrix} E_1 \\ E_2 \end{pmatrix}
   = \begin{pmatrix} t E_1 + i \kappa E_2 \\ i \kappa E_1 + t E_2 \end{pmatrix}.$$ -/
-def evalDirectionalCoupler2x2
+@[expose] def evalDirectionalCoupler2x2
     (t kappa : Int) (e1 e2 : ComplexField) : ComplexField × ComplexField :=
   let out1 : ComplexField := ⟨t * e1.re - kappa * e2.im, t * e1.im + kappa * e2.re⟩
   let out2 : ComplexField := ⟨-kappa * e1.im + t * e2.re, kappa * e1.re + t * e2.im⟩
@@ -138,7 +138,7 @@ theorem directional_coupler_2x2_power_conservation
 /-- Upper-arm optical phase shifter transfer matrix $\begin{pmatrix} e^{i\Delta\phi} & 0 \\ 0 & 1 \end{pmatrix}$
 represented by a complex phase phasor `phasePhasor : ComplexField` ($1 + 0i$ for $\Delta\phi = 0$,
 $-1 + 0i$ for $\Delta\phi = \pi$, $0 + 1i$ for $\Delta\phi = \pi/2$). -/
-def evalPhaseShifter2x2
+@[expose] def evalPhaseShifter2x2
     (phasePhasor : ComplexField) (e1 e2 : ComplexField) : ComplexField × ComplexField :=
   (ComplexField.mul phasePhasor e1, e2)
 
@@ -146,7 +146,7 @@ def evalPhaseShifter2x2
 $$T_{\text{MZI}} = U_{\text{DC}}(t, \kappa) \cdot \Phi(\Delta\phi) \cdot U_{\text{DC}}(t, \kappa)$$
 formed by composing the input $2 \times 2$ directional coupler, the upper-arm thermo-optic phase
 shifter `phasePhasor`, and the output $2 \times 2$ directional coupler. -/
-def evalCascadedMzi2x2
+@[expose] def evalCascadedMzi2x2
     (t kappa : Int) (phasePhasor : ComplexField) (eIn1 eIn2 : ComplexField) :
     ComplexField × ComplexField :=
   let (m1, m2) := evalDirectionalCoupler2x2 t kappa eIn1 eIn2

@@ -35,7 +35,7 @@ reluctivity fixed-point iteration** within `Obend.Hardware`:
    - Proves **`stepBhPicardReluctivity_fixed_point`** ($\nu_k = \nu_{\text{sec}}(B^2) \implies \nu_{k+1} = \nu_k$),
      **`stepBhPicardReluctivity_brackets`**, and **`stepBhPicardReluctivity_monotone`**.
 -/
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Magnetics
 set_option autoImplicit false
@@ -82,37 +82,37 @@ structure FemmTriangle2D where
   deriving DecidableEq, Repr
 
 /-- Shape function $x$-gradient numerator $b_0 = y_1 - y_2$. -/
-def FemmTriangle2D.b0 (tri : FemmTriangle2D) : Int := tri.y1 - tri.y2
+abbrev FemmTriangle2D.b0 (tri : FemmTriangle2D) : Int := tri.y1 - tri.y2
 
 /-- Shape function $x$-gradient numerator $b_1 = y_2 - y_0$. -/
-def FemmTriangle2D.b1 (tri : FemmTriangle2D) : Int := tri.y2 - tri.y0
+abbrev FemmTriangle2D.b1 (tri : FemmTriangle2D) : Int := tri.y2 - tri.y0
 
 /-- Shape function $x$-gradient numerator $b_2 = y_0 - y_1$. -/
-def FemmTriangle2D.b2 (tri : FemmTriangle2D) : Int := tri.y0 - tri.y1
+abbrev FemmTriangle2D.b2 (tri : FemmTriangle2D) : Int := tri.y0 - tri.y1
 
 /-- Shape function $y$-gradient numerator $c_0 = x_2 - x_1$. -/
-def FemmTriangle2D.c0 (tri : FemmTriangle2D) : Int := tri.x2 - tri.x1
+abbrev FemmTriangle2D.c0 (tri : FemmTriangle2D) : Int := tri.x2 - tri.x1
 
 /-- Shape function $y$-gradient numerator $c_1 = x_0 - x_2$. -/
-def FemmTriangle2D.c1 (tri : FemmTriangle2D) : Int := tri.x0 - tri.x2
+abbrev FemmTriangle2D.c1 (tri : FemmTriangle2D) : Int := tri.x0 - tri.x2
 
 /-- Shape function $y$-gradient numerator $c_2 = x_1 - x_0$. -/
-def FemmTriangle2D.c2 (tri : FemmTriangle2D) : Int := tri.x1 - tri.x0
+abbrev FemmTriangle2D.c2 (tri : FemmTriangle2D) : Int := tri.x1 - tri.x0
 
 /-- Twice the signed area $2\Delta = b_0 c_1 - b_1 c_0$ of the 2D triangle. -/
-def FemmTriangle2D.twiceArea (tri : FemmTriangle2D) : Int :=
+@[expose] def FemmTriangle2D.twiceArea (tri : FemmTriangle2D) : Int :=
   tri.b0 * tri.c1 - tri.b1 * tri.c0
 
 /-- Magnitude $|2\Delta_e| \ge 0$ of twice the triangle area. -/
-def FemmTriangle2D.absTwiceArea (tri : FemmTriangle2D) : Int :=
+@[expose] def FemmTriangle2D.absTwiceArea (tri : FemmTriangle2D) : Int :=
   Int.ofNat tri.twiceArea.natAbs
 
 /-- Strictly positive area denominator $\max(1, |2\Delta_e|)$ for fixed-point division. -/
-def FemmTriangle2D.areaDenom (tri : FemmTriangle2D) : Int :=
+@[expose] def FemmTriangle2D.areaDenom (tri : FemmTriangle2D) : Int :=
   max 1 tri.absTwiceArea
 
 /-- Golden 2D FEMM stator-tooth triangular mesh element (in micrometers, $2\Delta = 3 \times 10^6\,\mu\text{m}^2$, $\nu = 800$). -/
-def goldenStatorToothTriangle : FemmTriangle2D :=
+@[expose] def goldenStatorToothTriangle : FemmTriangle2D :=
   { x0       := 0
     y0       := 0
     x1       := 2000
@@ -134,27 +134,27 @@ theorem femm_gradient_sum_zero (tri : FemmTriangle2D) :
 
 /-- Scaled $x$-component numerator of $\nabla A_z$ (equal to $-2\Delta \cdot B_y$):
 $b_0 A_0 + b_1 A_1 + b_2 A_2$. -/
-def gradAxScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
+@[expose] def gradAxScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   tri.b0 * a0 + tri.b1 * a1 + tri.b2 * a2
 
 /-- Scaled $y$-component numerator of $\nabla A_z$ (equal to $2\Delta \cdot B_x$):
 $c_0 A_0 + c_1 A_1 + c_2 A_2$. -/
-def gradAyScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
+@[expose] def gradAyScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   tri.c0 * a0 + tri.c1 * a1 + tri.c2 * a2
 
 /-- Scaled squared magnetic flux density numerator $(2\Delta)^2 \|\mathbf{B}\|^2 = (\nabla_x A_z)^2 + (\nabla_y A_z)^2$. -/
-def fluxDensitySqScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
+@[expose] def fluxDensitySqScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   (gradAxScaled tri a0 a1 a2) * (gradAxScaled tri a0 a1 a2) +
   (gradAyScaled tri a0 a1 a2) * (gradAyScaled tri a0 a1 a2)
 
 /-- Numerator $\nu\,(2\Delta)^2 \|\nabla A_z\|^2$ ($8|\Delta_e|$ times $W_e$); see `evalElementMagneticEnergyQ`
 and `evalElementMagneticEnergyAreaScaled` for `/ \Delta_e`-normalized element energy across non-uniform meshes. -/
-def evalElementMagneticEnergyScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
+@[expose] def evalElementMagneticEnergyScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   tri.nuScaled * fluxDensitySqScaled tri a0 a1 a2
 
 /-- Fixed-point `/ \Delta_e`-normalized element magnetic energy
 $\lfloor (\text{scale} \cdot \nu_e ((b \cdot A)^2 + (c \cdot A)^2)) / (4 \cdot \max(1, |2\Delta_e|)) \rfloor$. -/
-def evalElementMagneticEnergyAreaScaled (scale : Int) (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
+@[expose] def evalElementMagneticEnergyAreaScaled (scale : Int) (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   (scale * evalElementMagneticEnergyScaled tri a0 a1 a2) / (4 * tri.areaDenom)
 
 /-- Universal Gauge Invariance Theorem (`femm_gauge_invariance`):
@@ -768,7 +768,7 @@ theorem evalMeshTotalCoEnergy_gauge_invariant
 /-! ## 5. Damped Picard Nonlinear B-H Chord/Secant Fixed-Point Iteration (`stepBhPicardReluctivity`) -/
 
 /-- Evaluates nonlinear ferromagnetic chord/secant reluctivity $\nu_{\text{sec}}(B^2) = \nu_0 + k_{\text{sat}} B^2$. -/
-def evalNonlinearReluctivity (nuLinear kSat bSq : Int) : Int :=
+@[expose] def evalNonlinearReluctivity (nuLinear kSat bSq : Int) : Int :=
   nuLinear + kSat * bSq
 
 /-- **Damped Picard Fixed-Point Update (`stepBhPicardReluctivity`)**:
@@ -777,7 +777,7 @@ computes the convex-combination fixed-point update toward $\nu_{\text{sec}}(B^2)
 $$\nu_{k+1} = \left\lfloor \frac{(1000 - \omega_{\text{pm}}) \cdot \nu_k + \omega_{\text{pm}} \cdot \nu_{\text{sec}}(B^2)}{1000} \right\rfloor.$$
 Unlike an unnormalized running sum, `stepBhPicardReluctivity` has the genuine fixed point
 $\nu^* = \nu_{\text{sec}}(B^2)$ for every relaxation weight $\omega_{\text{pm}} \in \mathbb{Z}$! -/
-def stepBhPicardReluctivity (nuLinear kSat omegaPermille nuCur bSq : Int) : Int :=
+@[expose] def stepBhPicardReluctivity (nuLinear kSat omegaPermille nuCur bSq : Int) : Int :=
   ((1000 - omegaPermille) * nuCur + omegaPermille * evalNonlinearReluctivity nuLinear kSat bSq) / 1000
 
 /-- **Exact Fixed-Point Stationarity Theorem (`stepBhPicardReluctivity_fixed_point`)**:

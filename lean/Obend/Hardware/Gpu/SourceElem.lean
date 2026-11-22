@@ -1,6 +1,6 @@
 module
 public import Obend.Hardware.Gpu.SourceOps
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.Source
 open Obend.Core.Term Obend.Equiv Obend.Leaf
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.OpenHypergraph
@@ -25,7 +25,7 @@ theorem mux_sound {c x y : Term} (cv xv yv : Word)
     (.run hy (.nat _))) (mux_steps cv xv yv)
 
 /-- Core4 meaning of every GPU element operation, including missing-operand zero defaults. -/
-def elemTerm (op : ElemOp) (args : List Term) : Term :=
+@[expose] def elemTerm (op : ElemOp) (args : List Term) : Term :=
   let a0 := args.getD 0 (.nat 0)
   let a1 := args.getD 1 (.nat 0)
   let a2 := args.getD 2 (.nat 0)

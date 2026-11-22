@@ -4,7 +4,7 @@ Subtraction adds 2^64 before Nat subtraction; shifts guard the count because Cor
 masks it modulo 64 whereas GPU element operations return zero for counts ≥ 64. -/
 public import Obend.Hardware.Gpu
 public import Obend.Leaf.Emit
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.Source
 open Obend.Core.Term Obend.Equiv Obend.Leaf
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.OpenHypergraph
@@ -14,7 +14,7 @@ inductive Binary where
   | add | mul | sub | band | bor | ult | shl | shr
   deriving DecidableEq, Repr
 
-def Binary.eval : Binary → Word → Word → Word
+@[expose] def Binary.eval : Binary → Word → Word → Word
   | .add, x, y => x + y
   | .mul, x, y => x * y
   | .sub, x, y => x - y
@@ -24,7 +24,7 @@ def Binary.eval : Binary → Word → Word → Word
   | .shl, x, y => wordShl x y
   | .shr, x, y => wordShr x y
 
-def Binary.op : Binary → ElemOp
+@[expose] def Binary.op : Binary → ElemOp
   | .add => .scalar .add
   | .mul => .scalar .mul
   | .sub => .scalar .sub
@@ -34,7 +34,7 @@ def Binary.op : Binary → ElemOp
   | .shl => .shl
   | .shr => .shr
 
-def Binary.term : Binary → Term → Term → Term
+@[expose] def Binary.term : Binary → Term → Term → Term
   | .add, x, y => .binary .modulo (.binary .add x y) (.nat (2^64))
   | .mul, x, y => .binary .modulo (.binary .multiply x y) (.nat (2^64))
   | .sub, x, y => .binary .modulo
@@ -110,9 +110,9 @@ theorem Binary.steps (b : Binary) (x y : Word) :
       simpa [Binary.eval, BitVec.ushiftRight_eq_zero (Nat.le_of_not_lt h)] using
         (Steps.next (Step.ifFalse (.binary .lshr (.nat x.toNat) (.nat y.toNat)) (.nat 0)) (.refl _))
 
-def muxEval (c x y : Word) : Word := if c != 0#64 then x else y
+@[expose] def muxEval (c x y : Word) : Word := if c != 0#64 then x else y
 
-def muxTerm (c x y : Term) : Term := .ifBool (.binary .equal c (.nat 0)) y x
+@[expose] def muxTerm (c x y : Term) : Term := .ifBool (.binary .equal c (.nat 0)) y x
 
 theorem mux_substitute (c x y : Term) (σ : Nat → Term) :
     (muxTerm c x y).substitute σ =

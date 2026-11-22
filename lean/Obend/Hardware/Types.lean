@@ -27,7 +27,7 @@ public import Std.Tactic.BVDecide
 public meta import Std.Tactic.BVDecide.Reflect
 public import Obend.Core.Term
 public import Obend.Hardware.HDL
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Types
 open Obend.Core.Term Obend.Hardware.HDL
@@ -65,18 +65,18 @@ def maxArmWidth : List (String × HwType) → Nat
 def HwType.mkTaggedUnion (tagBits : Nat) (arms : List (String × HwType)) : HwType :=
   .taggedUnion tagBits (maxArmWidth arms) arms.length
 
-@[simp] theorem bitWidth_bits (w : Nat) : (HwType.bits w).bitWidth = w := rfl
+@[simp] theorem bitWidth_bits (w : Nat) : (HwType.bits w).bitWidth = w := by rfl
 
-@[simp] theorem bitWidth_structNil : HwType.structNil.bitWidth = 0 := rfl
+@[simp] theorem bitWidth_structNil : HwType.structNil.bitWidth = 0 := by rfl
 
 @[simp] theorem bitWidth_structCons (name : String) (ty rest : HwType) :
-    (HwType.structCons name ty rest).bitWidth = ty.bitWidth + rest.bitWidth := rfl
+    (HwType.structCons name ty rest).bitWidth = ty.bitWidth + rest.bitWidth := by rfl
 
 @[simp] theorem bitWidth_taggedUnion (tagBits payloadWidth numArms : Nat) :
-    (HwType.taggedUnion tagBits payloadWidth numArms).bitWidth = tagBits + payloadWidth := rfl
+    (HwType.taggedUnion tagBits payloadWidth numArms).bitWidth = tagBits + payloadWidth := by rfl
 
 @[simp] theorem bitWidth_array (len : Nat) (elem : HwType) :
-    (HwType.array len elem).bitWidth = len * elem.bitWidth := rfl
+    (HwType.array len elem).bitWidth = len * elem.bitWidth := by rfl
 
 /-- Compute the static bit offset of field `target` inside a `HwType` struct spine. -/
 def fieldOffset : HwType → String → Option Nat
@@ -226,7 +226,7 @@ theorem pack_unpack_id (ty : HwType) (f : PackedBitFrame) :
 /-! ## 3. Hardware Struct Bit-Slice Lenses & Non-Interference Laws -/
 
 /-- Bit-mask for a slice of width `w` bits (`(1 <<< w) - 1`, or all-ones for `w ≥ 64`). -/
-def widthMask64 (w : Nat) : BitVec 64 :=
+@[expose] def widthMask64 (w : Nat) : BitVec 64 :=
   if w ≥ 64 then ~~~0#64 else (1#64 <<< w) - 1#64
 
 /-- A packed multi-field hardware struct bus where each field slot `f : Nat` carries a width-masked
@@ -351,7 +351,7 @@ def evalCaseMuxSpec
 
 /-- Compile a `Term.case` dispatch over `tagExpr` and `payloadExpr` into a cascade of hardware `.mux`
 nodes in `RtlExpr`. -/
-def compileCaseMuxRtl
+@[expose] def compileCaseMuxRtl
     (tagExpr : RtlExpr)
     (arms : List (Nat × RtlExpr))
     (defaultExpr : RtlExpr) : RtlExpr :=
@@ -450,11 +450,11 @@ structure RtlLayoutCtx where
   deriving DecidableEq, Repr
 
 /-- Look up the `(offset, width)` bit-slice for a struct field `fieldName` in `ctx`. -/
-def RtlLayoutCtx.lookupField (ctx : RtlLayoutCtx) (fieldName : String) : Option (Nat × Nat) :=
+@[expose] def RtlLayoutCtx.lookupField (ctx : RtlLayoutCtx) (fieldName : String) : Option (Nat × Nat) :=
   (ctx.structSlices.find? (fun (f, _) => f == fieldName)).map (·.2)
 
 /-- Look up the `(tagIdx, payloadWidth)` descriptor for a sum constructor `armLabel` in `ctx`. -/
-def RtlLayoutCtx.lookupArm (ctx : RtlLayoutCtx) (armLabel : String) : Option (Nat × Nat) :=
+@[expose] def RtlLayoutCtx.lookupArm (ctx : RtlLayoutCtx) (armLabel : String) : Option (Nat × Nat) :=
   (ctx.unionArms.find? (fun (l, _) => l == armLabel)).map (·.2)
 
 /-- Specification of extracting a bit-slice at `(offset, width)` from a 64-bit hardware word. -/
@@ -462,7 +462,7 @@ def evalSliceExtract64 (word : BitVec 64) (offset width : Nat) : BitVec 64 :=
   (word >>> ((BitVec.ofNat 64 offset).toNat % 64)) &&& widthMask64 width
 
 /-- Compile bit-slice extraction `(word >>> offset) & widthMask64 width` into `RtlExpr`. -/
-def compileSliceExtractRtl (wordExpr : RtlExpr) (offset width : Nat) : RtlExpr :=
+@[expose] def compileSliceExtractRtl (wordExpr : RtlExpr) (offset width : Nat) : RtlExpr :=
   .alu .bitAnd
     (.alu .lshr wordExpr (.const (BitVec.ofNat 64 offset)))
     (.const (widthMask64 width))
@@ -472,14 +472,14 @@ def evalSliceInsert64 (acc fieldVal : BitVec 64) (offset width : Nat) : BitVec 6
   acc ||| ((fieldVal &&& widthMask64 width) <<< ((BitVec.ofNat 64 offset).toNat % 64))
 
 /-- Compile bit-slice insertion `acc | ((field & widthMask64 width) << offset)` into `RtlExpr`. -/
-def compileSliceInsertRtl (accExpr fieldExpr : RtlExpr) (offset width : Nat) : RtlExpr :=
+@[expose] def compileSliceInsertRtl (accExpr fieldExpr : RtlExpr) (offset width : Nat) : RtlExpr :=
   .alu .bitOr accExpr
     (.alu .shl
       (.alu .bitAnd fieldExpr (.const (widthMask64 width)))
       (.const (BitVec.ofNat 64 offset)))
 
 /-- Bitmask that zeroes out the slice `[offset + width - 1 : offset]` in a 64-bit word. -/
-def clearSliceMask64 (offset width : Nat) : BitVec 64 :=
+@[expose] def clearSliceMask64 (offset width : Nat) : BitVec 64 :=
   ~~~(widthMask64 width <<< ((BitVec.ofNat 64 offset).toNat % 64))
 
 /-- Specification of updating slice `(offset, width)` in `word` with `newVal`. -/
@@ -489,7 +489,7 @@ def evalSliceUpdate64 (word newVal : BitVec 64) (offset width : Nat) : BitVec 64
 
 /-- Compile in-place bit-slice update `(word & ~(mask << offset)) | ((newVal & mask) << offset)`
 into `RtlExpr` (used for `.extend inherited fields`). -/
-def compileSliceUpdateRtl (wordExpr newValExpr : RtlExpr) (offset width : Nat) : RtlExpr :=
+@[expose] def compileSliceUpdateRtl (wordExpr newValExpr : RtlExpr) (offset width : Nat) : RtlExpr :=
   .alu .bitOr
     (.alu .bitAnd wordExpr (.const (clearSliceMask64 offset width)))
     (.alu .shl
@@ -502,15 +502,15 @@ def evalTagInject64 (tagBits tagIdx payloadWidth : Nat) (payload : BitVec 64) : 
 
 /-- Compile tagged-union injection `.inject label payload` into a single 64-bit `RtlExpr` word
 with tag in `[tagBits - 1 : 0]` and payload in `[tagBits + payloadWidth - 1 : tagBits]`. -/
-def compileTagInjectRtl (tagBits tagIdx payloadWidth : Nat) (payloadExpr : RtlExpr) : RtlExpr :=
+@[expose] def compileTagInjectRtl (tagBits tagIdx payloadWidth : Nat) (payloadExpr : RtlExpr) : RtlExpr :=
   compileSliceInsertRtl (.const (BitVec.ofNat 64 tagIdx &&& widthMask64 tagBits)) payloadExpr tagBits payloadWidth
 
 /-- Compile tag extraction `[tagBits - 1 : 0]` from a packed 64-bit tagged union word. -/
-def compileTagExtractRtl (tagBits : Nat) (scrutExpr : RtlExpr) : RtlExpr :=
+@[expose] def compileTagExtractRtl (tagBits : Nat) (scrutExpr : RtlExpr) : RtlExpr :=
   compileSliceExtractRtl scrutExpr 0 tagBits
 
 /-- Compile payload extraction `[tagBits + payloadWidth - 1 : tagBits]` from a packed 64-bit tagged union word. -/
-def compilePayloadExtractRtl (tagBits payloadWidth : Nat) (scrutExpr : RtlExpr) : RtlExpr :=
+@[expose] def compilePayloadExtractRtl (tagBits payloadWidth : Nat) (scrutExpr : RtlExpr) : RtlExpr :=
   compileSliceExtractRtl scrutExpr tagBits payloadWidth
 
 /-- Soundness of `compileSliceExtractRtl`, `compileSliceInsertRtl`, and `compileSliceUpdateRtl`. -/

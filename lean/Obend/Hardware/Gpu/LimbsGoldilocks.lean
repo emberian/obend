@@ -9,23 +9,23 @@ assembly, and special-prime reduction theorems. Inputs need not be canonical.
 The reduction follows the existing `goldilocksReduce128Spec` exactly; this is
 ordinary representation arithmetic, without Montgomery-domain conversions.
 -/
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.Limbs.Goldilocks
 open Obend.Apps.ZkNtt
 
-def prime : Word := ofNat goldilocksPrime
+@[expose] def prime : Word := ofNat goldilocksPrime
 
-def canon (a : Word) : Word := if lt a prime then a else sub a prime
+@[expose] def canon (a : Word) : Word := if lt a prime then a else sub a prime
 
-def addCanonical (a b : Word) : Word :=
+@[expose] def addCanonical (a b : Word) : Word :=
   let rem := Limbs.sub prime b
   if lt a rem then Limbs.add a b else Limbs.sub a rem
 
-def subCanonical (a b : Word) : Word :=
+@[expose] def subCanonical (a b : Word) : Word :=
   if lt a b then Limbs.add (Limbs.sub prime b) a else Limbs.sub a b
 
-def add (a b : Word) : Word := addCanonical (canon a) (canon b)
-def sub (a b : Word) : Word := subCanonical (canon a) (canon b)
+@[expose] def add (a b : Word) : Word := addCanonical (canon a) (canon b)
+@[expose] def sub (a b : Word) : Word := subCanonical (canon a) (canon b)
 
 theorem prime_val : prime.val = goldilocksPrime := by
   rw [prime, ofNat_val]
@@ -87,7 +87,7 @@ theorem sub_val (a b : Word) : (sub a b).val = goldilocksSubSpec a.val b.val := 
     split <;> unfold goldilocksPrime at * <;> omega
 
 /-- Fold x = lo + 2^64 hi using 2^64 = 2^32−1 and 2^96 = −1 mod p. -/
-def reduce (x : Wide) : Word :=
+@[expose] def reduce (x : Wide) : Word :=
   let middle := Limbs.sub ⟨0#32, x.hi.lo⟩ ⟨x.hi.lo, 0#32⟩
   sub (add x.lo middle) ⟨x.hi.hi, 0#32⟩
 
@@ -121,7 +121,7 @@ theorem canon_eq {a : Word} (h : a.val < goldilocksPrime) : canon a = a := by
 
 /-- The exact existing glMul graph's reduction: canonicalize lo once, then use
 canonical add/sub. The bounds below justify those input preconditions. -/
-def reduceNetwork (x : Wide) : Word :=
+@[expose] def reduceNetwork (x : Wide) : Word :=
   let middle := Limbs.sub ⟨0#32, x.hi.lo⟩ ⟨x.hi.lo, 0#32⟩
   subCanonical (addCanonical (canon x.lo) middle) ⟨x.hi.hi, 0#32⟩
 
@@ -158,7 +158,7 @@ theorem reduceNetwork_eq_reduce (x : Wide) : reduceNetwork x = reduce x := by
 
 /-- Actual scalar glMul network after replacing each 64-bit primitive by its
 proved pair-of-u32 implementation. -/
-def mul (a b : Word) : Word := reduceNetwork (mulNetwork a b)
+@[expose] def mul (a b : Word) : Word := reduceNetwork (mulNetwork a b)
 
 theorem mul_sound (a b : Word) : (mul a b).val = goldilocksMulSpec a.val b.val := by
   have hh := (reduce_sound (mulNetwork a b)).2

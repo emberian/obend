@@ -1,5 +1,6 @@
 module
 import all Obend.Hardware.ArrayKernel
+import all Obend.Hardware.Gpu.Memory
 /-
 # Barrier-separated workgroup kernels
 
@@ -28,7 +29,7 @@ it does not claim that G4's initial zero denotes an arbitrary input upload.
 -/
 public import Obend.Hardware.Gpu.Memory
 public import Obend.Hardware.ArrayKernel
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu.Workgroup
 open Obend.Hardware.Gpu.Memory
@@ -39,14 +40,14 @@ this common interface records their memory protocol. -/
 abbrev Phase := Nat → List Ev
 
 /-- Every lane encounters the same dynamic barrier instances, including lanes with no accesses. -/
-def tracePhases : List Phase → Nat → Nat → List Ev
+@[expose] def tracePhases : List Phase → Nat → Nat → List Ev
   | [], _, _ => []
   | p :: ps, lane, inst =>
     p lane ++ [.barrier (2 * inst) [.workgroup], .barrier (2 * inst + 1) [.storage]] ++
       tracePhases ps lane (inst + 1)
 
 /-- G4 trace for one workgroup. Both address spaces are synchronized. -/
-def trace (lanes : Nat) (phases : List Phase) : Shape :=
+abbrev trace (lanes : Nat) (phases : List Phase) : Shape :=
   { threads := (List.range lanes).map fun lane =>
       { id := lane, wg := 0, prog := tracePhases phases lane 0 } }
 
@@ -62,12 +63,12 @@ theorem phase_barrier (p : Phase) (ps : List Phase) (lane inst : Nat) :
 /-! ## The source array language uses this same trace interface -/
 
 /-- Prefix-sum array addresses. Bounds are checked by `ArrayKernel.Program.check`. -/
-def arrayBase : List Obend.Hardware.ArrayKernel.Buffer → Nat → Nat
+@[expose] def arrayBase : List Obend.Hardware.ArrayKernel.Buffer → Nat → Nat
   | [], _ => 0
   | _ :: _, 0 => 0
   | b :: bs, i + 1 => b.size + arrayBase bs i
 
-def arrayLoc (bs : List Obend.Hardware.ArrayKernel.Buffer) (array index : Nat) : Loc :=
+@[expose] def arrayLoc (bs : List Obend.Hardware.ArrayKernel.Buffer) (array index : Nat) : Loc :=
   { space := match bs[array]? with
       | some b => if b.storage == .shared then .workgroup else .storage
       | none => .storage
@@ -75,7 +76,7 @@ def arrayLoc (bs : List Obend.Hardware.ArrayKernel.Buffer) (array index : Nat) :
 
 /-- One logical invocation's actual source-language accesses, with arithmetic evaluated by
 `ArrayKernel.runRegisters`. Constants have storage locations but are never written by a kernel. -/
-def sourceLaneEvents (bs : List Obend.Hardware.ArrayKernel.Buffer)
+@[expose] def sourceLaneEvents (bs : List Obend.Hardware.ArrayKernel.Buffer)
     (p : Obend.Hardware.ArrayKernel.Phase) (mem : Obend.Hardware.ArrayKernel.Memory)
     (group lane : Nat) : List Ev :=
   p.reads.map (fun r => .read (arrayLoc bs r.array (r.index.eval group lane)) false) ++
@@ -84,7 +85,7 @@ def sourceLaneEvents (bs : List Obend.Hardware.ArrayKernel.Buffer)
 
 /-- Logical invocations are assigned to physical lanes by the emitter's strided loop.
 The barrier is outside that loop, inserted by `tracePhases`. -/
-def sourcePhase (bs : List Obend.Hardware.ArrayKernel.Buffer)
+@[expose] def sourcePhase (bs : List Obend.Hardware.ArrayKernel.Buffer)
     (p : Obend.Hardware.ArrayKernel.Phase) (mem : Obend.Hardware.ArrayKernel.Memory)
     (group width : Nat) : Phase := fun lane =>
   ((List.range p.lanes).filter (fun logical => logical % width == lane)).flatMap
@@ -92,7 +93,7 @@ def sourcePhase (bs : List Obend.Hardware.ArrayKernel.Buffer)
 
 /-- Record the source evaluator's concrete accesses at every phase boundary. This construction
 is also a protocol projection: changing values cannot change addresses or barriers. -/
-def sourcePhases (bs : List Obend.Hardware.ArrayKernel.Buffer)
+@[expose] def sourcePhases (bs : List Obend.Hardware.ArrayKernel.Buffer)
     (ps : List Obend.Hardware.ArrayKernel.Phase) (mem : Obend.Hardware.ArrayKernel.Memory)
     (group width : Nat) : List Phase :=
   match ps with
@@ -100,7 +101,7 @@ def sourcePhases (bs : List Obend.Hardware.ArrayKernel.Buffer)
   | p :: rest => sourcePhase bs p mem group width ::
       sourcePhases bs rest (Obend.Hardware.ArrayKernel.evalPhase p group mem) group width
 
-def sourceTrace (p : Obend.Hardware.ArrayKernel.Program)
+@[expose] def sourceTrace (p : Obend.Hardware.ArrayKernel.Program)
     (d : Obend.Hardware.ArrayKernel.Dispatch) (mem : Obend.Hardware.ArrayKernel.Memory)
     (group width : Nat) : Shape :=
   trace width (sourcePhases p.buffers d.phases mem group width)
@@ -129,7 +130,7 @@ def sourceProtocolPhases (bs : List Obend.Hardware.ArrayKernel.Buffer)
     (ps : List Obend.Hardware.ArrayKernel.Phase) (group width : Nat) : List Phase :=
   ps.map (fun p => sourcePhaseProtocol bs p group width)
 
-def sourceProtocolTrace (p : Obend.Hardware.ArrayKernel.Program)
+abbrev sourceProtocolTrace (p : Obend.Hardware.ArrayKernel.Program)
     (d : Obend.Hardware.ArrayKernel.Dispatch) (group width : Nat) : Shape :=
   trace width (sourceProtocolPhases p.buffers d.phases group width)
 
@@ -242,17 +243,19 @@ def shortPath (r : Rel) (a b : Nat) : Bool :=
   r.has a b || r.any (fun (x, y) => x == a &&
     (r.has y b || r.any (fun (z, t) => z == y && r.has t b)))
 
+example :
+    ∃ (r : Rel) (a b : Nat), a = 0 ∧ b = 1 ∧ shortPath r a b = true := by
+  exact ⟨[(0, 1)], 0, 1, rfl, rfl, rfl⟩
+
 private theorem shortPath_sound (r : Rel) {a b : Nat} (h : shortPath r a b = true) :
     (a, b) ∈ r.closure 2 := by
   simp only [shortPath, Bool.or_eq_true, List.any_eq_true] at h
   rcases h with h | ⟨⟨x,y⟩, hxy, h⟩
   · exact mem_closure r 2 (by simpa [Rel.has] using h)
   · simp only [Bool.and_eq_true, beq_iff_eq, Bool.or_eq_true, List.any_eq_true] at h
-    rcases h with ⟨rfl, h | ⟨⟨z,t⟩, hzt, h⟩⟩
+    rcases h with ⟨rfl, h | ⟨⟨z,t⟩, hzt, rfl, htb⟩⟩
     · exact mem_step r.step (mem_step_comp r hxy (by simpa [Rel.has] using h))
-    · simp only [Bool.and_eq_true, beq_iff_eq] at h
-      rcases h with ⟨rfl, htb⟩
-      exact mem_step_comp r.step (mem_step r hxy)
+    · exact mem_step_comp r.step (mem_step r hxy)
         (mem_step_comp r hzt (by simpa [Rel.has] using htb))
 
 private theorem closure_add (r : Rel) (n m : Nat) :
@@ -263,7 +266,7 @@ private theorem closure_add (r : Rel) (n m : Nat) :
 
 /-- Finite, value-independent evidence of actual synchronization, not an assumption of an
 outcome or of the `racy` result. `po` handles same-thread pairs. -/
-def ordered (ns : List Node) (a b : Nat) : Bool :=
+@[expose] def ordered (ns : List Node) (a b : Nat) : Bool :=
   (po ns).has a b || (2 ≤ ns.length &&
     (shortPath (syncEdges ns [.storage]) a b ||
       shortPath (syncEdges ns [.workgroup]) a b ||
@@ -320,8 +323,8 @@ theorem barrier_orders (ns : List Node) (a b enter leave inst : Nat) (space : Sp
   have hsw : (sw ns).has enter leave = true := by
     apply List.contains_iff_mem.mpr
     apply mem_pairs he hl
-    simp only [hne, bne_iff_ne, hwg, beq_self_eq_true, hea, hle,
-      Bool.and_eq_true, true_and, and_true]
+    simp only [bne_iff_ne, hwg, beq_self_eq_true, hea, hle,
+      Bool.and_eq_true, and_true]
     exact hne
   have h₁ : (a, enter) ∈ syncEdges ns [space] := by
     apply mem_pairs ha he
@@ -370,7 +373,7 @@ def barrierOffset : List Phase → Nat → Nat → Nat
 
 /-- Extract the structural certificate while lowering the very same phase sequence to events.
 Array-backed lookups make phase and barrier lookup constant-time. No memory-model search occurs. -/
-def layout (lanes : Nat) (ps : List Phase) : PhaseLayout :=
+abbrev layout (lanes : Nat) (ps : List Phase) : PhaseLayout :=
   let counts := (List.range lanes).map fun lane => ps.map fun p => (p lane).length + 2
   let starts := ((counts.map List.sum).scanl (· + ·) 0).toArray
   let tags := (counts.flatMap fun ns => ns.zipIdx.flatMap fun (n, phase) =>
@@ -381,17 +384,17 @@ def layout (lanes : Nat) (ps : List Phase) : PhaseLayout :=
     barrier := fun p lane space => (barriers.getD lane #[]).getD p 0 +
       if space = .storage then 1 else 0 }
 
-def sourceLayout (p : Obend.Hardware.ArrayKernel.Program)
+abbrev sourceLayout (p : Obend.Hardware.ArrayKernel.Program)
     (d : Obend.Hardware.ArrayKernel.Dispatch) (mem : Obend.Hardware.ArrayKernel.Memory)
     (group width : Nat) : PhaseLayout :=
   layout width (sourcePhases p.buffers d.phases mem group width)
 
-def sourceProtocolLayout (p : Obend.Hardware.ArrayKernel.Program)
+abbrev sourceProtocolLayout (p : Obend.Hardware.ArrayKernel.Program)
     (d : Obend.Hardware.ArrayKernel.Dispatch) (group width : Nat) : PhaseLayout :=
   layout width (sourceProtocolPhases p.buffers d.phases group width)
 
 /-- Linear construction of event identities, equivalent to G4's indexed-list definition. -/
-def threadNodesFast (t : Thread) : List Node :=
+@[expose] def threadNodesFast (t : Thread) : List Node :=
   t.prog.mapIdx fun i e => { id := ⟨t.id, i⟩, wg := t.wg, ev := e }
 
 theorem threadNodesFast_eq (t : Thread) : threadNodesFast t = t.nodes := by
@@ -402,7 +405,7 @@ theorem threadNodesFast_eq (t : Thread) : threadNodesFast t = t.nodes := by
     simp [threadNodesFast, Thread.nodes, List.getD_eq_getElem?_getD,
       List.getElem?_eq_getElem hib]
 
-def nodesFast (P : Shape) : Array Node := (P.threads.flatMap threadNodesFast).toArray
+abbrev nodesFast (P : Shape) : Array Node := (P.threads.flatMap threadNodesFast).toArray
 
 theorem nodesFast_eq (P : Shape) : nodesFast P = P.nodes.toArray := by
   have ht : threadNodesFast = Thread.nodes := funext threadNodesFast_eq
@@ -410,7 +413,7 @@ theorem nodesFast_eq (P : Shape) : nodesFast P = P.nodes.toArray := by
 
 /-- Local geometry of one access and one barrier. Checks only event labels and positions.
 There is no happens-before query or transitive closure in this predicate. -/
-def boundary (P : Shape) (c : PhaseLayout) (a p : Nat) (space : Space) (before : Bool) : Bool :=
+@[expose] def boundary (P : Shape) (c : PhaseLayout) (a p : Nat) (space : Space) (before : Bool) : Bool :=
   let x := P.nodes.getD a default
   let j := c.barrier p x.id.t space
   let y := P.nodes.getD j default
@@ -420,7 +423,7 @@ def boundary (P : Shape) (c : PhaseLayout) (a p : Nat) (space : Space) (before :
 
 /-- Linear in the access count times the number of stages: a stage barrier is after its own
 accesses and before every later stage's accesses. This checker never materializes Vulkan relations. -/
-def PhaseLayout.geometry (P : Shape) (c : PhaseLayout) : Bool :=
+@[expose] def PhaseLayout.geometry (P : Shape) (c : PhaseLayout) : Bool :=
   let ns := P.nodes
   ((List.range ns.length).filter fun a => (ns.getD a default).ev.loc?.isSome).all fun a =>
     [.storage, .workgroup].all fun space =>
@@ -540,7 +543,7 @@ private theorem phase_locord (P : Shape) (c : PhaseLayout) (hg : c.geometry P = 
 established by unique scatter addresses plus disjoint source/destination arrays. No synchronization
 or execution outcome occurs in this condition. The finite quantifiers are deliberately exposed so
 clients can prove it from a symbolic ownership invariant instead of enumerating pairs. -/
-def PhaseLayout.Separated (P : Shape) (c : PhaseLayout) : Prop :=
+abbrev PhaseLayout.Separated (P : Shape) (c : PhaseLayout) : Prop :=
   ∀ a ∈ P.static.mems, ∀ b ∈ P.static.mems,
     a ≠ b → P.static.sameLoc a b = true →
     ((P.nodes.getD a default).ev.isWrite || (P.nodes.getD b default).ev.isWrite) = true →
@@ -664,8 +667,7 @@ theorem wf_sourceValid (P : Shape) (w : List Nat) (r : Nat)
     simp [Static.externalAt, Shape.static, hex]
   have hspec : P.spec[posOf P.static.reads r]? =
       some (0 :: ((P.static.writesAt r).filter (· != r)).map (· + 1)) := by
-    simp [Shape.spec, Static.spec, List.getElem?_append, List.length_map, hpos,
-      List.getElem?_map, hread, hread', hea]
+    simp [Shape.spec, Static.spec, List.getElem?_append, List.length_map, hpos, hread', hea]
   have hc := wf_get w P.spec hw (posOf P.static.reads r) _ hspec
   simp only [List.mem_cons, List.mem_map] at hc
   rcases hc with hz | ⟨a, ha, hk⟩
@@ -677,8 +679,7 @@ theorem wf_sourceValid (P : Shape) (w : List Nat) (r : Nat)
       exact List.mem_range.mp (List.mem_filter.mp ham).1
     have heq : P.static.rf w r = .internal a := by
       simp only [Static.rf, ← hk]
-      simp [show a + 1 ≠ 0 by omega,
-        show a + 1 ≤ P.static.nodes.length by exact hb]
+      simp [show a + 1 ≤ P.static.nodes.length by exact hb]
     simp [sourceValid, heq, haw, hne]
 
 /-- `last` is the last write before this read: every other write is either before `last` or after
@@ -703,7 +704,7 @@ private theorem read_mem (P : Shape) (r : Nat) (hr : r ∈ P.static.reads) :
   refine ⟨hb, ?_⟩
   change (P.nodes.getD r default).ev.isRead = true at hv
   change (P.nodes.getD r default).ev.loc?.isSome = true
-  cases he : (P.nodes.getD r default).ev <;> simp_all [Ev.isRead, Ev.loc?]
+  cases he : (P.nodes.getD r default).ev <;> simp_all [Ev.loc?]
 
 private theorem write_mem (P : Shape) (r : Nat) (hr : r ∈ P.static.writes) :
     r ∈ P.static.mems := by
@@ -813,7 +814,7 @@ theorem consistent_reads_latest (s : Static) (w : List Nat) (r last : Nat)
   | external v => simp [sourceValid, hf] at hv
   | internal a =>
     by_cases heq : a = last
-    · simpa [heq]
+    · simp [heq]
     · have ha : a ∈ s.writesAt r := by
         have hva : (s.writesAt r).contains a = true ∧ a ≠ r := by
           simpa [sourceValid, hf, Bool.and_eq_true] using hv
@@ -997,7 +998,7 @@ theorem phase_reads_source (P : Shape) (c : PhaseLayout) (w : List Nat) (r : Nat
       omega
 
 /-- A sequential read at a phase boundary, including the initial-memory case. -/
-def phaseReadValue (P : Shape) (c : PhaseLayout) (w : List Nat) (r : Nat) : Nat :=
+@[expose] def phaseReadValue (P : Shape) (c : PhaseLayout) (w : List Nat) (r : Nat) : Nat :=
   match maxBefore c.phase (c.phase r) (P.static.writesAt r) with
   | none => 0
   | some last => P.static.valueOfWrite w P.nodes.length last
@@ -1026,7 +1027,7 @@ theorem phase_read_sequential (P : Shape) (c : PhaseLayout) (w : List Nat) (r : 
 
 @[simp] theorem eraseShape_writesAt (P : Shape) (r : Nat) :
     (eraseShape P).static.writesAt r = P.static.writesAt r := by
-  simp only [Static.writesAt, eraseShape_writes, Shape.static, eraseNodes,
+  simp only [Static.writesAt, Shape.static, eraseNodes,
     eraseNode_getD, eraseNode, Node.sameLoc, eraseValue_loc, eraseValue_write, List.length_map]
 
 theorem geometry_erase (P : Shape) (c : PhaseLayout) :
@@ -1036,7 +1037,7 @@ theorem geometry_erase (P : Shape) (c : PhaseLayout) :
 
 theorem separated_erase (P : Shape) (c : PhaseLayout) :
     c.Separated (eraseShape P) ↔ c.Separated P := by
-  simp only [PhaseLayout.Separated, eraseShape_mems, Static.sameLoc, Shape.static,
+  simp only [PhaseLayout.Separated, Static.sameLoc, Shape.static,
     eraseNodes, eraseNode_getD, eraseNode, Node.sameLoc, eraseValue_loc, eraseValue_write,
     List.length_map]
 

@@ -21,7 +21,7 @@ A CIC decimator (Hogenauer 1981) is `N` integrators at the input rate, a decimat
 Signals are causal: `x : Nat → Int`, zero before time `0`. `Obend.Apps.SdrFt8Cic` instantiates this
 for the SDR's `R = 64, M = 1, N = 3`, 16-bit input, 34-bit `RtlModule`.
 -/
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Cic
 
@@ -31,16 +31,16 @@ set_option autoImplicit false
 abbrev Signal := Nat → Int
 
 /-- Integrator: `cum x n = x 0 + ⋯ + x (n - 1)`, the accumulator's value after `n` samples. -/
-def cum (x : Signal) : Signal
+@[expose] def cum (x : Signal) : Signal
   | 0 => 0
   | n + 1 => cum x n + x n
 
 /-- Comb with lag `D` and zero history: `y n - y (n - D)`, with `y` zero before time `0`. -/
-def comb (D : Nat) (y : Signal) : Signal :=
+@[expose] def comb (D : Nat) (y : Signal) : Signal :=
   fun n => if D ≤ n then y n - y (n - D) else y n
 
 /-- `N` cascaded copies of a stage. -/
-def stages (f : Signal → Signal) : Nat → Signal → Signal
+@[expose] def stages (f : Signal → Signal) : Nat → Signal → Signal
   | 0, x => x
   | n + 1, x => f (stages f n x)
 
@@ -50,7 +50,7 @@ def movingSum (D : Nat) (x : Signal) : Signal :=
 
 /-- The exact output of the CIC decimator, at output index `m`: `N` integrators at the input rate,
 the integrator output sampled at times `m·R`, then `N` combs of delay `M` at the output rate. -/
-def cicOut (R M N : Nat) (x : Signal) : Signal :=
+@[expose] def cicOut (R M N : Nat) (x : Signal) : Signal :=
   stages (comb M) N (fun m => stages cum N x (m * R))
 
 @[simp] theorem cum_zero (x : Signal) : cum x 0 = 0 := rfl
@@ -176,7 +176,7 @@ theorem cicOut_bounds (R M N : Nat) (hR : 0 < R) (x : Signal) (lo hi : Int) (hlo
 /-! ## Register width -/
 
 /-- Two signals agree modulo `2^B` at every sample. -/
-def Congr (B : Nat) (y z : Signal) : Prop :=
+@[expose] def Congr (B : Nat) (y z : Signal) : Prop :=
   ∀ n, y n % (2 : Int) ^ B = z n % (2 : Int) ^ B
 
 theorem Congr.refl (B : Nat) (y : Signal) : Congr B y y := fun _ => rfl

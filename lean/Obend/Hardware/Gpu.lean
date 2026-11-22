@@ -60,9 +60,10 @@ its G4 phase certificates live in `ArrayKernel`, `Gpu.BlockLower`, `Gpu.Workgrou
 Expected values: a closure-based evaluator recomputed every wire on every read and was exponential in
 dependency depth; `obend-emit-gpu` uses `evalGraphArr` (wires as arrays, local names in a hash map).
 -/
+import all Obend.Hardware.ArrayHypergraph
 public import Obend.Hardware.ArrayHypergraph
 public import Obend.Hardware.Gpu.Limbs
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu
 open Obend.Hardware.OpenHypergraph
@@ -79,13 +80,13 @@ inductive KOperand where
   | cst (i : Nat)
   /-- the local `w`. -/
   | tmp (w : Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 structure KInstr where
   op   : ElemOp
   args : List KOperand
   dst  : Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- What one kernel's threads compute; element `e` writes `w[dstBase + e]`. -/
 inductive KernelBody where
@@ -99,18 +100,18 @@ inductive KernelBody where
   | const (cBase : Nat)
   /-- Ordered segmented fold denotation; ArrayEmit supplies its parallel block schedule. -/
   | fold (op : ReduceOp) (shape : FoldShape) (srcBase : Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 structure Kernel where
   dstBase : Nat
   count   : Nat
   body    : KernelBody
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- One dispatch: its kernels' thread ranges are laid end to end. -/
 structure GpuStage where
   kernels : List Kernel
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 structure GpuProgram where
   words    : Nat
@@ -123,16 +124,16 @@ structure GpuProgram where
   stages   : List GpuStage
   deriving Repr
 
-def workgroupSize : Nat := 64
+abbrev workgroupSize : Nat := 64
 
 /-- Elementwise thread count. The fold case is metadata only: ArrayEmit expands
 folds before this count is consumed by shader emission. -/
-def Kernel.threads (k : Kernel) : Nat :=
+@[expose] def Kernel.threads (k : Kernel) : Nat :=
   match k.body with
   | .fold _ shape _ => shape.segments.length
   | _ => k.count
 
-def GpuStage.threads (s : GpuStage) : Nat := sumNatList (s.kernels.map (·.threads))
+abbrev GpuStage.threads (s : GpuStage) : Nat := sumNatList (s.kernels.map (·.threads))
 
 /-! ## 2. Layout -/
 
@@ -142,20 +143,25 @@ structure Layout where
   words : Nat
   deriving Repr
 
-def Layout.base (l : Layout) (w : Nat) : Nat := l.bases[w]?.getD 0
+abbrev Layout.base (l : Layout) (w : Nat) : Nat := l.bases[w]?.getD 0
 
 /-- Live before a dispatch: its reads, and values needed afterwards that it does not define. -/
-def liveBefore (stage : List ArrayEdge) (after : List Nat) : List Nat :=
+abbrev liveBefore (stage : List ArrayEdge) (after : List Nat) : List Nat :=
   stage.flatMap (·.srcWires) ++ after.filter (fun w => !(stage.any (·.dstWire == w)))
 
-def liveAt : List (List ArrayEdge) → List Nat → List Nat
+@[expose] def liveAt : List (List ArrayEdge) → List Nat → List Nat
   | [], outputs => outputs
   | s :: ss, outputs => liveBefore s (liveAt ss outputs)
 
 /-- Intervals are disjoint, including empty wires. -/
-def separated (ls : List Nat) (b : Nat → Nat) (u v : Nat) : Bool :=
+@[expose] def separated (ls : List Nat) (b : Nat → Nat) (u v : Nat) : Bool :=
   ls.getD u 0 == 0 || ls.getD v 0 == 0 ||
     b u + ls.getD u 0 ≤ b v || b v + ls.getD v 0 ≤ b u
+
+example :
+    ∃ (ls : List Nat) (b : Nat → Nat) (u v : Nat),
+      u = 0 ∧ v = 1 ∧ ls.getD u 0 = 1 ∧ separated ls b u v = true :=
+  ⟨[1, 1], id, 0, 1, rfl, rfl, rfl, rfl⟩
 
 theorem separated_ne (ls : List Nat) (b : Nat → Nat) (u v i j : Nat)
     (h : separated ls b u v = true) (hi : i < ls.getD u 0) (hj : j < ls.getD v 0) :
@@ -282,12 +288,12 @@ def allocateLayout (lengths : List Nat) (inputs outputs : List Nat)
         words := words + n
   return ⟨bases, words⟩
 
-def gpuLayout (g : ArrayGraph) : Layout :=
+@[expose] def gpuLayout (g : ArrayGraph) : Layout :=
   allocateLayout g.lengths g.inputs g.outputs (layerGraph (fuseGraph g))
 
 /-- Executable certificate checked before emission. Also covers host input writes, buffer bounds,
 and the initially live wires, so a rejected allocator result cannot reach a device. -/
-def checkLayout (g : ArrayGraph) (l : Layout) : Bool :=
+@[expose] def checkLayout (g : ArrayGraph) (l : Layout) : Bool :=
   let stages := layerGraph (fuseGraph g)
   let initial := liveAt stages g.outputs ++ g.inputs
   let accessed := initial ++ stages.flatMap (fun s => s.flatMap (fun d => d.dstWire :: d.srcWires)) ++ g.outputs
@@ -296,7 +302,17 @@ def checkLayout (g : ArrayGraph) (l : Layout) : Bool :=
   layoutStagesOk g.lengths l.base stages g.outputs
 
 /-- Check the allocator's result using the same certificate checker available to other planners. -/
-def layoutOk (g : ArrayGraph) : Bool := checkLayout g (gpuLayout g)
+abbrev layoutOk (g : ArrayGraph) : Bool := checkLayout g (gpuLayout g)
+
+example :
+    ∃ g : ArrayGraph, g.edges.length = 1 ∧ g.wf = true ∧ layoutOk g = true := by
+  refine ⟨{ lengths := [1, 1], inputs := [0], outputs := [1],
+            edges := [⟨0, .map 1 (ElemProg.single (.scalar .add) [0, 0] 1), [0, 0], 1⟩] },
+          rfl, by decide, ?_⟩
+  simp [layoutOk, checkLayout, gpuLayout, allocateLayout, layerGraph, layerEdges, frontier,
+    fuseGraph, fuseEdges, fuseEdge, dedupeCode, live, ArrayEdge.isMap,
+    liveAt, liveBefore, layoutStagesOk, preservesLive, stageRaceFree, separated, Layout.base]
+  decide
 
 /-! ## 3. Lowering -/
 
@@ -306,7 +322,7 @@ structure LowerState where
   deriving Repr
 
 /-- A name in a program: a source wire reads the buffer at its base, anything else is a local. -/
-def operandOf (ls : List Nat) (b : Nat → Nat) (srcWires : List Nat) (a : Nat) : KOperand :=
+def operandOf (_ls : List Nat) (b : Nat → Nat) (srcWires : List Nat) (a : Nat) : KOperand :=
   if srcWires.contains a then .read (b a) else .tmp a
 
 /-- One instruction: a scalar constant becomes `c[i] + 0`, a scale `c[i] * x`, with the constant appended
@@ -357,7 +373,7 @@ def lowerStages (ls : List Nat) (b : Nat → Nat) : List (List ArrayEdge) → Lo
     (⟨r.1⟩ :: rs.1, rs.2)
 
 /-- Fuse, layer, allocate live buffers, and lower using the resulting physical bases. -/
-def lowerArrayToGpu (g : ArrayGraph) : GpuProgram :=
+@[expose] def lowerArrayToGpu (g : ArrayGraph) : GpuProgram :=
   let l := gpuLayout g
   let r := lowerStages g.lengths l.base (layerGraph (fuseGraph g)) ⟨[], []⟩
   { words    := l.words
@@ -370,26 +386,26 @@ def lowerArrayToGpu (g : ArrayGraph) : GpuProgram :=
   , stages   := r.1 }
 
 /-- The scalar graphs, through their one-element instance. -/
-def lowerHypergraphToGpu (g : StrictOpenHypergraph) : GpuProgram :=
+abbrev lowerHypergraphToGpu (g : StrictOpenHypergraph) : GpuProgram :=
   lowerArrayToGpu (ofScalar g)
 
 /-! ## 4. Semantics (order-free: a word is the write of the thread that owns it) -/
 
-def Kernel.owns (k : Kernel) (a : Nat) : Bool := decide (k.dstBase ≤ a ∧ a < k.dstBase + k.count)
+@[expose] def Kernel.owns (k : Kernel) (a : Nat) : Bool := decide (k.dstBase ≤ a ∧ a < k.dstBase + k.count)
 
-def readOperand (c : List Word) (entry : Nat → Word) (e : Nat) (loc : Nat → Word) : KOperand → Word
+@[expose] def readOperand (c : List Word) (entry : Nat → Word) (e : Nat) (loc : Nat → Word) : KOperand → Word
   | .read b => entry (b + e)
   | .cst i  => c.getD i 0#64
   | .tmp w  => loc w
 
-def stepKInstr (c : List Word) (entry : Nat → Word) (e : Nat) (loc : Nat → Word) (i : KInstr) : Nat → Word :=
+@[expose] def stepKInstr (c : List Word) (entry : Nat → Word) (e : Nat) (loc : Nat → Word) (i : KInstr) : Nat → Word :=
   let v := evalElemOp i.op (i.args.map (readOperand c entry e loc))
   fun w => if w == i.dst then v else loc w
 
-def runKCode (c : List Word) (entry : Nat → Word) (e : Nat) (loc : Nat → Word) (code : List KInstr) : Nat → Word :=
+abbrev runKCode (c : List Word) (entry : Nat → Word) (e : Nat) (loc : Nat → Word) (code : List KInstr) : Nat → Word :=
   code.foldl (stepKInstr c entry e) loc
 
-def kernelValue (c : List Word) (ix : List Nat) (entry : Nat → Word) (k : Kernel) (e : Nat) : Word :=
+@[expose] def kernelValue (c : List Word) (ix : List Nat) (entry : Nat → Word) (k : Kernel) (e : Nat) : Word :=
   match k.body with
   | .prog code out    => runKCode c entry e (fun _ => 0#64) code out
   | .gather ixb b     => entry (b + ix.getD (ixb + e) 0)
@@ -397,29 +413,39 @@ def kernelValue (c : List Word) (ix : List Nat) (entry : Nat → Word) (k : Kern
   | .const cb         => c.getD (cb + e) 0#64
   | .fold op shape b  => (evalFold op shape (fun i => entry (b + i))).getD e 0#64
 
-def runStage (c : List Word) (ix : List Nat) (entry : Nat → Word) (s : GpuStage) : Nat → Word :=
+@[expose] def runStage (c : List Word) (ix : List Nat) (entry : Nat → Word) (s : GpuStage) : Nat → Word :=
   fun a =>
     match s.kernels.find? (fun k => k.owns a) with
     | some k => kernelValue c ix entry k (a - k.dstBase)
     | none   => entry a
 
-def runStages (c : List Word) (ix : List Nat) (entry : Nat → Word) (ss : List GpuStage) : Nat → Word :=
+abbrev runStages (c : List Word) (ix : List Nat) (entry : Nat → Word) (ss : List GpuStage) : Nat → Word :=
   ss.foldl (runStage c ix) entry
 
 /-- The program's output wires, read from the buffer after every dispatch. -/
-def runProgram (p : GpuProgram) (flat : Nat → Word) : List Vec :=
+@[expose] def runProgram (p : GpuProgram) (flat : Nat → Word) : List Vec :=
   let final := runStages p.consts p.tables flat p.stages
   p.outputs.map fun w => (List.range (p.wireLen.getD w 0)).map fun e => final (p.wireBase.getD w 0 + e)
 
 /-! ## 5. Well-formed edges, environments and flattenings -/
 
 /-- Every existing wire holds its declared length. -/
-def Good (ls : List Nat) (env : Nat → Vec) : Prop :=
+abbrev Good (ls : List Nat) (env : Nat → Vec) : Prop :=
   ∀ w, w < ls.length → (env w).length = ls.getD w 0
 
 /-- `flat` represents just the live wires at their physical bases; dead wires may be overwritten. -/
-def Flat (ls : List Nat) (b : Nat → Nat) (live : List Nat) (env : Nat → Vec) (flat : Nat → Word) : Prop :=
+abbrev Flat (ls : List Nat) (b : Nat → Nat) (live : List Nat) (env : Nat → Vec) (flat : Nat → Word) : Prop :=
   ∀ w e, w ∈ live → w < ls.length → e < ls.getD w 0 → flat (b w + e) = (env w).getD e 0#64
+
+example :
+    ∃ (ls : List Nat) (b : Nat → Nat) (live : List Nat) (env : Nat → Vec) (flat : Nat → Word),
+      ls = [1] ∧ live = [0] ∧ Good ls env ∧ Flat ls b live env flat :=
+  ⟨[1], fun _ => 0, [0], fun _ => [7#64], fun _ => 7#64, rfl, rfl,
+   fun w hw => by cases w with | zero => rfl | succ w => simp at hw,
+   fun w e _ hw he => by
+     cases w with
+     | zero => cases e with | zero => rfl | succ e => simp at he
+     | succ w => simp at hw⟩
 
 /-- A kernel realizes an edge: it owns the destination's range and, from any good flattening, each of
 its elements is the edge's value there. -/
@@ -460,12 +486,11 @@ theorem lowerCode_extends (ls : List Nat) (b : Nat → Nat) (srcWires : List Nat
 
 theorem getD_append_length {α : Type} (c : List α) (x : α) (d : List α) (z : α) :
     (c ++ x :: d).getD c.length z = x := by
-  have := getD_append_right c (x :: d) 0 z
-  simpa using this
+  simp
 
 /-- The simulation relation between a program's local environment and the kernel's: every non-source
 name agrees, every source name holds the buffer's word at its base. -/
-def Sim (ls : List Nat) (b : Nat → Nat) (srcWires : List Nat) (flat : Nat → Word) (el : Nat) (loc kloc : Nat → Word) : Prop :=
+def Sim (_ls : List Nat) (b : Nat → Nat) (srcWires : List Nat) (flat : Nat → Word) (el : Nat) (loc kloc : Nat → Word) : Prop :=
   (∀ w, srcWires.contains w = false → kloc w = loc w) ∧
   (∀ w, srcWires.contains w = true → loc w = flat (b w + el))
 
@@ -776,7 +801,7 @@ theorem find_kernel (ls : List Nat) (b : Nat → Nat) (c : List Word) (ix : List
     (hOk : ∀ d ∈ stage, d.dstWire < ls.length)
     (after : List Nat)
     (hSep : ∀ d ∈ stage, ∀ w ∈ after, d.dstWire ≠ w → separated ls b d.dstWire w = true)
-    (w e : Nat) (hlive : w ∈ after) (hw : w < ls.length) (he : e < ls.getD w 0) :
+    (w e : Nat) (hlive : w ∈ after) (_hw : w < ls.length) (he : e < ls.getD w 0) :
     (kernels.find? (fun k => k.owns (b w + e)) = none ↔
       stage.find? (fun d => d.dstWire == w) = none) ∧
     (∀ k, kernels.find? (fun k => k.owns (b w + e)) = some k →
@@ -990,7 +1015,7 @@ theorem lowerHypergraphToGpu_sound (g : StrictOpenHypergraph)
   have hGood : Good (ofScalar g).lengths (singletonEnv env) := by
     intro w hw
     rw [hn] at hw
-    simp [ofScalar, singletonEnv, List.getD_eq_getElem?_getD, List.getElem?_replicate, hw]
+    simp [ofScalar, singletonEnv, List.getD_eq_getElem?_getD, hw]
   rw [lowerHypergraphToGpu, lowerArrayToGpu_sound (ofScalar g) hWf hLayout _ flat hGood hFlat]
   simp only [evalGraph]
   rw [← (layerGraph_sound (ofScalar g) (singletonEnv env)).2.2, ofScalar_layered_sound]
@@ -1004,7 +1029,7 @@ inductive Plant where
   | addAsSub
   | swapMux
   | mulHighZero
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 def Plant.ofString? : String → Option Plant
   | "addAsSub" => some .addAsSub

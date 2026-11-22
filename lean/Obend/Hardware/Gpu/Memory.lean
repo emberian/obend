@@ -118,7 +118,7 @@ no queue-family distinction from the device (one queue), no availability chains 
 the final value of a location is the last write in its coherence order, which is what the result kernel
 of a later dispatch reads. Values are natural numbers; the kernels store 1 and 2.
 -/
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu.Memory
 set_option autoImplicit false
@@ -129,13 +129,13 @@ set_option autoImplicit false
 inductive Space where
   | storage
   | workgroup
-  deriving DecidableEq, Repr, Inhabited
+  deriving @[expose] DecidableEq, Repr, Inhabited
 
 /-- A location: an address space and an index. -/
 structure Loc where
   space : Space
   idx : Nat
-  deriving DecidableEq, Repr, Inhabited
+  deriving @[expose] DecidableEq, Repr, Inhabited
 
 /-- What a read-modify-write writes, as a function of what it read. -/
 inductive RmwOp where
@@ -143,7 +143,7 @@ inductive RmwOp where
   | exchange (v : Nat)
   /-- `atomicAdd(p, v)`. -/
   | add (v : Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 def RmwOp.apply : RmwOp → Nat → Nat
   | .exchange v, _ => v
@@ -161,27 +161,27 @@ inductive Ev where
   AcquireRelease ordering and the memory semantics of the spaces `sems`: `storageBarrier()` is
   `[.storage]`, `workgroupBarrier()` is `[.workgroup]`. -/
   | barrier (inst : Nat) (sems : List Space)
-  deriving DecidableEq, Repr, Inhabited
+  deriving @[expose] DecidableEq, Repr, Inhabited
 
 structure Thread where
   /-- A label kept under restriction, so event identities survive `Shape.restrict`. -/
   id : Nat
   wg : Nat
   prog : List Ev
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- A litmus shape: threads, and the writes of threads outside this shape when it is the restriction of
 a larger one (`external`: a location and the value written). -/
 structure Shape where
   threads : List Thread
   external : List (Loc × Nat) := []
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- An event's identity: the thread label and the position in its program. -/
 structure EvId where
   t : Nat
   i : Nat
-  deriving DecidableEq, Repr, Inhabited
+  deriving @[expose] DecidableEq, Repr, Inhabited
 
 /-! ## 2. Static structure: the events of a shape, program order, synchronization, happens-before -/
 
@@ -190,26 +190,26 @@ structure Node where
   id : EvId
   wg : Nat
   ev : Ev
-  deriving DecidableEq, Repr, Inhabited
+  deriving @[expose] DecidableEq, Repr, Inhabited
 
-def Thread.nodes (th : Thread) : List Node :=
+@[expose] def Thread.nodes (th : Thread) : List Node :=
   (List.range th.prog.length).map fun i => { id := ⟨th.id, i⟩, wg := th.wg, ev := th.prog.getD i (.barrier 0 []) }
 
 /-- Every event of the shape, thread by thread, in program order; the event index is the position. -/
-def Shape.nodes (P : Shape) : List Node := P.threads.flatMap Thread.nodes
+@[expose] def Shape.nodes (P : Shape) : List Node := P.threads.flatMap Thread.nodes
 
-def Ev.loc? : Ev → Option Loc
+@[expose] def Ev.loc? : Ev → Option Loc
   | .write l _ _ => some l
   | .read l _ => some l
   | .rmw l _ => some l
   | .barrier _ _ => none
 
-def Ev.isWrite : Ev → Bool
+@[expose] def Ev.isWrite : Ev → Bool
   | .write .. => true
   | .rmw .. => true
   | _ => false
 
-def Ev.isRead : Ev → Bool
+abbrev Ev.isRead : Ev → Bool
   | .read .. => true
   | .rmw .. => true
   | _ => false
@@ -231,10 +231,10 @@ def Ev.isBarrier : Ev → Bool
 /-- A relation on event indices as an edge list. -/
 abbrev Rel := List (Nat × Nat)
 
-def Rel.has (r : Rel) (a b : Nat) : Bool := r.contains (a, b)
+@[expose] def Rel.has (r : Rel) (a b : Nat) : Bool := r.contains (a, b)
 
 /-- All pairs `(a, b)` of indices below `n` with `p a b`. -/
-def pairs (n : Nat) (p : Nat → Nat → Bool) : Rel :=
+@[expose] def pairs (n : Nat) (p : Nat → Nat → Bool) : Rel :=
   (List.range n).flatMap fun a => (List.range n).filterMap fun b => if p a b then some (a, b) else none
 
 /-- One round of `r ∪ r;r`. -/
@@ -247,7 +247,7 @@ def Rel.closure (r : Rel) : Nat → Rel
   | n + 1 => (r.step).closure n
 
 /-- `po`: same thread, earlier position. -/
-def po (ns : List Node) : Rel :=
+@[expose] def po (ns : List Node) : Rel :=
   pairs ns.length fun a b =>
     let x := ns.getD a default
     let y := ns.getD b default
@@ -260,7 +260,7 @@ def Ev.hasSems (e : Ev) (T : List Space) : Bool :=
   | _ => false
 
 /-- An access in a space of `T`. -/
-def Ev.inSpaces (e : Ev) (T : List Space) : Bool :=
+@[expose] def Ev.inSpaces (e : Ev) (T : List Space) : Bool :=
   match e.loc? with
   | some l => T.contains l.space
   | none => false
@@ -290,16 +290,16 @@ def ithb (ns : List Node) (T : List Space) : Rel :=
   edges.closure n
 
 /-- `hb = po ∪ ithb_{storage} ∪ ithb_{workgroup} ∪ ithb_{storage, workgroup}`. -/
-def hb (ns : List Node) : Rel :=
+abbrev hb (ns : List Node) : Rel :=
   po ns ++ ithb ns [.storage] ++ ithb ns [.workgroup] ++ ithb ns [.storage, .workgroup]
 
-def Node.sameLoc (x y : Node) : Bool :=
+@[expose] def Node.sameLoc (x y : Node) : Bool :=
   match x.ev.loc?, y.ev.loc? with
   | some l, some m => l == m
   | _, _ => false
 
 /-- `locord = loc ∩ hb` (derived in the header). -/
-def locord (ns : List Node) : Rel :=
+abbrev locord (ns : List Node) : Rel :=
   let h := hb ns
   pairs ns.length fun a b => (ns.getD a default).sameLoc (ns.getD b default) && h.has a b
 
@@ -316,7 +316,7 @@ structure Static where
   mems : List Nat
   external : List (Loc × Nat)
 
-def Shape.static (P : Shape) : Static :=
+@[expose] def Shape.static (P : Shape) : Static :=
   let ns := P.nodes
   let idx := List.range ns.length
   { nodes := ns
@@ -355,7 +355,7 @@ inductive Src where
   | init
   | internal (w : Nat)
   | external (v : Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- The position of `a` in `l`, or `l.length`. -/
 def posOf (l : List Nat) (a : Nat) : Nat :=
@@ -400,7 +400,7 @@ def Static.valueOfRead (s : Static) (w : List Nat) (r : Nat) : Nat :=
 
 def Static.atomicAt (s : Static) (a : Nat) : Bool := (s.nodes.getD a default).ev.isAtomic
 def Static.threadOf (s : Static) (a : Nat) : Nat := (s.nodes.getD a default).id.t
-def Static.sameLoc (s : Static) (a b : Nat) : Bool := (s.nodes.getD a default).sameLoc (s.nodes.getD b default)
+@[expose] def Static.sameLoc (s : Static) (a b : Nat) : Bool := (s.nodes.getD a default).sameLoc (s.nodes.getD b default)
 
 /-- `asmo`: both atomic writes at one location, ranked in order. -/
 def Static.asmo (s : Static) (w : List Nat) (a b : Nat) : Bool :=
@@ -483,7 +483,7 @@ def Static.consistent (s : Static) (w : List Nat) : Bool := s.consistentWith {} 
 
 /-- `dr` of the cat: same location, not both reads, not mutually ordered atomics, not `locord` either
 way. A flag, reported beside the verdict. -/
-def Static.racy (s : Static) : Bool :=
+@[expose] def Static.racy (s : Static) : Bool :=
   s.mems.any fun a => s.mems.any fun b =>
     a != b && s.sameLoc a b && ((s.nodes.getD a default).ev.isWrite || (s.nodes.getD b default).ev.isWrite) &&
     !(s.atomicAt a && s.atomicAt b) && !s.locord.has a b && !s.locord.has b a
@@ -525,7 +525,7 @@ atomic locations (in `Shape.atomicLocs` order). -/
 structure Outcome where
   histories : List History
   finals : List Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 def Static.obs (s : Static) (P : Shape) (w : List Nat) : Outcome :=
   { histories := P.threads.map fun th => s.history w th.id
@@ -571,7 +571,7 @@ def Shape.allowedWith (ax : Axioms) (P : Shape) (o : Outcome) : Bool :=
   let s := P.static
   (sequence s.spec).any fun w => s.consistentWith ax w && decide (s.obs P w = o)
 
-def Shape.allowed (P : Shape) (o : Outcome) : Bool := P.allowedWith {} o
+abbrev Shape.allowed (P : Shape) (o : Outcome) : Bool := P.allowedWith {} o
 
 /-- Every outcome the enumeration can produce, each once: the table the gate reads. -/
 def Shape.outcomes (P : Shape) : List Outcome :=
@@ -585,7 +585,7 @@ inductive Obj where
   | thread (t : Nat)
   | workgroup (g : Nat)
   | device
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- The workgroup of thread `t` in `P`. -/
 def Shape.wgOf (P : Shape) (t : Nat) : Option Nat :=
@@ -738,12 +738,12 @@ def Shape.restrict (P : Shape) (U : Obj) : Shape :=
         | _ => [] }
 
 /-- A section over `U`: a well-formed consistent witness of the restricted shape. -/
-def Section (P : Shape) (U : Obj) (w : List Nat) : Prop :=
+abbrev Section (P : Shape) (U : Obj) (w : List Nat) : Prop :=
   Wf w (P.restrict U).spec ∧ (P.restrict U).consistent w = true
 
 /-- The gluing question at the device: the family of thread histories (and the final values) recorded by
 `o` is the observation of a section over the device. -/
-def Glues (P : Shape) (o : Outcome) : Prop :=
+abbrev Glues (P : Shape) (o : Outcome) : Prop :=
   ∃ w, Section P .device w ∧ (P.restrict .device).obs w = o
 
 theorem restrict_device (P : Shape) : P.restrict .device = P := by
@@ -1431,7 +1431,7 @@ private theorem mem_static_writesAt (P : Shape) {r a : Nat} :
   simp only [Static.writesAt, Static.sameLoc, List.mem_filter]
 
 private theorem isRead_imp_loc_isSome {e : Ev} (h : e.isRead = true) : e.loc?.isSome = true := by
-  cases e <;> simp_all [Ev.isRead, Ev.loc?]
+  cases e <;> simp_all [Ev.loc?]
 
 private theorem isWrite_imp_loc_isSome {e : Ev} (h : e.isWrite = true) : e.loc?.isSome = true := by
   cases e <;> simp_all [Ev.isWrite, Ev.loc?]
@@ -2303,7 +2303,7 @@ private theorem valueOfWrite_mem_valuesAt (P : Shape) (U : Obj)
       | exchange val => exact exchange_mem_valuesAt P hthP he
       | add k =>
         have haR : a ∈ (P.restrict U).static.reads :=
-          (mem_static_reads _).mpr ⟨ha, by rw [hev]; rfl⟩
+          (mem_static_reads _).mpr ⟨ha, by rw [hev]⟩
         have hprev : (match (P.restrict U).static.rf wU a with
             | .init => 0
             | .internal b => (P.restrict U).static.valueOfWrite wU fuel b
@@ -2390,7 +2390,7 @@ private theorem dropped_write_mem_external (P : Shape) {U V : Obj}
       | add k =>
         simp only [List.mem_map, Prod.mk.injEq, true_and]
         have haR : a ∈ (P.restrict U).static.reads :=
-          (mem_static_reads _).mpr ⟨haLt, by rw [hev]; rfl⟩
+          (mem_static_reads _).mpr ⟨haLt, by rw [hev]⟩
         refine ⟨_, ?_, rfl⟩
         have hrc := wf_rf_cases (P.restrict U) hWf haR
         cases hrf : (P.restrict U).static.rf wU a with
@@ -2616,7 +2616,7 @@ private theorem valueOfWrite_eq_of_gt_ord (Q : Shape) {w : List Nat}
         | rmw _ op =>
           have haLt : a < Q.nodes.length := ((mem_static_writes _).mp ha).1
           have haR : a ∈ Q.static.reads :=
-            (mem_static_reads _).mpr ⟨haLt, by have hev' : (Q.nodes.getD a default).ev = _ := hev; rw [hev']; rfl⟩
+            (mem_static_reads _).mpr ⟨haLt, by have hev' : (Q.nodes.getD a default).ev = _ := hev; rw [hev']⟩
           have hrc := wf_rf_cases Q hWf haR
           cases hrf : Q.static.rf w a with
           | init => rfl
@@ -2678,7 +2678,7 @@ theorem valueOfWrite_restrictWitness (P : Shape) {U V : Obj} (hVU : Obj.le P V U
     | barrier _ _ => rfl
     | rmw _ op =>
       have hxR : x' ∈ (P.restrict V).static.reads :=
-        (mem_static_reads _).mpr ⟨hxLt, by have hev' : ((P.restrict V).nodes.getD x' default).ev = _ := hev; rw [hev']; rfl⟩
+        (mem_static_reads _).mpr ⟨hxLt, by have hev' : ((P.restrict V).nodes.getD x' default).ev = _ := hev; rw [hev']⟩
       have hxRU : restrictEmbed P U V x' ∈ (P.restrict U).static.reads := restrictEmbed_reads P hVU hxR
       rw [rf_restrictWitness_wf P hVU hClosed hSec.1 hxR]
       have hrc := wf_rf_cases (P.restrict U) hSec.1 hxRU

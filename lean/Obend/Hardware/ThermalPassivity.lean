@@ -17,7 +17,7 @@ current and hand-typed EOT / `V_th` / subthreshold formulas — are deleted. The
 every constant is a parameter and the solver's output is a checked certificate; the three corner
 formulas `TapeoutPipeline` still reads live in `Hardware/TcadBridge.lean` §0 under their own name.
 -/
-@[expose] public section
+public section
 
 namespace Obend.Hardware.ThermalPassivity
 set_option autoImplicit false
@@ -26,14 +26,14 @@ private theorem int_mul_nonneg (a b : Int) (ha : 0 ≤ a) (hb : 0 ≤ b) : 0 ≤
   cases a with
   | ofNat m =>
     cases b with
-    | ofNat n => exact Int.ofNat_nonneg (m * n)
+    | ofNat n => exact Int.natCast_nonneg (m * n)
     | negSucc _ => omega
   | negSucc _ => omega
 
 private theorem int_sq_nonneg (a : Int) : 0 ≤ a * a := by
   cases a with
-  | ofNat n => exact Int.ofNat_nonneg (n * n)
-  | negSucc n => exact Int.ofNat_nonneg (Nat.succ n * Nat.succ n)
+  | ofNat n => exact Int.natCast_nonneg (n * n)
+  | negSucc n => exact Int.natCast_nonneg (Nat.succ n * Nat.succ n)
 
 /-! ## 1. Fourier Heat PDE to Cauer RC Model-Order Reduction via PRIMA Congruence Projection -/
 
@@ -141,6 +141,12 @@ def AllEdgesPassive (edges : List ThermalEdge) : Prop :=
 def checkAllEdgesPassive (edges : List ThermalEdge) : Bool :=
   edges.all (fun e => decide (0 ≤ e.conductanceMwPerK))
 
+example :
+    ∃ edges : List ThermalEdge, edges.length = 1 ∧ checkAllEdgesPassive edges = true := by
+  exact ⟨[⟨0, 1, 1⟩], rfl, rfl⟩
+
+example : checkAllEdgesPassive [⟨0, 1, -1⟩] = false := rfl
+
 /-- Theorem (`checkAllEdgesPassive_sound`):
 If `checkAllEdgesPassive edges = true`, then `AllEdgesPassive edges` holds. -/
 theorem checkAllEdgesPassive_sound
@@ -192,13 +198,13 @@ theorem laplacian_quadratic_passive_universal
 
 /-- Reconstruct the full $N$-node temperature state $T = V \alpha = \alpha_0 v^{(0)} + \alpha_1 v^{(1)}$
 from an $N \times 2$ Krylov / POD projection basis `(col0, col1)` and 2D reduced state `(alpha0, alpha1)`. -/
-@[expose] def reconstructPrima2ColState
+def reconstructPrima2ColState
     (col0 col1 : List Int) (alpha0 alpha1 : Int) : List Int :=
   List.zipWith (fun v0 v1 => alpha0 * v0 + alpha1 * v1) col0 col1
 
 /-- Evaluate the reduced $2 \times 2$ PRIMA macromodel quadratic form
 $\alpha^\top \hat{G} \alpha = (V \alpha)^\top L (V \alpha)$ on an $N$-node thermal network `edges`. -/
-@[expose] def evalPrima2ColReducedQuadratic
+def evalPrima2ColReducedQuadratic
     (col0 col1 : List Int) (edges : List ThermalEdge) (alpha0 alpha1 : Int) : Int :=
   evalLaplacianQuadratic (reconstructPrima2ColState col0 col1 alpha0 alpha1) edges
 
