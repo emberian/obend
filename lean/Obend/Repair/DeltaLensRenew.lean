@@ -123,14 +123,14 @@ structure Store (V : Type v) (X : Type u) where
 namespace Store
 variable {X : Type u} {Y : Type w}
 
-@[expose] def extract (c : Store V X) : X := c.peek c.pos
-@[expose] def map (f : X → Y) (c : Store V X) : Store V Y := ⟨c.pos, fun v => f (c.peek v)⟩
-@[expose] def duplicate (c : Store V X) : Store V (Store V X) := ⟨c.pos, fun v => ⟨v, c.peek⟩⟩
+def extract (c : Store V X) : X := c.peek c.pos
+def map (f : X → Y) (c : Store V X) : Store V Y := ⟨c.pos, fun v => f (c.peek v)⟩
+def duplicate (c : Store V X) : Store V (Store V X) := ⟨c.pos, fun v => ⟨v, c.peek⟩⟩
 
 end Store
 
 /-- A lens as a coalgebra of the store comonad. -/
-@[expose] def coalg (L : DeltaLens S V) (s : S) : Store V S := ⟨L.get s, L.put s⟩
+def coalg (L : DeltaLens S V) (s : S) : Store V S := ⟨L.get s, L.put s⟩
 
 /-- The counit law is `get_put`. -/
 theorem extract_coalg (L : DeltaLens S V) (s : S) : (L.coalg s).extract = s := L.get_put s
@@ -146,7 +146,7 @@ theorem duplicate_coalg (L : DeltaLens S V) (s : S) : (L.coalg s).duplicate = (L
   rw [L.put_put]
 
 /-- **A coalgebra of the store comonad is a lens.** -/
-@[expose] def ofCoalg (c : S → Store V S) (h₁ : ∀ s, (c s).extract = s)
+def ofCoalg (c : S → Store V S) (h₁ : ∀ s, (c s).extract = s)
     (h₂ : ∀ s, (c s).duplicate = (c s).map c) : DeltaLens S V where
   get s := (c s).pos
   put s v := (c s).peek v
@@ -155,7 +155,7 @@ theorem duplicate_coalg (L : DeltaLens S V) (s : S) : (L.coalg s).duplicate = (L
   put_put s v₁ v₂ := (congrArg (fun d : Store V (Store V S) => (d.peek v₁).peek v₂) (h₂ s)).symm
 
 theorem ofCoalg_coalg (L : DeltaLens S V) :
-    ofCoalg L.coalg L.extract_coalg L.duplicate_coalg = L := rfl
+    ofCoalg L.coalg L.extract_coalg L.duplicate_coalg = L := by rfl
 
 end DeltaLens
 

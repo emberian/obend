@@ -43,15 +43,15 @@ set_option autoImplicit false
     | b :: bs' => (a + b) :: polyAdd as bs'
 
 /-- Negate a coefficient list. -/
-@[expose] def polyNeg (cs : List CanonicalRat) : List CanonicalRat :=
+abbrev polyNeg (cs : List CanonicalRat) : List CanonicalRat :=
   cs.map (fun c => -c)
 
 /-- Subtract two coefficient lists (`polyAdd as (polyNeg bs)`). -/
-@[expose] def polySub (as bs : List CanonicalRat) : List CanonicalRat :=
+abbrev polySub (as bs : List CanonicalRat) : List CanonicalRat :=
   polyAdd as (polyNeg bs)
 
 /-- Scale a coefficient list by a rational scalar `s`. -/
-@[expose] def polyScale (s : CanonicalRat) (cs : List CanonicalRat) : List CanonicalRat :=
+abbrev polyScale (s : CanonicalRat) (cs : List CanonicalRat) : List CanonicalRat :=
   cs.map (fun c => s * c)
 
 /-- Full Cauchy product of two coefficient lists. -/
@@ -81,7 +81,7 @@ set_option autoImplicit false
       Interval.add termIv rest
 
 /-- Evaluate a polynomial coefficient list over an offset interval `dxIv`. -/
-@[expose] def evalTaylorPolyInterval (coeffs : List CanonicalRat) (dxIv : Interval) : Interval :=
+abbrev evalTaylorPolyInterval (coeffs : List CanonicalRat) (dxIv : Interval) : Interval :=
   evalPolyTermsInterval dxIv coeffs 0
 
 /-- High-order Taylor model $(p(x - c), I_{\text{rem}})$ over $x \in \text{domain}$ centered at `center`. -/
@@ -90,10 +90,23 @@ structure TaylorModel where
   center : CanonicalRat
   domain : Interval
   rem    : Interval
-  deriving @[expose] DecidableEq, Repr
+  deriving Repr
+
+abbrev instDecidableEqTaylorModel : DecidableEq TaylorModel := fun a b =>
+  match a, b with
+  | ⟨c1, t1, d1, r1⟩, ⟨c2, t2, d2, r2⟩ =>
+    if hc : c1 = c2 then
+      if ht : t1 = t2 then
+        if hd : d1 = d2 then
+          if hr : r1 = r2 then isTrue (by subst hc; subst ht; subst hd; subst hr; rfl)
+          else isFalse (fun h => hr (by cases h; rfl))
+        else isFalse (fun h => hd (by cases h; rfl))
+      else isFalse (fun h => ht (by cases h; rfl))
+    else isFalse (fun h => hc (by cases h; rfl))
+attribute [instance] instDecidableEqTaylorModel
 
 /-- Offset interval $\text{domain} - \text{center}$. -/
-@[expose] def TaylorModel.deltaDomain (tm : TaylorModel) : Interval :=
+abbrev TaylorModel.deltaDomain (tm : TaylorModel) : Interval :=
   Interval.sub tm.domain (Interval.ofPoint tm.center)
 
 /-- Evaluate a `TaylorModel` at a concrete point $x \in \text{domain}$, returning $p(x - c) \oplus I_{\text{rem}}$. -/
@@ -106,35 +119,35 @@ structure TaylorModel where
   Interval.add (evalTaylorPolyInterval tm.coeffs tm.deltaDomain) tm.rem
 
 /-- Constant Taylor model $(q, c, \text{dom}, [0, 0])$. -/
-@[expose] def tmConst (q center : CanonicalRat) (dom : Interval) : TaylorModel where
+abbrev tmConst (q center : CanonicalRat) (dom : Interval) : TaylorModel where
   coeffs := [q]
   center := center
   domain := dom
   rem    := Interval.ofPoint 0
 
 /-- Identity variable Taylor model $x = c + 1 \cdot (x - c)$ over `dom` centered at `center`. -/
-@[expose] def tmVar (center : CanonicalRat) (dom : Interval) : TaylorModel where
+abbrev tmVar (center : CanonicalRat) (dom : Interval) : TaylorModel where
   coeffs := [center, 1]
   center := center
   domain := dom
   rem    := Interval.ofPoint 0
 
 /-- Add two Taylor models sharing `(center, domain)`. -/
-@[expose] def tmAdd (a b : TaylorModel) : TaylorModel where
+abbrev tmAdd (a b : TaylorModel) : TaylorModel where
   coeffs := polyAdd a.coeffs b.coeffs
   center := a.center
   domain := a.domain
   rem    := Interval.add a.rem b.rem
 
 /-- Subtract two Taylor models sharing `(center, domain)`. -/
-@[expose] def tmSub (a b : TaylorModel) : TaylorModel where
+abbrev tmSub (a b : TaylorModel) : TaylorModel where
   coeffs := polySub a.coeffs b.coeffs
   center := a.center
   domain := a.domain
   rem    := Interval.sub a.rem b.rem
 
 /-- Scale a Taylor model by a rational constant `s`. -/
-@[expose] def tmScale (s : CanonicalRat) (tm : TaylorModel) : TaylorModel where
+abbrev tmScale (s : CanonicalRat) (tm : TaylorModel) : TaylorModel where
   coeffs := polyScale s tm.coeffs
   center := tm.center
   domain := tm.domain
@@ -163,7 +176,7 @@ degree $> \text{order}$ and cross-remainder terms into the certified remainder i
 
 /-- Degree-4 Taylor model for $\exp(x) \approx 1 + x + \frac{1}{2}x^2 + \frac{1}{6}x^3 + \frac{1}{24}x^4$
 centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
-@[expose] def tmExp (dom lagrangeRem : Interval) : TaylorModel where
+def tmExp (dom lagrangeRem : Interval) : TaylorModel where
   coeffs := [1, 1, CanonicalRat.mk 1 2, CanonicalRat.mk 1 6, CanonicalRat.mk 1 24]
   center := 0
   domain := dom
@@ -171,7 +184,7 @@ centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
 
 /-- Degree-5 Taylor model for $\sin(x) \approx x - \frac{1}{6}x^3 + \frac{1}{120}x^5$
 centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
-@[expose] def tmSin (dom lagrangeRem : Interval) : TaylorModel where
+abbrev tmSin (dom lagrangeRem : Interval) : TaylorModel where
   coeffs := [0, 1, 0, CanonicalRat.mk (-1) 6, 0, CanonicalRat.mk 1 120]
   center := 0
   domain := dom
@@ -179,7 +192,7 @@ centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
 
 /-- Degree-4 Taylor model for $\cos(x) \approx 1 - \frac{1}{2}x^2 + \frac{1}{24}x^4$
 centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
-@[expose] def tmCos (dom lagrangeRem : Interval) : TaylorModel where
+abbrev tmCos (dom lagrangeRem : Interval) : TaylorModel where
   coeffs := [1, 0, CanonicalRat.mk (-1) 2, 0, CanonicalRat.mk 1 24]
   center := 0
   domain := dom
@@ -187,7 +200,7 @@ centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
 
 /-- Degree-4 Taylor model for $\ln(1 + x) \approx x - \frac{1}{2}x^2 + \frac{1}{3}x^3 - \frac{1}{4}x^4$
 centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
-@[expose] def tmLn1p (dom lagrangeRem : Interval) : TaylorModel where
+def tmLn1p (dom lagrangeRem : Interval) : TaylorModel where
   coeffs := [0, 1, CanonicalRat.mk (-1) 2, CanonicalRat.mk 1 3, CanonicalRat.mk (-1) 4]
   center := 0
   domain := dom
@@ -195,7 +208,7 @@ centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
 
 /-- Degree-3 Taylor model for $\sqrt{1 + x} \approx 1 + \frac{1}{2}x - \frac{1}{8}x^2 + \frac{1}{16}x^3$
 centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
-@[expose] def tmSqrt1p (dom lagrangeRem : Interval) : TaylorModel where
+def tmSqrt1p (dom lagrangeRem : Interval) : TaylorModel where
   coeffs := [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16]
   center := 0
   domain := dom
@@ -203,34 +216,34 @@ centered at $0$ over `dom` with certified Lagrange remainder `lagrangeRem`. -/
 
 /-- Certified Lagrange remainder bound for degree-4 $\exp(x)$ over `dom` ($\subseteq [-1, 1]$, where $|(\exp)^{(5)}(\xi)| \le 3$):
 $R_4(\exp, \text{dom}) = \left[-\frac{3}{120}, \frac{3}{120}\right] \cdot \text{dom}^5 = \left[-\frac{1}{40}, \frac{1}{40}\right] \cdot \text{dom}^5$. -/
-@[expose] def lagrangeRemExp4 (dom : Interval) : Interval :=
+def lagrangeRemExp4 (dom : Interval) : Interval :=
   Interval.mul (Interval.mk (CanonicalRat.mk (-1) 40) (CanonicalRat.mk 1 40)) (intervalPow dom 5)
 
 /-- Certified Lagrange remainder bound for degree-5 $\sin(x)$ over `dom` ($|\sin^{(6)}(\xi)| \le 1$):
 $R_5(\sin, \text{dom}) = \left[-\frac{1}{720}, \frac{1}{720}\right] \cdot \text{dom}^6$. -/
-@[expose] def lagrangeRemSin5 (dom : Interval) : Interval :=
+abbrev lagrangeRemSin5 (dom : Interval) : Interval :=
   Interval.mul (Interval.mk (CanonicalRat.mk (-1) 720) (CanonicalRat.mk 1 720)) (intervalPow dom 6)
 
 /-- Certified Lagrange remainder bound for degree-4 $\cos(x)$ over `dom` ($|\cos^{(5)}(\xi)| \le 1$):
 $R_4(\cos, \text{dom}) = \left[-\frac{1}{120}, \frac{1}{120}\right] \cdot \text{dom}^5$. -/
-@[expose] def lagrangeRemCos4 (dom : Interval) : Interval :=
+abbrev lagrangeRemCos4 (dom : Interval) : Interval :=
   Interval.mul (Interval.mk (CanonicalRat.mk (-1) 120) (CanonicalRat.mk 1 120)) (intervalPow dom 5)
 
 /-- Certified Lagrange remainder bound for degree-4 $\ln(1 + x)$ over `dom` ($\subseteq [-1/2, 1/2]$, where $|(1+\xi)^{-5}| \le 32$):
 $R_4(\ln(1+\cdot), \text{dom}) = \left[-\frac{32}{5}, \frac{32}{5}\right] \cdot \text{dom}^5$. -/
-@[expose] def lagrangeRemLn1p4 (dom : Interval) : Interval :=
+def lagrangeRemLn1p4 (dom : Interval) : Interval :=
   Interval.mul (Interval.mk (CanonicalRat.mk (-32) 5) (CanonicalRat.mk 32 5)) (intervalPow dom 5)
 
 /-- Certified Lagrange remainder bound for degree-3 $\sqrt{1 + x}$ over `dom` ($\subseteq [-1/2, 1/2]$):
 $R_3(\sqrt{1+\cdot}, \text{dom}) = \left[-\frac{15}{24}, \frac{15}{24}\right] \cdot \text{dom}^4 = \left[-\frac{5}{8}, \frac{5}{8}\right] \cdot \text{dom}^4$. -/
-@[expose] def lagrangeRemSqrt1p3 (dom : Interval) : Interval :=
+def lagrangeRemSqrt1p3 (dom : Interval) : Interval :=
   Interval.mul (Interval.mk (CanonicalRat.mk (-5) 8) (CanonicalRat.mk 5 8)) (intervalPow dom 4)
 
-@[expose] abbrev lagrangeRemSqrt3 := lagrangeRemSqrt1p3
+abbrev lagrangeRemSqrt3 := lagrangeRemSqrt1p3
 
 /-- Canonical invalid/rejected `TaylorModel` (`rem = ⟨1, -1⟩` with `lo > hi`) returned when
 `dom` violates the certified validity domain guard. -/
-@[expose] def invalidTaylorModel (dom : Interval) : TaylorModel where
+abbrev invalidTaylorModel (dom : Interval) : TaylorModel where
   coeffs := []
   center := 0
   domain := dom
@@ -239,7 +252,7 @@ $R_3(\sqrt{1+\cdot}, \text{dom}) = \left[-\frac{15}{24}, \frac{15}{24}\right] \c
 /-- Certified single-argument Taylor models enforcing explicit domain checks (`dom ⊆ [-1, 1]` for
 `exp/sin/cos`, and `dom ⊆ [-1/2, 1/2]` for `ln1p/sqrt1p` so `tmLn1pCertified` can never evaluate
 across the $\ln(0) = -\infty$ pole at $x = -1$) and computing Lagrange remainder intervals directly from `dom`. -/
-@[expose] def tmExpCertified (dom : Interval) : TaylorModel :=
+def tmExpCertified (dom : Interval) : TaylorModel :=
   if Interval.subset dom (Interval.mk (-1) 1) then
     tmExp dom (lagrangeRemExp4 dom)
   else
@@ -257,13 +270,13 @@ across the $\ln(0) = -\infty$ pole at $x = -1$) and computing Lagrange remainder
   else
     invalidTaylorModel dom
 
-@[expose] def tmLn1pCertified (dom : Interval) : TaylorModel :=
+def tmLn1pCertified (dom : Interval) : TaylorModel :=
   if Interval.subset dom (Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)) then
     tmLn1p dom (lagrangeRemLn1p4 dom)
   else
     invalidTaylorModel dom
 
-@[expose] def tmSqrt1pCertified (dom : Interval) : TaylorModel :=
+def tmSqrt1pCertified (dom : Interval) : TaylorModel :=
   if Interval.subset dom (Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)) then
     tmSqrt1p dom (lagrangeRemSqrt1p3 dom)
   else
@@ -323,7 +336,7 @@ theorem taylorModel_transcendental_enclosure_sound
   refine ⟨?_, by decide +kernel⟩
   have hCenter : center + -center = 0 := by grind
   have hOne : (1 : CanonicalRat) + -1 = 0 := by grind
-  simp [evalTaylorModelRange, tmSub, tmVar, polySub, polyAdd, polyNeg,
+  simp [evalTaylorModelRange, tmSub, polySub, polyAdd, polyNeg,
     evalTaylorPolyInterval, evalPolyTermsInterval, Interval.ofPoint, Interval.sub, Interval.add,
     hCenter, hOne]
   grind
@@ -331,24 +344,24 @@ theorem taylorModel_transcendental_enclosure_sound
 /-! ## 3. Picard–Lindelöf Taylor-Model ODE Operator & Wrapping-Effect Elimination -/
 
 /-- Formal integration helper $\sum_{j} \frac{c_j}{\text{deg}+1} t^{\text{deg}+1}$ via structural recursion on `cs`. -/
-@[expose] def polyIntegrateAux : List CanonicalRat → Nat → List CanonicalRat
+def polyIntegrateAux : List CanonicalRat → Nat → List CanonicalRat
   | [], _ => []
   | c :: cs, deg => (c / CanonicalRat.ofNat (deg + 1)) :: polyIntegrateAux cs (deg + 1)
 
 /-- Formal integration $\int_0^t p(s) \, ds$ prepending constant $0$. -/
-@[expose] def polyIntegrate (cs : List CanonicalRat) : List CanonicalRat :=
+def polyIntegrate (cs : List CanonicalRat) : List CanonicalRat :=
   0 :: polyIntegrateAux cs 0
 
 /-- One Picard–Lindelöf operator step $\Phi(p)(t) = x_0 + \int_0^t (\lambda \cdot p(s) + b) \, ds$
 for an affine/linearized mode $\dot{x} = \lambda x + b$, truncated to degree `order`. -/
-@[expose] def picardLinearStep (order : Nat) (x0 lam b : CanonicalRat) (coeffs : List CanonicalRat) : List CanonicalRat :=
+def picardLinearStep (order : Nat) (x0 lam b : CanonicalRat) (coeffs : List CanonicalRat) : List CanonicalRat :=
   let rhs := polyAdd [b] (polyScale lam coeffs)
   let integrated := (polyIntegrate rhs).take (order + 1)
   polyAdd [x0] integrated
 
 /-- Iterate the contractive Picard–Lindelöf operator `order` times from constant seed `[x0]`
 to obtain the degree-`order` Taylor flow polynomial in $t$. -/
-@[expose] def picardLinearCoeffs (order : Nat) (x0 lam b : CanonicalRat) : Nat → List CanonicalRat
+def picardLinearCoeffs (order : Nat) (x0 lam b : CanonicalRat) : Nat → List CanonicalRat
   | 0 => [x0]
   | k + 1 => picardLinearStep order x0 lam b (picardLinearCoeffs order x0 lam b k)
 
@@ -356,21 +369,21 @@ to obtain the degree-`order` Taylor flow polynomial in $t$. -/
 starting from initial interval $X_0$:
 Contracts the symbolic Taylor propagator $1 - \Delta t + \frac{\Delta t^2}{2} - \frac{\Delta t^3}{6} + \frac{\Delta t^4}{24}$
 before multiplying by $X_0$, eliminating the interval dependency/wrapping effect. -/
-@[expose] def stepPicardDecay1D (initBox : Interval) (dt : CanonicalRat) (remPad : Interval) : Interval :=
+def stepPicardDecay1D (initBox : Interval) (dt : CanonicalRat) (remPad : Interval) : Interval :=
   let unitPicard := picardLinearCoeffs 4 1 (-1) 0 4
   let factor := evalTaylorPolyAt unitPicard dt
   Interval.add (Interval.mul (Interval.ofPoint factor) initBox) remPad
 
 /-- Naive uncontracted degree-4 interval Taylor step that evaluates each power term
 $c_j \Delta t^j X_0$ as an independent interval and sums them, suffering the interval wrapping effect. -/
-@[expose] def stepNaiveIntervalPicardTerms (initBox : Interval) (dt : CanonicalRat) : List CanonicalRat → Nat → Interval
+def stepNaiveIntervalPicardTerms (initBox : Interval) (dt : CanonicalRat) : List CanonicalRat → Nat → Interval
   | [], _ => Interval.ofPoint 0
   | c :: cs, deg =>
     let coeffDt := Interval.mul (Interval.ofPoint c) (intervalPow (Interval.ofPoint dt) deg)
     let termBox := Interval.mul coeffDt initBox
     Interval.add termBox (stepNaiveIntervalPicardTerms initBox dt cs (deg + 1))
 
-@[expose] def stepNaiveIntervalPicard1D (initBox : Interval) (dt : CanonicalRat) (remPad : Interval) : Interval :=
+def stepNaiveIntervalPicard1D (initBox : Interval) (dt : CanonicalRat) (remPad : Interval) : Interval :=
   let unitPicard := picardLinearCoeffs 4 1 (-1) 0 4
   Interval.add (stepNaiveIntervalPicardTerms initBox dt unitPicard 0) remPad
 
@@ -417,12 +430,12 @@ theorem taylorModel_picard_sound (x0 : CanonicalRat) :
 namespace TaylorModel
 
 /-- Alias for `tm.rem` matching `TaylorModel.Models` specification. -/
-@[expose] abbrev remainder (tm : TaylorModel) : Interval := tm.rem
+abbrev remainder (tm : TaylorModel) : Interval := tm.rem
 
-@[expose] abbrev add := tmAdd
-@[expose] abbrev sub := tmSub
-@[expose] abbrev scale := tmScale
-@[expose] abbrev mul := tmMul
+abbrev add := tmAdd
+abbrev sub := tmSub
+abbrev scale := tmScale
+abbrev mul := tmMul
 
 /-- Semantic function-enclosure relation `TaylorModel.Models f tm`:
 For every point `x` in `tm.domain`, the approximation residual
@@ -743,23 +756,23 @@ theorem TaylorModel.mul_models
 
 /-- Canonical validity domain $[-1, 1]$ for degree-4 $\exp(x)$ Taylor–Lagrange remainder bound
 (where $|\exp^{(5)}(\xi)| \le e < 3$, so $\frac{3}{5!} = \frac{1}{40}$). -/
-@[expose] def expValidDomain : Interval :=
+abbrev expValidDomain : Interval :=
   Interval.mk (-1) 1
 
 /-- Canonical validity domain $[-1, 1]$ for degree-5 $\sin(x)$ and degree-4 $\cos(x)$ Taylor–Lagrange
 remainder bounds (`dom.lo ≥ -1 ∧ dom.hi ≤ 1`). -/
-@[expose] def trigValidDomain : Interval :=
+abbrev trigValidDomain : Interval :=
   Interval.mk (-1) 1
 
 /-- Canonical validity domain $[-\frac{1}{2}, \frac{1}{2}]$ for degree-4 $\ln(1 + x)$ Taylor–Lagrange
 remainder bound (where $|(1 + \xi)^{-5}| \le 2^5 = 32$ on $\xi \in [-1/2, 1/2]$, strictly avoiding the
 branch singularity at $x = -1$). -/
-@[expose] def ln1pValidDomain : Interval :=
+def ln1pValidDomain : Interval :=
   Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)
 
 /-- Canonical validity domain $[-\frac{1}{2}, \frac{1}{2}]$ for degree-3 $\sqrt{1 + x}$ Taylor–Lagrange
 remainder bound (where $\left|\frac{-15}{16}(1+\xi)^{-7/2}\right| \cdot \frac{1}{4!} \le \frac{5}{8}$ on $\xi \in [-1/2, 1/2]$). -/
-@[expose] def sqrt1pValidDomain : Interval :=
+def sqrt1pValidDomain : Interval :=
   Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)
 
 /-! ## 5. Convergent Rational Power-Series & Cauchy-Remainder `AnalyticModel`
@@ -775,7 +788,7 @@ structure SeriesOrder (extra : Nat) : Type where
   mk ::
 
 /-- Exact natural factorial $n!$. -/
-@[expose] def natFact : Nat → Nat
+def natFact : Nat → Nat
   | 0 => 1
   | n + 1 => (n + 1) * natFact n
 
@@ -838,7 +851,7 @@ theorem evalTaylorPolyAt_append (as bs : List CanonicalRat) (dx : CanonicalRat) 
     grind
 
 /-- Coefficient-wise factorial bound $|a_j| \le \frac{1}{(d + j)!}$ starting at degree `d`. -/
-@[expose] def FactorialBounded : Nat → List CanonicalRat → Prop
+def FactorialBounded : Nat → List CanonicalRat → Prop
   | _, [] => True
   | d, a :: rest =>
     a ∈ Interval.mk (CanonicalRat.mk (-1) (natFact d)) (CanonicalRat.mk 1 (natFact d)) ∧
@@ -924,7 +937,7 @@ theorem horner_factorial_majorant {d : Nat} {cs : List CanonicalRat} {x : Canoni
     grind
 
 /-- Uniform coefficient bound $|a| \le M$ across a polynomial tail list. -/
-@[expose] def UniformBounded (M : CanonicalRat) : List CanonicalRat → Prop
+def UniformBounded (M : CanonicalRat) : List CanonicalRat → Prop
   | [] => True
   | a :: rest => a ∈ Interval.mk (-M) M ∧ UniformBounded M rest
 
@@ -963,7 +976,7 @@ theorem horner_half_domain_majorant {M : CanonicalRat} {cs : List CanonicalRat} 
 /-! ### 5.1 Convergent Maclaurin & Newton-Binomial Rational Series -/
 
 /-- Exponential Maclaurin tail $\sum_{j=0}^{\text{len}-1} \frac{x^j}{(d + j)!}$ starting at degree `d`. -/
-@[expose] def expTailFrom (d : Nat) : Nat → List CanonicalRat
+def expTailFrom (d : Nat) : Nat → List CanonicalRat
   | 0 => []
   | len + 1 => CanonicalRat.mk 1 (natFact d) :: expTailFrom (d + 1) len
 
@@ -983,22 +996,22 @@ theorem expTailFrom_factorialBounded (d len : Nat) :
     grind
 
 /-- Convergent exponential Maclaurin series coefficients up to degree `4 + extra`. -/
-@[expose] def expSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+def expSeriesCoeffs (extra : Nat) : List CanonicalRat :=
   [1, 1, CanonicalRat.mk 1 2, CanonicalRat.mk 1 6, CanonicalRat.mk 1 24] ++ expTailFrom 5 extra
 
 /-- Convergent rational exponential series $\sum_{k=0}^{4 + \text{extra}} \frac{x^k}{k!}$. -/
-@[expose] def expSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+def expSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
   evalTaylorPolyAt (expSeriesCoeffs extra) x
 
 /-- Sine Maclaurin coefficient at degree `d`:
 $0$ for even $d$, $\frac{1}{d!}$ for $d \equiv 1 \pmod 4$, $-\frac{1}{d!}$ for $d \equiv 3 \pmod 4$. -/
-@[expose] def sinCoeffAt (d : Nat) : CanonicalRat :=
+def sinCoeffAt (d : Nat) : CanonicalRat :=
   if d % 2 == 0 then 0
   else if d % 4 == 1 then CanonicalRat.mk 1 (natFact d)
   else CanonicalRat.mk (-1) (natFact d)
 
 /-- Sine Maclaurin tail starting at degree `d`. -/
-@[expose] def sinTailFrom (d : Nat) : Nat → List CanonicalRat
+def sinTailFrom (d : Nat) : Nat → List CanonicalRat
   | 0 => []
   | len + 1 => sinCoeffAt d :: sinTailFrom (d + 1) len
 
@@ -1022,22 +1035,22 @@ theorem sinTailFrom_factorialBounded (d len : Nat) :
   | succ k ih => exact ⟨sinCoeffAt_mem_fact d, ih (d + 1)⟩
 
 /-- Convergent sine Maclaurin series coefficients up to degree `6 + extra`. -/
-@[expose] def sinSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+def sinSeriesCoeffs (extra : Nat) : List CanonicalRat :=
   [0, 1, 0, CanonicalRat.mk (-1) 6, 0, CanonicalRat.mk 1 120] ++ (0 :: sinTailFrom 7 extra)
 
 /-- Convergent rational sine series $\sum_{k=0}^{6 + \text{extra}} c_k x^k$. -/
-@[expose] def sinSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+def sinSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
   evalTaylorPolyAt (sinSeriesCoeffs extra) x
 
 /-- Cosine Maclaurin coefficient at degree `d`:
 $0$ for odd $d$, $\frac{1}{d!}$ for $d \equiv 0 \pmod 4$, $-\frac{1}{d!}$ for $d \equiv 2 \pmod 4$. -/
-@[expose] def cosCoeffAt (d : Nat) : CanonicalRat :=
+def cosCoeffAt (d : Nat) : CanonicalRat :=
   if d % 2 == 1 then 0
   else if d % 4 == 0 then CanonicalRat.mk 1 (natFact d)
   else CanonicalRat.mk (-1) (natFact d)
 
 /-- Cosine Maclaurin tail starting at degree `d`. -/
-@[expose] def cosTailFrom (d : Nat) : Nat → List CanonicalRat
+def cosTailFrom (d : Nat) : Nat → List CanonicalRat
   | 0 => []
   | len + 1 => cosCoeffAt d :: cosTailFrom (d + 1) len
 
@@ -1061,15 +1074,15 @@ theorem cosTailFrom_factorialBounded (d len : Nat) :
   | succ k ih => exact ⟨cosCoeffAt_mem_fact d, ih (d + 1)⟩
 
 /-- Convergent cosine Maclaurin series coefficients up to degree `5 + extra`. -/
-@[expose] def cosSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+def cosSeriesCoeffs (extra : Nat) : List CanonicalRat :=
   [1, 0, CanonicalRat.mk (-1) 2, 0, CanonicalRat.mk 1 24] ++ (0 :: cosTailFrom 6 extra)
 
 /-- Convergent rational cosine series $\sum_{k=0}^{5 + \text{extra}} c_k x^k$. -/
-@[expose] def cosSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+def cosSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
   evalTaylorPolyAt (cosSeriesCoeffs extra) x
 
 /-- Alternating Mercator series tail for $\ln(1 + x)$ starting at degree `d ≥ 1` with `sign ∈ {-1, 1}`. -/
-@[expose] def ln1pTailFrom (d : Nat) (sign : Int) : Nat → List CanonicalRat
+def ln1pTailFrom (d : Nat) (sign : Int) : Nat → List CanonicalRat
   | 0 => []
   | len + 1 => CanonicalRat.mk sign d :: ln1pTailFrom (d + 1) (-sign) len
 
@@ -1105,17 +1118,17 @@ theorem ln1pTailFrom_uniformBounded {d : Nat} {sign : Int} (hd : 5 ≤ d)
       grind
 
 /-- Convergent Mercator series coefficients for $\ln(1 + x)$ up to degree `4 + extra`. -/
-@[expose] def ln1pSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+def ln1pSeriesCoeffs (extra : Nat) : List CanonicalRat :=
   [0, 1, CanonicalRat.mk (-1) 2, CanonicalRat.mk 1 3, CanonicalRat.mk (-1) 4] ++
     ln1pTailFrom 5 1 extra
 
 /-- Convergent rational Mercator series $\sum_{k=1}^{4 + \text{extra}} \frac{(-1)^{k-1}}{k} x^k$. -/
-@[expose] def ln1pSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+def ln1pSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
   evalTaylorPolyAt (ln1pSeriesCoeffs extra) x
 
 /-- Newton generalized binomial tail for $\sqrt{1 + x} = \sum_{k=0}^\infty \binom{1/2}{k} x^k$,
 where $b_{d+1} = -b_d \cdot \frac{2d - 1}{2d + 2}$. -/
-@[expose] def sqrt1pTailFrom (d : Nat) (curCoeff : CanonicalRat) : Nat → List CanonicalRat
+def sqrt1pTailFrom (d : Nat) (curCoeff : CanonicalRat) : Nat → List CanonicalRat
   | 0 => []
   | len + 1 =>
     let nextCoeff := -curCoeff * CanonicalRat.mk (Int.ofNat (2 * d - 1)) (2 * d + 2)
@@ -1162,19 +1175,19 @@ theorem sqrt1pTailFrom_uniformBounded {d : Nat} {cur : CanonicalRat} {M : Canoni
     exact ih (by omega) hNext
 
 /-- Convergent Newton-binomial coefficients for $\sqrt{1 + x}$ up to degree `3 + extra`. -/
-@[expose] def sqrt1pSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+def sqrt1pSeriesCoeffs (extra : Nat) : List CanonicalRat :=
   [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16] ++
     sqrt1pTailFrom 4 (CanonicalRat.mk (-5) 128) extra
 
 /-- Convergent rational Newton-binomial series for $\sqrt{1 + x}$. -/
-@[expose] def sqrt1pSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+def sqrt1pSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
   evalTaylorPolyAt (sqrt1pSeriesCoeffs extra) x
 
 /-! ### 5.2 Outward Cauchy-Remainder Enclosures & Certified Rational Square-Root Enclosure -/
 
 /-- Outward rational Cauchy-remainder interval enclosure for $\exp(x)$ at arbitrary truncation order `order ≥ 1`:
 evaluates $\sum_{k=0}^{\text{order}} \frac{x^k}{k!} \oplus \left[-\frac{2}{(\text{order}+1)!}, \frac{2}{(\text{order}+1)!}\right] \cdot x^{\text{order}+1}$. -/
-@[expose] def expCauchyEnclosure (order : Nat) (x : CanonicalRat) : Interval :=
+def expCauchyEnclosure (order : Nat) (x : CanonicalRat) : Interval :=
   let headVal := evalTaylorPolyAt (expTailFrom 0 (order + 1)) x
   let d := order + 1
   let tailFactor := Interval.mk (CanonicalRat.mk (-2) (natFact d)) (CanonicalRat.mk 2 (natFact d))
@@ -1219,7 +1232,7 @@ theorem expCauchyEnclosure_encloses_higher_orders
 (following `Soundcalc.Common.Sqrt`): scales nonnegative $q = \frac{n}{d}$ by $2^{2 \cdot \text{prec}}$
 and returns $\left[\frac{\lfloor \sqrt{n \cdot d \cdot 4^{\text{prec}}} \rfloor}{d \cdot 2^{\text{prec}}},
 \frac{\lfloor \sqrt{n \cdot d \cdot 4^{\text{prec}}} \rfloor + 1}{d \cdot 2^{\text{prec}}}\right]$. -/
-@[expose] def sqrtRationalEnclosure (prec : Nat) (q : CanonicalRat) : Interval :=
+def sqrtRationalEnclosure (prec : Nat) (q : CanonicalRat) : Interval :=
   if decide (q < 0) then
     ⟨1, -1⟩
   else
@@ -1464,7 +1477,7 @@ theorem tmExpCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval)
   intro x hx
   unfold tmExpCertified at hx ⊢
   have hSub : Interval.subset dom (Interval.mk (-1) 1) = true := hDom
-  rw [if_pos hSub] at hx ⊢
+  simp only [hSub, ↓reduceIte] at hx ⊢
   dsimp [tmExp, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]
@@ -1482,7 +1495,7 @@ theorem tmSinCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval)
   intro x hx
   unfold tmSinCertified at hx ⊢
   have hSub : Interval.subset dom (Interval.mk (-1) 1) = true := hDom
-  rw [if_pos hSub] at hx ⊢
+  simp only [hSub, ↓reduceIte] at hx ⊢
   dsimp [tmSin, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]
@@ -1499,7 +1512,7 @@ theorem tmCosCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval)
   intro x hx
   unfold tmCosCertified at hx ⊢
   have hSub : Interval.subset dom (Interval.mk (-1) 1) = true := hDom
-  rw [if_pos hSub] at hx ⊢
+  simp only [hSub, ↓reduceIte] at hx ⊢
   dsimp [tmCos, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]
@@ -1516,7 +1529,7 @@ theorem tmLn1pCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval)
   intro x hx
   unfold tmLn1pCertified at hx ⊢
   have hSub : Interval.subset dom (Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)) = true := hDom
-  rw [if_pos hSub] at hx ⊢
+  simp only [hSub, ↓reduceIte] at hx ⊢
   dsimp [tmLn1p, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]
@@ -1533,7 +1546,7 @@ theorem tmSqrt1pCertified_models (R : Type) [M : AnalyticModel R] (dom : Interva
   intro x hx
   unfold tmSqrt1pCertified at hx ⊢
   have hSub : Interval.subset dom (Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)) = true := hDom
-  rw [if_pos hSub] at hx ⊢
+  simp only [hSub, ↓reduceIte] at hx ⊢
   dsimp [tmSqrt1p, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]

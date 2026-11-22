@@ -4,7 +4,7 @@ that is behind is matched by zero or more steps of the term that is ahead (`step
 of the term that is ahead is matched by one or more steps of the term that is behind
 (`step_ahead`). Determinism of `Step` is what lets the term behind catch up without branching. -/
 public import Obend.Equiv.Ahead
-@[expose] public section
+public section
 namespace Obend.Equiv
 open Obend.Core.Term
 set_option autoImplicit false

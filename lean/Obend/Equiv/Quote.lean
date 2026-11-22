@@ -415,8 +415,8 @@ inductive Level where
 @[expose] def Level.rank : Level → Nat
   | .b => 0 | .r => 1 | .q => 2
 
-@[expose] instance : LE Level := ⟨fun x y => x.rank ≤ y.rank⟩
-@[expose] instance (x y : Level) : Decidable (x ≤ y) := inferInstanceAs (Decidable (x.rank ≤ y.rank))
+instance : LE Level := ⟨fun x y => x.rank ≤ y.rank⟩
+instance (x y : Level) : Decidable (x ≤ y) := inferInstanceAs (Decidable (x.rank ≤ y.rank))
 
 /-- **The census** of a Core4 context: `r` if it holds a `metadata` observer, else `b`. -/
 @[expose] def census (t : Term) : Level := if observes t then .r else .b
@@ -599,17 +599,17 @@ inductive Observer where
   | run (C : Term)
   | quote (C : Term)
 
-@[expose] def Observer.plug : Observer → Term → Term
+def Observer.plug : Observer → Term → Term
   | .run C, t => instantiate C t
   | .quote C, t => instantiate C (Obend.Core.Data.Data.term (Obend.Core.Code.quote t))
 
 /-- A `quote` position has census `q`; a Core4 context has its own census. -/
-@[expose] def Observer.census : Observer → Level
+def Observer.census : Observer → Level
   | .run C => Obend.Equiv.census C
   | .quote _ => .q
 
 /-- Plug `D` into the hole of `C'`, keeping every other variable of `C'` where it was. -/
-@[expose] def plugContext (C' D : Term) : Term :=
+def plugContext (C' D : Term) : Term :=
   C'.substitute (fun i => match i with | 0 => D | n + 1 => .bound (n + 1))
 
 theorem instantiate_plugContext (C' D x : Term) :
@@ -686,11 +686,11 @@ theorem not_observed_b {t t' : Term} {o o' : Observation} {v v' : Term}
   cases ow <;> cases ov' <;> simp_all
 
 /-- A Bool read-back of a run, for `decide`. -/
-@[expose] def natOf : Option Term → Option Nat
+def natOf : Option Term → Option Nat
   | some (.nat n) => some n
   | _ => none
 
-@[expose] def boolOf : Option Term → Option Bool
+def boolOf : Option Term → Option Bool
   | some (.boolean b) => some b
   | _ => none
 
@@ -711,12 +711,12 @@ theorem boolOf_eval {t : Term} {b : Bool} (fuel : Nat) (h : boolOf (Obend.Law.ru
 /-! ### Barendregt's pair: `≈r` and not `≈q`, and a `quote` observer separates them -/
 
 /-- `(λx. x)(λx. x)`. -/
-@[expose] def selfApplied : Term := .app (.lam (.bound 0)) (.lam (.bound 0))
+def selfApplied : Term := .app (.lam (.bound 0)) (.lam (.bound 0))
 /-- `λx. x`. -/
-@[expose] def identityTerm : Term := .lam (.bound 0)
+def identityTerm : Term := .lam (.bound 0)
 
 /-- A program that reads the head of a quotation: `var ↦ 0`, `bind ↦ 1`, `node ↦ 2`. -/
-@[expose] def headReader : Term := .case (.bound 0) [("var", .nat 0), ("bind", .nat 1), ("node", .nat 2)]
+def headReader : Term := .case (.bound 0) [("var", .nat 0), ("bind", .nat 1), ("node", .nat 2)]
 
 -- fixture kept (2026-11-04): consumed by a proof in this file
 theorem headReader_selfApplied : Evaluates ((Observer.quote headReader).plug selfApplied) (.nat 2) :=
@@ -753,17 +753,17 @@ three counter specifications `A`, `B`, `C`; `compose(a, b)` is
 `leftNested` asks whether the inherited provenance of `compose(compose(A, B), C)` is composed. -/
 
 /-- `SpecMeta.declared{name, interface, claims: SpecClaims.none{}}`. -/
-@[expose] def declared (name : String) : Term :=
+def declared (name : String) : Term :=
   .inject "declared" (.record [("name", .label name), ("interface", .label "Counter"),
     ("claims", .inject "none" (.record []))])
 
 /-- `λself. λsuper. super with n = super.n op k`. -/
-@[expose] def counterExtension (op : Primitive) (k : Nat) : Term :=
+def counterExtension (op : Primitive) (k : Nat) : Term :=
   .lam (.lam (.extend (.bound 0) [("n", .binary op (.get (.bound 0) "n") (.nat k))]))
 
-@[expose] def specA : Term := .specification (declared "AssociationProvenance.A") (counterExtension .add 1)
-@[expose] def specB : Term := .specification (declared "AssociationProvenance.B") (counterExtension .multiply 2)
-@[expose] def specC : Term := .specification (declared "AssociationProvenance.C") (counterExtension .add 3)
+def specA : Term := .specification (declared "AssociationProvenance.A") (counterExtension .add 1)
+def specB : Term := .specification (declared "AssociationProvenance.B") (counterExtension .multiply 2)
+def specC : Term := .specification (declared "AssociationProvenance.C") (counterExtension .add 3)
 
 /-- `compose(a, b)`, as the elaborator lowers it for two specification operands. -/
 @[expose] def compose (a b : Term) : Term :=
@@ -771,14 +771,14 @@ three counter specifications `A`, `B`, `C`; `compose(a, b)` is
     (.mix a b)
 
 /-- `isComposed(inheritedOf(metadata(·)))`: the probes' observer, a context with its hole at 0. -/
-@[expose] def provenanceProbe : Term :=
+def provenanceProbe : Term :=
   .case (.case (.metadata (.bound 0))
       [("declared", .metadata (.bound 1)), ("composed", .get (.bound 0) "inherited"),
         ("extension", .metadata (.bound 1))])
     [("declared", .boolean false), ("composed", .boolean true), ("extension", .boolean false)]
 
-@[expose] def leftNested : Term := compose (compose specA specB) specC
-@[expose] def rightNested : Term := compose specA (compose specB specC)
+def leftNested : Term := compose (compose specA specB) specC
+def rightNested : Term := compose specA (compose specB specC)
 
 /-- **R01**: `leftNested()` is `true`. -/
 -- fixture kept (2026-11-04): consumed by a proof in this file

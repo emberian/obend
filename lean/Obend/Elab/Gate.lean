@@ -17,7 +17,7 @@ public import Obend.Elab.Work
 public import Obend.Core.Packet
 public import Obend.Core.Nominal
 
-@[expose] public section
+public section
 namespace Obend.Elab.Gate
 open Lean (Json toJson)
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Packet
@@ -38,7 +38,7 @@ structure Admitted (source : AnnotatedTerm) (context : Context) (fuel : Nat) whe
   within : checkWork { source with annotations := annotations } ≤ fuel
 
 /-- The gate on a source, a context and a work grant. -/
-def admitSource (source : AnnotatedTerm) (context : Context) (fuel : Nat) :
+@[expose] def admitSource (source : AnnotatedTerm) (context : Context) (fuel : Nat) :
     Except GateRefusal (Admitted source context fuel) :=
   match prepareInferred source context with
   | .ok ⟨annotations, checked⟩ =>
@@ -48,7 +48,7 @@ def admitSource (source : AnnotatedTerm) (context : Context) (fuel : Nat) :
   | .error refusal => .error (.prepare refusal)
 
 /-- The gate on a decoded packet. -/
-def admit (packet : DecodedPacket) : Except GateRefusal (Admitted packet.source packet.context packet.fuel) :=
+@[expose] def admit (packet : DecodedPacket) : Except GateRefusal (Admitted packet.source packet.context packet.fuel) :=
   admitSource packet.source packet.context packet.fuel
 
 /-- The admitted program is the packet's erased term, typed. -/
@@ -59,19 +59,19 @@ theorem Admitted.erase {source : AnnotatedTerm} {context : Context} {fuel : Nat}
 
 /-- The admitted certificate with the packet's own annotations replaced: the same erased term
 and assumptions, so it is a `Checked` for every source that agrees on those. -/
-def Admitted.certificate {source : AnnotatedTerm} {context : Context} {fuel : Nat}
+@[expose] def Admitted.certificate {source : AnnotatedTerm} {context : Context} {fuel : Nat}
     (admitted : Admitted source context fuel) : Checked { source with annotations := admitted.annotations } context :=
   admitted.checked
 
 /-- Which kind of rule a refused packet broke, by the gate's answer on two variations. -/
-def refusalKind (packet : DecodedPacket) : RefusalKind :=
+@[expose] def refusalKind (packet : DecodedPacket) : RefusalKind :=
   match admit packet with
   | .error (.budget _ _) => .budget
   | _ =>
     let relaxed := relaxQuantities packet
     if (admit relaxed).toBool then .ownership else .typing
 
-def refusalReason (packet : DecodedPacket) : String :=
+@[expose] def refusalReason (packet : DecodedPacket) : String :=
   match refusalKind packet with
   | .budget =>
     let work := match admit packet with

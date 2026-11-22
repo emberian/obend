@@ -127,13 +127,13 @@ theorem sumInt_mul (n : Nat) (c : Int) (f : Nat → Int) :
   | zero => simp [sumInt]
   | succ n ih => simp [sumInt, ih, Int.mul_add]
 
-@[expose] def intAdd {d : Nat} (a b : FastIntPoly d) : FastIntPoly d :=
+def intAdd {d : Nat} (a b : FastIntPoly d) : FastIntPoly d :=
   Sized.ofFn fun i => a.spec i + b.spec i
-@[expose] def intSub {d : Nat} (a b : FastIntPoly d) : FastIntPoly d :=
+def intSub {d : Nat} (a b : FastIntPoly d) : FastIntPoly d :=
   Sized.ofFn fun i => a.spec i - b.spec i
-@[expose] def intNeg {d : Nat} (a : FastIntPoly d) : FastIntPoly d :=
+def intNeg {d : Nat} (a : FastIntPoly d) : FastIntPoly d :=
   Sized.ofFn fun i => -a.spec i
-@[expose] def intScale {d : Nat} (c : Int) (a : FastIntPoly d) : FastIntPoly d :=
+def intScale {d : Nat} (c : Int) (a : FastIntPoly d) : FastIntPoly d :=
   Sized.ofFn fun i => c * a.spec i
 @[expose] def zeroVec (d : Nat) : FastIntPoly d := Sized.ofFn fun _ => 0
 
@@ -147,7 +147,7 @@ theorem sumInt_mul (n : Nat) (c : Int) (f : Nat → Int) :
     (intScale c a).spec = fun i => c * a.spec i := Sized.spec_ofFn _
 
 /-- The wrap coefficient is negative because X^d = -1. -/
-@[expose] def wrapSign (i k : Nat) (x : Int) : Int := if i ≤ k then x else -x
+abbrev wrapSign (i k : Nat) (x : Int) : Int := if i ≤ k then x else -x
 
 @[expose] def negacyclicSpec {d : Nat} (a b : IntCycloSpec d) (k : Fin d) : Int :=
   sumInt d fun i => if hi : i < d then
@@ -156,7 +156,7 @@ theorem sumInt_mul (n : Nat) (c : Int) (f : Nat → Int) :
 
 /-- The executable kernel has two branch-free arithmetic loops. The wrap boundary is
 hoisted out of the loops, and neither loop performs division by the degree. -/
-@[expose] def splitConvolution {α : Type} (add sub mul : α → α → α) (zero : α)
+def splitConvolution {α : Type} (add sub mul : α → α → α) (zero : α)
     (d k : Nat) (a b : Nat → α) : α :=
   let lo := (Array.range (k+1)).foldl (fun acc j => add acc (mul (a j) (b (k-j)))) zero
   (Array.range (d-(k+1))).foldl
@@ -221,12 +221,12 @@ theorem splitConvolution_eq_spec {d : Nat} (a b : Nat → Int) (k : Fin d) :
   simp only [Int.neg_one_mul] at hn
   rw [hn]; omega
 
-@[expose] def negacyclicMulFast {d : Nat} (a b : FastIntPoly d) : FastIntPoly d :=
+def negacyclicMulFast {d : Nat} (a b : FastIntPoly d) : FastIntPoly d :=
   Sized.ofFn fun k => splitConvolution (· + ·) (· - ·) (· * ·) 0 d k.val
     (fun j => a.coeffs[j]?.getD 0) (fun j => b.coeffs[j]?.getD 0)
 
 /-- Compatibility name; execution uses the split-loop kernel. -/
-@[expose] def negacyclicMulInt {d : Nat} (a b : FastIntPoly d) : FastIntPoly d :=
+def negacyclicMulInt {d : Nat} (a b : FastIntPoly d) : FastIntPoly d :=
   negacyclicMulFast a b
 
 theorem negacyclicMulFast_eq_spec {d : Nat} (a b : FastIntPoly d) :
@@ -250,11 +250,11 @@ theorem negacyclicMul_left_distrib {d : Nat} (a b c : IntCycloSpec d) :
   simp only [hi, ↓reduceDIte, Int.mul_add, wrapSign]
   split <;> omega
 
-@[expose] def reduceSpec {d q : Nat} (hq : 0 < q) (a : IntCycloSpec d) : CycloSpec d q :=
+def reduceSpec {d q : Nat} (hq : 0 < q) (a : IntCycloSpec d) : CycloSpec d q :=
   fun i => ⟨a i % (q : Int), Int.emod_nonneg _ (by omega), Int.emod_lt_of_pos _ (by omega)⟩
-@[expose] def cycloAdd {d q : Nat} (hq : 0 < q) (a b : CycloSpec d q) : CycloSpec d q :=
+def cycloAdd {d q : Nat} (hq : 0 < q) (a b : CycloSpec d q) : CycloSpec d q :=
   reduceSpec hq (fun i => (a i).val + (b i).val)
-@[expose] def cycloNeg {d q : Nat} (hq : 0 < q) (a : CycloSpec d q) : CycloSpec d q :=
+def cycloNeg {d q : Nat} (hq : 0 < q) (a : CycloSpec d q) : CycloSpec d q :=
   reduceSpec hq (fun i => -(a i).val)
 
 theorem reduceSpec_add {d q : Nat} (hq : 0 < q) (a b : IntCycloSpec d) :
@@ -365,7 +365,7 @@ theorem sumInt_mod (n : Nat) (q : Int) (f : Nat → Int) :
     simp only [sumInt]
     rw [Int.add_emod, ih, Int.emod_emod, ← Int.add_emod]
 
-@[expose] def cycloMul {d q : Nat} (hq : 0 < q) (a b : CycloSpec d q) : CycloSpec d q :=
+def cycloMul {d q : Nat} (hq : 0 < q) (a b : CycloSpec d q) : CycloSpec d q :=
   reduceSpec hq (negacyclicSpec (fun i => (a i).val) (fun i => (b i).val))
 
 private theorem neg_mod_congr (a b q : Int) (h : a % q = b % q) : -a % q = -b % q := by
@@ -475,19 +475,19 @@ theorem splitConvolution_gold (d k : Nat) (a b : Nat → Int) :
   exact Array.foldl_hom goldOfInt (fun x y => goldOfInt_sub x (a (k+1+y)*b (d-1-y)))
 
 namespace FastGoldilocksRing
-@[expose] def zeroFast (d : Nat) : FastGoldilocksRing d := Sized.ofFn fun _ => Goldilocks.zero
-@[expose] def oneFast (d : Nat) : FastGoldilocksRing d :=
+abbrev zeroFast (d : Nat) : FastGoldilocksRing d := Sized.ofFn fun _ => Goldilocks.zero
+def oneFast (d : Nat) : FastGoldilocksRing d :=
   Sized.ofFn fun i => if i.val = 0 then Goldilocks.one else Goldilocks.zero
-@[expose] def addFast {d : Nat} (a b : FastGoldilocksRing d) : FastGoldilocksRing d :=
+abbrev addFast {d : Nat} (a b : FastGoldilocksRing d) : FastGoldilocksRing d :=
   Sized.ofFn fun i => Goldilocks.add (a.spec i) (b.spec i)
-@[expose] def subFast {d : Nat} (a b : FastGoldilocksRing d) : FastGoldilocksRing d :=
+def subFast {d : Nat} (a b : FastGoldilocksRing d) : FastGoldilocksRing d :=
   Sized.ofFn fun i => Goldilocks.sub (a.spec i) (b.spec i)
-@[expose] def negFast {d : Nat} (a : FastGoldilocksRing d) : FastGoldilocksRing d :=
+def negFast {d : Nat} (a : FastGoldilocksRing d) : FastGoldilocksRing d :=
   Sized.ofFn fun i => Goldilocks.neg (a.spec i)
-@[expose] def scalarMulFast {d : Nat} (c : Goldilocks) (a : FastGoldilocksRing d) : FastGoldilocksRing d :=
+abbrev scalarMulFast {d : Nat} (c : Goldilocks) (a : FastGoldilocksRing d) : FastGoldilocksRing d :=
   Sized.ofFn fun i => Goldilocks.mul c (a.spec i)
 /-- Native field arithmetic in the two loops; no unbounded Int convolution. -/
-@[expose] def negacyclicMulFast {d : Nat} (a b : FastGoldilocksRing d) : FastGoldilocksRing d :=
+def negacyclicMulFast {d : Nat} (a b : FastGoldilocksRing d) : FastGoldilocksRing d :=
   Sized.ofFn fun k => splitConvolution Goldilocks.add Goldilocks.sub Goldilocks.mul Goldilocks.zero
     d k.val (fun j => a.coeffs[j]?.getD Goldilocks.zero) (fun j => b.coeffs[j]?.getD Goldilocks.zero)
 

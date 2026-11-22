@@ -3,7 +3,7 @@ module
 they carry the same names in the same order and their bodies are related position by position.
 Lookup (`find?`) and record extension (`extendFields`) respect such a relation. -/
 public import Obend.Core.Term
-@[expose] public section
+public section
 namespace Obend.Equiv
 open Obend.Core.Term
 set_option autoImplicit false
