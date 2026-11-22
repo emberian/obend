@@ -2227,6 +2227,20 @@ module = "Obend.Polis.EpiphanyCompositor"
 theorem = "sensorFrameSeal_binds"
 description = "Monotone CSI-2 sensor-frame `OBEND.SHE.SENSOR_SEAL/v1` cSHAKE256 sealing (`sensorFrameSeal_binds`, `redactedSensorFrame_zero_private_leakage`, `sensor_replay_or_rollback_refused`, `validEpiphanySessionTrace_sound`)."
 
+[[apex]]
+id = "os-smmu-dma-confinement-and-private-frame-safety"
+subsystem = "OS"
+module = "Obend.OS.SmmuDmaConfinement"
+theorem = "dma_burst_preserves_private_pd_frames"
+description = "Multi-device SMMUv3 / RISC-V IOMMU Stage-2 translation (`unmapped_stream_dma_faults`, `translateStage2Dma_skip_implies_contract_violation`) proving peripheral DMA bursts preserve `commit-pd` private frames and finalized outboxes (`dma_burst_preserves_private_pd_frames`)."
+
+[[apex]]
+id = "os-smmu-microkit-verifier-loop-and-manifest-binding"
+subsystem = "OS"
+module = "Obend.OS.SmmuDmaConfinement"
+theorem = "smmu_verifier_loop_dma_safe"
+description = "End-to-end `seL4` Microkit 4-PD verifier loop interleaved with arbitrary adversarial peripheral DMA bursts (`smmu_verifier_loop_dma_safe`), `OBEND.SHE.SMMU_MANIFEST/v1` binding (`smmuManifestDigest_binds`), and `smmuChokepointJudge`."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

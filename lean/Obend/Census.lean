@@ -496,6 +496,7 @@ import Obend.Metatheory.SponsorAndMigration
 import Obend.Metatheory.StratifiedCut
 import Obend.OS.Sel4MicrokitKernel
 import Obend.OS.Sel4MicrokitKernelCore
+import Obend.OS.SmmuDmaConfinement
 import Obend.Paco.GPaco
 import Obend.Polis.BlumRam
 import Obend.Polis.CapTP

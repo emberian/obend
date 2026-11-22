@@ -351,6 +351,7 @@ public import Obend.SemanticKG.HypergraphChase
 public import Obend.SemanticKG.SemanticCert
 public import Obend.OS.Sel4MicrokitKernelCore
 public import Obend.OS.Sel4MicrokitKernel
+public import Obend.OS.SmmuDmaConfinement
 public import Obend.SymbolicZk.SemiringDatalog
 public import Obend.SymbolicZk.RankedFixpointArith
 public import Obend.SymbolicZk.CamUnifyArith
