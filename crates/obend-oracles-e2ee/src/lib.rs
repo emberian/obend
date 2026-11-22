@@ -9,6 +9,7 @@
 
 pub mod kkt;
 pub mod sha256;
+pub mod she_ceremony;
 pub mod tee;
 pub mod tlsn_e2ee;
 
@@ -24,6 +25,15 @@ pub use kkt::{
 pub use sha256::{
     base64_decode_strict, ct_eq, hex_decode_strict, hex_encode_lower, hkdf_sha256_expand,
     hkdf_sha256_extract, hmac_sha256, sha256, Sha256,
+};
+pub use she_ceremony::{
+    apply_oracle_attested_actuation, apply_she_turn, encode_she_field, encode_she_fields,
+    encode_she_floors, jbr_per_query_milli_bits, legacy_withdrawn_cbr_milli_bits,
+    proven_zkml_milli_bits, run_she_trace, she_cshake256_32, she_floors_digest, she_leb128,
+    she_payload_digest, she_turn_envelope_digest, she_turn_preimage, udr_per_query_milli_bits,
+    ActuationTurnProposal, CandidateComputation, MandateAttenuation, SealedOracleIngress,
+    SettledActuationRecord, SheFloor, SheRefusal, SheState, SheTurn, UpgradeAuthorityClaim,
+    UpgradeJudgeProposal, ZkmlSoundnessRegime, SHE_MIN_PROVEN_ZKML_MILLI_BITS,
 };
 pub use tee::{
     chutes_report_data_binding, extract_der_dice_fwid, fold_nitro_pcrs, fold_tdx_measurement,
