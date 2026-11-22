@@ -341,6 +341,7 @@ public import Obend.Polis.GrainCustodyHost
 public import Obend.Polis.HermesEnv
 public import Obend.Polis.DecentralizedRulesMesh
 public import Obend.Polis.SandboxDomainTags
+public import Obend.Polis.EpiphanyCompositor
 public import Obend.Core.GradedCoreWeldDefs
 public import Obend.Core.GradedCoreWeld
 public import Obend.Core.GradedSessionMetatheory

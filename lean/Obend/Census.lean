@@ -500,6 +500,7 @@ import Obend.Paco.GPaco
 import Obend.Polis.BlumRam
 import Obend.Polis.CapTP
 import Obend.Polis.DecentralizedRulesMesh
+import Obend.Polis.EpiphanyCompositor
 import Obend.Polis.EpistemicVouchMarket
 import Obend.Polis.EvidencedOcap
 import Obend.Polis.GrainCustodyHost

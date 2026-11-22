@@ -2213,6 +2213,20 @@ module = "Obend.SymbolicZk.ProvenZkmlGate"
 theorem = "verifyZkmlSessionTrace_sound"
 description = "Streaming Gated-DeltaNet recurrent chunk-carry IVC (`OBEND.SHE.ZKML_CHUNK/v1`, `zkmlChunkChain_binds_endToEnd`, `verifyZkmlChunkChainExec_iff_spec`) and multi-turn `provenZkmlJudge` session trace soundness."
 
+[[apex]]
+id = "polis-epiphany-scanout-non-occlusion-and-hazard-floor"
+subsystem = "Polis"
+module = "Obend.Polis.EpiphanyCompositor"
+theorem = "chrome_non_occludable_and_unforgeable"
+description = "Trusted three-plane Epiphany AR display scanout compositor (`chrome_non_occludable_and_unforgeable`, `trusted_consent_band_unforgeable`, `physical_hazard_reticle_visibility_floor`, `frustum_unreachable_belief_scrubbed`)."
+
+[[apex]]
+id = "polis-epiphany-monotone-sensor-seal-and-redaction"
+subsystem = "Polis"
+module = "Obend.Polis.EpiphanyCompositor"
+theorem = "sensorFrameSeal_binds"
+description = "Monotone CSI-2 sensor-frame `OBEND.SHE.SENSOR_SEAL/v1` cSHAKE256 sealing (`sensorFrameSeal_binds`, `redactedSensorFrame_zero_private_leakage`, `sensor_replay_or_rollback_refused`, `validEpiphanySessionTrace_sound`)."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
