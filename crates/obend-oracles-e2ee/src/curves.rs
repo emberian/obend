@@ -567,6 +567,9 @@ impl SubjectPublicKey {
             Ok(Self::Rsa { n, e })
         } else if alg == OID_ED25519 {
             let pk: [u8; 32] = key.try_into().map_err(|_| CryptoError::InvalidEd25519Key)?;
+            if !ed25519::validate_public_key(&pk) {
+                return Err(CryptoError::InvalidEd25519Key);
+            }
             Ok(Self::Ed25519(pk))
         } else {
             Err(CryptoError::UnsupportedAlgorithm)
@@ -635,6 +638,22 @@ const ALGID_PSS_SHA384: &[u8] = &[
     0x01, 0x08, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
     0x05, 0x00, 0xa2, 0x03, 0x02, 0x01, 0x30,
 ];
+/// RSASSA-PSS AlgorithmIdentifiers with explicit `[3] trailerField = 1` (`a3 03 02 01 01`), as
+/// emitted by real AMD KDS Genoa/Milan/Turin ARK & ASK RSA-4096 certificates.
+const ALGID_PSS_SHA256_TF1: &[u8] = &[
+    0x30, 0x46, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x39,
+    0xa0, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+    0x05, 0x00, 0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01,
+    0x01, 0x08, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+    0x05, 0x00, 0xa2, 0x03, 0x02, 0x01, 0x20, 0xa3, 0x03, 0x02, 0x01, 0x01,
+];
+const ALGID_PSS_SHA384_TF1: &[u8] = &[
+    0x30, 0x46, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x39,
+    0xa0, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
+    0x05, 0x00, 0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01,
+    0x01, 0x08, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
+    0x05, 0x00, 0xa2, 0x03, 0x02, 0x01, 0x30, 0xa3, 0x03, 0x02, 0x01, 0x01,
+];
 const ALGID_ED25519: &[u8] = &[0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70];
 
 impl SignatureAlgorithm {
@@ -648,17 +667,77 @@ impl SignatureAlgorithm {
         (Self::Ed25519, ALGID_ED25519),
     ];
 
-    /// Map a full DER `AlgorithmIdentifier` TLV to a supported algorithm (exact canonical bytes).
+    /// Map a full DER `AlgorithmIdentifier` TLV to a supported algorithm (accepting RFC 4055 §2.1
+    /// RSASSA-PSS parameters with either explicit `NULL` or absent hash parameters and omitted or
+    /// explicit `trailerField = 1`).
     pub fn from_algorithm_identifier_der(der: &[u8]) -> Result<Self, CryptoError> {
-        let (_, _, rest) = der_tlv(der)?;
-        if !rest.is_empty() {
+        let (tag, body, rest) = der_tlv(der)?;
+        if tag != 0x30 || !rest.is_empty() {
             return Err(CryptoError::MalformedDer);
         }
-        Self::ALL
-            .iter()
-            .find(|(_, enc)| *enc == der)
-            .map(|(a, _)| *a)
-            .ok_or(CryptoError::UnsupportedAlgorithm)
+        if der == ALGID_PSS_SHA256_TF1 {
+            return Ok(Self::RsaPssSha256);
+        }
+        if der == ALGID_PSS_SHA384_TF1 {
+            return Ok(Self::RsaPssSha384);
+        }
+        if let Some((a, _)) = Self::ALL.iter().find(|(_, enc)| *enc == der) {
+            return Ok(*a);
+        }
+        // RFC 4055 §3.1 structural RSASSA-PSS AlgorithmIdentifier parser (accepting absent or NULL
+        // parameters inside SHA-256/SHA-384 hashAlgorithm and mgf1 AlgorithmIdentifiers).
+        const OID_RSASSA_PSS: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a];
+        const OID_MGF1: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08];
+        const OID_SHA256_TLV: &[u8] = &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+        const OID_SHA384_TLV: &[u8] = &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02];
+        if let Some(params_tlv) = body.strip_prefix(OID_RSASSA_PSS) {
+            let (pseq, end) = der_expect(params_tlv, 0x30)?;
+            if !end.is_empty() {
+                return Err(CryptoError::MalformedDer);
+            }
+            let parse_sha2_alg = |alg_tlv: &[u8]| -> Result<HashAlg, CryptoError> {
+                let (ab, aend) = der_expect(alg_tlv, 0x30)?;
+                if !aend.is_empty() {
+                    return Err(CryptoError::MalformedDer);
+                }
+                if let Some(rem) = ab.strip_prefix(OID_SHA256_TLV) {
+                    if rem.is_empty() || rem == DER_NULL {
+                        return Ok(HashAlg::Sha256);
+                    }
+                } else if let Some(rem) = ab.strip_prefix(OID_SHA384_TLV) {
+                    if rem.is_empty() || rem == DER_NULL {
+                        return Ok(HashAlg::Sha384);
+                    }
+                }
+                Err(CryptoError::UnsupportedAlgorithm)
+            };
+            let (h_box, rem) = der_expect(pseq, 0xa0)?;
+            let hash_alg = parse_sha2_alg(h_box)?;
+            let (m_box, rem) = der_expect(rem, 0xa1)?;
+            let (m_body, mend) = der_expect(m_box, 0x30)?;
+            if !mend.is_empty() {
+                return Err(CryptoError::MalformedDer);
+            }
+            let mgf_param = m_body.strip_prefix(OID_MGF1).ok_or(CryptoError::UnsupportedAlgorithm)?;
+            if parse_sha2_alg(mgf_param)? != hash_alg {
+                return Err(CryptoError::UnsupportedAlgorithm);
+            }
+            let (s_box, rem) = der_expect(rem, 0xa2)?;
+            let (s_int, send) = der_expect(s_box, 0x02)?;
+            if !send.is_empty() || der_uint(s_int)? != [hash_alg.output_len() as u8] {
+                return Err(CryptoError::UnsupportedAlgorithm);
+            }
+            if !rem.is_empty() {
+                if rem != [0xa3, 0x03, 0x02, 0x01, 0x01] {
+                    return Err(CryptoError::UnsupportedAlgorithm);
+                }
+            }
+            return Ok(match hash_alg {
+                HashAlg::Sha256 => Self::RsaPssSha256,
+                HashAlg::Sha384 => Self::RsaPssSha384,
+            });
+        }
+        Err(CryptoError::UnsupportedAlgorithm)
     }
 
     pub fn algorithm_identifier_der(self) -> Vec<u8> {

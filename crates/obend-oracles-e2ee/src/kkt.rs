@@ -1142,6 +1142,11 @@ pub fn verify_attested_solver_quote(
     wire: &[u8],
     quote_nonce: &[u8; 32],
 ) -> Result<VerifiedSolverQuote, ExactQpCertificateBundleError> {
+    // Refuse GPU SPDM tokens: on NVIDIA GPUs `report_data[0..32]` is the requester's SPDM nonce,
+    // not an enclave-computed solver commitment. Require a CPU TEE enclave.
+    if matches!(tee.vendor(), crate::tee::TeeVendor::NvidiaGpu(_)) {
+        return Err(ExactQpCertificateBundleError::QuoteAttestationMismatch);
+    }
     let zero_kkt = verify_zero_kkt_certified_qp(problem, wire)?;
     let quote_commitment = solver_quote_commitment(
         &zero_kkt.program_digest(),

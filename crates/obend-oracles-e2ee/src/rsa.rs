@@ -26,6 +26,9 @@ const DIGEST_INFO_SHA384: &[u8] = &[
 ];
 
 fn modulus(n: &[u8]) -> Result<(Limbs<LIMBS>, usize), CryptoError> {
+    if n.is_empty() || n[0] == 0 {
+        return Err(CryptoError::RsaModulusSize);
+    }
     let n_l = limbs_from_be::<LIMBS>(n).ok_or(CryptoError::RsaModulusSize)?;
     let bits = limbs_bits(&n_l);
     if !(RSA_MIN_BITS..=RSA_MAX_BITS).contains(&bits) || n_l[0] & 1 == 0 {
@@ -34,9 +37,13 @@ fn modulus(n: &[u8]) -> Result<(Limbs<LIMBS>, usize), CryptoError> {
     Ok((n_l, bits))
 }
 
-/// Validate an RSA public key: `2048 <= |n| <= 4096`, `n` odd, `e` odd, `3 <= e < n`.
+/// Validate an RSA public key: canonical big-endian `n` and `e` (no leading zero octets),
+/// `2048 <= |n| <= 4096`, `n` odd, `e` odd, `3 <= e < n`.
 pub fn validate_public_key(n: &[u8], e: &[u8]) -> Result<(), CryptoError> {
     let (n_l, _) = modulus(n)?;
+    if e.is_empty() || e[0] == 0 || e.len() > n.len() {
+        return Err(CryptoError::RsaBadExponent);
+    }
     let e_l = limbs_from_be::<LIMBS>(e).ok_or(CryptoError::RsaBadExponent)?;
     if e_l[0] & 1 == 0 || limbs_bits(&e_l) < 2 || limbs_ge(&e_l, &n_l) {
         return Err(CryptoError::RsaBadExponent);
@@ -136,7 +143,11 @@ pub fn verify_pss(
     }
     let em = &em_full[k - em_len..];
     let h_len = hash.output_len();
-    if em_len < h_len + salt_len + 2 || em[em_len - 1] != 0xbc {
+    let min_em = h_len
+        .checked_add(salt_len)
+        .and_then(|v| v.checked_add(2))
+        .ok_or(bad)?;
+    if em_len < min_em || em[em_len - 1] != 0xbc {
         return Err(bad);
     }
     let db_len = em_len - h_len - 1;

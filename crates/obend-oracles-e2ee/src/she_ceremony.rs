@@ -986,10 +986,12 @@ impl SealedOracleIngress {
         {
             return Err(SheRefusal::OracleEvidenceBindingMismatch);
         }
+        let mut seen_gpu_keys = std::collections::BTreeSet::new();
         for gpu in gpu_tees {
             if !matches!(gpu.vendor(), TeeVendor::NvidiaGpu(_))
                 || gpu.tcb_posture() != TcbPosture::VerifiedFloor
                 || gpu.gpu_fwid().is_none()
+                || !seen_gpu_keys.insert(gpu.leaf_spki_sha256())
             {
                 return Err(SheRefusal::OracleEvidenceBindingMismatch);
             }

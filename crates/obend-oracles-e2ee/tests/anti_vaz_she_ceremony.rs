@@ -10,18 +10,21 @@
 use std::collections::BTreeMap;
 
 use obend_oracles_e2ee::{
-    apply_oracle_attested_actuation, apply_she_turn, chutes_report_data_binding, hex_encode_lower,
-    legacy_withdrawn_cbr_milli_bits, proven_zkml_milli_bits, run_she_trace, sha256,
+    apply_oracle_attested_actuation, apply_she_turn, chutes_report_data_binding,
+    fixture_build_intel_tdx_quote, fixture_build_nvidia_rim_swid_xml, fixture_issue_cert_der,
+    fixture_issue_ocsp_der, fixture_notarize, fixture_sign_spdm_report, hex_encode_lower,
+    legacy_withdrawn_cbr_milli_bits, notary_key_fingerprint, proven_zkml_milli_bits, run_she_trace,
     she_floors_digest, she_payload_digest, she_turn_envelope_digest, verify_e2ee_channel,
     verify_intel_tdx, verify_nvidia_gpu, verify_tlsn_transcript, ActuationTurnProposal,
     BasicConstraints, CandidateComputation, CertRecord, E2eeChannelInput, E2eeChannelPolicy,
-    GpuArch, IntelTdxAttestation, IntelTdxMeasurementPin, IntelTdxPolicy, KeyUsage,
-    MandateAttenuation, NvidiaGpuAttestation, NvidiaGpuPolicy, NvidiaOcspResponse,
-    NvidiaOcspStatus, NvidiaRimManifest, PinnedNotaryEntry, PinnedNotaryRegistry,
-    SealedOracleIngress, SheFloor, SheRefusal, SheState, SheTurn, TlsnTranscriptEnvelope,
-    UpgradeAuthorityClaim, UpgradeJudgeProposal, ZkmlSoundnessRegime, KEY_USAGE_DIGITAL_SIGNATURE,
-    KEY_USAGE_KEY_CERT_SIGN, ML_KEM_768_PUBKEY_LEN, NO_SERVICE_TD, OPAQUE_CHIP_SKU, OPAQUE_FWID,
-    OPAQUE_PROJECT, OPAQUE_PROJECT_SKU, SPDM_NONCE_LEN, SPDM_SIGNATURE_LEN,
+    FixtureCertSpec, FixtureSigner, FixtureTdxQuoteFields, GpuArch, IntelTdxAttestation,
+    IntelTdxMeasurementPin, IntelTdxPolicy, KeyUsage, MandateAttenuation, NvidiaGpuAttestation,
+    NvidiaGpuPolicy, NvidiaOcspResponse, NvidiaOcspStatus, PinnedNotaryEntry,
+    PinnedNotaryRegistry, SealedOracleIngress, SheFloor, SheRefusal, SheState, SheTurn,
+    SignatureAlgorithm, TlsnTranscriptEnvelope, UpgradeAuthorityClaim, UpgradeJudgeProposal,
+    ZkmlSoundnessRegime, KEY_USAGE_DIGITAL_SIGNATURE, KEY_USAGE_KEY_CERT_SIGN,
+    ML_KEM_768_PUBKEY_LEN, NO_SERVICE_TD, OPAQUE_CHIP_SKU, OPAQUE_FWID, OPAQUE_PROJECT,
+    OPAQUE_PROJECT_SKU, SPDM_NONCE_LEN, SPDM_SIGNATURE_LEN,
 };
 
 fn canonical_genesis_floors() -> Vec<SheFloor> {
@@ -456,52 +459,75 @@ fn tof_relay_cbr_weak_zkml_nullifier_replay_budget_and_toctou_refused() {
 // End-to-End Integration with `obend-oracles-e2ee` TLSNotary + TDX + Hopper GPU + E2EE
 // ---------------------------------------------------------------------------
 
-fn make_ca_cert(subject: &str, issuer: &str, seed: u8) -> CertRecord {
-    CertRecord {
-        subject: subject.to_string(),
-        issuer: issuer.to_string(),
-        serial: vec![seed],
-        cert_sha256: [seed; 32],
-        not_before: 1_000,
-        not_after: 10_000,
-        basic_constraints: Some(BasicConstraints {
-            is_ca: true,
-            path_len_constraint: Some(2),
-        }),
-        basic_constraints_der: None,
-        key_usage: Some(KeyUsage::new(KEY_USAGE_KEY_CERT_SIGN)),
-        key_usage_der: None,
-        sig_verified: true,
-        dice_fwid_ext_der: None,
-    }
+fn make_ca_cert(
+    subject_cn: &str,
+    issuer_cn: &str,
+    serial: u8,
+    subject_signer: &FixtureSigner,
+    issuer_signer: &FixtureSigner,
+    sig_alg: SignatureAlgorithm,
+) -> CertRecord {
+    let der = fixture_issue_cert_der(
+        &FixtureCertSpec {
+            subject_cn,
+            issuer_cn,
+            serial: &[serial],
+            not_before: 1_000,
+            not_after: 10_000,
+            subject_key: subject_signer.public_key(),
+            basic_constraints: Some(BasicConstraints {
+                is_ca: true,
+                path_len_constraint: Some(2),
+            }),
+            key_usage: Some(KeyUsage::new(KEY_USAGE_KEY_CERT_SIGN)),
+            ocsp_signing_eku: false,
+            dice_fwid: None,
+            amd_vcek_ext: None,
+        },
+        issuer_signer,
+        sig_alg,
+    );
+    CertRecord::from_der(&der).expect("valid SHE CA cert DER")
 }
 
-fn make_leaf_cert(subject: &str, issuer: &str, seed: u8, fwid: Option<[u8; 48]>) -> CertRecord {
-    let dice_fwid_ext_der = fwid.map(|fw| {
-        let mut ext = vec![0x30, 0x32, 0x04, 0x30];
-        ext.extend_from_slice(&fw);
-        ext
-    });
-    CertRecord {
-        subject: subject.to_string(),
-        issuer: issuer.to_string(),
-        serial: vec![seed],
-        cert_sha256: [seed; 32],
-        not_before: 1_000,
-        not_after: 10_000,
-        basic_constraints: Some(BasicConstraints {
-            is_ca: false,
-            path_len_constraint: None,
-        }),
-        basic_constraints_der: None,
-        key_usage: Some(KeyUsage::new(KEY_USAGE_DIGITAL_SIGNATURE)),
-        key_usage_der: None,
-        sig_verified: true,
-        dice_fwid_ext_der,
-    }
+fn make_leaf_cert(
+    subject_cn: &str,
+    issuer_cn: &str,
+    serial: u8,
+    fwid: Option<[u8; 48]>,
+    subject_signer: &FixtureSigner,
+    issuer_signer: &FixtureSigner,
+    sig_alg: SignatureAlgorithm,
+) -> CertRecord {
+    let der = fixture_issue_cert_der(
+        &FixtureCertSpec {
+            subject_cn,
+            issuer_cn,
+            serial: &[serial],
+            not_before: 1_000,
+            not_after: 10_000,
+            subject_key: subject_signer.public_key(),
+            basic_constraints: Some(BasicConstraints {
+                is_ca: false,
+                path_len_constraint: None,
+            }),
+            key_usage: Some(KeyUsage::new(KEY_USAGE_DIGITAL_SIGNATURE)),
+            ocsp_signing_eku: false,
+            dice_fwid: fwid,
+            amd_vcek_ext: None,
+        },
+        issuer_signer,
+        sig_alg,
+    );
+    CertRecord::from_der(&der).expect("valid SHE leaf cert DER")
 }
 
-fn build_spdm_report(nonce: &[u8; SPDM_NONCE_LEN], fwid: &[u8; 48], meas1: &[u8]) -> Vec<u8> {
+fn build_spdm_report(
+    nonce: &[u8; SPDM_NONCE_LEN],
+    fwid: &[u8; 48],
+    meas1: &[u8],
+    gpu_leaf_signer: &FixtureSigner,
+) -> Vec<u8> {
     let mut req = vec![0x11, 0xE0, 0x00, 0x01];
     req.extend_from_slice(nonce);
     req.push(0x00);
@@ -533,10 +559,11 @@ fn build_spdm_report(nonce: &[u8; SPDM_NONCE_LEN], fwid: &[u8; 48], meas1: &[u8]
     resp.extend_from_slice(&[0x55; SPDM_NONCE_LEN]);
     resp.extend_from_slice(&(opaque.len() as u16).to_le_bytes());
     resp.extend_from_slice(&opaque);
-    resp.extend_from_slice(&[0xAA; SPDM_SIGNATURE_LEN]);
+    resp.extend_from_slice(&[0u8; SPDM_SIGNATURE_LEN]);
 
     let mut full = req;
     full.extend_from_slice(&resp);
+    fixture_sign_spdm_report(&mut full, gpu_leaf_signer);
     full
 }
 
@@ -567,8 +594,9 @@ fn base64_encode(bytes: &[u8]) -> String {
 fn end_to_end_tlsn_tdx_gpu_e2ee_oracle_receipt_drives_sovereign_she_ceremony() {
     let now_secs = 2_000u64;
 
-    // 1. Verify a registry-pinned TLSNotary HTTPS transcript.
-    let notary_key_sha = sha256(b"pinned-she-notary-v1");
+    // 1. Verify a registry-pinned TLSNotary HTTPS transcript with a real Ed25519 notary signature.
+    let notary_signer = FixtureSigner::ed25519(b"pinned-she-notary-v1");
+    let notary_key_sha = notary_key_fingerprint(&notary_signer.public_key());
     let registry = PinnedNotaryRegistry::new(vec![PinnedNotaryEntry {
         operator_id: "polis-notary-1".to_string(),
         notary_key_sha256: notary_key_sha,
@@ -576,23 +604,24 @@ fn end_to_end_tlsn_tdx_gpu_e2ee_oracle_receipt_drives_sovereign_she_ceremony() {
         valid_from: 1_000,
         valid_until: 5_000,
     }]);
-    let tlsn_env = TlsnTranscriptEnvelope {
+    let mut tlsn_env = TlsnTranscriptEnvelope {
         server_name: "sensor.polis.local".to_string(),
         expected_path: "/v1/epiphany/frame".to_string(),
         connection_time: 2_000,
         sent_bytes: b"GET /v1/epiphany/frame HTTP/1.1\r\nHost: sensor.polis.local\r\n\r\n".to_vec(),
         recv_bytes: b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"hazard\":\"clear\",\"rois_redacted\":3}".to_vec(),
         unauthed_recv_ranges: Vec::new(),
-        tls_cert_chain_ok: true,
-        mpc_signature_ok: true,
-        authenticated_notary_key_sha256: notary_key_sha,
+        notary_public_key: notary_signer.public_key(),
+        notary_signature_alg: SignatureAlgorithm::Ed25519,
+        notary_signature: Vec::new(),
         claimed_notary_key_hex: None,
     };
+    fixture_notarize(&mut tlsn_env, &notary_signer, SignatureAlgorithm::Ed25519);
     let verified_tlsn =
         verify_tlsn_transcript(&registry, &tlsn_env, Some("hazard"), now_secs).unwrap();
     assert_eq!(verified_tlsn.extracted_field(), Some("clear"));
 
-    // 2. Verify Intel TDX CPU + NVIDIA Hopper H100 GPU TEE evidence & E2EE channel binding.
+    // 2. Verify Intel TDX CPU (P-256) + NVIDIA Hopper H100 GPU (P-384) TEE evidence & E2EE channel binding.
     let nonce_bytes = [0x42u8; 32];
     let nonce_hex = hex_encode_lower(&nonce_bytes);
     let mlkem_pub = vec![0x77u8; ML_KEM_768_PUBKEY_LEN];
@@ -601,12 +630,33 @@ fn end_to_end_tlsn_tdx_gpu_e2ee_oracle_receipt_drives_sovereign_she_ceremony() {
     let mut cpu_report_data = [0u8; 64];
     cpu_report_data[..32].copy_from_slice(&rd_32);
 
+    let intel_root_k = FixtureSigner::p256(b"she-intel-root");
+    let pck_leaf_k = FixtureSigner::p256(b"she-pck-leaf");
+    let tdx_att_k = FixtureSigner::p256(b"she-tdx-att-key");
+    let intel_root = make_ca_cert(
+        "Intel Root",
+        "Intel Root",
+        0x01,
+        &intel_root_k,
+        &intel_root_k,
+        SignatureAlgorithm::EcdsaP256Sha256,
+    );
+    let pck_leaf = make_leaf_cert(
+        "PCK Leaf",
+        "Intel Root",
+        0x02,
+        None,
+        &pck_leaf_k,
+        &intel_root_k,
+        SignatureAlgorithm::EcdsaP256Sha256,
+    );
+
     let mr_td = [0x11u8; 48];
     let rt0 = [0x12u8; 48];
     let rt1 = [0x13u8; 48];
     let rt2 = [0x14u8; 48];
     let tdx_policy = IntelTdxPolicy {
-        pinned_intel_root_sha256: [0xA1; 32],
+        pinned_intel_root_sha256: intel_root.cert_sha256(),
         measurement_pin: IntelTdxMeasurementPin {
             mr_td,
             rt_mr0: rt0,
@@ -617,82 +667,124 @@ fn end_to_end_tlsn_tdx_gpu_e2ee_oracle_receipt_drives_sovereign_she_ceremony() {
         accepted_tcb_statuses: vec!["UpToDate".to_string()],
         accepted_service_tds: Vec::new(),
     };
+    let tdx_quote_bytes = fixture_build_intel_tdx_quote(
+        &FixtureTdxQuoteFields {
+            mr_td,
+            rt_mr0: rt0,
+            rt_mr1: rt1,
+            rt_mr2: rt2,
+            rt_mr3: [0u8; 48],
+            mr_servicetd: Some(NO_SERVICE_TD),
+            td_attributes: 0,
+            report_data: cpu_report_data,
+            qe_auth_data: b"she-qe-auth".to_vec(),
+        },
+        &[intel_root, pck_leaf],
+        &pck_leaf_k,
+        &tdx_att_k,
+    );
     let tdx_att = IntelTdxAttestation {
-        pck_cert_chain: vec![
-            make_ca_cert("Intel Root", "Intel Root", 0xA1),
-            make_leaf_cert("PCK Leaf", "Intel Root", 0xA2, None),
-        ],
-        dcap_quote_sig_ok: true,
+        quote_bytes: tdx_quote_bytes,
         tcb_status: "UpToDate".to_string(),
-        mr_td,
-        rt_mr0: rt0,
-        rt_mr1: rt1,
-        rt_mr2: rt2,
-        rt_mr3: [0u8; 48],
-        mr_servicetd: Some(NO_SERVICE_TD),
-        report_data: cpu_report_data,
     };
     let cpu_tee = verify_intel_tdx(&tdx_policy, &tdx_att, now_secs).unwrap();
 
     let fwid = [0x5Au8; 48];
-    let meas1 = vec![0xDE, 0xAD, 0xBE, 0xEF];
+    let meas1 = vec![0xDEu8; 48];
     let mut golden_measurements = BTreeMap::new();
     golden_measurements.insert(1u8, vec![meas1.clone()]);
+
+    let nv_dev_root_k = FixtureSigner::p384(b"she-nv-dev-root");
+    let nv_gpu_leaf_k = FixtureSigner::p384(b"she-nv-gpu-leaf");
+    let nv_rim_root_k = FixtureSigner::p384(b"she-nv-rim-root");
+    let nv_rim_leaf_k = FixtureSigner::p384(b"she-nv-rim-leaf");
+    let p384_alg = SignatureAlgorithm::EcdsaP384Sha384;
+
+    let nv_dev_root = make_ca_cert(
+        "NVIDIA Device Root",
+        "NVIDIA Device Root",
+        0x11,
+        &nv_dev_root_k,
+        &nv_dev_root_k,
+        p384_alg,
+    );
+    let nv_gpu_leaf = make_leaf_cert(
+        "H100 Leaf",
+        "NVIDIA Device Root",
+        0x12,
+        Some(fwid),
+        &nv_gpu_leaf_k,
+        &nv_dev_root_k,
+        p384_alg,
+    );
+    let nv_rim_root = make_ca_cert(
+        "NVIDIA RIM Root",
+        "NVIDIA RIM Root",
+        0x13,
+        &nv_rim_root_k,
+        &nv_rim_root_k,
+        p384_alg,
+    );
+    let nv_rim_leaf = make_leaf_cert(
+        "RIM Signer",
+        "NVIDIA RIM Root",
+        0x14,
+        None,
+        &nv_rim_leaf_k,
+        &nv_rim_root_k,
+        p384_alg,
+    );
+
     let gpu_policy = NvidiaGpuPolicy {
         arch: GpuArch::HopperH100,
-        pinned_device_root_sha256: [0xB1; 32],
-        pinned_corim_root_sha256: [0xB3; 32],
+        pinned_device_root_sha256: nv_dev_root.cert_sha256(),
+        pinned_corim_root_sha256: nv_rim_root.cert_sha256(),
         expected_driver_version: "550.54.15".to_string(),
         expected_vbios_version: "96.00.89.00.01".to_string(),
         pinned_fwid: fwid,
     };
-    let driver_rim = NvidiaRimManifest {
-        arch: GpuArch::HopperH100,
-        version: "550.54.15".to_string(),
-        cert_chain: vec![
-            make_ca_cert("NVIDIA RIM Root", "NVIDIA RIM Root", 0xB3),
-            make_leaf_cert("RIM Signer", "NVIDIA RIM Root", 0xB4, None),
-        ],
-        rim_sig_ok: true,
-        expected_fwid: fwid,
-        golden_measurements: golden_measurements.clone(),
-    };
-    let vbios_rim = NvidiaRimManifest {
-        arch: GpuArch::HopperH100,
-        version: "96.00.89.00.01".to_string(),
-        cert_chain: vec![
-            make_ca_cert("NVIDIA RIM Root", "NVIDIA RIM Root", 0xB3),
-            make_leaf_cert("RIM Signer", "NVIDIA RIM Root", 0xB4, None),
-        ],
-        rim_sig_ok: true,
-        expected_fwid: fwid,
-        golden_measurements,
-    };
+    let driver_rim = fixture_build_nvidia_rim_swid_xml(
+        GpuArch::HopperH100,
+        "550.54.15",
+        &[nv_rim_root.clone(), nv_rim_leaf.clone()],
+        &golden_measurements,
+        &nv_rim_leaf_k,
+    );
+    let vbios_rim = fixture_build_nvidia_rim_swid_xml(
+        GpuArch::HopperH100,
+        "96.00.89.00.01",
+        &[nv_rim_root.clone(), nv_rim_leaf.clone()],
+        &golden_measurements,
+        &nv_rim_leaf_k,
+    );
+
+    let ocsp_dev = NvidiaOcspResponse::from_der(&fixture_issue_ocsp_der(
+        &nv_dev_root,
+        &nv_gpu_leaf,
+        NvidiaOcspStatus::Good,
+        1_500,
+        5_000,
+        &nv_dev_root_k,
+        p384_alg,
+    ))
+    .unwrap();
+    let ocsp_rim = NvidiaOcspResponse::from_der(&fixture_issue_ocsp_der(
+        &nv_rim_root,
+        &nv_rim_leaf,
+        NvidiaOcspStatus::Good,
+        1_500,
+        5_000,
+        &nv_rim_root_k,
+        p384_alg,
+    ))
+    .unwrap();
+
     let gpu_att = NvidiaGpuAttestation {
-        spdm_report_bytes: build_spdm_report(&nonce_bytes, &fwid, &meas1),
-        device_cert_chain: vec![
-            make_ca_cert("NVIDIA Device Root", "NVIDIA Device Root", 0xB1),
-            make_leaf_cert("H100 Leaf", "NVIDIA Device Root", 0xB2, Some(fwid)),
-        ],
-        spdm_sig_ok: true,
+        spdm_report_bytes: build_spdm_report(&nonce_bytes, &fwid, &meas1, &nv_gpu_leaf_k),
+        device_cert_chain: vec![nv_dev_root, nv_gpu_leaf],
         driver_rim,
         vbios_rim,
-        ocsp_responses: vec![
-            NvidiaOcspResponse {
-                cert_sha256: [0xB2; 32],
-                status: NvidiaOcspStatus::Good,
-                this_update: 1_500,
-                next_update: 5_000,
-                sig_verified: true,
-            },
-            NvidiaOcspResponse {
-                cert_sha256: [0xB4; 32],
-                status: NvidiaOcspStatus::Good,
-                this_update: 1_500,
-                next_update: 5_000,
-                sig_verified: true,
-            },
-        ],
+        ocsp_responses: vec![ocsp_dev, ocsp_rim],
     };
     let gpu_tee = verify_nvidia_gpu(&gpu_policy, &gpu_att, &nonce_bytes, now_secs).unwrap();
 

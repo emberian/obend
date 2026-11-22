@@ -151,9 +151,9 @@ pub struct Mont<const N: usize> {
 }
 
 impl<const N: usize> Mont<N> {
-    /// Build a context; returns `None` for even or `< 3` moduli.
+    /// Build a context; returns `None` for zero-width, even, or `< 3` moduli.
     pub fn new(p: Limbs<N>) -> Option<Self> {
-        if p[0] & 1 == 0 || (limbs_bits(&p) < 2) {
+        if N == 0 || p[0] & 1 == 0 || (limbs_bits(&p) < 2) {
             return None;
         }
         let mut inv = 1u64;
@@ -287,10 +287,12 @@ impl<const N: usize> Mont<N> {
     }
 
     pub fn from_u64(&self, v: u64) -> Limbs<N> {
-        let mut x = limbs_from_u64::<N>(v);
-        while limbs_ge(&x, &self.p) {
-            x = limbs_sub(&x, &self.p).0;
-        }
+        let reduced = if limbs_bits(&self.p) <= 64 {
+            v % self.p[0]
+        } else {
+            v
+        };
+        let x = limbs_from_u64::<N>(reduced);
         self.to_mont(&x)
     }
 

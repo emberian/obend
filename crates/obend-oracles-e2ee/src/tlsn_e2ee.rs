@@ -7,6 +7,10 @@
 //!   `ProofEnvelope`. Every TLSNotary presentation MUST verify against a caller-supplied
 //!   [`PinnedNotaryRegistry`], pins both HTTP `Host` and request path, and emits only
 //!   [`VerificationLeg`] entries for checks that actually executed.
+//! - **Notary signature is verified, not asserted:** the envelope carries the notary's public
+//!   key and a P-256 ECDSA or Ed25519 signature over [`tlsn_attestation_preimage`]; the registry
+//!   pins `SHA-256(SubjectPublicKeyInfo DER)` of that key ([`notary_key_fingerprint`]). The
+//!   preimage is an OBEND canonical, length-framed encoding — not the TLSNotary wire format.
 //! - **`V4` closed:** Enforces complete body disclosure (refuses any `unauthed_recv_ranges`
 //!   or redaction placeholders inside the attested HTTP response body).
 //! - **RFC 8259 strict JSON field extraction:** Pure-Rust bounded parser (`MAX_JSON_BODY_BYTES`,
@@ -18,6 +22,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::curves::{verify_signature, FixtureSigner, SignatureAlgorithm, SubjectPublicKey};
 use crate::sha256::{
     base64_decode_strict, ct_eq, hex_decode_strict, hkdf_sha256_expand, hkdf_sha256_extract,
     sha256, Sha256,
@@ -32,6 +37,10 @@ use crate::tee::{chutes_report_data_binding, TeeVendor, VerifiedTeeEvidence};
 pub const MAX_JSON_BODY_BYTES: usize = 1 << 20;
 /// Max dotted JSON extraction path depth.
 pub const MAX_JSON_PATH_DEPTH: usize = 64;
+/// Max authenticated HTTP request or response wire bytes accepted (1 MiB body + 64 KiB headers).
+pub const MAX_HTTP_WIRE_BYTES: usize = MAX_JSON_BODY_BYTES + 65_536;
+/// Max unauthenticated range descriptors accepted in an envelope.
+pub const MAX_UNAUTHED_RANGES: usize = 1024;
 /// Exact length of an ML-KEM-768 public key (FIPS 203).
 pub const ML_KEM_768_PUBKEY_LEN: usize = 1184;
 /// Exact length of a 32-byte attestation nonce encoded as ASCII hex.
@@ -52,7 +61,7 @@ pub const E2EE_INFO_STREAM: &[u8] = b"e2e-stream-v1";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedNotaryEntry {
     pub operator_id: String,
-    /// SHA-256 digest of the canonical notary verifying key.
+    /// [`notary_key_fingerprint`]: SHA-256 of the notary key's DER `SubjectPublicKeyInfo`.
     pub notary_key_sha256: [u8; 32],
     /// Permitted HTTPS server hostnames this notary may attest (non-empty).
     pub allowed_servers: Vec<String>,
@@ -100,10 +109,13 @@ pub struct TlsnTranscriptEnvelope {
     /// Byte ranges `(start, end)` in `recv_bytes` that were NOT authenticated (redacted).
     /// Any range intersecting the HTTP response body is REFUSED (`V4`).
     pub unauthed_recv_ranges: Vec<(usize, usize)>,
-    pub tls_cert_chain_ok: bool,
-    pub mpc_signature_ok: bool,
-    /// Notary key SHA-256 extracted from the cryptographically verified TLSNotary presentation.
-    pub authenticated_notary_key_sha256: [u8; 32],
+    /// Notary verifying key carried by the presentation (P-256 or Ed25519). Trusted only if
+    /// [`notary_key_fingerprint`] of it is pinned in the caller's registry.
+    pub notary_public_key: SubjectPublicKey,
+    /// `EcdsaP256Sha256` (DER signature) or `Ed25519`.
+    pub notary_signature_alg: SignatureAlgorithm,
+    /// Notary signature over [`tlsn_attestation_preimage`] of this envelope.
+    pub notary_signature: Vec<u8>,
     /// Legacy/untrusted `notary_key_hex` field carried inside the wire JSON envelope.
     /// NEVER used as a trust anchor (`V3`); rejected if it does not match a pinned key.
     pub claimed_notary_key_hex: Option<String>,
@@ -171,8 +183,8 @@ pub enum OracleError {
     ClaimedNotaryKeyMismatch,
     NotaryExpiredAtConnectionTime,
     ServerNotAllowedByNotary,
-    TlsCertChainInvalid,
-    MpcSignatureInvalid,
+    UnsupportedNotaryAlgorithm,
+    NotarySignatureInvalid,
     MalformedHttpRequest,
     HostHeaderMismatch,
     RequestPathMismatch,
@@ -196,10 +208,16 @@ fn validate_http_request(
     expected_host: &str,
     expected_path: &str,
 ) -> Result<(), OracleError> {
+    if sent.len() > MAX_HTTP_WIRE_BYTES {
+        return Err(OracleError::BodyTooLarge {
+            actual: sent.len(),
+            max: MAX_HTTP_WIRE_BYTES,
+        });
+    }
     if sent.contains(&0) {
         return Err(OracleError::ControlPlaneInjection);
     }
-    let header_end = find_header_body_split(sent).unwrap_or(sent.len());
+    let header_end = find_header_body_split(sent).ok_or(OracleError::MalformedHttpRequest)?;
     let head = std::str::from_utf8(&sent[..header_end]).map_err(|_| OracleError::MalformedHttpRequest)?;
     let mut lines = head.split("\r\n");
     let req_line = lines.next().ok_or(OracleError::MalformedHttpRequest)?;
@@ -227,14 +245,15 @@ fn validate_http_request(
         };
         if k.eq_ignore_ascii_case("host") {
             if found_host.is_some() {
-                // Duplicate Host header is an HTTP request-smuggling vector.
                 return Err(OracleError::ControlPlaneInjection);
             }
             found_host = Some(v.trim());
         }
+        if k.eq_ignore_ascii_case("transfer-encoding") {
+            return Err(OracleError::ControlPlaneInjection);
+        }
     }
     let host = found_host.ok_or(OracleError::HostHeaderMismatch)?;
-    // Strip optional `:443` default port when matching host.
     let normalized_host = host.strip_suffix(":443").unwrap_or(host);
     if !normalized_host.eq_ignore_ascii_case(expected_host) {
         return Err(OracleError::HostHeaderMismatch);
@@ -242,13 +261,21 @@ fn validate_http_request(
     Ok(())
 }
 
-fn parse_http_response(recv: &[u8]) -> Result<(u16, usize, &[u8]), OracleError> {
+fn parse_http_response(recv: &[u8]) -> Result<(u16, usize, usize, &[u8]), OracleError> {
+    if recv.len() > MAX_HTTP_WIRE_BYTES {
+        return Err(OracleError::BodyTooLarge {
+            actual: recv.len(),
+            max: MAX_HTTP_WIRE_BYTES,
+        });
+    }
     if recv.contains(&0) {
         return Err(OracleError::ControlPlaneInjection);
     }
     let split = find_header_body_split(recv).ok_or(OracleError::MalformedHttpResponse)?;
     let head = std::str::from_utf8(&recv[..split]).map_err(|_| OracleError::MalformedHttpResponse)?;
-    let status_line = head.split("\r\n").next().ok_or(OracleError::MalformedHttpResponse)?;
+    let mut lines = head.split("\r\n");
+    let status_line = lines.next().ok_or(OracleError::MalformedHttpResponse)?;
+    let status_line_end = status_line.len();
     let mut parts = status_line.split(' ');
     let ver = parts.next().ok_or(OracleError::MalformedHttpResponse)?;
     let code_str = parts.next().ok_or(OracleError::MalformedHttpResponse)?;
@@ -259,7 +286,75 @@ fn parse_http_response(recv: &[u8]) -> Result<(u16, usize, &[u8]), OracleError> 
         .parse::<u16>()
         .map_err(|_| OracleError::MalformedHttpResponse)?;
     let body_start = split + 4;
-    Ok((status_code, body_start, &recv[body_start..]))
+    let body = &recv[body_start..];
+    let mut expected_cl: Option<usize> = None;
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let Some((k, v)) = line.split_once(':') else {
+            return Err(OracleError::MalformedHttpResponse);
+        };
+        if k.eq_ignore_ascii_case("transfer-encoding") {
+            // Chunked/compressed transfer codings are rejected unless decoded prior to attestation.
+            return Err(OracleError::MalformedHttpResponse);
+        }
+        if k.eq_ignore_ascii_case("content-length") {
+            let cl = v
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| OracleError::MalformedHttpResponse)?;
+            if expected_cl.is_some_and(|prev| prev != cl) {
+                return Err(OracleError::ControlPlaneInjection);
+            }
+            expected_cl = Some(cl);
+        }
+    }
+    if let Some(cl) = expected_cl {
+        if body.len() != cl {
+            return Err(OracleError::MalformedHttpResponse);
+        }
+    }
+    Ok((status_code, status_line_end, body_start, body))
+}
+
+/// Registry pin for a notary key: `SHA-256(SubjectPublicKeyInfo DER)`.
+pub fn notary_key_fingerprint(key: &SubjectPublicKey) -> [u8; 32] {
+    sha256(&key.to_spki_der())
+}
+
+/// Canonical length-framed bytes the notary signs: domain tag, server name, connection time,
+/// sent and received transcripts, every unauthenticated range, and the notary key fingerprint
+/// (so a signature cannot be replayed under a different pinned key).
+pub fn tlsn_attestation_preimage(env: &TlsnTranscriptEnvelope) -> Vec<u8> {
+    let mut out = b"OBEND.TLSN.NOTARY_ATTESTATION/v1".to_vec();
+    let frame = |out: &mut Vec<u8>, b: &[u8]| {
+        out.extend_from_slice(&(b.len() as u64).to_be_bytes());
+        out.extend_from_slice(b);
+    };
+    frame(&mut out, env.server_name.as_bytes());
+    out.extend_from_slice(&env.connection_time.to_be_bytes());
+    frame(&mut out, &env.sent_bytes);
+    frame(&mut out, &env.recv_bytes);
+    out.extend_from_slice(&(env.unauthed_recv_ranges.len() as u64).to_be_bytes());
+    for &(a, b) in &env.unauthed_recv_ranges {
+        out.extend_from_slice(&(a as u64).to_be_bytes());
+        out.extend_from_slice(&(b as u64).to_be_bytes());
+    }
+    out.extend_from_slice(&notary_key_fingerprint(&env.notary_public_key));
+    out
+}
+
+/// Fixture helper: install `signer`'s key and a genuine notary signature over the envelope's
+/// current contents. Test/fixture use only (see [`FixtureSigner`]).
+pub fn fixture_notarize(
+    env: &mut TlsnTranscriptEnvelope,
+    signer: &FixtureSigner,
+    alg: SignatureAlgorithm,
+) {
+    env.notary_public_key = signer.public_key();
+    env.notary_signature_alg = alg;
+    env.notary_signature = signer.sign(alg, &tlsn_attestation_preimage(env));
 }
 
 /// Verify an untrusted TLSNotary transcript envelope strictly against a caller-supplied
@@ -279,8 +374,9 @@ pub fn verify_tlsn_transcript(
 
     // V3: Strictly require the presentation's authenticated notary key to be in the caller's
     // PinnedNotaryRegistry — NEVER promote env.claimed_notary_key_hex to a trust anchor!
+    let fingerprint = notary_key_fingerprint(&env.notary_public_key);
     let pinned = registry
-        .find_pinned(&env.authenticated_notary_key_sha256)
+        .find_pinned(&fingerprint)
         .ok_or(OracleError::UntrustedNotaryKey)?;
 
     if let Some(claimed_hex) = &env.claimed_notary_key_hex {
@@ -301,28 +397,71 @@ pub fn verify_tlsn_transcript(
     {
         return Err(OracleError::ServerNotAllowedByNotary);
     }
-    if !env.tls_cert_chain_ok {
-        return Err(OracleError::TlsCertChainInvalid);
+    if env.sent_bytes.len() > MAX_HTTP_WIRE_BYTES {
+        return Err(OracleError::BodyTooLarge {
+            actual: env.sent_bytes.len(),
+            max: MAX_HTTP_WIRE_BYTES,
+        });
     }
-    if !env.mpc_signature_ok {
-        return Err(OracleError::MpcSignatureInvalid);
+    if env.recv_bytes.len() > MAX_HTTP_WIRE_BYTES {
+        return Err(OracleError::BodyTooLarge {
+            actual: env.recv_bytes.len(),
+            max: MAX_HTTP_WIRE_BYTES,
+        });
     }
+    if env.unauthed_recv_ranges.len() > MAX_UNAUTHED_RANGES {
+        return Err(OracleError::ControlPlaneInjection);
+    }
+    match (&env.notary_public_key, env.notary_signature_alg) {
+        (SubjectPublicKey::P256(_), SignatureAlgorithm::EcdsaP256Sha256)
+        | (SubjectPublicKey::Ed25519(_), SignatureAlgorithm::Ed25519) => {}
+        _ => return Err(OracleError::UnsupportedNotaryAlgorithm),
+    }
+    verify_signature(
+        &env.notary_public_key,
+        env.notary_signature_alg,
+        &tlsn_attestation_preimage(env),
+        &env.notary_signature,
+    )
+    .map_err(|_| OracleError::NotarySignatureInvalid)?;
 
     // V3: Pin both HTTP Host header and exact request path.
     validate_http_request(&env.sent_bytes, &env.server_name, &env.expected_path)?;
 
     // V4: Parse HTTP response and refuse ANY unauthenticated/redacted byte range intersecting
-    // the response body or header-body delimiter (kills 'X' placeholder body injection).
-    let (status_code, body_start, body) = parse_http_response(&env.recv_bytes)?;
+    // the status line, header names, colons, CRLF line delimiters, framing headers (`Content-Length`
+    // / `Transfer-Encoding`), header-body delimiter, or response body (only values of non-framing
+    // headers such as `Set-Cookie` may be redacted).
+    let (status_code, status_line_end, body_start, body) = parse_http_response(&env.recv_bytes)?;
     let header_delim_start = body_start.saturating_sub(4);
-    for &(start, end) in &env.unauthed_recv_ranges {
-        if start >= end || end > env.recv_bytes.len() {
-            return Err(OracleError::UnauthedBodyBytes {
-                range_start: start,
-                range_end: end,
-            });
+    let mut allowed_value_spans: Vec<(usize, usize)> = Vec::new();
+    let mut cursor = status_line_end + 2;
+    while cursor < header_delim_start {
+        let rel_end = env.recv_bytes[cursor..header_delim_start + 2]
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .ok_or(OracleError::MalformedHttpResponse)?;
+        let line_end = cursor + rel_end;
+        let line = &env.recv_bytes[cursor..line_end];
+        if let Some(colon_off) = line.iter().position(|&b| b == b':') {
+            let name = std::str::from_utf8(&line[..colon_off])
+                .map_err(|_| OracleError::MalformedHttpResponse)?;
+            if !name.eq_ignore_ascii_case("content-length")
+                && !name.eq_ignore_ascii_case("transfer-encoding")
+            {
+                let val_start = cursor + colon_off + 1;
+                if val_start < line_end {
+                    allowed_value_spans.push((val_start, line_end));
+                }
+            }
         }
-        if end > header_delim_start {
+        cursor = line_end + 2;
+    }
+    for &(start, end) in &env.unauthed_recv_ranges {
+        let in_allowed_header_value = allowed_value_spans
+            .iter()
+            .any(|&(vs, ve)| start >= vs && end <= ve);
+        if start >= end || end > env.recv_bytes.len() || !in_allowed_header_value {
             return Err(OracleError::UnauthedBodyBytes {
                 range_start: start,
                 range_end: end,
@@ -334,8 +473,8 @@ pub fn verify_tlsn_transcript(
         VerificationLeg {
             name: "authentic-pinned-notary",
             detail: format!(
-                "MPC-TLS 2PC presentation verified against caller-pinned notary '{}' and server TLS chain",
-                pinned.operator_id
+                "{:?} notary signature over the transcript verified under caller-pinned notary '{}'",
+                env.notary_signature_alg, pinned.operator_id
             ),
         },
         VerificationLeg {
@@ -364,9 +503,9 @@ pub fn verify_tlsn_transcript(
 
     let mut h = Sha256::new();
     h.update(b"OBEND.ORACLE.TLSN_TRANSCRIPT/v1");
-    h.update(&(env.server_name.len() as u32).to_be_bytes());
+    h.update(&(env.server_name.len() as u64).to_be_bytes());
     h.update(env.server_name.as_bytes());
-    h.update(&(env.expected_path.len() as u32).to_be_bytes());
+    h.update(&(env.expected_path.len() as u64).to_be_bytes());
     h.update(env.expected_path.as_bytes());
     h.update(&pinned.notary_key_sha256);
     h.update(&env.connection_time.to_be_bytes());
@@ -374,6 +513,21 @@ pub fn verify_tlsn_transcript(
     h.update(&env.sent_bytes);
     h.update(&(env.recv_bytes.len() as u64).to_be_bytes());
     h.update(&env.recv_bytes);
+    h.update(&(env.unauthed_recv_ranges.len() as u64).to_be_bytes());
+    for &(start, end) in &env.unauthed_recv_ranges {
+        h.update(&(start as u64).to_be_bytes());
+        h.update(&(end as u64).to_be_bytes());
+    }
+    match (extract_field_path, &extracted_field) {
+        (Some(p), Some(v)) => {
+            h.update(&[1u8]);
+            h.update(&(p.len() as u64).to_be_bytes());
+            h.update(p.as_bytes());
+            h.update(&(v.len() as u64).to_be_bytes());
+            h.update(v.as_bytes());
+        }
+        _ => h.update(&[0u8]),
+    }
     let transcript_digest = h.finalize();
 
     Ok(VerifiedHttpsTranscript {
@@ -405,6 +559,7 @@ enum JsonVal {
 }
 
 struct JsonParser<'a> {
+    s: &'a str,
     b: &'a [u8],
     pos: usize,
     depth: usize,
@@ -413,6 +568,7 @@ struct JsonParser<'a> {
 impl<'a> JsonParser<'a> {
     fn new(s: &'a str) -> Self {
         Self {
+            s,
             b: s.as_bytes(),
             pos: 0,
             depth: 0,
@@ -561,22 +717,46 @@ impl<'a> JsonParser<'a> {
                             .b
                             .get(self.pos..self.pos + 4)
                             .ok_or(OracleError::JsonMalformed)?;
-                        let hex_str =
-                            std::str::from_utf8(hex_slice).map_err(|_| OracleError::JsonMalformed)?;
+                        let hex_str = std::str::from_utf8(hex_slice)
+                            .map_err(|_| OracleError::JsonMalformed)?;
                         let code = u16::from_str_radix(hex_str, 16)
                             .map_err(|_| OracleError::JsonMalformed)?;
                         self.pos += 4;
-                        let ch = char::from_u32(u32::from(code))
-                            .ok_or(OracleError::JsonMalformed)?;
+                        let ch = if (0xD800..=0xDBFF).contains(&code) {
+                            // High surrogate must be followed immediately by `\uDC00..\uDFFF`.
+                            if self.b.get(self.pos..self.pos + 2) != Some(b"\\u") {
+                                return Err(OracleError::JsonMalformed);
+                            }
+                            self.pos += 2;
+                            let lo_slice = self
+                                .b
+                                .get(self.pos..self.pos + 4)
+                                .ok_or(OracleError::JsonMalformed)?;
+                            let lo_str = std::str::from_utf8(lo_slice)
+                                .map_err(|_| OracleError::JsonMalformed)?;
+                            let lo = u16::from_str_radix(lo_str, 16)
+                                .map_err(|_| OracleError::JsonMalformed)?;
+                            if !(0xDC00..=0xDFFF).contains(&lo) {
+                                return Err(OracleError::JsonMalformed);
+                            }
+                            self.pos += 4;
+                            let cp = 0x10000
+                                + ((u32::from(code) - 0xD800) << 10)
+                                + (u32::from(lo) - 0xDC00);
+                            char::from_u32(cp).ok_or(OracleError::JsonMalformed)?
+                        } else {
+                            char::from_u32(u32::from(code)).ok_or(OracleError::JsonMalformed)?
+                        };
                         out.push(ch);
                     }
                     _ => return Err(OracleError::JsonMalformed),
                 }
             } else {
-                // Safe UTF-8 character advance (input came from &str).
-                let rem = std::str::from_utf8(&self.b[self.pos..])
-                    .map_err(|_| OracleError::JsonMalformed)?;
-                let ch = rem.chars().next().ok_or(OracleError::JsonMalformed)?;
+                // O(1) UTF-8 character advance (input `self.s` is already validated `&str`).
+                let ch = self.s[self.pos..]
+                    .chars()
+                    .next()
+                    .ok_or(OracleError::JsonMalformed)?;
                 out.push(ch);
                 self.pos += ch.len_utf8();
             }
@@ -805,8 +985,11 @@ pub fn verify_calltree_recording(
         if edge.parent_index >= recording.hops.len() || edge.child_index >= recording.hops.len() {
             return Err(CallTreeError::EdgeOutOfBounds { edge_index });
         }
-        // Require strictly topological causal edge order (prevents cycles).
-        if edge.parent_index >= edge.child_index {
+        // Require strictly topological causal edge order and monotone connection timestamps.
+        if edge.parent_index >= edge.child_index
+            || verified_hops[edge.parent_index].connection_time()
+                > verified_hops[edge.child_index].connection_time()
+        {
             return Err(CallTreeError::EdgeNotCausalOrder { edge_index });
         }
         if edge.binding_token.is_empty() {
@@ -902,6 +1085,7 @@ pub enum E2eeChannelError {
     CpuTeeVendorRequired,
     ReportDataBindingMismatch,
     InsufficientAttestedGpus { required: usize, actual: usize },
+    DuplicateGpuDevice,
     GpuEvidenceVendorMismatch,
     GpuNonceMismatch,
     GpuMissingFwid,
@@ -1035,6 +1219,19 @@ pub fn verify_e2ee_channel(
     if matches!(cpu_tee.vendor(), TeeVendor::NvidiaGpu(_)) {
         return Err(E2eeChannelError::CpuTeeVendorRequired);
     }
+    // Enforce evidence freshness so stale TEE tokens cannot mint renewed session TTLs.
+    if cpu_tee.verified_at() > now_secs
+        || now_secs.saturating_sub(cpu_tee.verified_at()) > policy.ttl_secs
+    {
+        return Err(E2eeChannelError::SessionExpired);
+    }
+    for gpu in gpu_tees {
+        if gpu.verified_at() > now_secs
+            || now_secs.saturating_sub(gpu.verified_at()) > policy.ttl_secs
+        {
+            return Err(E2eeChannelError::SessionExpired);
+        }
+    }
 
     // Validate 64-hex-char (32-byte) attestation nonce.
     if input.attestation_nonce_hex.len() != CHUTES_NONCE_HEX_LEN {
@@ -1070,20 +1267,24 @@ pub fn verify_e2ee_channel(
         });
     }
     let mut gpu_fwids = Vec::with_capacity(gpu_tees.len());
+    let mut seen_gpu_keys = BTreeSet::new();
     let mut bind_hasher = Sha256::new();
     bind_hasher.update(b"OBEND.E2EE.CHANNEL_BIND/v1");
-    bind_hasher.update(&(input.chute_id.len() as u32).to_be_bytes());
+    bind_hasher.update(&(input.chute_id.len() as u64).to_be_bytes());
     bind_hasher.update(input.chute_id.as_bytes());
-    bind_hasher.update(&(input.instance_id.len() as u32).to_be_bytes());
+    bind_hasher.update(&(input.instance_id.len() as u64).to_be_bytes());
     bind_hasher.update(input.instance_id.as_bytes());
     bind_hasher.update(&cpu_tee.evidence_digest());
     bind_hasher.update(&attestation_nonce);
     bind_hasher.update(&sha256(&mlkem768_pubkey));
-    bind_hasher.update(&(gpu_tees.len() as u32).to_be_bytes());
+    bind_hasher.update(&(gpu_tees.len() as u64).to_be_bytes());
 
     for gpu in gpu_tees {
         if !matches!(gpu.vendor(), TeeVendor::NvidiaGpu(_)) {
             return Err(E2eeChannelError::GpuEvidenceVendorMismatch);
+        }
+        if !seen_gpu_keys.insert(gpu.leaf_spki_sha256()) {
+            return Err(E2eeChannelError::DuplicateGpuDevice);
         }
         if !ct_eq(&gpu.report_data_32(), &attestation_nonce) {
             return Err(E2eeChannelError::GpuNonceMismatch);
@@ -1149,5 +1350,101 @@ impl E2eeSessionGuard {
             return Err(E2eeChannelError::InvocationNonceReplayed);
         }
         Ok(self.channel.derive_aad(invocation_nonce, direction))
+    }
+}
+
+#[cfg(test)]
+mod notary_signature_tests {
+    use super::*;
+
+    const NOW: u64 = 1_780_000_000;
+
+    fn envelope() -> TlsnTranscriptEnvelope {
+        TlsnTranscriptEnvelope {
+            server_name: "api.coinbase.com".to_string(),
+            expected_path: "/v2/prices/BTC-USD/spot".to_string(),
+            connection_time: NOW - 10,
+            sent_bytes: b"GET /v2/prices/BTC-USD/spot HTTP/1.1\r\nHost: api.coinbase.com\r\n\r\n".to_vec(),
+            recv_bytes: b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"data\":{\"amount\":\"98450.25\"}}".to_vec(),
+            unauthed_recv_ranges: vec![],
+            notary_public_key: SubjectPublicKey::Ed25519([0u8; 32]),
+            notary_signature_alg: SignatureAlgorithm::Ed25519,
+            notary_signature: vec![],
+            claimed_notary_key_hex: None,
+        }
+    }
+
+    fn registry(keys: &[&FixtureSigner]) -> PinnedNotaryRegistry {
+        PinnedNotaryRegistry::new(
+            keys.iter()
+                .enumerate()
+                .map(|(i, k)| PinnedNotaryEntry {
+                    operator_id: format!("notary-{i}"),
+                    notary_key_sha256: notary_key_fingerprint(&k.public_key()),
+                    allowed_servers: vec!["api.coinbase.com".to_string()],
+                    valid_from: NOW - 86_400,
+                    valid_until: NOW + 86_400,
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn genuine_p256_and_ed25519_notary_signatures_verify() {
+        for (signer, alg) in [
+            (FixtureSigner::p256(b"notary-p256"), SignatureAlgorithm::EcdsaP256Sha256),
+            (FixtureSigner::ed25519(b"notary-ed"), SignatureAlgorithm::Ed25519),
+        ] {
+            let reg = registry(&[&signer]);
+            let mut env = envelope();
+            fixture_notarize(&mut env, &signer, alg);
+            let v = verify_tlsn_transcript(&reg, &env, Some("data.amount"), NOW).unwrap();
+            assert_eq!(v.extracted_field(), Some("98450.25"));
+            // Any transcript byte flipped after signing is refused.
+            let mut tampered = env.clone();
+            *tampered.recv_bytes.last_mut().unwrap() ^= 1;
+            assert_eq!(
+                verify_tlsn_transcript(&reg, &tampered, None, NOW).unwrap_err(),
+                OracleError::NotarySignatureInvalid
+            );
+            let mut redacted = env.clone();
+            redacted.unauthed_recv_ranges = vec![(0, 1)];
+            assert_eq!(
+                verify_tlsn_transcript(&reg, &redacted, None, NOW).unwrap_err(),
+                OracleError::NotarySignatureInvalid
+            );
+        }
+    }
+
+    #[test]
+    fn rogue_replayed_and_unsupported_notaries_refused() {
+        let trusted = FixtureSigner::p256(b"trusted");
+        let other_pinned = FixtureSigner::p256(b"other-pinned");
+        let rogue = FixtureSigner::p256(b"rogue");
+        let reg = registry(&[&trusted, &other_pinned]);
+        // Rogue self-signed envelope: key not pinned.
+        let mut env = envelope();
+        fixture_notarize(&mut env, &rogue, SignatureAlgorithm::EcdsaP256Sha256);
+        assert_eq!(
+            verify_tlsn_transcript(&reg, &env, None, NOW).unwrap_err(),
+            OracleError::UntrustedNotaryKey
+        );
+        // A genuine signature by `trusted` presented under another pinned key is refused.
+        let mut env = envelope();
+        fixture_notarize(&mut env, &trusted, SignatureAlgorithm::EcdsaP256Sha256);
+        env.notary_public_key = other_pinned.public_key();
+        assert_eq!(
+            verify_tlsn_transcript(&reg, &env, None, NOW).unwrap_err(),
+            OracleError::NotarySignatureInvalid
+        );
+        // RSA notary keys are outside the accepted notary algorithms.
+        let rsa = FixtureSigner::rsa(2048);
+        let reg = registry(&[&rsa]);
+        let mut env = envelope();
+        fixture_notarize(&mut env, &rsa, SignatureAlgorithm::RsaPkcs1Sha256);
+        assert_eq!(
+            verify_tlsn_transcript(&reg, &env, None, NOW).unwrap_err(),
+            OracleError::UnsupportedNotaryAlgorithm
+        );
     }
 }

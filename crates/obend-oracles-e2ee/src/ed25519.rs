@@ -199,6 +199,13 @@ fn hash_mod_l(c: &Ctx, parts: &[&[u8]]) -> Fe {
     c.l.from_be_reduce(&reversed(&digest))
 }
 
+/// Validate that `public_key` is a canonical RFC 8032 §5.1.3 point encoding AND is not in the
+/// 8-torsion small-order subgroup (`[8]A != O`).
+pub fn validate_public_key(public_key: &[u8; 32]) -> bool {
+    let c = ctx();
+    decode_with(c, public_key).is_some_and(|a| !a.is_small_order(c))
+}
+
 /// Strict Ed25519 verification (see module docs). Returns `true` iff the signature is valid.
 pub fn verify_strict(public_key: &[u8; 32], msg: &[u8], signature: &[u8; 64]) -> bool {
     let c = ctx();
