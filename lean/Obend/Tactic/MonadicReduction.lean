@@ -2,7 +2,7 @@ module
 /- Source-first congruence for executable proof reduction. Register locally
 where simplifying a symbolic continuation would expand speculative branches. -/
 public import Lean
-@[expose] public section
+public section
 namespace Obend.Tactic.MonadicReduction
 set_option autoImplicit false
 universe u v w

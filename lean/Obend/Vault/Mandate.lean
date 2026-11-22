@@ -31,7 +31,7 @@ Addresses Requirement R3 and Milestone 3 Feature 28 (`Mandate`):
 public import Obend.Core.Digest
 public import Obend.Digest.HashBytes
 
-@[expose] public section
+public section
 
 namespace Obend.Vault.Mandate
 
@@ -56,9 +56,9 @@ inductive Auth where
 structure Caveat where
   admits : Nat → Bool
 
-def Caveat.any : Caveat := ⟨fun _ => true⟩
+@[expose] def Caveat.any : Caveat := ⟨fun _ => true⟩
 
-def Caveat.and (c₁ c₂ : Caveat) : Caveat :=
+@[expose] def Caveat.and (c₁ c₂ : Caveat) : Caveat :=
   ⟨fun m => c₁.admits m && c₂.admits m⟩
 
 /-! ## 2. Principals, Grants, Mandates & Invocations -/
@@ -120,7 +120,7 @@ structure Invocation where
 
 /-- **The Attenuation Relation**: `attenuates child parent` holds iff every dimension of `child`
     is narrower than or equal to `parent`. -/
-def attenuates (child parent : Mandate) : Prop :=
+@[expose] def attenuates (child parent : Mandate) : Prop :=
   child.rights ⊆ parent.rights ∧
   child.budget ≤ parent.budget ∧
   child.cells ⊆ parent.cells ∧
@@ -148,7 +148,7 @@ theorem attenuates_trans {m₁ m₂ m₃ : Mandate}
 (parent after, child): the child's budget is `min parent.budget quota` and the parent keeps
 `parent.budget - child.budget`; the child's grant is `.under parent.id`. There is no second ledger to
 check (`delegate_conserves`). -/
-def Mandate.delegate (parent : Mandate) (childId : Nat) (child : Principal) (reqRights : List Auth)
+@[expose] def Mandate.delegate (parent : Mandate) (childId : Nat) (child : Principal) (reqRights : List Auth)
     (quota : Nat) (mask : List Nat) (term : Nat) (cv : Caveat) : Mandate × Mandate :=
   let childBudget := min parent.budget quota
   ({ parent with budget := parent.budget - childBudget },
@@ -221,7 +221,7 @@ theorem delegate_child_attenuates (parent : Mandate) (childId : Nat) (child : Pr
 /-! ## 4. Invocation Validation & Soundness -/
 
 /-- Check whether an invocation's parameters fall within a mandate's authorization envelope. -/
-def authorizedBy (m : Mandate) (inv : Invocation) : Bool :=
+@[expose] def authorizedBy (m : Mandate) (inv : Invocation) : Bool :=
   (inv.target == m.target) &&
   (inv.requiredAuth.all m.rights.contains) &&
   (inv.cost ≤ m.budget) &&
@@ -230,7 +230,7 @@ def authorizedBy (m : Mandate) (inv : Invocation) : Bool :=
   (m.caveat.admits inv.method)
 
 /-- Full invocation check: the principal, then the authorization envelope. -/
-def checkInvocation (m : Mandate) (inv : Invocation) : Bool :=
+@[expose] def checkInvocation (m : Mandate) (inv : Invocation) : Bool :=
   (inv.principal == m.principal) && authorizedBy m inv
 
 /-- Why an invocation is refused. Every clause names the principal and the grant the mandate is under,
@@ -293,7 +293,7 @@ theorem refusal_none_iff (m : Mandate) (inv : Invocation) :
     have hall := find_not_some_all_false _ _ hf
     have hmem := List.mem_of_find?_eq_some hf
     have hpa := List.find?_some hf
-    simp only [Bool.not_eq_eq_eq_not, Bool.not_true, List.contains_iff_mem] at hpa
+    simp only [Bool.not_eq_eq_eq_not, Bool.not_true] at hpa
     cases hp : (inv.principal == m.principal) <;> cases ht : (inv.target == m.target) <;>
       simp_all <;> exact fun h => absurd (h a hmem) hpa
   | none =>

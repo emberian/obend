@@ -37,11 +37,12 @@ What is proved, for every list of laws, state type, pair of states and request: 
 (`judge_refuses`), at a write, a birth and an adoption alike.
 -/
 public import Obend.Vault.Page
+import all Obend.Vault.Page
 public import Obend.Spec.Proofs.LawCompile
 public import Obend.Spec.LawDial
 public import Obend.Law.Proofs.Inherit
 public import Obend.Law.Proofs.Run
-@[expose] public section
+public section
 
 namespace Obend.Vault
 
@@ -56,18 +57,18 @@ open Obend.Core.Data (Data)
 /-! ## The state a law reads -/
 
 /-- Insert into a sorted list of names. -/
-def insertName (k : String) : List String → List String
+@[expose] def insertName (k : String) : List String → List String
   | [] => [k]
   | x :: xs => if k == x then x :: xs else if decide (k < x) then k :: x :: xs else x :: insertName k xs
 
 /-- The names, sorted, without repeats. -/
-def sortNames (ks : List String) : List String := ks.foldr insertName []
+@[expose] def sortNames (ks : List String) : List String := ks.foldr insertName []
 
 /-- The state type of a page: a record of naturals at the names `keys`. -/
-def stateTy (keys : List String) : Ty := keys.foldr (fun k t => .field k .natural t) .emptyRow
+@[expose] def stateTy (keys : List String) : Ty := keys.foldr (fun k t => .field k .natural t) .emptyRow
 
 /-- A page's state as data: each name its value, or 0. -/
-def stateOf (keys : List String) (vals : List (String × Nat)) : Data :=
+@[expose] def stateOf (keys : List String) (vals : List (String × Nat)) : Data :=
   .record (keys.map fun k => (k, .natural ((vals.lookup k).getD 0)))
 
 /-- The state type of a page whose fields `labels` hold labels (a word in the frontmatter, and the
@@ -91,13 +92,13 @@ inductive Occ
   | adopt
 deriving DecidableEq, Repr
 
-def Occ.data : Occ → Data
+@[expose] def Occ.data : Occ → Data
   | .write => writeO
   | .birth => birthO
   | .adopt => adoptO "page"
 
 /-- The old state the fragment's meaning takes at an occasion. -/
-def Occ.old (k : Occ) (o n : Data) : Option Data :=
+@[expose] def Occ.old (k : Occ) (o n : Data) : Option Data :=
   match k with
   | .write => some o
   | .birth => none
@@ -107,10 +108,10 @@ def Occ.old (k : Occ) (o n : Data) : Option Data :=
 it carries (`principal`: the member whose text it is, the POSTER; `who` for a write of one's own),
 the occasion and the facts. The poster is also bound into the state the laws read (`new.poster`,
 `Obend.Vault.commit`), so a law can tie a field to it: `new.decider == new.poster`. -/
-def requestBy (who principal : String) (k : Occ) (facts : Facts) : Data := reqOf who principal 0 0 k.data facts
+@[expose] def requestBy (who principal : String) (k : Occ) (facts : Facts) : Data := reqOf who principal 0 0 k.data facts
 
 /-- A write of one's own: signer and principal the same. -/
-def requestOf (who : String) (k : Occ) (facts : Facts) : Data := requestBy who who k facts
+abbrev requestOf (who : String) (k : Occ) (facts : Facts) : Data := requestBy who who k facts
 
 /-! ## The judge -/
 
@@ -122,22 +123,22 @@ inductive Verdict
 deriving DecidableEq, Repr
 
 /-- The verdict a run of the effective law reached. -/
-def readVerdict : Option Term → Verdict
+@[expose] def readVerdict : Option Term → Verdict
   | some (.inject "ok" _) => .admitted
   | some (.inject "refused" (.record [("by", .label b), ("reason", .label r)])) => .refused b r
   | _ => .undecided "the law did not finish within its fuel"
 
 /-- Steps a law may take. -/
-def lawFuel : Nat := 200000
+abbrev lawFuel : Nat := 200000
 
 /-- The laws, compiled for the state type `S`, the page named `pkg`. -/
-def compiled (S : Ty) (pkg : String) (lin : List (String × LawExpr)) : List (String × Term) :=
+@[expose] def compiled (S : Ty) (pkg : String) (lin : List (String × LawExpr)) : List (String × Term) :=
   lin.map fun p => (p.1, compile S pkg p.1 p.2)
 
 /-- **The judge.** Every law on the list (in precedence order) compiled and combined by `effective`,
 run on the old and new states and the request. A state that does not fit a law, or a compiled law
 that is not closed, is undecided, never admitted. -/
-def judge (S : Ty) (pkg : String) (lin : List (String × LawExpr)) (o n rq : Data) : Verdict :=
+@[expose] def judge (S : Ty) (pkg : String) (lin : List (String × LawExpr)) (o n rq : Data) : Verdict :=
   if lin.all (fun p => Fits S p.2 o && Fits S p.2 n) then
     if (compiled S pkg lin).all (fun p => closedB p.2) then
       readVerdict (run lawFuel (applyLaw (effective (compiled S pkg lin)) o n rq))
@@ -235,7 +236,7 @@ theorem judge_refuses {S : Ty} {pkg : String} {lin : List (String × LawExpr)} {
 /-! ## What would pass -/
 
 /-- A natural field of a state. -/
-def natAt (d : Data) (f : String) : Nat :=
+@[expose] def natAt (d : Data) (f : String) : Nat :=
   match d with
   | .record fs => match fs.lookup f with
     | some (.natural v) => v
@@ -243,7 +244,7 @@ def natAt (d : Data) (f : String) : Nat :=
   | _ => 0
 
 /-- A state with one field set. -/
-def setNat (d : Data) (f : String) (v : Nat) : Data :=
+@[expose] def setNat (d : Data) (f : String) (v : Nat) : Data :=
   match d with
   | .record fs => .record (fs.map fun (k, x) => if k == f then (k, .natural v) else (k, x))
   | other => other

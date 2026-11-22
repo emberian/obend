@@ -16,9 +16,10 @@ public import Obend.Law.Contract
 public import Obend.Core.Data
 public import Obend.Core.Term
 public import Obend.Judge.Class
+import all Obend.Judge.Class
 public import Obend.Tactic.Tooth
 
-@[expose] public section
+public section
 
 namespace Obend.Vault
 
@@ -104,7 +105,7 @@ abbrev Footprint := List FootprintPin
 def Footprint.cells (fp : Footprint) : List String :=
   fp.map FootprintPin.cell
 
-def Footprint.Holds (store : VaultStore) (fp : Footprint) : Prop :=
+@[expose] def Footprint.Holds (store : VaultStore) (fp : Footprint) : Prop :=
   ∀ p ∈ fp, store p.cell = p.observed
 
 inductive Refusal where
@@ -114,7 +115,7 @@ inductive Refusal where
   | unbalancedConservation (asset : String) (netSum : Int)
   | duplicateWriteCell (cell : String)
 
-def Footprint.firstStale? (store : VaultStore) : Footprint → Option (String × Option Data × Option Data)
+@[expose] def Footprint.firstStale? (store : VaultStore) : Footprint → Option (String × Option Data × Option Data)
   | [] => none
   | p :: rest =>
       match store p.cell, p.observed with
@@ -126,7 +127,7 @@ def Footprint.firstStale? (store : VaultStore) : Footprint → Option (String ×
             some (p.cell, p.observed, store p.cell)
       | _, _ => some (p.cell, p.observed, store p.cell)
 
-def admitFootprint (store : VaultStore) (fp : Footprint) : Except Refusal Unit :=
+@[expose] def admitFootprint (store : VaultStore) (fp : Footprint) : Except Refusal Unit :=
   match Footprint.firstStale? store fp with
   | none => .ok ()
   | some (cell, exp, cur) => .error (.footprintStale cell exp cur)
@@ -167,7 +168,7 @@ structure CellDelta where
   cert : Option LegTurnTag := none
 
 /-- Compute the net balance change for a specific asset in a single cell delta. -/
-def deltaAsset (d : CellDelta) (asset : String) : Int :=
+@[expose] def deltaAsset (d : CellDelta) (asset : String) : Int :=
   match d.halfEdges.find? (·.1 == asset) with
   | some (_, amount) => amount
   | none => 0
@@ -177,7 +178,7 @@ abbrev cellAssetDelta (d : CellDelta) (asset : String) : Int :=
   deltaAsset d asset
 
 /-- Sum asset balance adjustments across all cell deltas. -/
-def sumAssetDelta (writeCells : List CellDelta) (asset : String) : Int :=
+@[expose] def sumAssetDelta (writeCells : List CellDelta) (asset : String) : Int :=
   (writeCells.map (fun d => deltaAsset d asset)).foldl (· + ·) 0
 
 /-- Request payload delivered to a cell contract under a turn. -/
@@ -188,7 +189,7 @@ def turnRequest (turnId : ByteArray) (occasion : Data) (cell : String) : Data :=
   ]
 
 /-- Leg turn ID projected by a cell delta. -/
-def legTurnId (d : CellDelta) : ByteArray :=
+@[expose] def legTurnId (d : CellDelta) : ByteArray :=
   match d.cert with
   | some (.byLoweredDecider _ _ r) => r
   | none => d.boundTurnId
@@ -215,10 +216,10 @@ structure VaultTurn where
   balanced : ∀ (asset : String), sumAssetDelta writeCells asset = 0
   nodup_cells : (writeCells.map CellDelta.cell).Nodup := by decide
 
-def VaultTurn.writeFootprint (turn : VaultTurn) : List String :=
+@[expose] def VaultTurn.writeFootprint (turn : VaultTurn) : List String :=
   turn.writeCells.map CellDelta.cell
 
-def VaultTurn.readFootprint (turn : VaultTurn) : List String :=
+@[expose] def VaultTurn.readFootprint (turn : VaultTurn) : List String :=
   turn.readPins.map FootprintPin.cell
 
 def VaultTurn.accessFootprint (turn : VaultTurn) : List String :=
@@ -304,6 +305,55 @@ theorem checkTurnWitness_sound {formats : List Obend.Judge.Format} {w : TurnWitn
     · cases h
   · cases h
 
+/-- Non-vacuity witness for `checkTurnWitness_sound`: there exists a registered format and
+    turn witness accepted by `checkTurnWitness`. -/
+theorem checkTurnWitness_inhabited :
+    ∃ (formats : List Obend.Judge.Format) (w : TurnWitness),
+      checkTurnWitness formats w = true := by
+  let J : Obend.Judge Nat Nat :=
+    { Clause := Bool
+      Meaning := fun o c => o = 1 ∧ c = 1
+      check := fun _ o c =>
+        if o == 1 then (if c == 1 then .ok else .refused false []) else .refused true []
+      sound := fun {r o c} h => by
+        by_cases ho : o = 1
+        · subst ho
+          by_cases hc : c = 1
+          · exact ⟨rfl, hc⟩
+          · have hcb : (c == 1) = false := beq_eq_false_iff_ne.mpr hc
+            simp [hcb] at h
+        · have hob : (o == 1) = false := beq_eq_false_iff_ne.mpr ho
+          simp [hob] at h
+      refutes := id
+      refuted := fun {r o c k p} h href c' hm => by
+        have hk : k = true := href
+        subst hk
+        have ho : o = 1 := hm.1
+        subst ho
+        by_cases hc : c = 1
+        · subst hc; cases h
+        · have hcb : (c == 1) = false := beq_eq_false_iff_ne.mpr hc
+          simp [hcb] at h
+      Fragment := fun o => o = 1
+      complete := fun {o} hf _ => ⟨1, 0, by subst hf; rfl⟩
+      mono := fun _ _ => rfl }
+  let F : Obend.Judge.Format :=
+    { name := "eq1"
+      version := "1"
+      Obj := Nat
+      Cert := Nat
+      judge := J
+      decodeObj := fun s => if s == "1" then .ok 1 else .error "bad"
+      decodeCert := fun s => if s == "1" then .ok 1 else .error "bad"
+      trust := .kernel
+      regime := .decidable
+      bad := (0, 0)
+      badGrade := 0
+      bad_refused := ⟨true, [], rfl⟩ }
+  let w : TurnWitness :=
+    { formatName := "eq1", version := "1", grade := 0, objBytes := "1", certBytes := "1" }
+  exact ⟨[F], w, rfl⟩
+
 /-! ### 3b. Constructing turns
 
 `VaultTurn` carries three proof fields. `VaultTurn.ofWitnessLegs` is the constructor a host uses:
@@ -313,21 +363,23 @@ legs report no half-edges (so `balanced` holds), and the write cells are checked
 witnesses in `witnesses`, and checks them with `checkTurnWitness`. -/
 
 /-- A write leg bound to the turn apex `tid` (`legTurnId_witnessLeg`). -/
-def witnessLeg (tid : ByteArray) (cell : String) (pre post : Data) : CellDelta :=
+@[expose] def witnessLeg (tid : ByteArray) (cell : String) (pre post : Data) : CellDelta :=
   { cell := cell, preState := pre, postState := post,
     boundTurnId := tid }
 
 theorem legTurnId_witnessLeg (tid : ByteArray) (cell : String) (pre post : Data) :
-    legTurnId (witnessLeg tid cell pre post) = tid := rfl
+    legTurnId (witnessLeg tid cell pre post) = tid := by
+  simp only [legTurnId, witnessLeg]
 
 theorem deltaAsset_witnessLeg (tid : ByteArray) (cell : String) (pre post : Data) (asset : String) :
-    deltaAsset (witnessLeg tid cell pre post) asset = 0 := rfl
+    deltaAsset (witnessLeg tid cell pre post) asset = 0 := by
+  simp only [deltaAsset, witnessLeg, List.find?_nil]
 
 /-- A write leg before it is bound to a turn: the cell, its pre-state, and its post-state. -/
 abbrev WitnessLegSpec := String × Data × Data
 
 /-- The write legs of a turn `tid` over `legs`. -/
-def witnessLegs (tid : ByteArray) (legs : List WitnessLegSpec) : List CellDelta :=
+@[expose] def witnessLegs (tid : ByteArray) (legs : List WitnessLegSpec) : List CellDelta :=
   legs.map fun l => witnessLeg tid l.1 l.2.1 l.2.2
 
 theorem foldl_deltaAsset_witnessLegs (tid : ByteArray) (asset : String) :
@@ -775,12 +827,12 @@ def deriveHalfEdgesFromState (d : CellDelta) (assets : List String) : List HalfE
 
 /-- Boolean checker verifying that for every `a ∈ assets`, the reported half-edge delta
     `cellAssetDelta d a` equals the actual state balance delta `cellStateBalanceDelta d a`. -/
-def checkDeltaMatchesStateBalances (assets : List String) (d : CellDelta) : Bool :=
+@[expose] def checkDeltaMatchesStateBalances (assets : List String) (d : CellDelta) : Bool :=
   assets.all (fun a => cellAssetDelta d a == cellStateBalanceDelta d a)
 
 /-- Whole-turn boolean checker verifying that every modified cell in `turn.writeCells`
     binds its `halfEdges` faithfully to its `preState`/`postState` balance changes. -/
-def checkTurnStateBalancesBound (assets : List String) (turn : VaultTurn) : Bool :=
+@[expose] def checkTurnStateBalancesBound (assets : List String) (turn : VaultTurn) : Bool :=
   turn.writeCells.all (checkDeltaMatchesStateBalances assets)
 
 theorem checkDeltaMatchesStateBalances_iff (assets : List String) (d : CellDelta) :

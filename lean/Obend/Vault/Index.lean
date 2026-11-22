@@ -8,7 +8,7 @@ an index is linearithmic; the index belongs to a query context and is shared by 
 queries, never rebuilt at each lookup.
 -/
 public import Std.Data.TreeMap
-@[expose] public section
+public section
 
 namespace Obend.Vault.Index
 

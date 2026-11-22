@@ -18,8 +18,9 @@ finite-support resource kernel from `Obend.Ledger.Floors` and `Obend.Ledger.Regi
    - `ResourcePosting.toMovements` compiles any `ResourcePosting` to balanced `Register.Movement` pairs.
 -/
 public import Obend.Ledger.Floors
+import all Obend.Ledger.Floors
 
-@[expose] public section
+public section
 namespace Obend.Ledger
 
 set_option autoImplicit false
@@ -42,7 +43,7 @@ structure ResourcePosting where
   destination : AccountId
   asset       : AssetId
   amount      : Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 abbrev Book.Posting := ResourcePosting
 
@@ -66,7 +67,7 @@ structure Book where
   floors       : List ((AccountId × AssetId) × Nat) := []
   deriving DecidableEq, Repr
 
-def Book.balance (b : Book) (a : AccountId) (ast : AssetId) : Int :=
+@[expose] def Book.balance (b : Book) (a : AccountId) (ast : AssetId) : Int :=
   b.balances.get (a, ast)
 
 def Book.floor (b : Book) (a : AccountId) (ast : AssetId) : Nat :=
@@ -75,7 +76,7 @@ def Book.floor (b : Book) (a : AccountId) (ast : AssetId) : Nat :=
 def Book.leases (b : Book) (id : LeaseId) : Option LeaseRecord :=
   b.leaseRecords.lookup id
 
-def Book.empty : Book := {}
+@[expose] def Book.empty : Book := {}
 
 @[simp] theorem Book.balance_empty (a : AccountId) (ast : AssetId) :
     Book.empty.balance a ast = 0 := rfl
@@ -134,7 +135,7 @@ def Book.globalAssetSum (b : Book) (ast : AssetId) : Int :=
 
 /-! ## Posting Execution & Invariant Preservation -/
 
-def Book.applyPosting (b : Book) (p : ResourcePosting) : Book where
+@[expose] def Book.applyPosting (b : Book) (p : ResourcePosting) : Book where
   accounts := b.accounts
   balances :=
     (b.balances.addDelta (p.source, p.asset) (-(p.amount : Int))).addDelta
@@ -143,13 +144,16 @@ def Book.applyPosting (b : Book) (p : ResourcePosting) : Book where
   floors := b.floors
 
 @[simp] theorem Book.applyPosting_accounts (b : Book) (p : ResourcePosting) :
-    (b.applyPosting p).accounts = b.accounts := rfl
+    (b.applyPosting p).accounts = b.accounts := by
+  simp only [Book.applyPosting]
 
 @[simp] theorem Book.applyPosting_floors (b : Book) (p : ResourcePosting) :
-    (b.applyPosting p).floors = b.floors := rfl
+    (b.applyPosting p).floors = b.floors := by
+  simp only [Book.applyPosting]
 
 @[simp] theorem Book.applyPosting_leases (b : Book) (p : ResourcePosting) :
-    (b.applyPosting p).leaseRecords = b.leaseRecords := rfl
+    (b.applyPosting p).leaseRecords = b.leaseRecords := by
+  simp only [Book.applyPosting]
 
 theorem Book.balance_applyPosting (b : Book) (p : ResourcePosting) (a : AccountId) (ast : AssetId) :
     (b.applyPosting p).balance a ast =
