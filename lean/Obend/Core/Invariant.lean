@@ -304,7 +304,7 @@ and permits mutually reachable cells. It only requires allocated addresses. -/
   | .refused _ => True
   | .yielded plan => plan < bound
 
-@[expose] def LexicalInvariant (state : State) : Prop :=
+abbrev LexicalInvariant (state : State) : Prop :=
   (∀ (address : Nat) (cell : Cell), state.heap[address]? = some cell → CellValid state.heap.size cell) ∧
     ControlValid state.heap.size state.control ∧ ∀ frame ∈ state.stack, FrameValid state.heap.size frame
 
@@ -1106,7 +1106,7 @@ blackhole before pushing another update frame. -/
   (stackUpdates stack).Nodup ∧ ∀ address,
     address ∈ stackUpdates stack ↔ ∃ origin, heap[address]? = some (.evaluating origin)
 
-@[expose] def BusyInvariant (state : State) : Prop := Busy state.heap state.stack
+abbrev BusyInvariant (state : State) : Prop := Busy state.heap state.stack
 
  theorem initial_busyInvariant (source : Term) : BusyInvariant (initial source) := by
   simp [BusyInvariant,Busy,initial,stackUpdates]
@@ -1268,7 +1268,7 @@ theorem stackUpdates_splitFrames (addresses : List Address) (rest : List Frame) 
         stepRaw_no_invalidUpdate busy ih.2.2⟩
 
 /-- Completion is exposed only after the continuation has been discharged. -/
-@[expose] def FinalStackInvariant (state : State) : Prop :=
+abbrev FinalStackInvariant (state : State) : Prop :=
   ∀ value, state.control = .complete value → state.stack = []
 
  theorem initial_finalStackInvariant (source : Term) : FinalStackInvariant (initial source) := by

@@ -19,7 +19,7 @@ The behaviour theorem (a renaming simulation: lockstep `stepRaw`, `resume`, boun
 Plan/result extraction) and the typing transfer are in
 `Obend.Core.Proofs.Collect` (`ObjectiveProofs`). -/
 public import Obend.Core.Machine
-@[expose] public section
+public section
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -27,7 +27,7 @@ set_option autoImplicit false
 
 /-! ## The addresses a machine object holds -/
 
-def valueAddresses : RuntimeValue → List Nat
+@[expose] def valueAddresses : RuntimeValue → List Nat
   | .closure _ environment => environment
   | .natural _ | .boolean _ | .label _ => []
   | .record fields => fields.map Prod.snd
@@ -35,11 +35,11 @@ def valueAddresses : RuntimeValue → List Nat
   | .prototype specification target => [specification, target]
   | .variant _ payload => [payload]
 
-def cellAddresses : Cell → List Nat
+abbrev cellAddresses : Cell → List Nat
   | .suspended origin | .evaluating origin => origin.environment
   | .cached origin value => origin.environment ++ valueAddresses value
 
-def frameAddresses : Frame → List Nat
+@[expose] def frameAddresses : Frame → List Nat
   | .argument _ environment | .extend _ environment | .condition _ _ environment
   | .binaryLeft _ _ environment | .case _ environment | .ifBool _ _ environment
   | .split _ _ environment => environment
@@ -47,19 +47,19 @@ def frameAddresses : Frame → List Nat
   | .field _ | .reflect | .metadata | .project => []
   | .binaryRight _ value => valueAddresses value
 
-def controlAddresses : Control → List Nat
+@[expose] def controlAddresses : Control → List Nat
   | .evaluate _ environment => environment
   | .enter address | .blackhole address | .yielded address => [address]
   | .returned value | .complete value => valueAddresses value
   | .refused _ => []
 
 /-- The roots: the control (a yielded state's Plan address among them) and every frame. -/
-def rootAddresses (state : State) : List Nat :=
+abbrev rootAddresses (state : State) : List Nat :=
   controlAddresses state.control ++ state.stack.flatMap frameAddresses
 
 /-! ## Renaming every address -/
 
-def renameValue (f : Nat → Nat) : RuntimeValue → RuntimeValue
+@[expose] def renameValue (f : Nat → Nat) : RuntimeValue → RuntimeValue
   | .closure body environment => .closure body (environment.map f)
   | .natural value => .natural value
   | .boolean value => .boolean value
@@ -69,15 +69,15 @@ def renameValue (f : Nat → Nat) : RuntimeValue → RuntimeValue
   | .prototype specification target => .prototype (f specification) (f target)
   | .variant label payload => .variant label (f payload)
 
-def renameClosure (f : Nat → Nat) (closure : Closure) : Closure :=
+abbrev renameClosure (f : Nat → Nat) (closure : Closure) : Closure :=
   ⟨closure.term, closure.environment.map f⟩
 
-def renameCell (f : Nat → Nat) : Cell → Cell
+@[expose] def renameCell (f : Nat → Nat) : Cell → Cell
   | .suspended origin => .suspended (renameClosure f origin)
   | .evaluating origin => .evaluating (renameClosure f origin)
   | .cached origin value => .cached (renameClosure f origin) (renameValue f value)
 
-def renameFrame (f : Nat → Nat) : Frame → Frame
+@[expose] def renameFrame (f : Nat → Nat) : Frame → Frame
   | .argument term environment => .argument term (environment.map f)
   | .update address => .update (f address)
   | .field name => .field name
@@ -92,7 +92,7 @@ def renameFrame (f : Nat → Nat) : Frame → Frame
   | .ifBool whenTrue whenFalse environment => .ifBool whenTrue whenFalse (environment.map f)
   | .split names function environment => .split names function (environment.map f)
 
-def renameControl (f : Nat → Nat) : Control → Control
+@[expose] def renameControl (f : Nat → Nat) : Control → Control
   | .evaluate term environment => .evaluate term (environment.map f)
   | .enter address => .enter (f address)
   | .blackhole address => .blackhole (f address)
@@ -104,14 +104,14 @@ def renameControl (f : Nat → Nat) : Control → Control
 /-! ## Marking -/
 
 /-- The addresses the cell at `address` holds; nothing past the heap. -/
-def children (heap : Array Cell) (address : Nat) : List Nat :=
+abbrev children (heap : Array Cell) (address : Nat) : List Nat :=
   match heap[address]? with
   | some cell => cellAddresses cell
   | none => []
 
 /-- Drop the worklist prefix that needs no tracing: marked addresses and addresses
 past the heap (those are renamed by the shift, never traced). -/
-def pending (marks : Array Bool) : List Nat → List Nat
+@[expose] def pending (marks : Array Bool) : List Nat → List Nat
   | [] => []
   | address :: rest => match marks[address]? with
     | some false => address :: rest
@@ -120,7 +120,7 @@ def pending (marks : Array Bool) : List Nat → List Nat
 /-- Worklist marking. `fuel` bounds the cells still unmarked (each mark spends one
 unit); the worklist is drained between marks, so the recursion is structural and the
 fuel provably never runs out first (`markFrom_spec`). -/
-def markFrom (heap : Array Cell) : Nat → Array Bool → List Nat → Array Bool
+@[expose] def markFrom (heap : Array Cell) : Nat → Array Bool → List Nat → Array Bool
   | 0, marks, _ => marks
   | fuel+1, marks, work => match pending marks work with
     | [] => marks
@@ -128,38 +128,38 @@ def markFrom (heap : Array Cell) : Nat → Array Bool → List Nat → Array Boo
       markFrom heap fuel (marks.set! address true) (children heap address ++ rest)
 
 /-- Which cells are live: traced from the roots. -/
-def liveMarks (state : State) : Array Bool :=
+abbrev liveMarks (state : State) : Array Bool :=
   markFrom state.heap state.heap.size (Array.replicate state.heap.size false) (rootAddresses state)
 
 /-! ## Compaction -/
 
 /-- One rank step: record the live count so far, count this cell if it is live. -/
-def rankStep (acc : Array Nat × Nat) (marked : Bool) : Array Nat × Nat :=
+abbrev rankStep (acc : Array Nat × Nat) (marked : Bool) : Array Nat × Nat :=
   (acc.1.push acc.2, if marked then acc.2 + 1 else acc.2)
 
 /-- Each old address's new address (the number of live cells before it), and the
 number of live cells. -/
-def rankTable (marks : Array Bool) : Array Nat × Nat :=
+abbrev rankTable (marks : Array Bool) : Array Nat × Nat :=
   marks.foldl rankStep (#[], 0)
 
 /-- The renaming: a heap address goes to its rank; an address past the heap keeps
 its distance past the end. -/
-def relocate (size live : Nat) (table : Array Nat) (address : Nat) : Nat :=
+abbrev relocate (size live : Nat) (table : Array Nat) (address : Nat) : Nat :=
   if address < size then table.getD address 0 else address - size + live
 
 /-- The live cells in increasing old-address order, renamed. -/
-def compact (f : Nat → Nat) (heap : Array Cell) (marks : Array Bool) : Array Cell :=
+abbrev compact (f : Nat → Nat) (heap : Array Cell) (marks : Array Bool) : Array Cell :=
   (heap.zip marks).filterMap fun entry => if entry.2 then some (renameCell f entry.1) else none
 
 /-- The renaming `collect` applies to `state`. -/
-def collectRenaming (state : State) : Nat → Nat :=
+abbrev collectRenaming (state : State) : Nat → Nat :=
   let ranked := rankTable (liveMarks state)
   relocate state.heap.size ranked.2 ranked.1
 
 /-- Collect the heap: keep the cells reachable from the roots, compact, rename. A
 yielded state stays yielded (at its Plan cell's new address); heap and stack keep
 their meaning under the renaming (`Obend.Core.Proofs.Collect`). -/
-def collect (state : State) : State :=
+abbrev collect (state : State) : State :=
   let marks := liveMarks state
   let ranked := rankTable marks
   let f := relocate state.heap.size ranked.2 ranked.1
@@ -184,24 +184,24 @@ in `Obend.Core.Proofs.Settle`: every bounded run, extraction and resume
 agrees exactly, capacity suspensions included, because heap sizes are unchanged). -/
 
 /-- The origin a settled cached cell keeps: itself. -/
-def selfOrigin (address : Nat) : Closure := ⟨.bound 0, [address]⟩
+abbrev selfOrigin (address : Nat) : Closure := ⟨.bound 0, [address]⟩
 
-def settleCell (address : Nat) : Cell → Cell
+@[expose] def settleCell (address : Nat) : Cell → Cell
   | .cached _ value => .cached (selfOrigin address) value
   | cell => cell
 
 /-- Replace every cached cell's origin by its self origin. -/
-def settle (state : State) : State :=
+@[expose] def settle (state : State) : State :=
   {state with heap := state.heap.mapIdx settleCell}
 
 /-- What a yield stores: the settled state, collected. -/
-def checkpoint (state : State) : State := collect (settle state)
+abbrev checkpoint (state : State) : State := collect (settle state)
 
 /-- Limits counted from `start`'s own heap end: `limits.heap` cells beyond the heap it
 starts with, and the same stack. A checkpoint resumes under these
 (`Kernel.ObjectiveActivity.segmentLimits`): forcing and collection change the size of the
 state a segment starts from, never the room it has past it. -/
-def limitsPast (limits : Limits) (start : State) : Limits :=
+abbrev limitsPast (limits : Limits) (start : State) : Limits :=
   ⟨start.heap.size + limits.heap, limits.stack⟩
 
 /-! ## Measurement: collection drops garbage
@@ -210,7 +210,7 @@ A yielded state whose heap holds a finished demand's leftovers: cell 1 (a spent 
 thunk) and cell 3 (a cached intermediate) are unreachable; the Plan cell 2 captures cell
 0, and the stack's argument frame captures cell 4. -/
 
-def garbageExample : State :=
+@[expose] def garbageExample : State :=
   ⟨#[.cached ⟨.nat 1, []⟩ (.natural 1), .suspended ⟨.nat 7, []⟩,
      .suspended ⟨.bound 0, [0]⟩, .cached ⟨.nat 9, []⟩ (.natural 9),
      .suspended ⟨.nat 5, []⟩],

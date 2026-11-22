@@ -12,20 +12,20 @@ set_option autoImplicit false
 
 /-- 64-bit two's-complement word projection used by bitwise, shift, signed order,
     and fixed-point `Q32.32` (`qmul32`) primitives on `Nat`. -/
-@[expose] def word64 (n : Nat) : BitVec 64 :=
+abbrev word64 (n : Nat) : BitVec 64 :=
   BitVec.ofNat 64 n
 
 /-- Signed `Q32.32` fixed-point multiplication on 64-bit words:
     `((a.signExtend 128 * b.signExtend 128) >>> 32).setWidth 64`. -/
-@[expose] def qmul32Bv (a b : BitVec 64) : BitVec 64 :=
+abbrev qmul32Bv (a b : BitVec 64) : BitVec 64 :=
   ((a.signExtend 128 * b.signExtend 128) >>> 32).setWidth 64
 
 /-- Encode a signed integer `x` as a `Q32.32` fixed-point 64-bit word (`x * 2^32`). -/
-@[expose] def q32FromInt (x : Int) : BitVec 64 :=
+abbrev q32FromInt (x : Int) : BitVec 64 :=
   BitVec.ofInt 64 (x * (2 ^ 32 : Int))
 
 /-- Decode the integer part of a `Q32.32` fixed-point 64-bit word via arithmetic right shift by 32. -/
-@[expose] def q32ToInt (w : BitVec 64) : Int :=
+abbrev q32ToInt (w : BitVec 64) : Int :=
   (BitVec.sshiftRight w 32).toInt
 
 /-- The scalar primitives, each one machine transition on unbounded naturals (or 64-bit words).
@@ -378,7 +378,7 @@ inductive Steps : Term → Term → Prop where
   | refl (term : Term) : Steps term term
   | next {initial middle result : Term} : Step initial middle → Steps middle result → Steps initial result
 
-@[expose] def Evaluates (initial result : Term) : Prop := Steps initial result ∧ Value result
+abbrev Evaluates (initial result : Term) : Prop := Steps initial result ∧ Value result
 
 /-! ## Activities: a perform in evaluation position is a yield
 
@@ -416,7 +416,7 @@ inductive SourceFrame where
   | .split names function, hole => .split hole names function
 
 /-- Plug a hole into a context listed innermost first. -/
-@[expose] def plug (context : List SourceFrame) (hole : Term) : Term :=
+abbrev plug (context : List SourceFrame) (hole : Term) : Term :=
   context.foldl (fun term frame => frame.plug term) hole
 
 /-- `Yields term plan context`: the next redex of `term` is `perform plan` in

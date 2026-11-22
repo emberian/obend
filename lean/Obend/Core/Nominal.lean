@@ -189,18 +189,18 @@ end
 /-! ## Teeth: Mile and Kilo, the same layout -/
 
 /-- One layout, two kinds. -/
-@[expose] def distance : Ty := .field "n" .natural .emptyRow
-@[expose] def mile : Ty := Ty.kinded "Units.Mile" distance
-@[expose] def kilo : Ty := Ty.kinded "Units.Kilo" distance
+def distance : Ty := .field "n" .natural .emptyRow
+def mile : Ty := Ty.kinded "Units.Mile" distance
+def kilo : Ty := Ty.kinded "Units.Kilo" distance
 
 /-- `λf. f`, typed `(Kilo → Nat) → (Kilo → Nat)` by its annotation, checked at
 `(Kilo → Nat) → (Mile → Nat)`: the higher-order Kilo-to-Mile crossing. -/
-@[expose] def crossing : AnnotatedTerm :=
+def crossing : AnnotatedTerm :=
   ⟨.lam (.bound 0), fun p => if p = [] then
     some ⟨.arrow .reusable .unrestricted kilo .natural, .arrow .reusable .unrestricted kilo .natural,
       .unrestricted, .reusable⟩ else none, {}⟩
 
-@[expose] def crossingType : Ty :=
+def crossingType : Ty :=
   .arrow .reusable .unrestricted (.arrow .reusable .unrestricted kilo .natural)
     (.arrow .reusable .unrestricted mile .natural)
 

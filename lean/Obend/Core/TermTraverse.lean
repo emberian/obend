@@ -2,7 +2,7 @@ module
 public import Obend.Core.Term
 public import Obend.Tactic.Cases
 public import Obend.Core.Traverse
-@[expose] public section
+public section
 namespace Obend.Core.TermTraverse
 open Obend.Core.Term
 open Obend.Core.Traverse
@@ -35,7 +35,7 @@ inductive Tag where
 
 abbrev Shape := Tree Tag
 
-def encode : Term → Shape
+@[expose] def encode : Term → Shape
   | .hole n σ => .node (.hole n) (σ.map encode)
   | .bound i => .var i
   | .lam b => .bind (encode b)
@@ -73,7 +73,7 @@ decreasing_by
        omega)
 
 /-- Decode is total; malformed shapes are irrelevant to the left inverse. -/
-def decode : Shape → Term
+@[expose] def decode : Shape → Term
   | .node (.hole n) σ => .hole n (σ.map decode)
   | .var i => .bound i
   | .bind b => .lam (decode b)

@@ -6,6 +6,7 @@ public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.Core.Invariant
 public import Obend.Tactic.Cases
+public section
 namespace Obend.Core.Proofs.Substitution
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Invariant
 set_option autoImplicit false
@@ -92,25 +93,26 @@ public inductive UsesLE : Uses → Uses → Prop
   | cons {a b : Nat} {u v : Uses} : a ≤ b → UsesLE u v → UsesLE (a :: u) (b :: v)
 
 /-- `σ` filling hypothesis `0` with `f`, nothing else. -/
-@[expose] public def fillZero (f : AnnotatedTerm) : Nat → Option AnnotatedTerm := fun i => if i = 0 then some f else none
+public abbrev fillZero (f : AnnotatedTerm) : Nat → Option AnnotatedTerm := fun i => if i = 0 then some f else none
 
 @[expose] public def fuelTemplate : AnnotatedTerm :=
   ⟨.lam (.bound 1), fun p => if p = [] then
     some ⟨.natural, .arrow .reusable .unrestricted .natural .natural, .unrestricted, .reusable⟩ else none, {}⟩
 @[expose] public def fuelFilling : AnnotatedTerm :=
   ⟨.lam (.bound 0), fun p => if p = [] then some ⟨.natural, .natural, .unrestricted, .reusable⟩ else none, {}⟩
-@[expose] public def fuelContext : Context := [⟨.arrow .reusable .unrestricted .natural .natural, .unrestricted⟩]
+public abbrev fuelContext : Context := [⟨.arrow .reusable .unrestricted .natural .natural, .unrestricted⟩]
 
 @[expose] public def linearTemplate : AnnotatedTerm := ⟨.binary .add (.bound 0) (.bound 1), fun _ => none, {}⟩
 @[expose] public def linearFilling : AnnotatedTerm := ⟨.bound 1, fun _ => none, {}⟩
-@[expose] public def linearContext : Context := [⟨.natural, .unrestricted⟩, ⟨.natural, .linear⟩]
+public abbrev linearContext : Context := [⟨.natural, .unrestricted⟩, ⟨.natural, .linear⟩]
 
-@[expose] public def sumRow : Ty := .field "l" .natural .emptyRow
-@[expose] public def sumAssumptions : Assumptions := ⟨[(0, .variant sumRow)], [], [], []⟩
+public abbrev sumRow : Ty := .field "l" .natural .emptyRow
+public abbrev sumAssumptions : Assumptions := ⟨[(0, .variant sumRow)], [], [], []⟩
 @[expose] public def aliasFilling : AnnotatedTerm :=
   ⟨.inject "l" (.nat 1), fun p => if p = [] then some ⟨.natural, .variable 0, .unrestricted, .reusable⟩ else none,
     sumAssumptions⟩
 @[expose] public def aliasTemplate : AnnotatedTerm := ⟨.bound 0, fun _ => none, {}⟩
-@[expose] public def aliasContext : Context := [⟨.variable 0, .linear⟩]
+public abbrev aliasContext : Context := [⟨.variable 0, .linear⟩]
 
 end Obend.Core.Proofs.Substitution
+end

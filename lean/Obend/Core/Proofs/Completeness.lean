@@ -248,14 +248,14 @@ set_option autoImplicit false
 
 /-- The whole residual source program at a state: the phase-sensitive demand
 focus closed under the actual continuation (update frames are transparent). -/
-@[expose] public def budgetWhole (meaning : AddressMeaning) (state : State) : Option Term :=
+public def budgetWhole (meaning : AddressMeaning) (state : State) : Option Term :=
   (budgetFocus meaning state).map (stackMeaning meaning state.stack)
 
-@[expose] public noncomputable def cellPotential : Cell → Nat
+public noncomputable def cellPotential : Cell → Nat
   | .suspended origin => 3 * sizeOf origin.term + 1
   | .evaluating _ | .cached _ _ => 0
 
-@[expose] public noncomputable def controlPotential : Control → Nat
+public noncomputable def controlPotential : Control → Nat
   | .evaluate term _ => 3 * sizeOf term + 1
   | .enter _ => 2
   | .returned _ => 1
@@ -263,7 +263,7 @@ focus closed under the actual continuation (update frames are transparent). -/
   -- only by a resume (an admitted turn), never by stepRaw.
   | .complete _ | .refused _ | .blackhole _ | .yielded _ => 0
 
-@[expose] public noncomputable def framePotential : Frame → Nat
+public noncomputable def framePotential : Frame → Nat
   | .argument term _ => 3 * sizeOf term
   | .binaryLeft _ right _ => 3 * sizeOf right + 2
   | .condition zero body _ => 3 * (sizeOf zero + sizeOf body)
@@ -273,7 +273,7 @@ focus closed under the actual continuation (update frames are transparent). -/
   | .split _ function _ => 3 * sizeOf function
   | .update _ | .field _ | .reflect | .metadata | .project | .binaryRight _ _ => 0
 
-@[expose] public noncomputable def heapPotential (heap : Array Cell) : Nat := (heap.toList.map cellPotential).sum
+public noncomputable def heapPotential (heap : Array Cell) : Nat := (heap.toList.map cellPotential).sum
 
 /-- Raw syntax still to be traversed (suspended thunks, the control term,
 pending operands) plus continuation depth. Every non-semantic raw transition
@@ -335,7 +335,7 @@ strictly decreases it, for every state, terminating or not. -/
 /-- One raw transition advances the whole residual program: either a genuine
 reference reduction (then possibly a demand-focus unfolding), or a `Steps`
 (often identity) together with a strict stutter-rank descent. -/
-@[expose] public def WholeAdvance (meaning next : AddressMeaning) (state successor : State) : Prop :=
+public def WholeAdvance (meaning next : AddressMeaning) (state successor : State) : Prop :=
   ∃ before after, budgetWhole meaning state = some before ∧ budgetWhole next successor = some after ∧
     ((∃ middle, Step before middle ∧ Steps middle after) ∨
       (Steps before after ∧ stutterRank successor < stutterRank state))
@@ -1018,6 +1018,8 @@ edition: every elaborated program is closed, and nothing narrower is assumed.
 The step is the machine's own bounded `step`, run at limits that admit the next
 transition, read through an explicit Outcome → Transition adapter. -/
 
+public section
+
 @[expose] public def groundObservation : RuntimeValue → Option Observation
   | .natural number => some (.natural number)
   | .boolean value => some (.boolean value)
@@ -1044,7 +1046,7 @@ GROUND completion is a finished observation. -/
 @[expose] public def machineTransition (state : State) : Transition State :=
   outcomeTransition (step (traceLimits 1 state) state)
 
- theorem machineTransition_running {state : State}
+ private theorem machineTransition_running {state : State}
     (running : ∀ value, state.control ≠ .complete value)
     (noFault : ResultControl state.control) (successful : ResultControl (stepRaw state).control) :
     machineTransition state = .advanced (stepRaw state) := by
@@ -1056,7 +1058,7 @@ GROUND completion is a finished observation. -/
   simp only [machineTransition,fits,outcomeTransition]
   cases next : (stepRaw state).control <;> simp_all [ResultControl]
 
- theorem machineTransition_advanced {state successor : State}
+ private theorem machineTransition_advanced {state successor : State}
     (advanced : machineTransition state = .advanced successor) :
     successor = stepRaw state ∧ ResultControl successor.control ∧ ∀ value, state.control ≠ .complete value := by
   cases control : state.control with
@@ -1071,7 +1073,7 @@ GROUND completion is a finished observation. -/
       cases next : (stepRaw state).control <;> simp [next] at advanced <;> subst advanced <;>
         simp [next,control,ResultControl]
 
- theorem machineTransition_finished {state : State} {result : Observation}
+ private theorem machineTransition_finished {state : State} {result : Observation}
     (finished : machineTransition state = .finished result) :
     ∃ value, state.control = .complete value ∧ groundObservation value = some result := by
   cases control : state.control with
@@ -1134,7 +1136,7 @@ open Classical in
   refine ⟨valueMeaning meaning value,.refl _,valueMeaning_value _ _,?_⟩
   cases value <;> simp [groundObservation] at ground <;> subst ground <;> simp [valueMeaning] <;> constructor
 
- theorem machine_steps_of_rawRun {count : Nat} {state : State} {value : RuntimeValue}
+ private theorem machine_steps_of_rawRun {count : Nat} {state : State} {value : RuntimeValue}
     (progress : ∀ ticks, ResultControl (rawRun ticks state).control)
     (complete : (rawRun count state).control = .complete value) :
     ∃ final, MachineSteps machineTransition state final ∧ final.control = .complete value := by
@@ -1183,10 +1185,12 @@ for EVERY closed source. Nothing here restricts the domain below closedness. -/
   suspensionExact := fun _ _ suspended => machineTransition_suspension_exact suspended
   evaluationComplete := fun _ _ _ closed evaluates observes => machine_evaluation_complete closed evaluates observes
 
+end
+
 /-! ## Non-vacuity -/
 
 /-- A closed Fix program with a ground answer: `fix (λself λinh. inh) 7`. -/
-@[expose] public def lazyFixedSeed : Term := .fix (.lam (.lam (.bound 0))) (.nat 7)
+public def lazyFixedSeed : Term := .fix (.lam (.lam (.bound 0))) (.nat 7)
 
 theorem lazyFixedSeed_closed : Scoped 0 lazyFixedSeed :=
   .fix (.lam (.lam (.bound (by decide)))) (.natural 7)
