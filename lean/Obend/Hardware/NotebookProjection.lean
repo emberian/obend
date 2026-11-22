@@ -710,7 +710,7 @@ def cncToolpathToData (spec : CncToolpathViewportSpec) : Data :=
   let coriolisPower := spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist
   let rStep1 := stepRuckigSegment spec.ruckigInit spec.jerkPulse spec.pulseDt
   let rStep2 := stepRuckigSegment rStep1 (-spec.jerkPulse) spec.pulseDt
-  let millBook := emit goldenCnc5AxisMillComp
+  let millBook := emit cnc5AxisMillComp
   .record [
     ("kind", .label "physical_cnc_5axis"),
     ("machine_name", .label spec.machineName),
@@ -819,7 +819,7 @@ structure StatorMultiphysicsViewportSpec where
 
 /-- Project a `StatorMultiphysicsViewportSpec` into canonical `Core.Data`. -/
 def statorMultiphysicsToData (spec : StatorMultiphysicsViewportSpec) : Data :=
-  let statorBook := emit goldenLcDrivesStatorComp
+  let statorBook := emit lcDrivesStatorComp
   let femmCoEnergy := evalElementMagneticEnergyAreaScaled 1000000 spec.statorTriangle 10 (-4) 6
   let flowpipeSafe := verifyTrajectorySafety spec.ode spec.initBox spec.steps spec.safeBounds
   .record [
@@ -841,52 +841,7 @@ def projectStatorMultiphysics
     (receipt : Option ByteArray := none) : Doc.Content :=
   .cell id .hardwareTiming (statorMultiphysicsToData spec) pins receipt
 
-/-! ## 4. Concrete Golden Physical Viewport Specs & Soundness Theorems -/
-
-/-- Golden 5-axis CNC toolpath viewport specification (`Cnc5AxisMill.obend`). -/
-def goldenCncViewportSpec : CncToolpathViewportSpec where
-  machineName := "Hermle_C42U_5Axis"
-  pTarget     := { x := 100000, y := 200000, z := 50000 }
-  linErr      := { x := 12, y := -8, z := 5 }
-  angErr      := { x := 2, y := -3, z := 1 }
-  abbeArm     := { x := 0, y := 0, z := 150 }
-  twist       := { ang := { x := 3, y := -4, z := 12 }, lin := { x := 50, y := -20, z := 10 } }
-  momentum    := { torque := { x := 90, y := -80, z := 240 }, force := { x := 250, y := -100, z := 50 } }
-  ruckigInit  := { posScaled6 := 0, velScaled2 := 0, acc := 0 }
-  jerkPulse   := 5
-  pulseDt     := 4
-
-/-- Golden OpenUSD scene-graph & `timeSamples` viewport specification (`LcDrivesStatorUsd.obend`). -/
-def goldenOpenUsdViewportSpec : OpenUsdViewportSpec where
-  stageName     := "LcDrives_Production_Stator"
-  primPath      := ["Factory", "Draft", "Stator", "Slot01"]
-  relocateSrc   := ["Factory", "Draft"]
-  relocateDst   := ["Prod", "LCDrives"]
-  sdfWallForm   := { c0 := 1500, c1 := 15, c2 := 10 }
-  minWallUm     := 1200
-  maxTempMilliC := 180000
-  initSample    := { timeCode := 0, wallThicknessUm := 5000, peakTempMilliC := 25000, receiptDigest := 101 }
-  timeSamples   :=
-    [ { timeCode := 10,  wallThicknessUm := 2200, peakTempMilliC := 65000,  receiptDigest := 202 }
-    , { timeCode := 20,  wallThicknessUm := 1500, peakTempMilliC := 55000,  receiptDigest := 303 }
-    , { timeCode := 100, wallThicknessUm := 1500, peakTempMilliC := 122000, receiptDigest := 404 } ]
-
-/-- Golden coupled LC-drive stator multiphysics + continuous `Flowpipe` viewport specification.
-
-`safeBounds` is what the degree-1 interval flowpipe certifies for the whole continuous tube, not what
-the physics does: from `T ∈ [28, 30]` the solutions of `Ṫ = 20 − T` never leave `[19.9, 30]`, but the
-box enclosures widen by about 1.9× per half-second step (the Lie remainder is evaluated over the
-a-priori box), and at the third step the a-priori enclosure reaches down to about 14.6. The earlier
-`[15, 35]` was passed only by the discrete slices; `verifyTrajectorySafety` now checks the a-priori
-enclosures too, so the bound is the method's, `[12, 35]`, as in `Flowpipe`'s own fixture. A tighter
-bound needs a mean-value (Lohner) step, not a looser spec. -/
-def goldenStatorMultiphysicsSpec : StatorMultiphysicsViewportSpec where
-  partName       := "LC_Drives_InSlot_Stator_Assy"
-  statorTriangle := goldenStatorToothTriangle
-  ode            := thermalCoolingOde
-  initBox        := [("T", ⟨28, 30⟩)]
-  steps          := 3
-  safeBounds     := [("T", ⟨12, 35⟩)]
+/-! ## 4. Universal Physical Viewport Projection Soundness Theorems -/
 
 /-- **Theorem (`physical_projection_deterministic`)**:
 All three physical-world `.obnb` projection functions (`projectCncToolpath`, `projectOpenUsdScene`,
@@ -904,34 +859,148 @@ theorem physical_projection_deterministic
   exact ⟨rfl, rfl, rfl⟩
 
 /-- **Theorem (`physical_cnc_abbe_projection_sound`)**:
-1. For ANY `CncToolpathViewportSpec`, pre-compensating the CNC command by `evalAbbeCompensatedCmd3D`
-   cancels the 21-parameter volumetric + Abbe lever-arm error (`abbe_volumetric_compensation_exact`),
-   and the Featherstone gyroscopic/Coriolis wrench performs zero mechanical work (`rnea_gyroscopic_coriolis_power_zero`).
-2. On `goldenCncViewportSpec`, `cncToolpathToData` certifies `"abbe_exact_cancelled" = true`,
-   `"coriolis_power" = 0`, and `"userspace_mill_closed" = true`. -/
+For ANY `CncToolpathViewportSpec`, pre-compensating the CNC command by `evalAbbeCompensatedCmd3D`
+cancels the 21-parameter volumetric + Abbe lever-arm error (`abbe_volumetric_compensation_exact`),
+the Featherstone gyroscopic/Coriolis wrench performs zero mechanical work (`rnea_gyroscopic_coriolis_power_zero`),
+and `cnc5AxisMillComp` emits a closed `Leaf.Book`. -/
 theorem physical_cnc_abbe_projection_sound (spec : CncToolpathViewportSpec) :
     evalUncompensatedTipPos3D
       (evalAbbeCompensatedCmd3D spec.pTarget spec.linErr spec.angErr spec.abbeArm)
       spec.linErr spec.angErr spec.abbeArm = spec.pTarget ∧
     spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist = 0 ∧
-    (emit goldenCnc5AxisMillComp).closedB = true := by
+    (emit cnc5AxisMillComp).closedB = true := by
   refine ⟨abbe_volumetric_compensation_exact spec.pTarget spec.linErr spec.angErr spec.abbeArm,
     rnea_gyroscopic_coriolis_power_zero spec.twist spec.momentum,
     by decide +kernel⟩
 
-/-- The concrete OpenUSD and stator fixtures satisfy relocation, affine cancellation,
-    lifecycle, trajectory, and closed-program checks. Universal contracts are supplied by
-    `usd_relocate_roundtrip_exact` and `affine_sub_self_exact_zero`. -/
+/-- Look up a named field inside a `Core.Data.record` payload. -/
+def lookupDataRecordField (d : Data) (key : String) : Option Data :=
+  match d with
+  | .record fs => fs.lookup key
+  | _ => none
+
+/-- **Field-Level CNC `.obnb` Record Projection Soundness (`cncToolpathToData_fields_sound`)**:
+For EVERY `CncToolpathViewportSpec`, the emitted `Core.Data` record `cncToolpathToData spec`
+projects `"abbe_exact_cancelled" = .boolean true`, `"coriolis_power" = dInt 0`, and
+`"actual_tip_nm" = vec3ToData spec.pTarget`! -/
+theorem cncToolpathToData_fields_sound (spec : CncToolpathViewportSpec) :
+    lookupDataRecordField (cncToolpathToData spec) "abbe_exact_cancelled" = some (.boolean true) ∧
+    lookupDataRecordField (cncToolpathToData spec) "coriolis_power" = some (dInt 0) ∧
+    lookupDataRecordField (cncToolpathToData spec) "actual_tip_nm" = some (vec3ToData spec.pTarget) := by
+  have hAbbe := abbe_volumetric_compensation_exact spec.pTarget spec.linErr spec.angErr spec.abbeArm
+  have hCor := rnea_gyroscopic_coriolis_power_zero spec.twist spec.momentum
+  dsimp only [cncToolpathToData, lookupDataRecordField, List.lookup]
+  rw [hAbbe, hCor]
+  simp
+
+/-- **Field-Level OpenUSD `.obnb` Record Projection Soundness (`physical_openusd_projection_sound`)**:
+For EVERY `OpenUsdViewportSpec`, inspects the actual emitted `Core.Data` record `openUsdSceneToData spec`:
+1. The nested `"affine_sdf"` record emits `"self_cancel_zero" = .boolean true`,
+2. For any suffix path `spec.primPath = spec.relocateSrc ++ suffix`, the emitted record satisfies
+   `"relocate_roundtrip_ok" = .boolean true`,
+3. Whenever the emitted record reports `"chain_valid" = .boolean true`, it also reports
+   `"final_invariant_ok" = .boolean true` (proved via `usd_lifecycle_invariant_preserved`). -/
+theorem physical_openusd_projection_sound (spec : OpenUsdViewportSpec) :
+    (lookupDataRecordField (openUsdSceneToData spec) "affine_sdf").bind
+        (fun d => lookupDataRecordField d "self_cancel_zero") = some (.boolean true) ∧
+    (∀ suffix : SdfPath, spec.primPath = spec.relocateSrc ++ suffix →
+      lookupDataRecordField (openUsdSceneToData spec) "relocate_roundtrip_ok" = some (.boolean true)) ∧
+    (lookupDataRecordField (openUsdSceneToData spec) "chain_valid" = some (.boolean true) →
+      lookupDataRecordField (openUsdSceneToData spec) "final_invariant_ok" = some (.boolean true)) := by
+  refine ⟨?_, ?_, ?_⟩
+  · have hZero := affine_sub_self_exact_zero spec.sdfWallForm
+    dsimp only [openUsdSceneToData, affineSdfToData, lookupDataRecordField, List.lookup]
+    rw [hZero]
+    rfl
+  · intro suffix hEq
+    have hRt : applyUsdRelocate spec.relocateDst spec.relocateSrc
+        (applyUsdRelocate spec.relocateSrc spec.relocateDst spec.primPath) = spec.primPath := by
+      rw [hEq]
+      exact usd_relocate_roundtrip_exact spec.relocateSrc spec.relocateDst suffix
+    dsimp only [openUsdSceneToData, lookupDataRecordField, List.lookup]
+    rw [hRt]
+    simp
+  · intro hChainField
+    have hChainEq :
+        lookupDataRecordField (openUsdSceneToData spec) "chain_valid" =
+          some (.boolean (checkPartLifecycleInvariant spec.minWallUm spec.maxTempMilliC spec.initSample &&
+            checkUsdTimeSampleChain spec.minWallUm spec.maxTempMilliC spec.initSample spec.timeSamples)) := rfl
+    have hFinalEq :
+        lookupDataRecordField (openUsdSceneToData spec) "final_invariant_ok" =
+          some (.boolean (checkPartLifecycleInvariant spec.minWallUm spec.maxTempMilliC
+            (finalUsdState spec.initSample spec.timeSamples))) := rfl
+    rw [hChainEq] at hChainField
+    rw [hFinalEq]
+    simp only [Option.some.injEq, Data.boolean.injEq, Bool.and_eq_true] at hChainField
+    have hFinal := usd_lifecycle_invariant_preserved
+      spec.minWallUm spec.maxTempMilliC spec.initSample spec.timeSamples hChainField.1 hChainField.2
+    rw [hFinal]
+
+/-- **Field-Level Stator Multiphysics `.obnb` Projection Soundness (`physical_stator_projection_sound`)**:
+For EVERY `StatorMultiphysicsViewportSpec`, inspects the actual emitted `Core.Data` record
+`statorMultiphysicsToData spec`:
+1. Whenever the emitted `"status"` field equals `.label "MULTIPHYSICS_CERTIFIED"`, `verifyTrajectorySafety`
+   holds AND every valid continuous ODE flow trajectory starting in `spec.initBox` remains inside
+   `spec.safeBounds` at every discrete step `k ≤ spec.steps` and every inter-step time `τ ∈ [0, dt]`,
+2. Whenever `0 ≤ spec.statorTriangle.nuScaled`, the emitted `"femm_coenergy_scaled"` field carries
+   a non-negative scaled magnetic co-energy value (`∃ e ≥ 0, ... = some (dInt e)`). -/
+theorem physical_stator_projection_sound (spec : StatorMultiphysicsViewportSpec) :
+    (lookupDataRecordField (statorMultiphysicsToData spec) "status" = some (.label "MULTIPHYSICS_CERTIFIED") →
+     ∀ (traj : Nat → CanonicalRat → String → CanonicalRat),
+       BoxMem (traj 0 0) spec.initBox →
+       IsValidOdeFlowTrajectory spec.ode spec.steps traj →
+       ∃ tube,
+         runFlowpipe spec.ode spec.initBox spec.steps = some tube ∧
+         tube.length = spec.steps + 1 ∧
+         (∀ k, k ≤ spec.steps → BoxMem (traj k 0) (tube.getD k []) ∧ BoxMem (traj k 0) spec.safeBounds) ∧
+         (∀ k, k < spec.steps → ∀ τ ∈ Interval.mk 0 spec.ode.dt, BoxMem (traj k τ) spec.safeBounds)) ∧
+    (0 ≤ spec.statorTriangle.nuScaled →
+      ∃ e : Int, 0 ≤ e ∧
+        lookupDataRecordField (statorMultiphysicsToData spec) "femm_coenergy_scaled" = some (dInt e)) := by
+  constructor
+  · intro hStatus traj hInit hFlow
+    dsimp only [statorMultiphysicsToData, lookupDataRecordField, List.lookup] at hStatus
+    have hSafe : verifyTrajectorySafety spec.ode spec.initBox spec.steps spec.safeBounds = true := by
+      cases hV : verifyTrajectorySafety spec.ode spec.initBox spec.steps spec.safeBounds with
+      | true => rfl
+      | false =>
+        simp [hV] at hStatus
+    exact verifyTrajectorySafety_sound spec.ode spec.initBox spec.safeBounds spec.steps traj hSafe hInit hFlow
+  · intro hNu
+    refine ⟨evalElementMagneticEnergyAreaScaled 1000000 spec.statorTriangle 10 (-4) 6,
+      femm_element_energy_areaScaled_nonneg 1000000 spec.statorTriangle 10 (-4) 6 (by omega) hNu, ?_⟩
+    rfl
+
+/-- Concrete OpenUSD and stator lifecycle witness instantiating `physical_openusd_projection_sound`
+    and `verifyTrajectorySafety` on the LC Drives stator assembly. -/
 theorem physical_openusd_lifecycle_fixture :
-    let usd := goldenOpenUsdViewportSpec
-    let stator := goldenStatorMultiphysicsSpec
+    let usd : OpenUsdViewportSpec :=
+      { stageName     := "LcDrives_Production_Stator"
+      , primPath      := ["Factory", "Draft", "Stator", "Slot01"]
+      , relocateSrc   := ["Factory", "Draft"]
+      , relocateDst   := ["Prod", "LCDrives"]
+      , sdfWallForm   := { c0 := 1500, c1 := 15, c2 := 10 }
+      , minWallUm     := 1200
+      , maxTempMilliC := 180000
+      , initSample    := { timeCode := 0, wallThicknessUm := 5000, peakTempMilliC := 25000, receiptDigest := 101 }
+      , timeSamples   :=
+          [ { timeCode := 10,  wallThicknessUm := 2200, peakTempMilliC := 65000,  receiptDigest := 202 }
+          , { timeCode := 20,  wallThicknessUm := 1500, peakTempMilliC := 55000,  receiptDigest := 303 }
+          , { timeCode := 100, wallThicknessUm := 1500, peakTempMilliC := 122000, receiptDigest := 404 } ] }
+    let stator : StatorMultiphysicsViewportSpec :=
+      { partName       := "LC_Drives_InSlot_Stator_Assy"
+      , statorTriangle := statorToothRightTriangle2000x1500
+      , ode            := thermalCoolingOde
+      , initBox        := [("T", ⟨28, 30⟩)]
+      , steps          := 3
+      , safeBounds     := [("T", ⟨12, 35⟩)] }
     applyUsdRelocate usd.relocateDst usd.relocateSrc
       (applyUsdRelocate usd.relocateSrc usd.relocateDst usd.primPath) = usd.primPath ∧
     (AffineForm1D.sub usd.sdfWallForm usd.sdfWallForm).toInterval = { lo := 0, hi := 0 } ∧
     checkPartLifecycleInvariant usd.minWallUm usd.maxTempMilliC
       (finalUsdState usd.initSample usd.timeSamples) = true ∧
     verifyTrajectorySafety stator.ode stator.initBox stator.steps stator.safeBounds = true ∧
-    (emit goldenLcDrivesStatorComp).closedB = true := by
+    (emit lcDrivesStatorComp).closedB = true := by
   decide +kernel
 
 /-- **Theorem (`physical_projection_doc_noninterference`)**:

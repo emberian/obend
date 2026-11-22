@@ -22,14 +22,18 @@ import all Obend.Core.Ty
 import all Obend.Crypto.FastRing
 import all Obend.Crypto.Multilinear
 import all Obend.Hardware.Accelerators
+import all Obend.Hardware.Circuits
+import all Obend.Hardware.Codec
 import all Obend.Hardware.Compiler
 import all Obend.Hardware.GeometryCAM
 import all Obend.Hardware.HDL
 import all Obend.Hardware.Kinematics
+import all Obend.Hardware.Magnetics
 import all Obend.Hardware.OpenHypergraph
 import all Obend.Hardware.Photonics
 import all Obend.Hardware.QuantumMatter
 import all Obend.Hardware.ReductionMachine
+import all Obend.Hardware.Synth
 import all Obend.Hardware.Types
 import all Obend.Judge.Class
 import all Obend.Leaf.Emit
@@ -65,7 +69,7 @@ open Obend.Crypto Obend.Crypto.Fast Obend.Crypto.Fast.FastGoldilocksRing
 
 end Obend_Crypto_FastRing
 
-/-! ## Extracted from `Obend.Hardware.GeometryCAM` (2 teeth) -/
+/-! ## Extracted from `Obend.Hardware.GeometryCAM` (3 teeth) -/
 section Obend_Hardware_GeometryCAM
 open Obend.Hardware.GeometryCAM
 open Obend.Hardware.Accelerators
@@ -83,7 +87,42 @@ private def wallLeafBroken (outer inner : FRepExpr) (_tx _ty _tz : Nat) (B : Box
 #tooth checkWall_sound by mutation
   wallLeaf := wallLeafBroken
 
+/-- Broken `compactSsaTape` that only truncates at the live root without eliminating dead registers. -/
+private def compactSsaTapeTruncateOnlyMutant (tape : List SsaTapeOp) (rootReg : Nat) : List SsaTapeOp :=
+  let liveRoot := resolveSsaLiveRoot tape tape.length rootReg
+  tape.take (liveRoot + 1)
+
+#tooth compactSsaTape_strict_shrink_of_dead_reg by mutation
+  compactSsaTape := compactSsaTapeTruncateOnlyMutant
+
 end Obend_Hardware_GeometryCAM
+
+/-! ## Extracted from `Obend.Hardware.{Circuits,Codec,Magnetics,Synth}` (8 teeth) -/
+section Obend_Hardware_UniversalTeeth
+open Obend.Hardware.Circuits Obend.Hardware.Codec Obend.Hardware.Magnetics Obend.Hardware.Synth
+
+#tooth datasheetFitSignoff_domain_sound by mutation checkDatasheetFitSignoff := fun _ => true
+
+#tooth ina_common_mode_invariance_iff by mutation
+  evalInaOutputUv := fun p vDiff _ deltaTC => p.gainDiff * (vDiff + p.vos0Uv + p.dVosDtUvPerC * deltaTC)
+
+#tooth nonTapeDomain_tape_cert_refused by mutation verifyBinaryTapeCert := fun _ => true
+
+#tooth binaryHwCert_tapeCert_disjoint_wire by mutation
+  decodeBinaryTapeCert := fun _ => some statorMesh6WordTapeCert
+
+#tooth evalElementMagneticEnergyAreaScaled_floor_spec by mutation
+  evalElementMagneticEnergyAreaScaled := fun _ _ _ _ _ => 0
+
+#tooth femm_element_energy_pos_iff_nonconstant by mutation
+  evalElementMagneticEnergyScaled := fun _ _ _ _ => 0
+
+#tooth stepBhPicardReluctivity_lipschitz_bound by mutation
+  stepBhPicardReluctivity := fun _ _ _ nu _ => 2 * nu
+
+#tooth checkSynthesizedRtlSignoff_iff by mutation checkSynthesizedRtlSignoff := fun _ => true
+
+end Obend_Hardware_UniversalTeeth
 
 /-! ## Extracted from `Obend.Hardware.Kinematics` (1 teeth) -/
 section Obend_Hardware_Kinematics

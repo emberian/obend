@@ -86,7 +86,7 @@ inductive Kind where
 
 /-- The scalar graphs: name, the Lean definition's name, the graph. -/
 def scalarGraphs : List (String × String × StrictOpenHypergraph) :=
-  [ ("diamond", "Obend.Hardware.OpenHypergraph.goldenDiamondHypergraph", goldenDiamondHypergraph)
+  [ ("diamond", "Obend.Hardware.OpenHypergraph.diamondAddMulConstHypergraph", diamondAddMulConstHypergraph)
   , ("optic-mul", "Obend.Hardware.OpenHypergraph.compileOpticToHypergraph .mul", compileOpticToHypergraph .mul)
   , ("optic-linearmac", "Obend.Hardware.OpenHypergraph.compileOpticToHypergraph (.linearMac 7)",
       compileOpticToHypergraph (.linearMac 7))

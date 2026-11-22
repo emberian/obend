@@ -1761,9 +1761,9 @@ theorem checkSynthesizedRtlSignoff_sound (m : RtlModule)
     fun ins st => evalBelNetlistOutputs_synthesizeModuleToBels m ins st hOk.1,
     fun rst ins st => stepBelNetlistRegs_synthesizeModuleToBels m rst ins st hOk.1⟩
 
-/-- Golden Leiserson–Saxe retimed 2-stage MAC `RtlModule` (`mulReg := a * b`, `cReg := c`,
+/-- Leiserson–Saxe retimed 2-stage MAC `RtlModule` (`mulReg := a * b`, `cReg := c`,
 `outReg := mulReg + cReg`). -/
-def goldenRetimedMacRtl : RtlModule where
+def retimedMac2StageRtl : RtlModule where
   name       := "obend_retimed_mac2"
   inputNames := ["a", "b", "c"]
   wires      :=
@@ -1782,12 +1782,36 @@ theorem checkSynthesizedRtlSignoff_complete (m : RtlModule) (hWf : checkRtlModul
     checkSynthesizedRtlSignoff m = true := by
   simp only [checkSynthesizedRtlSignoff, hWf, (synthesizeModuleToBels_valid_and_ff_count m).1, Bool.and_self]
 
-/-- `checkSynthesizedRtlSignoff` is inhabited by a sequential module: the retimed two-stage MAC
+/-- **Universal Signoff Biconditional (`checkSynthesizedRtlSignoff_iff`)**:
+`checkSynthesizedRtlSignoff m = true` iff `checkRtlModule m = true`. -/
+theorem checkSynthesizedRtlSignoff_iff (m : RtlModule) :
+    checkSynthesizedRtlSignoff m = true ↔ checkRtlModule m = true :=
+  ⟨fun h => (checkSynthesizedRtlSignoff_sound m h).1, checkSynthesizedRtlSignoff_complete m⟩
+
+/-- **Universal Two-Cycle Pipeline Transfer Function (`retimedMac2StageRtl_two_cycle_mac`)**:
+Starting from ANY register state `regState₀` and ANY arbitrary reset bits `r0, r1` and 64-bit input
+vectors `in0, in1, in2`, stepping `retimedMac2StageRtl` through `(r0, in0)` and `(r1, in1)` produces
+the exact 64-bit multiply-accumulate output `in0 0 * in0 1 + in0 2` on `"mac_out"`, and the synthesized
+`BelNetlist` matches on every cycle of the 3-cycle trace! -/
+theorem retimedMac2StageRtl_two_cycle_mac
+    (regState₀ : Nat → BitVec 64)
+    (r0 r1 r2 : Bool)
+    (in0 in1 in2 : Nat → BitVec 64) :
+    let st1 := stepModuleRegs retimedMac2StageRtl r0 in0 regState₀
+    let st2 := stepModuleRegs retimedMac2StageRtl r1 in1 st1
+    evalModuleOutputs retimedMac2StageRtl in2 st2 = [("mac_out", in0 0 * in0 1 + in0 2)] ∧
+    runBelNetlistTrace (synthesizeModuleToBels retimedMac2StageRtl) regState₀
+      [(r0, in0), (r1, in1), (r2, in2)] =
+      runRtlModuleTrace retimedMac2StageRtl regState₀ [(r0, in0), (r1, in1), (r2, in2)] := by
+  refine ⟨?_, synthesizeModuleToBels_trace_equiv retimedMac2StageRtl (by decide +kernel) regState₀ _⟩
+  rfl
+
+/-- `checkSynthesizedRtlSignoff` is inhabited by a sequential module: `retimedMac2StageRtl`
 (two wires, three registers) passes it. -/
 example :
     ∃ m : RtlModule, 0 < m.regs.length ∧ 0 < m.wires.length ∧ checkSynthesizedRtlSignoff m = true := by
-  exact ⟨goldenRetimedMacRtl, by decide, by decide,
-    checkSynthesizedRtlSignoff_complete goldenRetimedMacRtl (by decide +kernel)⟩
+  exact ⟨retimedMac2StageRtl, by decide, by decide,
+    checkSynthesizedRtlSignoff_complete retimedMac2StageRtl (by decide +kernel)⟩
 
 end Obend.Hardware.Synth
 end

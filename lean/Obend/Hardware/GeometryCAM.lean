@@ -1630,80 +1630,108 @@ theorem prune_and_compact_ssa_tape_sound
     exact pruneSsaTapeForBox_sound B x y z tape rootReg hIn
   · exact Nat.le_trans (compactSsaTape_length_le (pruneSsaTapeForBox B tape) rootReg) (by omega)
 
-/-- Golden Linear SSA Tape Pruning & Compaction Verification (`golden_ssa_tape_prune_and_compact_verified`):
-On a 20-instruction linear SSA stator CSG tape (7 ops for stator core cylinder + 6 ops for
-mounting lug + 1 `minUnion` + 5 ops for cooling bore + 1 `maxInter`):
-1. Specializing over the center octree box $B_{\text{center}} = [-2, 2]^3$ and running `compactSsaTape`
-   compacts the SSA tape from `20` instructions down to `7` instructions,
-2. Specializing over the mounting-lug box $B_{\text{lug}} = [14, 16] \times [-1, 1]^2$ (where the right
-   branch `reg 12` of `.minUnion 6 12` dominates `reg 6`) eliminates the dead stator core instructions
-   `[1, 4, 5, 6]` and dead bore instructions `[13..19]`, compacting from `20` down to `9` instructions, and
-3. Specializing over the cooling-bore box $B_{\text{bore}} = [-16, -14] \times [-1, 1]^2$ on a radius-20
-   stator housing (where the negated cooling bore `reg 18` in the right branch of `.maxInter 13 18`
-   dominates `reg 13`) eliminates both the dead stator core and dead mounting lug branches,
-   compacting from `20` down to `10` instructions! -/
--- fixture kept (2026-11-04): would delete (a literal tape pruned and compared to its literal result) but cited by tests/metasystem/OpenUsdAndSsaTapeTest.lean:250
-theorem golden_ssa_tape_prune_and_compact_verified {x y z : Int}
-    (hBox : (⟨⟨-2,2⟩,⟨-2,2⟩,⟨-2,2⟩⟩ : Box3D).contains x y z := by unfold Obend.Hardware.GeometryCAM.Box3D.contains Obend.Hardware.Accelerators.FloatInterval.contains; decide) :
-    let box : Box3D :=
-      { xIv := { lo := -2, hi := 2 }
-      , yIv := { lo := -2, hi := 2 }
-      , zIv := { lo := -2, hi := 2 } }
-    let ssaStatorTape : List SsaTapeOp :=
-      [ -- 0..6: Stator core cylinder x^2 + y^2 - 100 (root at reg 6)
-        .varX, .mul 0 0, .varY, .mul 2 2, .add 1 3, .const 100, .sub 4 5,
-        -- 7..12: Mounting lug (x - 15)^2 + y^2 - 4 (root at reg 12)
-        .const 15, .sub 0 7, .mul 8 8, .add 9 3, .const 4, .sub 10 11,
-        -- 13: Union of core (6) and lug (12)
-        .minUnion 6 12,
-        -- 14..18: Negated cooling bore -((x + 15)^2 + y^2 - 4) (root at reg 18)
-        .add 0 7, .mul 14 14, .add 15 3, .sub 16 11, .neg 17,
-        -- 19: CSG difference maxInter 13 18
-        .maxInter 13 18
-      ]
-    let pruned := pruneSsaTapeForBox box ssaStatorTape
-    let compacted := compactSsaTape pruned 19
-    let fullCompacted := compactSsaTapeFull pruned 19
-    ssaStatorTape.length = 20 ∧
-    compacted.length = 7 ∧
-    fullCompacted.length = 7 ∧
-    evalSsaTape x y z compacted (compacted.length - 1) = evalSsaTape x y z ssaStatorTape 19 := by
-  refine ⟨by decide +kernel, by decide +kernel, by decide +kernel, ?_⟩
-  exact (prune_and_compact_ssa_tape_sound _ x y z _ 19 hBox (by decide)).1
+private theorem compactSsaStep_regMap_length
+    (live : List Nat) (compacted : List SsaTapeOp) (regMap : List (Option Nat)) (op : SsaTapeOp) :
+    (compactSsaStep live compacted regMap op).2.length = regMap.length + 1 := by
+  unfold compactSsaStep
+  dsimp only
+  split
+  · split
+    · simp
+    · split <;> simp
+  · simp
 
--- fixture kept (2026-11-04): would delete (a literal tape compacted and compared to its literal result) but cited by tests/metasystem/OpenUsdAndSsaTapeTest.lean:279, tests/metasystem/OpenUsdAndSsaTapeTest.lean:452
-theorem golden_ssa_tape_right_branch_compaction_verified {xL yL zL xB yB zB : Int}
-    (hL : (⟨⟨14,16⟩,⟨-1,1⟩,⟨-1,1⟩⟩ : Box3D).contains xL yL zL := by unfold Obend.Hardware.GeometryCAM.Box3D.contains Obend.Hardware.Accelerators.FloatInterval.contains; decide)
-    (hB : (⟨⟨-16,-14⟩,⟨-1,1⟩,⟨-1,1⟩⟩ : Box3D).contains xB yB zB := by unfold Obend.Hardware.GeometryCAM.Box3D.contains Obend.Hardware.Accelerators.FloatInterval.contains; decide) :
-    let boxLug : Box3D :=
-      { xIv := { lo := 14, hi := 16 }
-      , yIv := { lo := -1, hi := 1 }
-      , zIv := { lo := -1, hi := 1 } }
-    let boxBore : Box3D :=
-      { xIv := { lo := -16, hi := -14 }
-      , yIv := { lo := -1, hi := 1 }
-      , zIv := { lo := -1, hi := 1 } }
-    let ssaStatorTape : List SsaTapeOp :=
-      [ .varX, .mul 0 0, .varY, .mul 2 2, .add 1 3, .const 100, .sub 4 5,
-        .const 15, .sub 0 7, .mul 8 8, .add 9 3, .const 4, .sub 10 11,
-        .minUnion 6 12,
-        .add 0 7, .mul 14 14, .add 15 3, .sub 16 11, .neg 17,
-        .maxInter 13 18 ]
-    let ssaBoreTape : List SsaTapeOp :=
-      [ .varX, .mul 0 0, .varY, .mul 2 2, .add 1 3, .const 400, .sub 4 5,
-        .const 15, .sub 0 7, .mul 8 8, .add 9 3, .const 4, .sub 10 11,
-        .minUnion 6 12,
-        .add 0 7, .mul 14 14, .add 15 3, .sub 16 11, .neg 17,
-        .maxInter 13 18 ]
-    let compactedLug  := compactSsaTape (pruneSsaTapeForBox boxLug ssaStatorTape) 19
-    let compactedBore := compactSsaTape (pruneSsaTapeForBox boxBore ssaBoreTape) 19
-    compactedLug.length = 9 ∧
-    compactedBore.length = 10 ∧
-    evalSsaTape xL yL zL compactedLug (compactedLug.length - 1) = evalSsaTape xL yL zL ssaStatorTape 19 ∧
-    evalSsaTape xB yB zB compactedBore (compactedBore.length - 1) = evalSsaTape xB yB zB ssaBoreTape 19 := by
-  refine ⟨by decide +kernel, by decide +kernel, ?_, ?_⟩
-  · exact (prune_and_compact_ssa_tape_sound _ xL yL zL _ 19 hL (by decide)).1
-  · exact (prune_and_compact_ssa_tape_sound _ xB yB zB _ 19 hB (by decide)).1
+private theorem compactSsaStep_length_of_dead
+    (live : List Nat) (compacted : List SsaTapeOp) (regMap : List (Option Nat)) (op : SsaTapeOp)
+    (hDead : live.contains regMap.length = false) :
+    (compactSsaStep live compacted regMap op).1.length = compacted.length := by
+  unfold compactSsaStep
+  dsimp only
+  rw [hDead]
+  rfl
+
+private theorem compactSsaLoop_length_lt_of_dead
+    (live : List Nat) (compacted : List SsaTapeOp) (regMap : List (Option Nat))
+    (ts : List SsaTapeOp) (k : Nat)
+    (hK : k < ts.length)
+    (hDead : live.contains (regMap.length + k) = false) :
+    (compactSsaLoop live compacted regMap ts).1.length < compacted.length + ts.length := by
+  induction ts generalizing compacted regMap k with
+  | nil => cases hK
+  | cons op rest ih =>
+    cases k with
+    | zero =>
+      dsimp only [compactSsaLoop, List.length_cons]
+      have hDead0 : live.contains regMap.length = false := by simpa using hDead
+      have hStepEq := compactSsaStep_length_of_dead live compacted regMap op hDead0
+      have hRest := compactSsaLoop_length_le live (compactSsaStep live compacted regMap op).1
+        (compactSsaStep live compacted regMap op).2 rest
+      omega
+    | succ k' =>
+      dsimp only [compactSsaLoop, List.length_cons] at hK ⊢
+      have hStepLe := compactSsaStep_length_le live compacted regMap op
+      have hMapLen := compactSsaStep_regMap_length live compacted regMap op
+      have hDead' : live.contains ((compactSsaStep live compacted regMap op).2.length + k') = false := by
+        rw [hMapLen]
+        have hEq : regMap.length + 1 + k' = regMap.length + (k' + 1) := by omega
+        rw [hEq]
+        exact hDead
+      have hRest := ih (compactSsaStep live compacted regMap op).1
+        (compactSsaStep live compacted regMap op).2 k' (by omega) hDead'
+      omega
+
+/-- **Universal Strict Dead-Register Compaction Theorem (`compactSsaTape_strict_shrink_of_dead_reg`)**:
+For EVERY linear SSA tape `tape : List SsaTapeOp`, valid `rootReg < tape.length`, and dead register
+`k < (tape.take (resolveSsaLiveRoot tape tape.length rootReg + 1)).length` (`live.contains k = false`),
+whenever the forward register-remapping pass maps the resolved live root to the final emitted register,
+`compactSsaTape tape rootReg` produces a strictly shorter tape than simple root-prefix truncation
+`tape.take (resolveSsaLiveRoot tape tape.length rootReg + 1)` (and hence strictly shorter than `tape`). -/
+theorem compactSsaTape_strict_shrink_of_dead_reg
+    (tape : List SsaTapeOp) (rootReg k : Nat)
+    (hK : k < (tape.take (resolveSsaLiveRoot tape tape.length rootReg + 1)).length)
+    (hDead : (computeLiveSsaRegs tape rootReg).contains k = false)
+    (hMapped :
+      let liveRoot := resolveSsaLiveRoot tape tape.length rootReg
+      let loop := compactSsaLoop (computeLiveSsaRegs tape rootReg) [] [] (tape.take (liveRoot + 1))
+      match loop.2.getD liveRoot none with
+      | some cr => 0 < loop.1.length ∧ cr = loop.1.length - 1
+      | none => False) :
+    (compactSsaTape tape rootReg).length <
+      (tape.take (resolveSsaLiveRoot tape tape.length rootReg + 1)).length := by
+  dsimp only at hMapped
+  unfold compactSsaTape
+  dsimp only
+  have hLt := compactSsaLoop_length_lt_of_dead (computeLiveSsaRegs tape rootReg) [] []
+    (tape.take (resolveSsaLiveRoot tape tape.length rootReg + 1)) k hK (by simpa using hDead)
+  simp only [List.length_nil, Nat.zero_add] at hLt
+  cases hGet : (compactSsaLoop (computeLiveSsaRegs tape rootReg) [] []
+      (tape.take (resolveSsaLiveRoot tape tape.length rootReg + 1))).2.getD
+      (resolveSsaLiveRoot tape tape.length rootReg) none with
+  | none =>
+    rw [hGet] at hMapped
+    exact False.elim hMapped
+  | some cr =>
+    rw [hGet] at hMapped
+    have hCond : decide (0 < (compactSsaLoop (computeLiveSsaRegs tape rootReg) [] []
+        (tape.take (resolveSsaLiveRoot tape tape.length rootReg + 1))).1.length ∧
+        (cr == (compactSsaLoop (computeLiveSsaRegs tape rootReg) [] []
+        (tape.take (resolveSsaLiveRoot tape tape.length rootReg + 1))).1.length - 1)) = true := by
+      rw [decide_eq_true_eq, beq_iff_eq]
+      exact hMapped
+    dsimp only
+    simp only [hCond, ↓reduceIte]
+    exact hLt
+
+private theorem compactSsaTape_strict_shrink_of_dead_reg_inhabited :
+    ∃ (tape : List SsaTapeOp) (rootReg k : Nat),
+      k < (tape.take (resolveSsaLiveRoot tape tape.length rootReg + 1)).length ∧
+      (computeLiveSsaRegs tape rootReg).contains k = false ∧
+      (let liveRoot := resolveSsaLiveRoot tape tape.length rootReg
+       let loop := compactSsaLoop (computeLiveSsaRegs tape rootReg) [] [] (tape.take (liveRoot + 1))
+       match loop.2.getD liveRoot none with
+       | some cr => 0 < loop.1.length ∧ cr = loop.1.length - 1
+       | none => False) :=
+  ⟨[.const 1, .const 2, .varX], 2, 0, by decide, by decide, ⟨by decide, rfl⟩⟩
 
 /-! ## 3. Implicit Swept-Volume CAM Material Removal & Zero-Gouge Certification -/
 
@@ -1741,6 +1769,53 @@ theorem voxel_no_gouge_sound
   have hLo : 0 < (evalFRepInterval B fSwept).lo := of_decide_eq_true hNoGouge
   have hExt := frep_octree_prune_exterior_sound B fSwept hLo x y z hInBox
   dsimp only [inSolid, evalFRepPoint] at *
+  omega
+
+/-- **Multi-Pass Subtractive Milling Occupancy Characterization (`multipass_milling_solid_iff`)**:
+For ANY stock `fStock : FRepExpr`, ANY sequence of cutter swept volumes `passes : List FRepExpr`,
+and ANY 3D point `(x, y, z) : Int × Int × Int`, the point remains inside the machined solid
+`passes.foldl .csgDiff fStock` **if and only if** it started inside `fStock` AND lies outside the
+strict interior of every milling pass (`∀ p ∈ passes, 0 ≤ evalFRepPoint x y z p`). -/
+theorem multipass_milling_solid_iff
+    (x y z : Int) (fStock : FRepExpr) (passes : List FRepExpr) :
+    inSolid x y z (passes.foldl .csgDiff fStock) ↔
+      inSolid x y z fStock ∧ ∀ p ∈ passes, 0 ≤ evalFRepPoint x y z p := by
+  induction passes generalizing fStock with
+  | nil =>
+    simp [List.foldl]
+  | cons p rest ih =>
+    simp only [List.foldl, List.mem_cons]
+    rw [ih (.csgDiff fStock p)]
+    dsimp only [inSolid, evalFRepPoint]
+    constructor
+    · rintro ⟨hDiff, hRest⟩
+      have hStock : evalFRepPoint x y z fStock ≤ 0 := by omega
+      have hP : 0 ≤ evalFRepPoint x y z p := by omega
+      refine ⟨hStock, ?_⟩
+      rintro q (rfl | hq)
+      · exact hP
+      · exact hRest q hq
+    · rintro ⟨hStock, hAll⟩
+      have hP : 0 ≤ evalFRepPoint x y z p := hAll p (Or.inl rfl)
+      have hDiff : max (evalFRepPoint x y z fStock) (-evalFRepPoint x y z p) ≤ 0 := by omega
+      exact ⟨hDiff, fun q hq => hAll q (Or.inr hq)⟩
+
+/-- **Multi-Pass Zero-Gouge Toolpath Clearance Theorem (`multipass_no_gouge_preserves_solid`)**:
+If every cutter swept volume `p ∈ passes` clears bounding box `B` (`checkVoxelNoGouge B p = true`),
+then for EVERY point `(x, y, z) ∈ B` inside the finished part (`inSolid x y z fStock`), the entire
+multi-pass milling sequence preserves material at `(x, y, z)` with zero gouging! -/
+theorem multipass_no_gouge_preserves_solid
+    (B : Box3D) (fStock : FRepExpr) (passes : List FRepExpr)
+    (hClear : ∀ p ∈ passes, checkVoxelNoGouge B p = true)
+    (x y z : Int) (hInBox : B.contains x y z)
+    (hInStock : inSolid x y z fStock) :
+    inSolid x y z (passes.foldl .csgDiff fStock) := by
+  rw [multipass_milling_solid_iff]
+  refine ⟨hInStock, fun p hp => ?_⟩
+  have hNoG : checkVoxelNoGouge B p = true := hClear p hp
+  unfold checkVoxelNoGouge at hNoG
+  have hLo : 0 < (evalFRepInterval B p).lo := of_decide_eq_true hNoG
+  have hExt := frep_octree_prune_exterior_sound B p hLo x y z hInBox
   omega
 
 /-! ### 3B. Continuous-Time 5-Axis Swept-Volume Envelope Synthesis & Lipschitz No-Gouge Soundness -/

@@ -248,8 +248,10 @@ theorem test_golden_ssa_tape_compaction :
     ssaStatorTape.length = 20 ∧
     compacted.length = 7 ∧
     fullCompacted.length = 7 ∧
-    evalSsaTape 1 1 0 compacted (compacted.length - 1) = evalSsaTape 1 1 0 ssaStatorTape 19 :=
-  golden_ssa_tape_prune_and_compact_verified
+    evalSsaTape 1 1 0 compacted (compacted.length - 1) = evalSsaTape 1 1 0 ssaStatorTape 19 := by
+  refine ⟨by decide +kernel, by decide +kernel, by decide +kernel, ?_⟩
+  exact (prune_and_compact_ssa_tape_sound _ 1 1 0 _ 19
+    (by unfold Box3D.contains Obend.Hardware.Accelerators.FloatInterval.contains; decide) (by decide)).1
 
 theorem test_golden_ssa_tape_right_branch_compaction :
     let boxLug : Box3D :=
@@ -277,8 +279,12 @@ theorem test_golden_ssa_tape_right_branch_compaction :
     compactedLug.length = 9 ∧
     compactedBore.length = 10 ∧
     evalSsaTape 15 0 0 compactedLug (compactedLug.length - 1) = evalSsaTape 15 0 0 ssaStatorTape 19 ∧
-    evalSsaTape (-15) 0 0 compactedBore (compactedBore.length - 1) = evalSsaTape (-15) 0 0 ssaBoreTape 19 :=
-  golden_ssa_tape_right_branch_compaction_verified
+    evalSsaTape (-15) 0 0 compactedBore (compactedBore.length - 1) = evalSsaTape (-15) 0 0 ssaBoreTape 19 := by
+  refine ⟨by decide +kernel, by decide +kernel, ?_, ?_⟩
+  · exact (prune_and_compact_ssa_tape_sound _ 15 0 0 _ 19
+      (by unfold Box3D.contains Obend.Hardware.Accelerators.FloatInterval.contains; decide) (by decide)).1
+  · exact (prune_and_compact_ssa_tape_sound _ (-15) 0 0 _ 19
+      (by unfold Box3D.contains Obend.Hardware.Accelerators.FloatInterval.contains; decide) (by decide)).1
 
 /-- 3.3 Continuous-time 5-axis swept-volume CAM envelope (`synthesizeSweptVolume`) soundness. -/
 theorem test_continuous_swept_volume_no_gouge
@@ -432,7 +438,7 @@ def compactSsaTapeTruncateOnly (tape : List SsaTapeOp) (rootReg : Nat) : List Ss
   let liveRoot := resolveSsaLiveRoot tape tape.length rootReg
   tape.take (liveRoot + 1)
 
-#tooth Obend.Hardware.GeometryCAM.golden_ssa_tape_right_branch_compaction_verified by mutation Obend.Hardware.GeometryCAM.compactSsaTape := compactSsaTapeTruncateOnly
+#tooth Obend.Hardware.GeometryCAM.compactSsaTape_strict_shrink_of_dead_reg by mutation Obend.Hardware.GeometryCAM.compactSsaTape := compactSsaTapeTruncateOnly
 
 #print axioms Obend.Hardware.OpenUSD.liverps_local_dominates_term
 #print axioms Obend.Hardware.OpenUSD.liverps_local_overrides_preceding_reference_eval
@@ -444,7 +450,7 @@ def compactSsaTapeTruncateOnly (tape : List SsaTapeOp) (rootReg : Nat) : List Ss
 #print axioms Obend.Hardware.GeometryCAM.csgDiff_right_branch_pruning_sound
 #print axioms Obend.Hardware.GeometryCAM.compactSsaTape_length_le
 #print axioms Obend.Hardware.GeometryCAM.prune_and_compact_ssa_tape_sound
-#print axioms Obend.Hardware.GeometryCAM.golden_ssa_tape_right_branch_compaction_verified
+#print axioms Obend.Hardware.GeometryCAM.compactSsaTape_strict_shrink_of_dead_reg
 #print axioms Obend.Hardware.GeometryCAM.continuous_swept_volume_no_gouge_sound
 #print axioms Obend.Hardware.Codec.decode_encode_binaryTapeCert
 #print axioms Obend.Hardware.Codec.pnr_tape_cert_bypass_refused

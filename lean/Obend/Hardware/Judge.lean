@@ -845,6 +845,21 @@ theorem rtlSynthFormat_sound {r : Nat} {obj cert : String}
     ∃ o c, decodeRtlSynthObj obj = .ok o ∧ decodeRtlSynthCert cert = .ok c ∧
       RtlSynthMeaning o c :=
   rtlSynthFormat.checkBytes_sound h
+/-- **Universal Wire Round-Trip Soundness & Completeness (`rtlSynthFormat_roundtrip_iff`)**:
+For EVERY grade `r : Nat`, top module name `name : String`, and `m : RtlModule`,
+`rtlSynthFormat.checkBytes r (encodeRtlSynthObj name) (encodeRtlSynthCert m) = .ok`
+holds iff `RtlSynthMeaning name m`. -/
+theorem rtlSynthFormat_roundtrip_iff (r : Nat) (name : String) (m : RtlModule) :
+    rtlSynthFormat.checkBytes r (encodeRtlSynthObj name) (encodeRtlSynthCert m) = .ok ↔
+      RtlSynthMeaning name m := by
+  unfold Format.checkBytes rtlSynthFormat
+  dsimp only
+  rw [decodeRtlSynthObj_encodeRtlSynthObj_roundtrip, decodeRtlSynthCert_encodeRtlSynthCert_roundtrip]
+  dsimp only
+  have hMap : ∀ v : Verdict HwClause, Verdict.map FormatClause.judge v = .ok ↔ v = .ok := by
+    intro v; cases v <;> simp [Verdict.map]
+  rw [hMap]
+  exact checkRtlSynth_ok_iff r name m
 instance {ε α : Type} [DecidableEq ε] [DecidableEq α] : DecidableEq (Except ε α)
   | .error e1, .error e2 =>
     if h : e1 = e2 then isTrue (h ▸ rfl) else isFalse (fun hEq => by cases hEq; exact h rfl)
@@ -859,8 +874,8 @@ theorem verdict_eq_ok_of_isOk {C : Type} {v : Verdict C} (h : v.isOk = true) : v
   cases v <;> simp [Obend.Judge.Verdict.isOk] at h ⊢
 theorem verdict_ne_ok_of_isOk_false {C : Type} {v : Verdict C} (h : v.isOk = false) : v ≠ .ok := by
   intro hEq; subst hEq; cases h
-def goldenFlatRtlModule : RtlModule where
-  name       := "test_rtl_synth"
+def flatMulAddRtlModule : RtlModule where
+  name       := "obend_flat_mul_add_rtl"
   inputNames := ["arg"]
   wires      :=
     [ { wireIdx := 0, name := "w0", expr := .alu .mul (.inputPort 0) (.const 2#64) }
@@ -1007,7 +1022,7 @@ def decodeDatasheetFitCert (s : String) : Except String DatasheetFitCert := do
     pullupBoostMv := pullup, minMarginMv := minMargin, ttlParams := sn74ls00TotemParams
     fanout := fanout, modelPreds := calibrated74ls00ModelPreds
     datasheetPoints := sn74ls00Datasheet.transferCurve, maxCalErrMv := maxCalErr
-    inaSpec := precisionMatchedIna, buckStage := { golden5vBuckSpec with iLoadMa := buckLoadMa } }
+    inaSpec := precisionMatchedIna, buckStage := { buck12vTo5v2aSpec with iLoadMa := buckLoadMa } }
 def datasheetFitFormat : Format where
   name := "datasheet-fit"; version := "1"; Obj := String; Cert := DatasheetFitCert
   judge := datasheetFitJudge; decodeObj := decodeDatasheetFitObj; decodeCert := decodeDatasheetFitCert
@@ -1173,7 +1188,7 @@ def BinaryHwCertDomainMeaning (c : BinaryHwCert) : Prop :=
     let matched := iqConjMul sig sig
     matched.q = 0 ∧ matched.i = c.p0 * c.p0 + c.p1 * c.p1 ∧ 0 ≤ matched.i
   | .magnetics =>
-    let tri := Obend.Hardware.Magnetics.goldenStatorToothTriangle
+    let tri := Obend.Hardware.Magnetics.statorToothRightTriangle2000x1500
     let e := Obend.Hardware.Magnetics.evalElementMagneticEnergyAreaScaled 1000000 tri c.p0 c.p1 c.p2
     let nuNext := Obend.Hardware.Magnetics.stepBhPicardReluctivity c.p3 c.p4 500 c.p3 c.p5
     0 ≤ e ∧ 0 < c.p3 ∧ c.p3 ≤ nuNext ∧ 0 < nuNext
@@ -1257,7 +1272,7 @@ theorem unregisteredBinaryCborCode_refused (c : BinaryHwCert) :
 
 #tooth unregisteredBinaryCborCode_refused by mutation checkBinaryCborCodeJudge := fun _ _ _ => .ok
 
-def badBinaryPnrCert : BinaryHwCert := { goldenBinaryPnrCert with p5 := 100 }
+def badBinaryPnrCert : BinaryHwCert := { adder2nsPnrCert with p5 := 100 }
 -- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badBinaryCborCert_refused :
     checkBinaryCborJudge 0 .pnr badBinaryPnrCert =
@@ -1381,7 +1396,7 @@ instance binaryTapeJudge : Obend.Judge HwCertDomain BinaryTapeCert where
   Fragment _ := True
   complete := by intro o _ ⟨c, hc⟩; exact ⟨c, 0, (checkBinaryTapeCert_ok_iff 0 o c).mpr hc⟩
   mono := by intro _ _ _ _ _ _; rfl
-def badBinaryTapeCert : BinaryTapeCert := { goldenBinaryFemmTapeCert with metric0 := 999 }
+def badBinaryTapeCert : BinaryTapeCert := { statorMesh6WordTapeCert with metric0 := 999 }
 -- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badBinaryTapeCert_refused :
     checkBinaryTapeCert 0 .magnetics badBinaryTapeCert =

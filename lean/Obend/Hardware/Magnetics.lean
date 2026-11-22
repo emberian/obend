@@ -111,8 +111,8 @@ abbrev FemmTriangle2D.c2 (tri : FemmTriangle2D) : Int := tri.x1 - tri.x0
 @[expose] def FemmTriangle2D.areaDenom (tri : FemmTriangle2D) : Int :=
   max 1 tri.absTwiceArea
 
-/-- Golden 2D FEMM stator-tooth triangular mesh element (in micrometers, $2\Delta = 3 \times 10^6\,\mu\text{m}^2$, $\nu = 800$). -/
-@[expose] def goldenStatorToothTriangle : FemmTriangle2D :=
+/-- 2D FEMM stator-tooth right-triangular mesh element ($2000 \times 1500\,\mu\text{m}$, $2\Delta = 3 \times 10^6\,\mu\text{m}^2$, $\nu = 800$). -/
+@[expose] def statorToothRightTriangle2000x1500 : FemmTriangle2D :=
   { x0       := 0
     y0       := 0
     x1       := 2000
@@ -209,6 +209,80 @@ theorem femm_element_energy_areaScaled_nonneg (scale : Int) (tri : FemmTriangle2
     int_mul_nonneg scale _ hScale (femm_element_energy_nonneg tri a0 a1 a2 hNu)
   have hDen : 0 ≤ 4 * max 1 (Int.ofNat tri.twiceArea.natAbs) := by omega
   exact Int.ediv_nonneg hNum hDen
+
+/-- **Exact Courant $P_1$ Element Stiffness Coercivity / Gauge-Kernel Characterization
+(`femm_element_energy_pos_iff_nonconstant`)**:
+On EVERY non-degenerate 2D triangle (`tri.twiceArea ≠ 0`) with strictly positive reluctivity
+(`0 < tri.nuScaled`), the element magnetic energy numerator `evalElementMagneticEnergyScaled tri a0 a1 a2`
+is strictly positive **if and only if** the nodal potentials `(a0, a1, a2)` are non-constant
+(i.e. the exact kernel of the element gradient operator is the 1D constant-potential gauge line
+$\mathrm{span}\{(1,1,1)\}$, proved via the 2×2 Cramer determinant `b0*c1 - b1*c0 = twiceArea`). -/
+theorem femm_element_energy_pos_iff_nonconstant
+    (tri : FemmTriangle2D) (a0 a1 a2 : Int)
+    (hNonDeg : tri.twiceArea ≠ 0) (hNu : 0 < tri.nuScaled) :
+    0 < evalElementMagneticEnergyScaled tri a0 a1 a2 ↔ ¬ (a0 = a1 ∧ a1 = a2) := by
+  have hCramer0 :
+      tri.twiceArea * (a0 - a2) =
+        tri.c1 * gradAxScaled tri a0 a1 a2 - tri.b1 * gradAyScaled tri a0 a1 a2 := by
+    unfold FemmTriangle2D.twiceArea gradAxScaled gradAyScaled
+      FemmTriangle2D.b0 FemmTriangle2D.b1 FemmTriangle2D.b2
+      FemmTriangle2D.c0 FemmTriangle2D.c1 FemmTriangle2D.c2
+    grind
+  have hCramer1 :
+      tri.twiceArea * (a1 - a2) =
+        tri.b0 * gradAyScaled tri a0 a1 a2 - tri.c0 * gradAxScaled tri a0 a1 a2 := by
+    unfold FemmTriangle2D.twiceArea gradAxScaled gradAyScaled
+      FemmTriangle2D.b0 FemmTriangle2D.b1 FemmTriangle2D.b2
+      FemmTriangle2D.c0 FemmTriangle2D.c1 FemmTriangle2D.c2
+    grind
+  constructor
+  · intro hPos ⟨h01, h12⟩
+    subst h01 h12
+    have hZero := femm_gradient_sum_zero tri
+    have hGx : gradAxScaled tri a0 a0 a0 = 0 := by
+      unfold gradAxScaled; grind
+    have hGy : gradAyScaled tri a0 a0 a0 = 0 := by
+      unfold gradAyScaled; grind
+    unfold evalElementMagneticEnergyScaled fluxDensitySqScaled at hPos
+    rw [hGx, hGy] at hPos
+    omega
+  · intro hNonConst
+    have hNotBothZero : ¬ (gradAxScaled tri a0 a1 a2 = 0 ∧ gradAyScaled tri a0 a1 a2 = 0) := by
+      rintro ⟨hGx, hGy⟩
+      rw [hGx, hGy] at hCramer0 hCramer1
+      have hMul0 : tri.twiceArea * (a0 - a2) = 0 := by omega
+      have hMul1 : tri.twiceArea * (a1 - a2) = 0 := by omega
+      have hA0 : a0 - a2 = 0 := (Int.mul_eq_zero.mp hMul0).resolve_left hNonDeg
+      have hA1 : a1 - a2 = 0 := (Int.mul_eq_zero.mp hMul1).resolve_left hNonDeg
+      exact hNonConst ⟨by omega, by omega⟩
+    have hSqPos : 0 < fluxDensitySqScaled tri a0 a1 a2 := by
+      unfold fluxDensitySqScaled
+      have hX := int_sq_nonneg (gradAxScaled tri a0 a1 a2)
+      have hY := int_sq_nonneg (gradAyScaled tri a0 a1 a2)
+      by_cases hGx : gradAxScaled tri a0 a1 a2 = 0
+      · have hGy : gradAyScaled tri a0 a1 a2 ≠ 0 := fun h => hNotBothZero ⟨hGx, h⟩
+        have hYPos : 0 < gradAyScaled tri a0 a1 a2 * gradAyScaled tri a0 a1 a2 := by
+          rcases Int.lt_or_gt_of_ne hGy with hLt | hGt
+          · have : 0 < (-gradAyScaled tri a0 a1 a2) * (-gradAyScaled tri a0 a1 a2) :=
+              Int.mul_pos (by omega) (by omega)
+            rw [Int.neg_mul_neg] at this; exact this
+          · exact Int.mul_pos hGt hGt
+        omega
+      · have hXPos : 0 < gradAxScaled tri a0 a1 a2 * gradAxScaled tri a0 a1 a2 := by
+          rcases Int.lt_or_gt_of_ne hGx with hLt | hGt
+          · have : 0 < (-gradAxScaled tri a0 a1 a2) * (-gradAxScaled tri a0 a1 a2) :=
+              Int.mul_pos (by omega) (by omega)
+            rw [Int.neg_mul_neg] at this; exact this
+          · exact Int.mul_pos hGt hGt
+        omega
+    unfold evalElementMagneticEnergyScaled
+    exact Int.mul_pos hNu hSqPos
+
+private theorem femm_element_energy_pos_iff_nonconstant_inhabited :
+    ∃ (tri : FemmTriangle2D) (a0 a1 a2 : Int),
+      0 < tri.twiceArea.natAbs ∧ 0 < tri.nuScaled ∧
+      0 < evalElementMagneticEnergyScaled tri a0 a1 a2 :=
+  ⟨statorToothRightTriangle2000x1500, 10, -4, 6, by decide, by decide, by decide⟩
 
 /-- Area-normalized fixed-point mesh energy sum across `mesh`. -/
 def evalMeshMagneticEnergyScaled (mesh : List FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
@@ -401,6 +475,71 @@ structure FemmMesh2D where
 = \frac{\nu_e ((b \cdot A)^2 + (c \cdot A)^2)}{4 |2\Delta_e|}$ with true $1 / |\Delta_e|$ area scaling! -/
 def evalElementMagneticEnergyQ (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Rat :=
   (evalElementMagneticEnergyScaled tri a0 a1 a2 : Rat) / (4 * (tri.absTwiceArea : Rat))
+
+private theorem int_ediv_rat_le_div (n d : Int) (hd : 0 < d) :
+    ((n / d : Int) : Rat) ≤ (n : Rat) / (d : Rat) := by
+  have hdRatPos : (0 : Rat) < (d : Rat) := by exact_mod_cast hd
+  have hMulLe : (n / d : Int) * d ≤ n := Int.ediv_mul_le n (by omega)
+  have hMulLeRat : ((n / d : Int) : Rat) * (d : Rat) ≤ (n : Rat) := by
+    exact_mod_cast hMulLe
+  have hInvPos : (0 : Rat) < (d : Rat)⁻¹ := Rat.inv_pos.mpr hdRatPos
+  have hScaled := Rat.mul_le_mul_of_nonneg_right hMulLeRat (Rat.le_of_lt hInvPos)
+  have hdNe : (d : Rat) ≠ 0 := fun h => Rat.lt_irrefl (h ▸ hdRatPos)
+  rw [Rat.mul_assoc, Rat.mul_inv_cancel _ hdNe, Rat.mul_one, ← Rat.div_def] at hScaled
+  exact hScaled
+
+private theorem int_div_rat_lt_ediv_add_one (n d : Int) (hd : 0 < d) :
+    (n : Rat) / (d : Rat) < ((n / d : Int) : Rat) + 1 := by
+  have hdRatPos : (0 : Rat) < (d : Rat) := by exact_mod_cast hd
+  have hLt : n < ((n / d : Int) + 1) * d := by
+    have hMod := Int.mul_ediv_add_emod n d
+    have hModLt : n % d < d := Int.emod_lt_of_pos n hd
+    have hDist : ((n / d : Int) + 1) * d = d * (n / d) + d := by
+      rw [Int.add_mul, Int.one_mul, Int.mul_comm]
+    omega
+  have hLtRat : (n : Rat) < (((n / d : Int) : Rat) + 1) * (d : Rat) := by
+    exact_mod_cast hLt
+  have hInvPos : (0 : Rat) < (d : Rat)⁻¹ := Rat.inv_pos.mpr hdRatPos
+  have hScaled := Rat.mul_lt_mul_of_pos_right hLtRat hInvPos
+  have hdNe : (d : Rat) ≠ 0 := fun h => Rat.lt_irrefl (h ▸ hdRatPos)
+  rw [Rat.mul_assoc, Rat.mul_inv_cancel _ hdNe, Rat.mul_one, ← Rat.div_def] at hScaled
+  exact hScaled
+
+/-- **Fixed-Point Area-Scaled Energy Quantization Accuracy (`evalElementMagneticEnergyAreaScaled_floor_spec`)**:
+For EVERY non-degenerate triangle (`tri.twiceArea ≠ 0`), EVERY scale factor `scale : Int`, and EVERY
+nodal potentials `(a0, a1, a2)`, the fixed-point integer `evalElementMagneticEnergyAreaScaled scale tri a0 a1 a2`
+is the exact Euclidean floor of `(scale : Rat) * evalElementMagneticEnergyQ tri a0 a1 a2` (error strictly in `[0, 1)`). -/
+theorem evalElementMagneticEnergyAreaScaled_floor_spec
+    (scale : Int) (tri : FemmTriangle2D) (a0 a1 a2 : Int)
+    (hNonDeg : tri.twiceArea ≠ 0) :
+    let q : Rat := (scale : Rat) * evalElementMagneticEnergyQ tri a0 a1 a2
+    ((evalElementMagneticEnergyAreaScaled scale tri a0 a1 a2 : Int) : Rat) ≤ q ∧
+    q < ((evalElementMagneticEnergyAreaScaled scale tri a0 a1 a2 : Int) : Rat) + 1 := by
+  dsimp only [evalElementMagneticEnergyAreaScaled, evalElementMagneticEnergyQ,
+    FemmTriangle2D.areaDenom, FemmTriangle2D.absTwiceArea]
+  have hNatPos : 0 < tri.twiceArea.natAbs := Int.natAbs_pos.mpr hNonDeg
+  have hGe1 : (1 : Int) ≤ Int.ofNat tri.twiceArea.natAbs := Int.ofNat_le.mpr hNatPos
+  have hMaxEq : max (1 : Int) (Int.ofNat tri.twiceArea.natAbs) = Int.ofNat tri.twiceArea.natAbs := by
+    omega
+  rw [hMaxEq]
+  have hdPos : (0 : Int) < 4 * Int.ofNat tri.twiceArea.natAbs := by omega
+  have hQEq :
+      (scale : Rat) * ((evalElementMagneticEnergyScaled tri a0 a1 a2 : Rat) /
+        (4 * (Int.ofNat tri.twiceArea.natAbs : Rat))) =
+      (((scale * evalElementMagneticEnergyScaled tri a0 a1 a2 : Int) : Rat) /
+        ((4 * Int.ofNat tri.twiceArea.natAbs : Int) : Rat)) := by
+    rw [Rat.div_def, Rat.div_def, ← Rat.mul_assoc]
+    simp [Rat.intCast_mul]
+  rw [hQEq]
+  exact ⟨int_ediv_rat_le_div _ _ hdPos, int_div_rat_lt_ediv_add_one _ _ hdPos⟩
+
+private theorem evalElementMagneticEnergyAreaScaled_floor_spec_inhabited :
+    ∃ (scale : Int) (tri : FemmTriangle2D) (a0 a1 a2 : Int),
+      0 < tri.twiceArea.natAbs ∧
+      ((evalElementMagneticEnergyAreaScaled scale tri a0 a1 a2 : Int) : Rat) ≤
+        (scale : Rat) * evalElementMagneticEnergyQ tri a0 a1 a2 :=
+  ⟨1000000, statorToothRightTriangle2000x1500, 10, -4, 6, by decide,
+    (evalElementMagneticEnergyAreaScaled_floor_spec 1000000 statorToothRightTriangle2000x1500 10 (-4) 6 (by decide)).1⟩
 
 /-- Exact rational (`Rat`) Courant $P_1$ Galerkin nodal residual of element `tri` at vertices `(v0, v1, v2)`:
 $$r_{e,i} = \frac{\nu_e}{4|\Delta_e|}(b_i g_x + c_i g_y) - \frac{J_z |\Delta_e|}{3}
@@ -843,6 +982,31 @@ theorem stepBhPicardReluctivity_monotone
     have hDiv := Int.ediv_le_ediv (c := 1000) (by omega) hNumGe
     rw [Int.mul_ediv_cancel nuLinear (by decide)] at hDiv
     exact hDiv
+
+/-- **Damped Picard Affine-Relaxation Lipschitz Separation Bound (`stepBhPicardReluctivity_lipschitz_bound`)**:
+Holding the flux density `bSq` fixed, for ANY relaxation weight `omegaPermille : Int` and
+ANY two reluctivity iterates `nu1, nu2 : Int`, the separation after one damped Picard step satisfies the
+exact floor-rounded `(1 - ω)` Lipschitz bound:
+`1000 * (step(nu2) - step(nu1)) ≤ (1000 - omegaPermille) * (nu2 - nu1) + 999`. -/
+theorem stepBhPicardReluctivity_lipschitz_bound
+    (nuLinear kSat omegaPermille nu1 nu2 bSq : Int) :
+    1000 * (stepBhPicardReluctivity nuLinear kSat omegaPermille nu2 bSq -
+            stepBhPicardReluctivity nuLinear kSat omegaPermille nu1 bSq) ≤
+      (1000 - omegaPermille) * (nu2 - nu1) + 999 := by
+  unfold stepBhPicardReluctivity
+  let a1 : Int := (1000 - omegaPermille) * nu1 + omegaPermille * evalNonlinearReluctivity nuLinear kSat bSq
+  let a2 : Int := (1000 - omegaPermille) * nu2 + omegaPermille * evalNonlinearReluctivity nuLinear kSat bSq
+  have hMod1 : 1000 * (a1 / 1000) + a1 % 1000 = a1 := Int.mul_ediv_add_emod a1 1000
+  have hMod2 : 1000 * (a2 / 1000) + a2 % 1000 = a2 := Int.mul_ediv_add_emod a2 1000
+  have hRem1Lo : 0 ≤ a1 % 1000 := Int.emod_nonneg a1 (by decide)
+  have hRem1Hi : a1 % 1000 < 1000 := Int.emod_lt_of_pos a1 (by decide)
+  have hRem2Lo : 0 ≤ a2 % 1000 := Int.emod_nonneg a2 (by decide)
+  have hRem2Hi : a2 % 1000 < 1000 := Int.emod_lt_of_pos a2 (by decide)
+  have hDiff : a2 - a1 = (1000 - omegaPermille) * (nu2 - nu1) := by
+    dsimp only [a1, a2]
+    grind
+  change 1000 * (a2 / 1000 - a1 / 1000) ≤ (1000 - omegaPermille) * (nu2 - nu1) + 999
+  omega
 
 end Obend.Hardware.Magnetics
 end

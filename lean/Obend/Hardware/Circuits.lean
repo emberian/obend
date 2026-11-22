@@ -229,6 +229,24 @@ theorem ina_common_mode_cancelled_at_matched_bridge
   have hZero : p.gainCmRaw - p.trimCmCancel = 0 := by omega
   rw [hZero, Int.zero_mul, Int.add_zero]
 
+/-- Theorem (`ina_common_mode_invariance_iff`):
+A 3-Op-Amp Instrumentation Amplifier rejects arbitrary $60\,\text{Hz}$ common-mode hum
+(`evalInaOutputUv p vDiffUv vCm1 deltaTC = evalInaOutputUv p vDiffUv vCm2 deltaTC` for all
+differential signals, common-mode excursions, and temperatures) **if and only if** its laser-trimmed
+subtractor bridge satisfies `p.gainCmRaw = p.trimCmCancel`. -/
+theorem ina_common_mode_invariance_iff (p : InaParams) :
+    p.gainCmRaw = p.trimCmCancel ↔
+      ∀ vDiffUv vCm1 vCm2 deltaTC : Int,
+        evalInaOutputUv p vDiffUv vCm1 deltaTC = evalInaOutputUv p vDiffUv vCm2 deltaTC := by
+  constructor
+  · intro hTrim vDiffUv vCm1 vCm2 deltaTC
+    rw [ina_common_mode_cancelled_at_matched_bridge p vDiffUv vCm1 deltaTC hTrim,
+        ina_common_mode_cancelled_at_matched_bridge p vDiffUv vCm2 deltaTC hTrim]
+  · intro hInv
+    have h01 := hInv 0 1 0 0
+    dsimp only [evalInaOutputUv] at h01
+    omega
+
 /-- Negative-feedback loop factor $1000 + A_{\text{OL}} \cdot \beta_{\text{permille}}$ of an operational
 amplifier with open-loop gain `aOl` and feedback attenuation network $\beta \in [0, 1000]\,\text{permille}$.
 Higher loop factor directly suppresses closed-loop gain error $\frac{1}{1 + A_{\text{OL}} \beta}$,
@@ -295,9 +313,9 @@ without saturating its inductor core:
   decide (evalBuckRippleMa b ≤ 2 * b.iLoadMa) &&
   decide (evalBuckPeakInductorMa b ≤ b.iSatMaxMa)
 
-/-- Canonical $12\,\text{V} \to 5.0\,\text{V}$ ($2\,\text{A}$ load, $L = 10\,\mu\text{H}$, $f_{\text{sw}} = 500\,\text{kHz}$,
+/-- $12\,\text{V} \to 5.0\,\text{V}$ ($2\,\text{A}$ load, $L = 10\,\mu\text{H}$, $f_{\text{sw}} = 500\,\text{kHz}$,
 $I_{\text{sat}} = 3500\,\text{mA}$) synchronous Buck supply for a TTL/CMOS board. -/
-def golden5vBuckSpec : BuckSpec where
+def buck12vTo5v2aSpec : BuckSpec where
   stageName    := "buck_12v_to_5v_2a"
   vinMv        := 12000
   dutyPermille := 417
@@ -309,7 +327,7 @@ def golden5vBuckSpec : BuckSpec where
 /-- Overloaded Buck stage (`iLoadMa = 3400 mA`, `I_peak = 3691 mA > I_sat = 3500 mA`): drives the
 ferrite inductor into magnetic core saturation! -/
 def overloadedSaturatingBuckSpec : BuckSpec :=
-  { golden5vBuckSpec with iLoadMa := 3400 }
+  { buck12vTo5v2aSpec with iLoadMa := 3400 }
 
 /-- Theorem (`buck_volt_second_balance_bounded`):
 For any Buck converter with valid duty cycle `b.dutyPermille ≤ 1000`, the steady-state output voltage
@@ -324,8 +342,10 @@ theorem buck_volt_second_balance_bounded (b : BuckSpec) (hDuty : b.dutyPermille 
   omega
 
 /-- Theorem (`buck_ccm_safe_prevents_core_saturation`):
-Any Buck converter accepted by `checkBuckCcmSafe` satisfies `evalBuckPeakInductorMa b ≤ b.iSatMaxMa`
-and remains in Continuous Conduction Mode (`evalBuckRippleMa b ≤ 2 * b.iLoadMa`). -/
+Any Buck converter accepted by `checkBuckCcmSafe` satisfies:
+1. Step-down volt-second balance (`evalBuckSteadyVoutMv b ≤ b.vinMv`),
+2. Continuous Conduction Mode (`evalBuckRippleMa b ≤ 2 * b.iLoadMa`, so $I_{L,\text{valley}} \ge 0$),
+3. Ferrite core saturation safety (`evalBuckPeakInductorMa b ≤ b.iSatMaxMa`). -/
 theorem buck_ccm_safe_prevents_core_saturation
     (b : BuckSpec) (hOk : checkBuckCcmSafe b = true) :
     evalBuckRippleMa b ≤ 2 * b.iLoadMa ∧
@@ -335,14 +355,71 @@ theorem buck_ccm_safe_prevents_core_saturation
   rw [decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq] at hOk
   exact ⟨hOk.1.2, hOk.2⟩
 
-/-- Theorem (`buck_overcurrent_saturation_refused`):
-`golden5vBuckSpec` regulates to $5004\,\text{mV}$ with ripple $583\,\text{mA}$ and passes `checkBuckCcmSafe`,
-whereas `overloadedSaturatingBuckSpec` exceeds $I_{\text{sat}} = 3500\,\text{mA}$ and is refused! -/
-theorem buck_overcurrent_saturation_refused :
-    evalBuckSteadyVoutMv golden5vBuckSpec = 5004 ∧
-    checkBuckCcmSafe golden5vBuckSpec = true ∧
-    checkBuckCcmSafe overloadedSaturatingBuckSpec = false :=
-  ⟨rfl, rfl, rfl⟩
+/-- Exact rational peak-to-peak inductor ripple
+$\Delta I_L^{\mathbb{Q}} = \frac{V_{\text{out}} (1000 - D)}{L_{\mu\text{H}} f_{\text{sw,kHz}}}$ ($\text{mA}$). -/
+def evalBuckRippleQ (b : BuckSpec) : Rat :=
+  ((evalBuckSteadyVoutMv b * (1000 - b.dutyPermille) : Nat) : Rat) /
+    ((b.inductanceUh * b.fswKhz : Nat) : Rat)
+
+/-- **Fixed-Point Buck Ripple Quantization Accuracy (`buck_ccm_safe_ripple_floor_and_balance`)**:
+For EVERY synchronous Buck stage accepted by `checkBuckCcmSafe`:
+1. Volt-second balance bounds the steady-state output voltage (`evalBuckSteadyVoutMv b ≤ b.vinMv`),
+2. The integer ripple `evalBuckRippleMa b` is the exact floor of `evalBuckRippleQ b` (error in `[0, 1)` mA),
+3. Continuous Conduction Mode holds (`evalBuckRippleMa b ≤ 2 * b.iLoadMa`) and peak current stays
+   within core saturation (`evalBuckPeakInductorMa b ≤ b.iSatMaxMa`). -/
+theorem buck_ccm_safe_ripple_floor_and_balance
+    (b : BuckSpec) (hOk : checkBuckCcmSafe b = true) :
+    evalBuckSteadyVoutMv b ≤ b.vinMv ∧
+    ((evalBuckRippleMa b : Nat) : Rat) ≤ evalBuckRippleQ b ∧
+    evalBuckRippleQ b < ((evalBuckRippleMa b : Nat) : Rat) + 1 ∧
+    evalBuckRippleMa b ≤ 2 * b.iLoadMa ∧
+    evalBuckPeakInductorMa b ≤ b.iSatMaxMa := by
+  dsimp only [checkBuckCcmSafe] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
+  rw [decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq] at hOk
+  have hDuty : b.dutyPermille ≤ 1000 := hOk.1.1.1.1
+  have hLPos : 0 < b.inductanceUh := hOk.1.1.1.2
+  have hFPos : 0 < b.fswKhz := hOk.1.1.2
+  have hDenPos : 0 < b.inductanceUh * b.fswKhz := Nat.mul_pos hLPos hFPos
+  have hDenRatPos : (0 : Rat) < ((b.inductanceUh * b.fswKhz : Nat) : Rat) := by exact_mod_cast hDenPos
+  have hDenNe : ((b.inductanceUh * b.fswKhz : Nat) : Rat) ≠ 0 := fun h => Rat.lt_irrefl (h ▸ hDenRatPos)
+  have hInvPos : (0 : Rat) < (((b.inductanceUh * b.fswKhz : Nat) : Rat))⁻¹ := Rat.inv_pos.mpr hDenRatPos
+  have hMulLe : evalBuckRippleMa b * (b.inductanceUh * b.fswKhz) ≤
+      evalBuckSteadyVoutMv b * (1000 - b.dutyPermille) := by
+    unfold evalBuckRippleMa
+    let num := evalBuckSteadyVoutMv b * (1000 - b.dutyPermille)
+    let den := b.inductanceUh * b.fswKhz
+    have hDivMod : den * (num / den) + num % den = num := Nat.div_add_mod num den
+    rw [Nat.mul_comm den] at hDivMod
+    change (num / den) * den ≤ num
+    omega
+  have hMulLt : evalBuckSteadyVoutMv b * (1000 - b.dutyPermille) <
+      (evalBuckRippleMa b + 1) * (b.inductanceUh * b.fswKhz) := by
+    unfold evalBuckRippleMa
+    let num := evalBuckSteadyVoutMv b * (1000 - b.dutyPermille)
+    let den := b.inductanceUh * b.fswKhz
+    have hDivMod : den * (num / den) + num % den = num := Nat.div_add_mod num den
+    have hModLt : num % den < den := Nat.mod_lt num hDenPos
+    rw [Nat.mul_comm den] at hDivMod
+    change num < (num / den + 1) * den
+    rw [Nat.add_mul, Nat.one_mul]
+    omega
+  have hLeRat : ((evalBuckRippleMa b : Nat) : Rat) ≤ evalBuckRippleQ b := by
+    unfold evalBuckRippleQ
+    have hCast : ((evalBuckRippleMa b : Nat) : Rat) * ((b.inductanceUh * b.fswKhz : Nat) : Rat) ≤
+        ((evalBuckSteadyVoutMv b * (1000 - b.dutyPermille) : Nat) : Rat) := by exact_mod_cast hMulLe
+    have hSc := Rat.mul_le_mul_of_nonneg_right hCast (Rat.le_of_lt hInvPos)
+    rw [Rat.mul_assoc, Rat.mul_inv_cancel _ hDenNe, Rat.mul_one, ← Rat.div_def] at hSc
+    exact hSc
+  have hLtRat : evalBuckRippleQ b < ((evalBuckRippleMa b : Nat) : Rat) + 1 := by
+    unfold evalBuckRippleQ
+    have hCast : ((evalBuckSteadyVoutMv b * (1000 - b.dutyPermille) : Nat) : Rat) <
+        (((evalBuckRippleMa b : Nat) : Rat) + 1) * ((b.inductanceUh * b.fswKhz : Nat) : Rat) := by
+      exact_mod_cast hMulLt
+    have hSc := Rat.mul_lt_mul_of_pos_right hCast hInvPos
+    rw [Rat.mul_assoc, Rat.mul_inv_cancel _ hDenNe, Rat.mul_one, ← Rat.div_def] at hSc
+    exact hSc
+  exact ⟨buck_volt_second_balance_bounded b hDuty, hLeRat, hLtRat, hOk.1.2, hOk.2⟩
 
 /-! ## 4. Unified Datasheet-Fit & Mixed-Signal Circuit Calibration Certificate (`DatasheetFitCert`) -/
 
@@ -375,8 +452,8 @@ structure DatasheetFitCert where
   (cert.inaSpec.gainCmRaw == cert.inaSpec.trimCmCancel) &&
   checkBuckCcmSafe cert.buckStage
 
-/-- Golden calibrated `SN74LS00` $\to$ `CD74HCT00` + Pt100 INA + 5V Buck certificate. -/
-@[expose] def goldenDatasheetFitCert : DatasheetFitCert where
+/-- Calibrated `SN74LS00` $\to$ `CD74HCT00` + Pt100 INA + 5V Buck certificate. -/
+@[expose] def sn74ls00ToHct00FitCert : DatasheetFitCert where
   suiteName       := "obend_74ls_hct_ina_calibrated"
   driverSpec      := sn74ls00Datasheet.logic
   receiverSpec    := cd74hct00Datasheet.logic
@@ -388,28 +465,98 @@ structure DatasheetFitCert where
   datasheetPoints := sn74ls00Datasheet.transferCurve
   maxCalErrMv     := 25
   inaSpec         := precisionMatchedIna
-  buckStage       := golden5vBuckSpec
+  buckStage       := buck12vTo5v2aSpec
 
 /-- Bad certificate attempting to drive `CD74HC00` directly from `SN74LS00` without a pull-up
 ($\text{NM}_H = -800\,\text{mV}$). -/
 @[expose] def badDirect74HcFitCert : DatasheetFitCert :=
-  { goldenDatasheetFitCert with
+  { sn74ls00ToHct00FitCert with
     receiverSpec  := cd74hc00Datasheet.logic
     pullupBoostMv := 0 }
 
 /-- Bad certificate with uncalibrated model drift ($\varepsilon_\infty = 620\,\text{mV} > 25\,\text{mV}$). -/
 def badUncalibratedDriftFitCert : DatasheetFitCert :=
-  { goldenDatasheetFitCert with
+  { sn74ls00ToHct00FitCert with
     modelPreds := uncalibratedDrifted74ls00Preds }
 
-/-- Theorem (`datasheet_fit_signoff_contrast`):
-`checkDatasheetFitSignoff` accepts `goldenDatasheetFitCert` and refuses both `badDirect74HcFitCert`
-(direct `74LS` $\to$ `74HC` negative noise margin) and `badUncalibratedDriftFitCert`! -/
-theorem datasheet_fit_signoff_contrast :
-    checkDatasheetFitSignoff goldenDatasheetFitCert = true ∧
-    checkDatasheetFitSignoff badDirect74HcFitCert = false ∧
-    checkDatasheetFitSignoff badUncalibratedDriftFitCert = false :=
-  ⟨rfl, rfl, rfl⟩
+/-- Pointwise empirical calibration bound derived inductively from `maxCurveErrorLInf`. -/
+theorem maxCurveErrorLInf_pointwise_bound
+    (preds : List Int) (pts : List DatasheetCurvePoint) (tol : Int)
+    (hLen : preds.length = pts.length)
+    (hMax : maxCurveErrorLInf preds pts ≤ tol) :
+    ∀ (i : Nat) (hI : i < pts.length),
+      pointAbsError (preds.getD i 0) pts[i].measuredY ≤ tol := by
+  induction preds generalizing pts with
+  | nil =>
+    cases pts with
+    | nil => intro i hI; cases hI
+    | cons _ _ => simp at hLen
+  | cons p ps ih =>
+    cases pts with
+    | nil => simp at hLen
+    | cons pt rest =>
+      dsimp only [maxCurveErrorLInf] at hMax
+      have hCurLe : pointAbsError p pt.measuredY ≤ tol := by
+        split at hMax <;> omega
+      have hRestLe : maxCurveErrorLInf ps rest ≤ tol := by
+        split at hMax <;> omega
+      intro i hI
+      cases i with
+      | zero => exact hCurLe
+      | succ i' =>
+        simp only [List.length_cons] at hLen hI
+        exact ih rest (by omega) hRestLe i' (by omega)
+
+/-- **End-to-End Physical Signoff Theorem (`datasheetFitSignoff_domain_sound`)**:
+For EVERY `cert : DatasheetFitCert` accepted by `checkDatasheetFitSignoff cert = true` with
+non-negative noise budget `0 ≤ cert.minMarginMv`:
+1. **Worst-Case DC Noise-Band Immunity**: every driver HIGH output `vH ≥ V_OH + boost` disturbed by
+   bounded additive noise `|n| ≤ minMarginMv` still clears receiver `V_IH`, and every driver LOW
+   output `vL ≤ V_OL` disturbed by `|n| ≤ minMarginMv` stays below receiver `V_IL` (with strict
+   separation `V_OL < V_IH`),
+2. **Pointwise Empirical Transfer-Curve Accuracy**: for EVERY captured datasheet index
+   `i < cert.datasheetPoints.length`, the model residual `|pred_i - meas_i| ≤ cert.maxCalErrMv`,
+3. **Common-Mode Hum Immunity**: for EVERY differential signal, common-mode pair `(vCm1, vCm2)`,
+   and temperature `deltaTC`, `evalInaOutputUv cert.inaSpec` is strictly invariant to common-mode hum,
+4. **Buck Step-Down Balance, CCM, & Core Safety**: `V_out ≤ V_in`, `ΔI_L ≤ 2 I_load`, and
+   `I_peak ≤ I_sat`. -/
+theorem datasheetFitSignoff_domain_sound
+    (cert : DatasheetFitCert)
+    (hOk : checkDatasheetFitSignoff cert = true) :
+    (∀ vH vL n : Int,
+      cert.driverSpec.vohMinMv + cert.pullupBoostMv ≤ vH →
+      vL ≤ cert.driverSpec.volMaxMv →
+      -cert.minMarginMv ≤ n → n ≤ cert.minMarginMv →
+      cert.receiverSpec.vihMinMv ≤ vH + n ∧
+      vL + n ≤ cert.receiverSpec.vilMaxMv ∧
+      cert.driverSpec.volMaxMv < cert.receiverSpec.vihMinMv) ∧
+    (∀ (i : Nat) (hI : i < cert.datasheetPoints.length),
+      pointAbsError (cert.modelPreds.getD i 0) cert.datasheetPoints[i].measuredY ≤ cert.maxCalErrMv) ∧
+    (∀ vDiffUv vCm1 vCm2 deltaTC : Int,
+      evalInaOutputUv cert.inaSpec vDiffUv vCm1 deltaTC =
+        evalInaOutputUv cert.inaSpec vDiffUv vCm2 deltaTC) ∧
+    (evalBuckSteadyVoutMv cert.buckStage ≤ cert.buckStage.vinMv ∧
+      evalBuckRippleMa cert.buckStage ≤ 2 * cert.buckStage.iLoadMa ∧
+      evalBuckPeakInductorMa cert.buckStage ≤ cert.buckStage.iSatMaxMa) := by
+  dsimp only [checkDatasheetFitSignoff] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
+  have hLogic := checkLogicInterface_guarantees_valid_thresholds
+    cert.driverSpec cert.receiverSpec cert.pullupBoostMv cert.minMarginMv hOk.1.1.1.1
+  have hCal := hOk.1.1.2
+  dsimp only [checkModelCalibration] at hCal
+  rw [Bool.and_eq_true, Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq] at hCal
+  have hTrim : cert.inaSpec.gainCmRaw = cert.inaSpec.trimCmCancel := beq_iff_eq.mp hOk.1.2
+  have hBuck := buck_ccm_safe_ripple_floor_and_balance cert.buckStage hOk.2
+  refine ⟨?_, ?_, ?_, ⟨hBuck.1, hBuck.2.2.2.1, hBuck.2.2.2.2⟩⟩
+  · intro vH vL n hVH hVL hNLo hNHi
+    exact ⟨by omega, by omega, hLogic.2.2⟩
+  · exact maxCurveErrorLInf_pointwise_bound cert.modelPreds cert.datasheetPoints cert.maxCalErrMv
+      hCal.1.1 hCal.2
+  · exact (ina_common_mode_invariance_iff cert.inaSpec).mp hTrim
+
+private theorem datasheetFitSignoff_domain_sound_inhabited :
+    ∃ cert : DatasheetFitCert, checkDatasheetFitSignoff cert = true ∧ 0 ≤ cert.minMarginMv :=
+  ⟨sn74ls00ToHct00FitCert, by decide, by decide⟩
 
 end Obend.Hardware.Circuits
 end

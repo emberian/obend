@@ -348,7 +348,7 @@ example (op1 op2 : OpticOp) (x y dOut : Int) :
   exact ⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1⟩
 
 example (x0 x1 x2 x3 dOut : Int) :
-    let gAdj := compileGraphAdjoint goldenDiamondHypergraph
+    let gAdj := compileGraphAdjoint diamondAddMulConstHypergraph
     let env : Nat → Int := fun w =>
       match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0
     let expected :=
@@ -365,7 +365,7 @@ example (x0 x1 x2 x3 dOut : Int) :
 -- `#tooth` probe on `compileGraphAdjoint`: mutating `compileGraphAdjoint` to return the un-differentiated
 -- forward graph fails to produce the `[z, dx, dy]` gradient outputs.
 theorem test_compileGraphAdjoint_diamond_eval :
-    evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph)
+    evalHypergraphComb (compileGraphAdjoint diamondAddMulConstHypergraph)
       (fun w => match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0) =
       [87, 11, 11, 7, 7] := by
   decide +kernel
@@ -374,20 +374,20 @@ theorem test_compileGraphAdjoint_diamond_eval :
   Obend.Hardware.OpenHypergraph.compileGraphAdjoint := fun g => g
 
 -- Pipelined Wavefront RTL Compilation (`compileHypergraphToRtlPipelined`, `compileHypergraphToRtlPipelined_sound`).
-#guard (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph).regs.length == 27
+#guard (compileHypergraphToRtlPipelined "diamond_pipe" diamondAddMulConstHypergraph).regs.length == 27
 
 -- The whole-module theorem, instantiated: its two side conditions are decided on the diamond.
 example (ins initRegs : Nat → BitVec 64) :
-    (evalModuleOutputs (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph) ins
-        (runModuleTrace (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph) initRegs
-          (List.replicate (layerHypergraph goldenDiamondHypergraph).length (false, ins)))).map Prod.snd =
-      goldenDiamondHypergraph.boundaryOut.table.map
-        (evalLayeredStagesSyncBv ins (layerHypergraph goldenDiamondHypergraph)) :=
-  compileHypergraphToRtlPipelined_sound "diamond_pipe" goldenDiamondHypergraph (by decide) (by decide) ins initRegs
+    (evalModuleOutputs (compileHypergraphToRtlPipelined "diamond_pipe" diamondAddMulConstHypergraph) ins
+        (runModuleTrace (compileHypergraphToRtlPipelined "diamond_pipe" diamondAddMulConstHypergraph) initRegs
+          (List.replicate (layerHypergraph diamondAddMulConstHypergraph).length (false, ins)))).map Prod.snd =
+      diamondAddMulConstHypergraph.boundaryOut.table.map
+        (evalLayeredStagesSyncBv ins (layerHypergraph diamondAddMulConstHypergraph)) :=
+  compileHypergraphToRtlPipelined_sound "diamond_pipe" diamondAddMulConstHypergraph (by decide) (by decide) ins initRegs
 
 -- A known answer: inputs 3, 4, 5, 6 give (3 + 4) * (5 + 6) + 10 = 87 after one edge per stage.
 #guard
-  let m := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph
+  let m := compileHypergraphToRtlPipelined "diamond_pipe" diamondAddMulConstHypergraph
   let ins : Nat → BitVec 64 := fun u => match u with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | _ => 0
   (evalModuleOutputs m ins (runModuleTrace m (fun _ => 0#64) (List.replicate 3 (false, ins)))).map Prod.snd
     == [87#64]
@@ -401,9 +401,9 @@ example
 
 
 -- `#tooth` probe on `compileHypergraphToRtlPipelined`: mutating `regs := []` breaks the 27-register
--- 3-stage pipeline check for `goldenDiamondHypergraph`.
+-- 3-stage pipeline check for `diamondAddMulConstHypergraph`.
 theorem test_pipelined_rtl_has_stage_regs :
-    (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph).regs.length = 27 := rfl
+    (compileHypergraphToRtlPipelined "diamond_pipe" diamondAddMulConstHypergraph).regs.length = 27 := rfl
 
 #tooth test_pipelined_rtl_has_stage_regs by mutation
   Obend.Hardware.OpenHypergraph.compileHypergraphToRtlPipelined :=
@@ -548,13 +548,13 @@ def customAnisotropicLyapunovWitness : SosLyapunovWitness where
 
 def customAnisotropicSosProblem : SosLyapunovProblem where
   lyapunov := customAnisotropicLyapunovSpec
-  cbf      := goldenCbfSpec2D
-  dae      := goldenCircleDaeSpec
+  cbf      := unitDiskCbfSpec2D
+  dae      := parabolicManifoldDaeSpec2D
 
 def customAnisotropicSosCert : SosLyapunovCert where
   lyapunovWitness := customAnisotropicLyapunovWitness
-  cbfWitness      := goldenCbfWitness2D
-  daeWitness      := goldenCircleDaeWitness
+  cbfWitness      := unitDiskCbfWitness2D
+  daeWitness      := parabolicManifoldDaeWitness2D
 
 example : customAnisotropicSosProblem.SemanticMeaning :=
   checkSosLyapunovProblem_sound 0 customAnisotropicSosProblem customAnisotropicSosCert (by decide +kernel)
@@ -566,8 +566,8 @@ example : customAnisotropicSosProblem.SemanticMeaning :=
     , coneTerms     := [(⟨[(1, Poly.one)]⟩, 0)]
     , idealTerms    := [(Poly.one, 0)] }
   (positivstellensatzCheck 0 { strictPos := [], nonneg := [], eqs := [] } validCert ==
-    .refused .feasibleAtOrigin []) &&
-  positivstellensatzRefutes .feasibleAtOrigin
+    .refused (.feasibleWitness []) []) &&
+  positivstellensatzRefutes (.feasibleWitness [])
 
 #guard
   let probJson := renderSosLyapunovProblemJson customAnisotropicSosProblem
@@ -595,15 +595,15 @@ example := @optimizeAdjointHypergraph_sound_universal
 example := @pruneDeadEdges_sound
 
 theorem test_universal_adjoint_eqSat_benchmarks (initEnv : Nat → Int) :
-    evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph) initEnv =
-      evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph) initEnv ∧
+    evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph) initEnv =
+      evalHypergraphComb (compileGraphAdjoint diamondAddMulConstHypergraph) initEnv ∧
     evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel coupledOscillatorStepHypergraph) initEnv =
       evalHypergraphComb (compileGraphAdjoint coupledOscillatorStepHypergraph) initEnv ∧
     evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel rnea2LinkCostHypergraph) initEnv =
       evalHypergraphComb (compileGraphAdjoint rnea2LinkCostHypergraph) initEnv ∧
     evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel statorCoupledLossHypergraph) initEnv =
       evalHypergraphComb (compileGraphAdjoint statorCoupledLossHypergraph) initEnv :=
-  ⟨ optimizeAdjointHypergraph_sound_universal defaultRtlCostModel goldenDiamondHypergraph initEnv (by decide)
+  ⟨ optimizeAdjointHypergraph_sound_universal defaultRtlCostModel diamondAddMulConstHypergraph initEnv (by decide)
   , optimizeAdjointHypergraph_sound_universal defaultRtlCostModel coupledOscillatorStepHypergraph initEnv (by decide)
   , optimizeAdjointHypergraph_sound_universal defaultRtlCostModel rnea2LinkCostHypergraph initEnv (by decide)
   , optimizeAdjointHypergraph_sound_universal defaultRtlCostModel statorCoupledLossHypergraph initEnv (by decide) ⟩

@@ -530,29 +530,29 @@ def verifyBinaryHwCert (c : BinaryHwCert) : Bool :=
     decide (matched.q == 0 ∧ matched.i == c.p0 * c.p0 + c.p1 * c.p1 ∧ matched.i ≥ 0)
   | .magnetics =>
     -- p0: a0, p1: a1, p2: a2, p3: nuLinear, p4: kSat, p5: bSq
-    let tri := Obend.Hardware.Magnetics.goldenStatorToothTriangle
+    let tri := Obend.Hardware.Magnetics.statorToothRightTriangle2000x1500
     let e := Obend.Hardware.Magnetics.evalElementMagneticEnergyAreaScaled 1000000 tri c.p0 c.p1 c.p2
     let nuNext := Obend.Hardware.Magnetics.stepBhPicardReluctivity c.p3 c.p4 500 c.p3 c.p5
     decide (0 ≤ e ∧ 0 < c.p3 ∧ c.p3 ≤ nuNext ∧ 0 < nuNext)
 
-/-! ### Golden Binary CBOR Certificate Instances & Kernel Proofs -/
+/-! ### Domain Binary CBOR Certificate Definitions -/
 
-def goldenBinaryPnrCert : BinaryHwCert :=
+def adder2nsPnrCert : BinaryHwCert :=
   { domain := .pnr, p0 := 0, p1 := 0, p2 := 0, p3 := 1, p4 := 5, p5 := 2000 }
 
-def goldenBinaryPhotonicsCert : BinaryHwCert :=
+def coupler3To4PhotonicsCert : BinaryHwCert :=
   { domain := .photonics, p0 := 3, p1 := 4, p2 := 10, p3 := -5, p4 := 2, p5 := 7 }
 
-def goldenBinaryPcbCert : BinaryHwCert :=
+def microstrip50OhmPcbCert : BinaryHwCert :=
   { domain := .pcb, p0 := 330, p1 := 152, p2 := 35, p3 := 3480, p4 := 50000, p5 := 50000 }
 
-def goldenBinaryDprCert : BinaryHwCert :=
+def slot2MulImm4DprCert : BinaryHwCert :=
   { domain := .dpr, p0 := 2, p1 := 0, p2 := 2, p3 := 4, p4 := 10, p5 := 40 }
 
-def goldenBinaryEdaSwapCert : BinaryHwCert :=
+def ldoSwap400mVEdaCert : BinaryHwCert :=
   { domain := .edaBomSwap, p0 := 2950, p1 := 180, p2 := 68000, p3 := 1280, p4 := 120, p5 := 400 }
 
-def goldenBinaryMagneticsCert : BinaryHwCert :=
+def statorToothMagneticsCert : BinaryHwCert :=
   { domain := .magnetics, p0 := 10, p1 := -4, p2 := 6, p3 := 800, p4 := 2, p5 := 100 }
 
 /-! ### Variable-Length Binary CBOR Tape / Mesh / Evolutionary Certificates (`BinaryTapeCert`)
@@ -677,22 +677,88 @@ def verifyBinaryTapeCert (c : BinaryTapeCert) : Bool :=
   | _ =>
     false
 
+/-- **Universal No-Bypass Theorem Across All 8 Fixed-Arity Domains (`nonTapeDomain_tape_cert_refused`)**:
+Every `BinaryTapeCert` whose domain is neither `.magnetics` nor `.multiphysics` is unconditionally
+refused (`verifyBinaryTapeCert c = false`), regardless of its `metric0`, `metric1`, or `words` payload. -/
+theorem nonTapeDomain_tape_cert_refused (c : BinaryTapeCert)
+    (hNotMag : c.domain ≠ .magnetics) (hNotMulti : c.domain ≠ .multiphysics) :
+    verifyBinaryTapeCert c = false := by
+  rcases c with ⟨dom, m0, m1, ws⟩
+  cases dom <;> simp [verifyBinaryTapeCert] at hNotMag hNotMulti ⊢
+
 /-- **No-Bypass Theorem for Fixed-Arity Domains (`pnr_tape_cert_bypass_refused`)**:
-Any `BinaryTapeCert` claiming domain `.pnr` (or `.retiming`, `.photonics`, `.pcb`, `.dpr`,
-`.edaBomSwap`, `.analog2d`, `.dspBeamformer`) is unconditionally refused (`verifyBinaryTapeCert c = false`),
-regardless of its `metric0`, `metric1`, or `words` payload! -/
+Any `BinaryTapeCert` claiming domain `.pnr`, `.retiming`, `.pcb`, or `.analog2d` is unconditionally
+refused (`verifyBinaryTapeCert c = false`), regardless of its `metric0`, `metric1`, or `words` payload. -/
 theorem pnr_tape_cert_bypass_refused (m0 m1 : UInt32) (ws : List UInt32) :
     verifyBinaryTapeCert { domain := .pnr, metric0 := m0, metric1 := m1, words := ws } = false ∧
     verifyBinaryTapeCert { domain := .retiming, metric0 := m0, metric1 := m1, words := ws } = false ∧
     verifyBinaryTapeCert { domain := .pcb, metric0 := m0, metric1 := m1, words := ws } = false ∧
-    verifyBinaryTapeCert { domain := .analog2d, metric0 := m0, metric1 := m1, words := ws } = false := by
-  simp [verifyBinaryTapeCert]
+    verifyBinaryTapeCert { domain := .analog2d, metric0 := m0, metric1 := m1, words := ws } = false :=
+  ⟨nonTapeDomain_tape_cert_refused _ (by intro h; cases h) (by intro h; cases h),
+   nonTapeDomain_tape_cert_refused _ (by intro h; cases h) (by intro h; cases h),
+   nonTapeDomain_tape_cert_refused _ (by intro h; cases h) (by intro h; cases h),
+   nonTapeDomain_tape_cert_refused _ (by intro h; cases h) (by intro h; cases h)⟩
 
-def goldenBinaryFemmTapeCert : BinaryTapeCert :=
+/-- **CBOR Wire Injectivity for Fixed-Arity `BinaryHwCert` (`encodeBinaryHwCert_injective`)**:
+For EVERY two well-formed fixed-arity certificates `c1, c2 : BinaryHwCert`, identical RFC 8949
+CBOR wire encodings imply identical certificates (`c1 = c2`). -/
+theorem encodeBinaryHwCert_injective (c1 c2 : BinaryHwCert)
+    (h1 : c1.WellFormed) (h2 : c2.WellFormed)
+    (hEq : encodeBinaryHwCert c1 = encodeBinaryHwCert c2) : c1 = c2 := by
+  have hd1 := decode_encode_binaryHwCert c1 h1
+  have hd2 := decode_encode_binaryHwCert c2 h2
+  rw [hEq] at hd1
+  rw [hd1] at hd2
+  exact Option.some.inj hd2
+
+/-- **CBOR Wire Injectivity for Variable-Length `BinaryTapeCert` (`encodeBinaryTapeCert_injective`)**:
+For EVERY two well-formed tape certificates `t1, t2 : BinaryTapeCert`, identical RFC 8949
+CBOR wire encodings imply identical certificates (`t1 = t2`). -/
+theorem encodeBinaryTapeCert_injective (t1 t2 : BinaryTapeCert)
+    (h1 : t1.WellFormed) (h2 : t2.WellFormed)
+    (hEq : encodeBinaryTapeCert t1 = encodeBinaryTapeCert t2) : t1 = t2 := by
+  have hd1 := decode_encode_binaryTapeCert t1 h1
+  have hd2 := decode_encode_binaryTapeCert t2 h2
+  rw [hEq] at hd1
+  rw [hd1] at hd2
+  exact Option.some.inj hd2
+
+def statorMesh6WordTapeCert : BinaryTapeCert :=
   { domain := .magnetics
   , metric0 := 15200
   , metric1 := 184000
   , words := [4200, 3800, 3100, 2200, 1100, 800] }
+
+/-- **Unconditional Cross-Format CBOR Non-Aliasing (`binaryHwCert_tapeCert_disjoint_wire`)**:
+Because fixed-arity frames carry CBOR Major Type 4 array header `0x87` at byte 3 while variable-length
+tape frames carry 32-bit array header `0x9A` at byte 3, the two decoders mutually reject each other's
+encodings and no `BinaryHwCert` can ever collide on the wire with any `BinaryTapeCert`. -/
+theorem binaryHwCert_tapeCert_disjoint_wire (c : BinaryHwCert) (t : BinaryTapeCert) :
+    decodeBinaryTapeCert (encodeBinaryHwCert c) = none ∧
+    decodeBinaryHwCert (encodeBinaryTapeCert t) = none ∧
+    encodeBinaryHwCert c ≠ encodeBinaryTapeCert t := by
+  refine ⟨?_, ?_, ?_⟩
+  · dsimp only [encodeBinaryHwCert, decodeBinaryTapeCert, cborDecodeArrHeader32,
+      cborEncodeU32, be, List.append_assoc, List.cons_append, List.nil_append]
+    rfl
+  · simp [encodeBinaryTapeCert, decodeBinaryHwCert, cborEncodeArrHeader32]
+  · intro hEq
+    have hByte3 : (encodeBinaryHwCert c)[3]? = (encodeBinaryTapeCert t)[3]? := congrArg (·[3]?) hEq
+    simp [encodeBinaryHwCert, encodeBinaryTapeCert, cborEncodeArrHeader32] at hByte3
+
+private theorem encodeBinaryHwCert_injective_inhabited :
+    ∃ c : BinaryHwCert, c.WellFormed ∧ decodeBinaryHwCert (encodeBinaryHwCert c) = some c :=
+  have hWf : adder2nsPnrCert.WellFormed := by
+    dsimp only [adder2nsPnrCert, BinaryHwCert.WellFormed, i32WellFormed, u32Bound]
+    decide
+  ⟨adder2nsPnrCert, hWf, decode_encode_binaryHwCert adder2nsPnrCert hWf⟩
+
+private theorem encodeBinaryTapeCert_injective_inhabited :
+    ∃ t : BinaryTapeCert, t.WellFormed ∧ decodeBinaryTapeCert (encodeBinaryTapeCert t) = some t :=
+  have hWf : statorMesh6WordTapeCert.WellFormed := by
+    dsimp only [statorMesh6WordTapeCert, BinaryTapeCert.WellFormed, u32Bound]
+    decide
+  ⟨statorMesh6WordTapeCert, hWf, decode_encode_binaryTapeCert statorMesh6WordTapeCert hWf⟩
 
 /-! ## 6. `.obnb` (`NEXT-MATHEMATICA.md` §5) `Obend.Core.Data` Hardware Cell Projections -/
 

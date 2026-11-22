@@ -200,17 +200,17 @@ def cmdVerifyCbor (args : List String) : IO UInt32 := do
     else .pnr
   let baseCert : Obend.Hardware.Codec.BinaryHwCert :=
     match expectedDom with
-    | .photonics => Obend.Hardware.Codec.goldenBinaryPhotonicsCert
-    | .pcb => Obend.Hardware.Codec.goldenBinaryPcbCert
-    | .dpr => Obend.Hardware.Codec.goldenBinaryDprCert
-    | .edaBomSwap => Obend.Hardware.Codec.goldenBinaryEdaSwapCert
-    | .magnetics => Obend.Hardware.Codec.goldenBinaryMagneticsCert
+    | .photonics => Obend.Hardware.Codec.coupler3To4PhotonicsCert
+    | .pcb => Obend.Hardware.Codec.microstrip50OhmPcbCert
+    | .dpr => Obend.Hardware.Codec.slot2MulImm4DprCert
+    | .edaBomSwap => Obend.Hardware.Codec.ldoSwap400mVEdaCert
+    | .magnetics => Obend.Hardware.Codec.statorToothMagneticsCert
     | _ =>
       if mode == "corrupt" then badBinaryPnrCert
-      else Obend.Hardware.Codec.goldenBinaryPnrCert
+      else Obend.Hardware.Codec.adder2nsPnrCert
   let defaultBytes : ByteArray :=
     if mode == "tape" then
-      Obend.Hardware.Codec.encodeToByteArray Obend.Hardware.Codec.goldenBinaryFemmTapeCert
+      Obend.Hardware.Codec.encodeToByteArray Obend.Hardware.Codec.statorMesh6WordTapeCert
     else
       Obend.Hardware.Codec.encodeToByteArray baseCert
   let rawBytes : ByteArray ← match binInOpt with

@@ -88,7 +88,7 @@ theorem judge_decoders_strictly_refuse_missing_fields :
     -- 1. `hw-rtl-synth@1`: legacy `{dagOk, cdcOk}` without `numWires`/wire definitions is refused
     (decodeRtlSynthCert "{\"dagOk\":1,\"cdcOk\":1}").isOk = false ∧
     -- 2. `hw-rtl-synth@1`: explicit module with all required header/output fields decodes cleanly
-    (decodeRtlSynthCert (encodeRtlSynthCert goldenFlatRtlModule)).isOk = true ∧
+    (decodeRtlSynthCert (encodeRtlSynthCert flatMulAddRtlModule)).isOk = true ∧
     -- 3. `hw-retime-sta@1`: missing `lag1` is refused
     (decodeRetimeCert "{\"lag0\":0}").isOk = false ∧
     -- 4. `hw-pnr-bitstream@1`: missing `net1DstWire` is refused

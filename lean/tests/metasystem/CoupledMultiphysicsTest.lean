@@ -54,9 +54,9 @@ set_option autoImplicit false
 
 def testMesh2D : FemmMesh2D where
   triangles :=
-    [ goldenStatorToothTriangle
-    , { goldenStatorToothTriangle with jzScaled := 5, nuScaled := 1200 }
-    , { goldenStatorToothTriangle with x2 := 1000, y2 := 2000, jzScaled := -3, nuScaled := 950 } ]
+    [ statorToothRightTriangle2000x1500
+    , { statorToothRightTriangle2000x1500 with jzScaled := 5, nuScaled := 1200 }
+    , { statorToothRightTriangle2000x1500 with x2 := 1000, y2 := 2000, jzScaled := -3, nuScaled := 950 } ]
   vertexMap := fun idx =>
     if idx == 0 then (0, 1, 2)
     else if idx == 1 then (1, 2, 3)
@@ -161,16 +161,34 @@ theorem test_physical_projections_verified (spec : CncToolpathViewportSpec) :
       (evalAbbeCompensatedCmd3D spec.pTarget spec.linErr spec.angErr spec.abbeArm)
       spec.linErr spec.angErr spec.abbeArm = spec.pTarget ∧
      spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist = 0 ∧
-     (Obend.Leaf.emit Obend.Hardware.VerilateRunner.goldenCnc5AxisMillComp).closedB = true) ∧
-    (let usd := goldenOpenUsdViewportSpec
-     let stator := goldenStatorMultiphysicsSpec
+     (Obend.Leaf.emit Obend.Hardware.VerilateRunner.cnc5AxisMillComp).closedB = true) ∧
+    (let usd : OpenUsdViewportSpec :=
+       { stageName     := "LcDrives_Production_Stator"
+       , primPath      := ["Factory", "Draft", "Stator", "Slot01"]
+       , relocateSrc   := ["Factory", "Draft"]
+       , relocateDst   := ["Prod", "LCDrives"]
+       , sdfWallForm   := { c0 := 1500, c1 := 15, c2 := 10 }
+       , minWallUm     := 1200
+       , maxTempMilliC := 180000
+       , initSample    := { timeCode := 0, wallThicknessUm := 5000, peakTempMilliC := 25000, receiptDigest := 101 }
+       , timeSamples   :=
+           [ { timeCode := 10,  wallThicknessUm := 2200, peakTempMilliC := 65000,  receiptDigest := 202 }
+           , { timeCode := 20,  wallThicknessUm := 1500, peakTempMilliC := 55000,  receiptDigest := 303 }
+           , { timeCode := 100, wallThicknessUm := 1500, peakTempMilliC := 122000, receiptDigest := 404 } ] }
+     let stator : StatorMultiphysicsViewportSpec :=
+       { partName       := "LC_Drives_InSlot_Stator_Assy"
+       , statorTriangle := statorToothRightTriangle2000x1500
+       , ode            := Obend.Analysis.thermalCoolingOde
+       , initBox        := [("T", ⟨28, 30⟩)]
+       , steps          := 3
+       , safeBounds     := [("T", ⟨12, 35⟩)] }
      Obend.Hardware.OpenUSD.applyUsdRelocate usd.relocateDst usd.relocateSrc
        (Obend.Hardware.OpenUSD.applyUsdRelocate usd.relocateSrc usd.relocateDst usd.primPath) = usd.primPath ∧
      (Obend.Hardware.OpenUSD.AffineForm1D.sub usd.sdfWallForm usd.sdfWallForm).toInterval = { lo := 0, hi := 0 } ∧
      Obend.Hardware.OpenUSD.checkPartLifecycleInvariant usd.minWallUm usd.maxTempMilliC
        (Obend.Hardware.OpenUSD.finalUsdState usd.initSample usd.timeSamples) = true ∧
      Obend.Analysis.verifyTrajectorySafety stator.ode stator.initBox stator.steps stator.safeBounds = true ∧
-     (Obend.Leaf.emit Obend.Hardware.VerilateRunner.goldenLcDrivesStatorComp).closedB = true) :=
+     (Obend.Leaf.emit Obend.Hardware.VerilateRunner.lcDrivesStatorComp).closedB = true) :=
   ⟨physical_cnc_abbe_projection_sound spec, physical_openusd_lifecycle_fixture⟩
 
 /-! ## 4. `#tooth` Mutation-Killing Probes & `#print axioms` Verification (`0 sorryAx`) -/

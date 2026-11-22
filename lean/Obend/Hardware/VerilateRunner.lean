@@ -108,8 +108,8 @@ structure VerilateReport where
 
 /-! ## 2. Canonical Physical `.obend` Compositions for Built-In Modules -/
 
-/-- Canonical 2-layer `CleanroomTcadStack` composition (`stdlib/physical/CleanroomTcadStack.obend`). -/
-def goldenCleanroomTcadComp : Composition where
+/-- 2-layer `CleanroomTcadStack` composition (`stdlib/physical/CleanroomTcadStack.obend`). -/
+def cleanroomTcadStackComp : Composition where
   top :=
     { name     := "HighKMetalGateFinFetUpgrade"
       metadata := .record []
@@ -135,8 +135,8 @@ def goldenCleanroomTcadComp : Composition where
     , ("gateDelayPs",        .lam (.nat 0))
     , ("calibratedDelayPs",  .lam (.nat 0)) ]
 
-/-- Canonical 3-layer `LcDrivesStator` composition (`stdlib/physical/LcDrivesStator.obend`). -/
-@[expose] def goldenLcDrivesStatorComp : Composition where
+/-- 3-layer `LcDrivesStator` composition (`stdlib/physical/LcDrivesStator.obend`). -/
+@[expose] def lcDrivesStatorComp : Composition where
   top :=
     { name     := "FiveAxisFinishMilled"
       metadata := .record []
@@ -167,8 +167,8 @@ def goldenCleanroomTcadComp : Composition where
     , ("peakWindingTemp",   .lam (.bound 0))
     , ("camSurfaceErrorUm", .lam (.bound 0)) ]
 
-/-- Canonical 2-layer `Cnc5AxisMill` composition (`stdlib/physical/Cnc5AxisMill.obend`). -/
-@[expose] def goldenCnc5AxisMillComp : Composition where
+/-- 2-layer `Cnc5AxisMill` composition (`stdlib/physical/Cnc5AxisMill.obend`). -/
+@[expose] def cnc5AxisMillComp : Composition where
   top :=
     { name     := "AbbeAndRuckigCompensatedMill"
       metadata := .record []
@@ -203,11 +203,11 @@ def goldenCleanroomTcadComp : Composition where
 /-- Select a built-in physical `Composition` and module name when requested by `--top` / `--module` or file stem. -/
 def selectBuiltInComposition (choice : String) : String × Composition :=
   if choice == "lc_drives_stator" || choice == "lc_drives_userspace_stator" || choice == "LcDrivesStator" || choice == "LcDrivesStatorUsd" then
-    ("lc_drives_userspace_stator", goldenLcDrivesStatorComp)
+    ("lc_drives_userspace_stator", lcDrivesStatorComp)
   else if choice == "cnc_5axis_mill" || choice == "cnc_5axis_userspace_mill" || choice == "Cnc5AxisMill" then
-    ("cnc_5axis_userspace_mill", goldenCnc5AxisMillComp)
+    ("cnc_5axis_userspace_mill", cnc5AxisMillComp)
   else
-    ("cleanroom_tcad_stack", goldenCleanroomTcadComp)
+    ("cleanroom_tcad_stack", cleanroomTcadStackComp)
 
 /-- Specialize a single `BookItem` by applying `inlineDict passes` followed by `betaRecordDict passes`. -/
 def specializeVerilateBookItem (passes : Nat) : BookItem → BookItem
@@ -395,6 +395,116 @@ theorem runModuleTrace_append
   unfold runModuleTrace
   exact List.foldl_append
 
+private theorem foldl_regUpdate_preserves_out_of_bound
+    (regs : List RegSpec) (f : RegSpec → BitVec 64)
+    (st : Nat → BitVec 64) (i : Nat)
+    (hOut : ∀ r ∈ regs, r.regIdx < i) :
+    regs.foldl (fun nextSt r => fun j => if j == r.regIdx then f r else nextSt j) st i = st i := by
+  induction regs generalizing st with
+  | nil => rfl
+  | cons r rest ih =>
+    dsimp only [List.foldl]
+    have hR : r.regIdx < i := hOut r (List.mem_cons_self ..)
+    have hNe : (i == r.regIdx) = false := beq_eq_false_iff_ne.mpr (by omega)
+    rw [ih (fun j => if j == r.regIdx then f r else st j) (fun r' hr' => hOut r' (List.mem_cons_of_mem r hr'))]
+    simp [hNe]
+
+/-- Frame lemma: `stepModuleRegs` never modifies any register index `i ≥ nRegs`. -/
+theorem stepModuleRegs_preserves_ge_nRegs
+    (m : RtlModule) (rst : Bool) (inputs curRegs : Nat → BitVec 64) (i : Nat)
+    (hGe : m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0 ≤ i) :
+    stepModuleRegs m rst inputs curRegs i = curRegs i := by
+  rw [stepModuleRegs_eq_foldl_next]
+  refine foldl_regUpdate_preserves_out_of_bound m.regs _ curRegs i (fun r hr => ?_)
+  have hLe := mem_le_foldl_max (fun r : RegSpec => r.regIdx + 1) m.regs 0 r hr
+  omega
+
+/-- Multi-cycle frame lemma: `runModuleTrace` preserves every register index `i ≥ nRegs`. -/
+theorem runModuleTrace_preserves_ge_nRegs
+    (m : RtlModule) (curRegs : Nat → BitVec 64)
+    (trace : List (Bool × (Nat → BitVec 64))) (i : Nat)
+    (hGe : m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0 ≤ i) :
+    runModuleTrace m curRegs trace i = curRegs i := by
+  unfold runModuleTrace
+  induction trace generalizing curRegs with
+  | nil => rfl
+  | cons cyc rest ih =>
+    rcases cyc with ⟨rst, ins⟩
+    dsimp only [List.foldl]
+    rw [ih (stepModuleRegs m rst ins curRegs)]
+    exact stepModuleRegs_preserves_ge_nRegs m rst ins curRegs i hGe
+
+/-- Masked port input environment for vector index `vecIdx`. -/
+def maskedVectorInputEnv (m : RtlModule) (vecIdx : Nat) : Nat → BitVec 64 :=
+  fun pIdx => truncToWidth (inputWidth m pIdx) (genVectorWord vecIdx pIdx)
+
+/-- Concatenated continuous held-input trace across a sequence of vector indices `idxs`. -/
+def concatHeldVectorTraces (m : RtlModule) (numCycles : Nat) :
+    List Nat → List (Bool × (Nat → BitVec 64))
+  | [] => []
+  | vIdx :: rest =>
+    mkHeldCycleTrace numCycles (maskedVectorInputEnv m vIdx) ++
+      concatHeldVectorTraces m numCycles rest
+
+/-- **All-Index Register-State Materialization Equivalence (`evaluateDifferentialVectorFromRegs_regs_eq`)**:
+The array-materialized register function returned by `evaluateDifferentialVectorFromRegs` is
+**pointwise identical at every register index `i : Nat`** (both `< nRegs` and `≥ nRegs`) to the
+pure functional `HDL.runModuleTrace` state, and its `expectedOutputs` equals `evalModuleOutputsW`
+evaluated on that exact traced register state! -/
+theorem evaluateDifferentialVectorFromRegs_regs_eq
+    (m : RtlModule) (comp? : Option Composition) (numCycles : Nat)
+    (curRegs : Nat → BitVec 64) (vecIdx : Nat) :
+    (evaluateDifferentialVectorFromRegs m comp? numCycles curRegs vecIdx).1 =
+      runModuleTrace m curRegs (mkHeldCycleTrace numCycles (maskedVectorInputEnv m vecIdx)) ∧
+    (evaluateDifferentialVectorFromRegs m comp? numCycles curRegs vecIdx).2.expectedOutputs =
+      evalModuleOutputsW m (maskedVectorInputEnv m vecIdx)
+        (runModuleTrace m curRegs (mkHeldCycleTrace numCycles (maskedVectorInputEnv m vecIdx))) := by
+  have hFun :
+      (evaluateDifferentialVectorFromRegs m comp? numCycles curRegs vecIdx).1 =
+        runModuleTrace m curRegs (mkHeldCycleTrace numCycles (maskedVectorInputEnv m vecIdx)) := by
+    funext i
+    dsimp only [evaluateDifferentialVectorFromRegs, maskedVectorInputEnv]
+    by_cases hLt : i < m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0
+    · simp only [hLt, ↓reduceIte, Array.getD_eq_getD_getElem?, Array.getElem?_map,
+        List.getElem?_toArray, List.getElem?_range hLt, Option.map_some, Option.getD_some]
+      rfl
+    · simp only [hLt, ↓reduceIte]
+      exact (runModuleTrace_preserves_ge_nRegs m curRegs _ i (by omega)).symm
+  refine ⟨hFun, ?_⟩
+  dsimp only [evaluateDifferentialVectorFromRegs, maskedVectorInputEnv] at hFun ⊢
+  rw [← hFun]
+  rfl
+
+/-- **Universal Multi-Vector Continuous Trace Simulation (`generateDifferentialVectorsAux_simulates_trace`)**:
+For EVERY `RtlModule` `m`, `comp?`, `numCycles`, initial register state `curRegs`, vector index list
+`idxs`, and position `k < idxs.length`, the `k`-th differential vector emitted by
+`generateDifferentialVectorsAux` has `expectedOutputs` equal to `evalModuleOutputsW` after running
+`HDL.runModuleTrace` continuously across the concatenated held-input traces of `idxs.take (k + 1)`! -/
+theorem generateDifferentialVectorsAux_simulates_trace
+    (m : RtlModule) (comp? : Option Composition) (numCycles : Nat)
+    (curRegs : Nat → BitVec 64) (idxs : List Nat) (k : Nat) (hK : k < idxs.length) :
+    ((generateDifferentialVectorsAux m comp? numCycles curRegs idxs).getD k
+      { vecIdx := 0, portInputs := [], expectedOutputs := [], machineAgreed := true }).expectedOutputs =
+      evalModuleOutputsW m (maskedVectorInputEnv m (idxs[k]))
+        (runModuleTrace m curRegs (concatHeldVectorTraces m numCycles (idxs.take (k + 1)))) := by
+  induction idxs generalizing curRegs k with
+  | nil => cases hK
+  | cons vIdx rest ih =>
+    cases k with
+    | zero =>
+      dsimp only [generateDifferentialVectorsAux, List.getD, List.getElem?_cons_zero,
+        Option.getD_some, List.getElem_cons_zero, List.take_succ_cons, List.take_zero,
+        concatHeldVectorTraces]
+      rw [List.append_nil]
+      exact (evaluateDifferentialVectorFromRegs_regs_eq m comp? numCycles curRegs vIdx).2
+    | succ k' =>
+      dsimp only [generateDifferentialVectorsAux, List.getD, List.getElem?_cons_succ,
+        List.getElem_cons_succ, List.take_succ_cons, concatHeldVectorTraces]
+      rw [runModuleTrace_append]
+      have hStep := (evaluateDifferentialVectorFromRegs_regs_eq m comp? numCycles curRegs vIdx).1
+      rw [← hStep]
+      exact ih (evaluateDifferentialVectorFromRegs m comp? numCycles curRegs vIdx).1 k' (by simpa using hK)
+
 /-! ## 4. Rung 1: C++17 `Verilator` Differential Harness Generator (`emitVerilatorHarnessCpp`) -/
 
 /-- Emit a self-contained C++17 `Verilator` differential testbench for `m : RtlModule` with:
@@ -531,7 +641,7 @@ def emitExprSmt2 (wirePrefix : String) : RtlExpr → String
 
 /-- Multi-input sequential `RtlModule` exercising `.ashr`, `.slt`, `.qmul32`, `.shl`, `.lshr`,
     `.bitNot (.alu .bitXor ...)`, register `"r_0"`, and output `"in_ready"`. -/
-def goldenMultiInputSeqAluRtl : RtlModule where
+def multiInputSeqAluRtl : RtlModule where
   name       := "obend_multi_input_seq_alu"
   inputNames := ["a", "b", "c"]
   wires      :=
@@ -554,7 +664,7 @@ def goldenMultiInputSeqAluRtl : RtlModule where
     a 4-bit slice, an 8-to-16 sign extension and a 16-bit truncation; a 16-bit accumulator and a
     resetless 4-bit register in `coreClk`; a 1-bit flag crossing into `axiIoClk` through a two-flop
     synchronizer (`ASYNC_REG`) and counted there by an 8-bit register. It passes `checkRtlModuleW`. -/
-def goldenWidthProbeRtl : RtlModule where
+def widthProbeTwoClockRtl : RtlModule where
   name        := "obend_width_probe"
   inputNames  := ["a", "b", "c", "flag"]
   inputWidths := [8, 8, 16, 1]
@@ -768,11 +878,11 @@ def parseObendSourceComposition (modName : String) (entryHint : String) (src : S
 /-- Resolve an `.obend` file or module name to `(moduleName, Option Composition, RtlModule)`. -/
 def resolveTargetRtlModule (cfg : VerilateConfig) : IO (Except String (String × Option Composition × RtlModule)) := do
   if cfg.topModule == "obend_retimed_mac2" || cfg.inputPath == "obend_retimed_mac2" then
-    return .ok ("obend_retimed_mac2", none, goldenRetimedMacRtl)
+    return .ok ("obend_retimed_mac2", none, retimedMac2StageRtl)
   if cfg.topModule == "obend_multi_input_seq_alu" || cfg.inputPath == "obend_multi_input_seq_alu" then
-    return .ok ("obend_multi_input_seq_alu", none, goldenMultiInputSeqAluRtl)
+    return .ok ("obend_multi_input_seq_alu", none, multiInputSeqAluRtl)
   if cfg.topModule == "obend_width_probe" || cfg.inputPath == "obend_width_probe" then
-    return .ok ("obend_width_probe", none, goldenWidthProbeRtl)
+    return .ok ("obend_width_probe", none, widthProbeTwoClockRtl)
   let pathExists ←
     if cfg.inputPath != "" then (System.FilePath.mk cfg.inputPath).pathExists
     else pure false

@@ -39,8 +39,8 @@ example : (SmtBV.bin .urem (.lit 5#64) (.lit 0#64)).eval { inp := fun _ => 0, wi
 
 /-! ## Glue lines, verbatim from the committed files -/
 
-def probeLines : List String := ((lecScript goldenWidthProbeRtl).print.splitOn "\n")
-def mac2Lines : List String := ((lecScript Obend.Hardware.Synth.goldenRetimedMacRtl).print.splitOn "\n")
+def probeLines : List String := ((lecScript widthProbeTwoClockRtl).print.splitOn "\n")
+def mac2Lines : List String := ((lecScript Obend.Hardware.Synth.retimedMac2StageRtl).print.splitOn "\n")
 
 -- a narrow input and a 1-bit input (Yosys's `Bool`) zero-extended to the 64-bit word
 #guard probeLines.contains "(define-fun in_2 () (_ BitVec 64) ((_ zero_extend 48) (|obend_width_probe_n c| s)))"
@@ -65,8 +65,8 @@ def checkCommitted (target path qualified : String) (m : RtlModule) : IO Unit :=
     throw <| IO.userError s!"{path} is not the print of lecScript ({committed.length} vs {printed.length} bytes)"
 
 #eval checkCommitted "mac2" "../hardware/sim/obend_retimed_mac2_lec.smt2"
-  "Obend.Hardware.Synth.goldenRetimedMacRtl" Obend.Hardware.Synth.goldenRetimedMacRtl
+  "Obend.Hardware.Synth.goldenRetimedMacRtl" Obend.Hardware.Synth.retimedMac2StageRtl
 #eval checkCommitted "width-probe" "../hardware/sim/obend_width_probe_lec.smt2"
-  "Obend.Hardware.VerilateRunner.goldenWidthProbeRtl" goldenWidthProbeRtl
+  "Obend.Hardware.VerilateRunner.goldenWidthProbeRtl" widthProbeTwoClockRtl
 
 end Obend.Tests.YosysLecTest

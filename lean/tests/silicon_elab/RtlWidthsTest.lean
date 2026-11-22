@@ -58,10 +58,10 @@ def env8 : WidthEnv := ⟨fun i => [8, 8, 16].getD i 64, fun _ => 64, fun _ => 6
     (RtlExpr.concat (.inputPort 0) (.inputPort 1) 8) == 0x1234#64
 
 -- The probe module: two domains, narrow signals, a two-flop synchronizer; it passes the gate.
-#guard checkRtlModuleW goldenWidthProbeRtl
-#guard moduleDomains goldenWidthProbeRtl == [.coreClk, .axiIoClk]
+#guard checkRtlModuleW widthProbeTwoClockRtl
+#guard moduleDomains widthProbeTwoClockRtl == [.coreClk, .axiIoClk]
 
-def probeSV : String := emitModuleSV goldenWidthProbeRtl
+def probeSV : String := emitModuleSV widthProbeTwoClockRtl
 #guard (probeSV.splitOn "input  logic        clk_core").length == 2
 #guard (probeSV.splitOn "input  logic        clk_axi").length == 2
 #guard (probeSV.splitOn "always_ff @(posedge clk_axi)").length == 2
@@ -72,9 +72,9 @@ def probeSV : String := emitModuleSV goldenWidthProbeRtl
 #guard (probeSV.splitOn "[63:0]").length == 1
 
 -- A synchronizer that is one flop, not two, is refused by the emission gate.
-#guard !checkRtlModuleW { goldenWidthProbeRtl with
-  regs := goldenWidthProbeRtl.regs.map fun r =>
+#guard !checkRtlModuleW { widthProbeTwoClockRtl with
+  regs := widthProbeTwoClockRtl.regs.map fun r =>
     if r.name == "flag_s2" then { r with isSynchronizer := false } else r }
 
 -- An all-64 module still declares `[63:0]` and one `clk`.
-#guard ((emitModuleSV goldenMultiInputSeqAluRtl).splitOn "input  logic        clk,").length == 2
+#guard ((emitModuleSV multiInputSeqAluRtl).splitOn "input  logic        clk,").length == 2

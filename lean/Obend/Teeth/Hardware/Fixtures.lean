@@ -13,6 +13,8 @@ import Obend.Hardware.GeometryCAM
 import Obend.Hardware.Kinematics
 import Obend.Hardware.OpenUSD
 import Obend.Hardware.Retiming
+import Obend.Hardware.Circuits
+import Obend.Hardware.NotebookProjection
 
 set_option autoImplicit false
 
@@ -184,3 +186,86 @@ example :
      | none => false) = true := by
   decide +kernel
 end Obend.Hardware.Retiming
+
+-- Relocated concrete Buck & DatasheetFit fixtures from Obend/Hardware/Circuits.lean
+namespace Obend.Hardware.Circuits
+example :
+    evalBuckSteadyVoutMv buck12vTo5v2aSpec = 5004 ∧
+    checkBuckCcmSafe buck12vTo5v2aSpec = true ∧
+    checkBuckCcmSafe overloadedSaturatingBuckSpec = false ∧
+    checkDatasheetFitSignoff sn74ls00ToHct00FitCert = true ∧
+    checkDatasheetFitSignoff badDirect74HcFitCert = false ∧
+    checkDatasheetFitSignoff badUncalibratedDriftFitCert = false :=
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
+end Obend.Hardware.Circuits
+
+-- Relocated concrete 20-op SSA tape pruning & right-branch compaction fixtures from Obend/Hardware/GeometryCAM.lean
+namespace Obend.Hardware.GeometryCAM
+open Obend.Hardware.Accelerators
+
+def statorCoreLugBoreSsaTape : List SsaTapeOp :=
+  [ .varX, .mul 0 0, .varY, .mul 2 2, .add 1 3, .const 100, .sub 4 5,
+    .const 15, .sub 0 7, .mul 8 8, .add 9 3, .const 4, .sub 10 11,
+    .minUnion 6 12,
+    .add 0 7, .mul 14 14, .add 15 3, .sub 16 11, .neg 17,
+    .maxInter 13 18 ]
+
+def statorHousingBoreSsaTape : List SsaTapeOp :=
+  [ .varX, .mul 0 0, .varY, .mul 2 2, .add 1 3, .const 400, .sub 4 5,
+    .const 15, .sub 0 7, .mul 8 8, .add 9 3, .const 4, .sub 10 11,
+    .minUnion 6 12,
+    .add 0 7, .mul 14 14, .add 15 3, .sub 16 11, .neg 17,
+    .maxInter 13 18 ]
+
+example {x y z : Int}
+    (hBox : (⟨⟨-2, 2⟩, ⟨-2, 2⟩, ⟨-2, 2⟩⟩ : Box3D).contains x y z) :
+    let box : Box3D := { xIv := { lo := -2, hi := 2 }, yIv := { lo := -2, hi := 2 }, zIv := { lo := -2, hi := 2 } }
+    let pruned := pruneSsaTapeForBox box statorCoreLugBoreSsaTape
+    let compacted := compactSsaTape pruned 19
+    let fullCompacted := compactSsaTapeFull pruned 19
+    statorCoreLugBoreSsaTape.length = 20 ∧
+    compacted.length = 7 ∧
+    fullCompacted.length = 7 ∧
+    evalSsaTape x y z compacted (compacted.length - 1) = evalSsaTape x y z statorCoreLugBoreSsaTape 19 := by
+  refine ⟨by decide +kernel, by decide +kernel, by decide +kernel, ?_⟩
+  exact (prune_and_compact_ssa_tape_sound _ x y z _ 19 hBox (by decide)).1
+
+example {xL yL zL xB yB zB : Int}
+    (hL : (⟨⟨14, 16⟩, ⟨-1, 1⟩, ⟨-1, 1⟩⟩ : Box3D).contains xL yL zL)
+    (hB : (⟨⟨-16, -14⟩, ⟨-1, 1⟩, ⟨-1, 1⟩⟩ : Box3D).contains xB yB zB) :
+    let boxLug : Box3D := { xIv := { lo := 14, hi := 16 }, yIv := { lo := -1, hi := 1 }, zIv := { lo := -1, hi := 1 } }
+    let boxBore : Box3D := { xIv := { lo := -16, hi := -14 }, yIv := { lo := -1, hi := 1 }, zIv := { lo := -1, hi := 1 } }
+    let compactedLug  := compactSsaTape (pruneSsaTapeForBox boxLug statorCoreLugBoreSsaTape) 19
+    let compactedBore := compactSsaTape (pruneSsaTapeForBox boxBore statorHousingBoreSsaTape) 19
+    compactedLug.length = 9 ∧
+    compactedBore.length = 10 ∧
+    evalSsaTape xL yL zL compactedLug (compactedLug.length - 1) = evalSsaTape xL yL zL statorCoreLugBoreSsaTape 19 ∧
+    evalSsaTape xB yB zB compactedBore (compactedBore.length - 1) = evalSsaTape xB yB zB statorHousingBoreSsaTape 19 := by
+  refine ⟨by decide +kernel, by decide +kernel, ?_, ?_⟩
+  · exact (prune_and_compact_ssa_tape_sound _ xL yL zL _ 19 hL (by decide)).1
+  · exact (prune_and_compact_ssa_tape_sound _ xB yB zB _ 19 hB (by decide)).1
+end Obend.Hardware.GeometryCAM
+
+-- Relocated concrete CNC viewport fixture from Obend/Hardware/NotebookProjection.lean
+namespace Obend.Vault.PhysicalProjection
+def hermleC42uCncViewportSpec : CncToolpathViewportSpec where
+  machineName := "Hermle_C42U_5Axis"
+  pTarget     := { x := 100000, y := 200000, z := 50000 }
+  linErr      := { x := 12, y := -8, z := 5 }
+  angErr      := { x := 2, y := -3, z := 1 }
+  abbeArm     := { x := 0, y := 0, z := 150 }
+  twist       := { ang := { x := 3, y := -4, z := 12 }, lin := { x := 50, y := -20, z := 10 } }
+  momentum    := { torque := { x := 90, y := -80, z := 240 }, force := { x := 250, y := -100, z := 50 } }
+  ruckigInit  := { posScaled6 := 0, velScaled2 := 0, acc := 0 }
+  jerkPulse   := 5
+  pulseDt     := 4
+
+example :
+    Obend.Hardware.Kinematics.evalUncompensatedTipPos3D
+      (Obend.Hardware.Kinematics.evalAbbeCompensatedCmd3D
+        hermleC42uCncViewportSpec.pTarget hermleC42uCncViewportSpec.linErr
+        hermleC42uCncViewportSpec.angErr hermleC42uCncViewportSpec.abbeArm)
+      hermleC42uCncViewportSpec.linErr hermleC42uCncViewportSpec.angErr hermleC42uCncViewportSpec.abbeArm =
+      hermleC42uCncViewportSpec.pTarget :=
+  (physical_cnc_abbe_projection_sound hermleC42uCncViewportSpec).1
+end Obend.Vault.PhysicalProjection

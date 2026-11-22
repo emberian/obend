@@ -131,7 +131,7 @@ uncalibrated model drift ($\varepsilon_\infty = 620\,\text{mV} > 25\,\text{mV}$)
 example :
     checkLogicInterface sn74ls00Datasheet.logic cd74hc00Datasheet.logic 0 400 = false ∧
     checkModelCalibration uncalibratedDrifted74ls00Preds sn74ls00Datasheet.transferCurve 25 = false ∧
-    checkDatasheetFitSignoff goldenDatasheetFitCert = true ∧
+    checkDatasheetFitSignoff sn74ls00ToHct00FitCert = true ∧
     checkDatasheetFitSignoff badDirect74HcFitCert = false ∧
     checkDatasheetFitSignoff badUncalibratedDriftFitCert = false :=
   ⟨rfl, rfl, rfl, rfl, rfl⟩

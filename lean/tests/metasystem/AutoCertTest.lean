@@ -72,13 +72,13 @@ open Obend.Judge (Verdict Format IntervalQuery)
 open Obend.Judge.SOS (Poly)
 open Obend.Analysis
   (CanonicalRat polyVarPow polyConst SosLyapunovProblem SosLyapunovCert
-   goldenSosProblem goldenSosCert badSosCert checkSosLyapunovProblem
+   cubicDampedCbfDaeProblem2D cubicDampedCbfDaeCert2D badSosCert checkSosLyapunovProblem
    renderSosLyapunovProblemJson renderSosLyapunovCertJson
    decodeSosLyapunovProblem decodeSosLyapunovCert sosLyapunovFormat)
 open Obend.Hardware.HDL (RtlModule)
 open Obend.Hardware.Judge
   (encodeRtlSynthObj decodeRtlSynthObj encodeRtlSynthCert decodeRtlSynthCert
-   normalizeRtlModuleForWire goldenFlatRtlModule badLoopRtlModule
+   normalizeRtlModuleForWire flatMulAddRtlModule badLoopRtlModule
    rtlSynthFormat hwSynthFormat checkRtlSynth
    verdict_eq_ok_of_isOk verdict_ne_ok_of_isOk_false
    decodeRtlSynthObj_encodeRtlSynthObj_roundtrip
@@ -97,35 +97,35 @@ set_option maxHeartbeats 800000
 
 /-! ## 1. Judge 1: `"interval@1"` (Adaptive Bisection, Wire Roundtrip, Soundness & Refusals) -/
 
-/-- Naive depth-0 interval evaluation fails on `goldenBisectIntervalObj` (`x - x ∈ [-1/4, 1/4]`
+/-- Naive depth-0 interval evaluation fails on `dependencyBisectIntervalObj` (`x - x ∈ [-1/4, 1/4]`
     over `x ∈ [0, 1]`) because `[0, 1] - [0, 1] = [-1, 1]` exceeds `[-1/4, 1/4]`. -/
 example :
-    (checkIntervalAutoCert goldenBisectIntervalObj .direct).isOk = false := by decide +kernel
+    (checkIntervalAutoCert dependencyBisectIntervalObj .direct).isOk = false := by decide +kernel
 
 def synthesizedBisectCert : IntervalCert :=
-  (synthesizeIntervalCert 4 goldenBisectIntervalObj).getD .direct
+  (synthesizeIntervalCert 4 dependencyBisectIntervalObj).getD .direct
 
 /-- Adaptive bisection (`synthesizeIntervalCert 4`) synthesizes a multi-level `.bisect` tree
     accepted by `checkIntervalAutoCert` and `intervalFormat.checkBytes`. -/
 theorem interval_bisect_synthesizes_and_checks :
-    synthesizeIntervalCert 4 goldenBisectIntervalObj = some synthesizedBisectCert ∧
+    synthesizeIntervalCert 4 dependencyBisectIntervalObj = some synthesizedBisectCert ∧
     synthesizedBisectCert ≠ .direct ∧
-    checkIntervalAutoCert goldenBisectIntervalObj synthesizedBisectCert = Verdict.ok ∧
-    decodeIntervalObj (encodeIntervalObj goldenBisectIntervalObj) = Except.ok goldenBisectIntervalObj ∧
+    checkIntervalAutoCert dependencyBisectIntervalObj synthesizedBisectCert = Verdict.ok ∧
+    decodeIntervalObj (encodeIntervalObj dependencyBisectIntervalObj) = Except.ok dependencyBisectIntervalObj ∧
     decodeIntervalCert (encodeIntervalCert synthesizedBisectCert) = Except.ok synthesizedBisectCert ∧
     intervalFormat.checkBytes 0
-      (encodeIntervalObj goldenBisectIntervalObj) (encodeIntervalCert synthesizedBisectCert) = Verdict.ok :=
+      (encodeIntervalObj dependencyBisectIntervalObj) (encodeIntervalCert synthesizedBisectCert) = Verdict.ok :=
   ⟨by decide +kernel,
    by decide +kernel,
    verdict_eq_ok_of_isOk (by decide +kernel),
-   decodeIntervalObj_encodeIntervalObj_golden,
+   decodeIntervalObj_encodeIntervalObj_bisect,
    by decide +kernel,
    verdict_eq_ok_of_isOk (by decide +kernel)⟩
 
 /-- Universal semantic enclosure proved via `checkIntervalAutoCert_sound`. -/
 theorem interval_bisect_semantic_sound :
-    IntervalQuery.SemanticMeaning goldenBisectIntervalObj.toQuery :=
-  checkIntervalAutoCert_sound goldenBisectIntervalObj synthesizedBisectCert
+    IntervalQuery.SemanticMeaning dependencyBisectIntervalObj.toQuery :=
+  checkIntervalAutoCert_sound dependencyBisectIntervalObj synthesizedBisectCert
     interval_bisect_synthesizes_and_checks.2.2.1
 
 /-- Negative refusal tests for `"interval@1"`: `badIntervalObj`, empty JSON `"{}"`, and false
@@ -144,35 +144,35 @@ theorem interval_negative_refusals :
 /-! ## 2. Judge 2: `"taylor-model@1"` (Degree-4 Transcendental Enclosure, Wire Roundtrip & Refusals) -/
 
 def synthesizedTaylorCert : Obend.Analysis.TaylorModel :=
-  (synthesizeTaylorModelCert goldenTaylorModelQuery).getD badTaylorModelCert
+  (synthesizeTaylorModelCert cosAddSinTaylorQuery).getD badTaylorModelCert
 
 theorem taylor_model_synthesizes_and_checks :
-    synthesizeTaylorModelCert goldenTaylorModelQuery = some synthesizedTaylorCert ∧
-    checkTaylorModelJudge 0 goldenTaylorModelQuery synthesizedTaylorCert = Verdict.ok ∧
-    decodeTaylorModelQuery (encodeTaylorModelQuery goldenTaylorModelQuery) =
-      Except.ok goldenTaylorModelQuery ∧
+    synthesizeTaylorModelCert cosAddSinTaylorQuery = some synthesizedTaylorCert ∧
+    checkTaylorModelJudge 0 cosAddSinTaylorQuery synthesizedTaylorCert = Verdict.ok ∧
+    decodeTaylorModelQuery (encodeTaylorModelQuery cosAddSinTaylorQuery) =
+      Except.ok cosAddSinTaylorQuery ∧
     decodeTaylorModelCert (encodeTaylorModelCert synthesizedTaylorCert) =
       Except.ok synthesizedTaylorCert ∧
     taylorModelFormat.checkBytes 0
-      (encodeTaylorModelQuery goldenTaylorModelQuery) (encodeTaylorModelCert synthesizedTaylorCert) =
+      (encodeTaylorModelQuery cosAddSinTaylorQuery) (encodeTaylorModelCert synthesizedTaylorCert) =
       Verdict.ok :=
   ⟨by decide +kernel,
    verdict_eq_ok_of_isOk (by decide +kernel),
-   decodeTaylorModelQuery_encodeTaylorModelQuery_golden,
+   decodeTaylorModelQuery_encodeTaylorModelQuery_cosAddSin,
    by decide +kernel,
    verdict_eq_ok_of_isOk (by decide +kernel)⟩
 
 theorem taylor_model_semantic_sound :
-    verifyTaylorModelCert goldenTaylorModelQuery synthesizedTaylorCert = true ∧
+    verifyTaylorModelCert cosAddSinTaylorQuery synthesizedTaylorCert = true ∧
     (Obend.Analysis.evalTaylorModelRange synthesizedTaylorCert).isSubintervalOf
-      goldenTaylorModelQuery.claimedBound = true :=
-  checkTaylorModelJudge_sound 0 goldenTaylorModelQuery synthesizedTaylorCert
+      cosAddSinTaylorQuery.claimedBound = true :=
+  checkTaylorModelJudge_sound 0 cosAddSinTaylorQuery synthesizedTaylorCert
     taylor_model_synthesizes_and_checks.2.1
 
 /-- `taylorModelJudge` establishes mathematical `TaylorModelMeaning` (polynomial + remainder range
     enclosure without restating `verifyTaylorModelCert`) and certifies genuine `refuted` witnesses. -/
 theorem taylor_model_judge_meaning_and_refusal :
-    TaylorModelMeaning goldenTaylorModelQuery synthesizedTaylorCert ∧
+    TaylorModelMeaning cosAddSinTaylorQuery synthesizedTaylorCert ∧
     ¬ TaylorModelMeaning badTaylorModelQuery badTaylorModelCert :=
   ⟨taylorModelJudge.sound (r := 0) taylor_model_synthesizes_and_checks.2.1,
    fun h => taylorModelJudge.refuted (r := 0) (o := badTaylorModelQuery) (c := badTaylorModelCert)
@@ -182,7 +182,7 @@ theorem taylor_model_judge_meaning_and_refusal :
     `cos(x) + 5n <= 2n`, `sin(x) <= 0n` (since `sin(0.1) > 0` on `[-1/10, 1/10]`), and the
     composite domain-confusion attack `0 - sin(1) ∈ [-0.01, 0.01]` on `domain = [0, 0]` all fail closed. -/
 theorem taylor_model_negative_refusals :
-    checkTaylorModelJudge 0 goldenTaylorModelQuery badTaylorModelCert ≠ Verdict.ok ∧
+    checkTaylorModelJudge 0 cosAddSinTaylorQuery badTaylorModelCert ≠ Verdict.ok ∧
     (taylorModelFormat.checkBytes 0 "{}" "{}").isOk = false ∧
     synthesizeJudgeWirePair "taylor-model@1" "Mod"
       (some (.binary "<=" (.binary "+" (.call (.var "cos") [.var "x"]) (.nat "5")) (.nat "2"))) none = none ∧
@@ -210,10 +210,10 @@ theorem taylor_model_negative_refusals :
 /-! ## 3. Judge 3: `"sos-lyapunov-cbf@1"` (SOS Gram / Lyapunov / CBF / DAE Synthesis & JSON Codec) -/
 
 theorem sos_lyapunov_synthesizes_and_checks :
-    synthesizeSosLyapunovCert goldenSosProblem = some goldenSosCert ∧
-    checkSosLyapunovProblem 0 goldenSosProblem goldenSosCert = Verdict.ok ∧
-    encodeSosLyapunovProblem goldenSosProblem = renderSosLyapunovProblemJson goldenSosProblem ∧
-    encodeSosLyapunovCert goldenSosCert = renderSosLyapunovCertJson goldenSosCert ∧
+    synthesizeSosLyapunovCert cubicDampedCbfDaeProblem2D = some cubicDampedCbfDaeCert2D ∧
+    checkSosLyapunovProblem 0 cubicDampedCbfDaeProblem2D cubicDampedCbfDaeCert2D = Verdict.ok ∧
+    encodeSosLyapunovProblem cubicDampedCbfDaeProblem2D = renderSosLyapunovProblemJson cubicDampedCbfDaeProblem2D ∧
+    encodeSosLyapunovCert cubicDampedCbfDaeCert2D = renderSosLyapunovCertJson cubicDampedCbfDaeCert2D ∧
     (∀ r rawObj rawCert,
       (autoSosLyapunovFormat.checkBytes r rawObj rawCert).isOk =
         (sosLyapunovFormat.checkBytes r rawObj rawCert).isOk) :=
@@ -227,18 +227,18 @@ theorem sos_lyapunov_synthesizes_and_checks :
     `renderSosLyapunovCertJson`) through `decodeSosLyapunovProblem`, `decodeSosLyapunovCert`,
     `autoDecodeSosLyapunovProblem`, `autoDecodeSosLyapunovCert`, and `checkSosLyapunovProblem`. -/
 private def checkStructuredSosJsonRoundtrip : Bool :=
-  let probJson := renderSosLyapunovProblemJson goldenSosProblem
-  let certJson := renderSosLyapunovCertJson goldenSosCert
-  let autoProbJson := encodeSosLyapunovProblemJson goldenSosProblem
-  let autoCertJson := encodeSosLyapunovCertJson goldenSosCert
+  let probJson := renderSosLyapunovProblemJson cubicDampedCbfDaeProblem2D
+  let certJson := renderSosLyapunovCertJson cubicDampedCbfDaeCert2D
+  let autoProbJson := encodeSosLyapunovProblemJson cubicDampedCbfDaeProblem2D
+  let autoCertJson := encodeSosLyapunovCertJson cubicDampedCbfDaeCert2D
   let verdictOk :=
-    match checkSosLyapunovProblem 0 goldenSosProblem goldenSosCert with
+    match checkSosLyapunovProblem 0 cubicDampedCbfDaeProblem2D cubicDampedCbfDaeCert2D with
     | .ok => true
     | _ => false
-  (decodeSosLyapunovProblem probJson == .ok goldenSosProblem) &&
-  (decodeSosLyapunovCert certJson == .ok goldenSosCert) &&
-  (autoDecodeSosLyapunovProblem autoProbJson == .ok goldenSosProblem) &&
-  (autoDecodeSosLyapunovCert autoCertJson == .ok goldenSosCert) &&
+  (decodeSosLyapunovProblem probJson == .ok cubicDampedCbfDaeProblem2D) &&
+  (decodeSosLyapunovCert certJson == .ok cubicDampedCbfDaeCert2D) &&
+  (autoDecodeSosLyapunovProblem autoProbJson == .ok cubicDampedCbfDaeProblem2D) &&
+  (autoDecodeSosLyapunovCert autoCertJson == .ok cubicDampedCbfDaeCert2D) &&
   verdictOk
 
 #guard checkStructuredSosJsonRoundtrip == true
@@ -249,9 +249,9 @@ private def checkStructuredSosJsonRoundtrip : Bool :=
     and fail-closed refusal of removed preset wire strings (`"golden-cubic-cbf-dae"`, `"valid-sos-cert"`,
     `"bad-sos-cert"`). -/
 def customNonGoldenSosProblem : SosLyapunovProblem :=
-  { goldenSosProblem with
+  { cubicDampedCbfDaeProblem2D with
     lyapunov :=
-      { goldenSosProblem.lyapunov with
+      { cubicDampedCbfDaeProblem2D.lyapunov with
         vectorField :=
           [ Poly.scale (CanonicalRat.mk (-3) 2) (polyVarPow 0 1)
           , Poly.scale (CanonicalRat.mk (-5) 4) (polyVarPow 1 1) ]
@@ -269,7 +269,7 @@ def checkCustomNonGoldenSosRoundtrip : Bool :=
 #guard checkCustomNonGoldenSosRoundtrip == true
 
 theorem sos_lyapunov_lossless_and_no_presets :
-    customNonGoldenSosProblem.lyapunov ≠ goldenSosProblem.lyapunov ∧
+    customNonGoldenSosProblem.lyapunov ≠ cubicDampedCbfDaeProblem2D.lyapunov ∧
     encodeSosLyapunovProblem customNonGoldenSosProblem =
       renderSosLyapunovProblemJson customNonGoldenSosProblem ∧
     (autoDecodeSosLyapunovProblem "golden-cubic-cbf-dae").isOk = false ∧
@@ -305,35 +305,35 @@ theorem sos_lyapunov_ast_and_negative_refusals :
 /-- Without Buchberger S-polynomial completion, direct division of `x1 - x0^2` by `[x1^2 - x0, x0*x1 - 1]`
     cannot eliminate `x1 - x0^2` (remainder is non-zero). -/
 theorem groebner_direct_division_insufficient :
-    (polyDivModWithQuotients 16 goldenGroebnerQuery.target goldenGroebnerQuery.eqGens).1.isZero = false := by
+    (polyDivModWithQuotients 16 binomialSyzygyGroebnerQuery.target binomialSyzygyGroebnerQuery.eqGens).1.isZero = false := by
   decide +kernel
 
 def synthesizedGroebnerCert : GroebnerCert :=
-  (synthesizeGroebnerCert goldenGroebnerQuery).getD badGroebnerCert
+  (synthesizeGroebnerCert binomialSyzygyGroebnerQuery).getD badGroebnerCert
 
 /-- With `completeGroebnerBasisWithCofactors` cofactor tracking, `synthesizeGroebnerCert` discovers
     the S-polynomial consequence and synthesizes an ideal-membership witness directly over `q.eqGens`! -/
 theorem groebner_buchberger_synthesizes_and_checks :
-    synthesizeGroebnerCert goldenGroebnerQuery = some synthesizedGroebnerCert ∧
-    checkGroebnerJudge 0 goldenGroebnerQuery synthesizedGroebnerCert = Verdict.ok ∧
-    decodeGroebnerQuery (encodeGroebnerQuery goldenGroebnerQuery) = Except.ok goldenGroebnerQuery ∧
+    synthesizeGroebnerCert binomialSyzygyGroebnerQuery = some synthesizedGroebnerCert ∧
+    checkGroebnerJudge 0 binomialSyzygyGroebnerQuery synthesizedGroebnerCert = Verdict.ok ∧
+    decodeGroebnerQuery (encodeGroebnerQuery binomialSyzygyGroebnerQuery) = Except.ok binomialSyzygyGroebnerQuery ∧
     decodeGroebnerCert (encodeGroebnerCert synthesizedGroebnerCert) = Except.ok synthesizedGroebnerCert ∧
     groebnerFormat.checkBytes 0
-      (encodeGroebnerQuery goldenGroebnerQuery) (encodeGroebnerCert synthesizedGroebnerCert) = Verdict.ok :=
+      (encodeGroebnerQuery binomialSyzygyGroebnerQuery) (encodeGroebnerCert synthesizedGroebnerCert) = Verdict.ok :=
   ⟨by decide +kernel,
    verdict_eq_ok_of_isOk (by decide +kernel),
-   decodeGroebnerQuery_encodeGroebnerQuery_golden,
+   decodeGroebnerQuery_encodeGroebnerQuery_binomialSyzygy,
    by decide +kernel,
    verdict_eq_ok_of_isOk (by decide +kernel)⟩
 
-/-- Semantic root soundness over `goldenGroebnerQuery.eqGens`: at every common root `ρ` of
+/-- Semantic root soundness over `binomialSyzygyGroebnerQuery.eqGens`: at every common root `ρ` of
     `eqGens = [x1^2 - x0, x0*x1 - 1]`, `target = x1 - x0^2` evaluates to `0`! -/
 theorem groebner_buchberger_semantic_sound :
-    verifyGroebnerCert goldenGroebnerQuery synthesizedGroebnerCert = true ∧
+    verifyGroebnerCert binomialSyzygyGroebnerQuery synthesizedGroebnerCert = true ∧
     (∀ (ρ : Nat → CanonicalRat),
-      (∀ g ∈ goldenGroebnerQuery.eqGens, g.eval ρ = 0) →
-      goldenGroebnerQuery.target.eval ρ = 0) :=
-  checkGroebnerJudge_sound_membership 0 goldenGroebnerQuery synthesizedGroebnerCert rfl
+      (∀ g ∈ binomialSyzygyGroebnerQuery.eqGens, g.eval ρ = 0) →
+      binomialSyzygyGroebnerQuery.target.eval ρ = 0) :=
+  checkGroebnerJudge_sound_membership 0 binomialSyzygyGroebnerQuery synthesizedGroebnerCert rfl
     groebner_buchberger_synthesizes_and_checks.2.1
 
 /-- Positivstellensatz non-negativity query (`isNonneg = true`) on `(x0 + x1)^2 + (x2 - 1) >= 0`
@@ -361,7 +361,7 @@ theorem groebner_psatz_nonneg_checks :
     counterexample `refuted` witnesses (`1 ∉ ⟨x0⟩`), while receiver-qualified `.member` extraction
     refuses `a.val == b.val` (`P0 #8`) and certifies `a.val == a.val`. -/
 theorem groebner_judge_meaning_and_refusal :
-    goldenGroebnerQuery.SemanticMeaning ∧
+    binomialSyzygyGroebnerQuery.SemanticMeaning ∧
     ¬ forgedUnitBasisQuery.SemanticMeaning ∧
     (synthesizeJudgeWirePair "groebner@1" "Mod"
       (some (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val"))) none).isNone = true ∧
@@ -377,7 +377,7 @@ theorem groebner_judge_meaning_and_refusal :
     claiming `1 ∈ ⟨x0⟩`, empty JSON `"{}"`, and false polynomial identity `(x + 1n) * (x + 1n) == x * x + 1n`
     all fail closed, while true identity `(x + 1n) * (x + 1n) == x * x + 2n * x + 1n` succeeds. -/
 theorem groebner_negative_and_positive_ast :
-    checkGroebnerJudge 0 goldenGroebnerQuery badGroebnerCert ≠ Verdict.ok ∧
+    checkGroebnerJudge 0 binomialSyzygyGroebnerQuery badGroebnerCert ≠ Verdict.ok ∧
     checkGroebnerJudge 0
       { target := Poly.one, eqGens := [polyVarPow 0 1], ineqGens := [], isNonneg := false, divFuel := 16 }
       (.membership [Poly.one] { quotients := [(Poly.one, 0)] }) ≠ Verdict.ok ∧
@@ -407,9 +407,9 @@ theorem groebner_negative_and_positive_ast :
 
 theorem rtl_synth_wire_roundtrips :
     decodeRtlSynthObj (encodeRtlSynthObj "test_rtl_synth") = Except.ok "test_rtl_synth" ∧
-    decodeRtlSynthCert (encodeRtlSynthCert goldenFlatRtlModule) = Except.ok goldenFlatRtlModule :=
+    decodeRtlSynthCert (encodeRtlSynthCert flatMulAddRtlModule) = Except.ok flatMulAddRtlModule :=
   ⟨decodeRtlSynthObj_encodeRtlSynthObj_roundtrip "test_rtl_synth",
-   decodeRtlSynthCert_encodeRtlSynthCert_roundtrip goldenFlatRtlModule⟩
+   decodeRtlSynthCert_encodeRtlSynthCert_roundtrip flatMulAddRtlModule⟩
 
 /-- Closed 1-slot `Leaf.Book` (`out := x * 2 + 1`) for fast kernel `decide +kernel` synthesis proof,
     plus VM `#guard` check on the 4-slot open-recursive `StdlibCell.versionedCell_book`. -/

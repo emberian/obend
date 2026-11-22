@@ -217,7 +217,7 @@ example (b : BuckSpec) (hOk : checkBuckCcmSafe b = true) :
     evalBuckPeakInductorMa b ≤ b.iSatMaxMa :=
   buck_ccm_safe_prevents_core_saturation b hOk
 
-#guard checkDatasheetFitSignoff goldenDatasheetFitCert == true
+#guard checkDatasheetFitSignoff sn74ls00ToHct00FitCert == true
 #guard checkDatasheetFitSignoff badDirect74HcFitCert == false
 #guard checkDatasheetFitSignoff badUncalibratedDriftFitCert == false
 

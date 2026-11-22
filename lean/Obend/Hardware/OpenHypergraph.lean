@@ -556,23 +556,29 @@ theorem evalHypergraph_pipelined_eq_comb (g : StrictOpenHypergraph) (initEnv : N
   rw [(layerHypergraph_sound g initEnv).2.2.1, (layerHypergraph_sound g initEnv).2.2.2]
   exact ⟨rfl, rfl⟩
 
-/-- Golden 4-operation diamond hypergraph computing $(x_0 + x_1) \cdot (x_2 + x_3) + 10$:
+/-- Parametric 4-input diamond hypergraph computing $f_k(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + k$
+for an arbitrary integer bias $k : \mathbb{Z}$:
 * Wires `0..3`: boundary inputs $x_0, x_1, x_2, x_3$,
 * Edge 0 (Stage 0): $w_4 := w_0 + w_1$,
 * Edge 1 (Stage 0, parallel with Edge 0!): $w_5 := w_2 + w_3$,
 * Edge 2 (Stage 1, depends on $w_4, w_5$): $w_6 := w_4 \cdot w_5$,
-* Edge 3 (Stage 2, depends on $w_6$): $w_7 := 10$,
+* Edge 3 (Stage 2): $w_7 := k$,
 * Edge 4 (Stage 2, depends on $w_6, w_7$): $w_8 := w_6 + w_7$. -/
-abbrev goldenDiamondHypergraph : StrictOpenHypergraph :=
+abbrev parametricDiamondHypergraph (k : Int) : StrictOpenHypergraph :=
   mkStrictOpenHypergraph 9 [0, 1, 2, 3] [8]
-    [ { opIdx := 0, op := .add,      srcWires := [0, 1], dstWire := 4 }
-    , { opIdx := 1, op := .add,      srcWires := [2, 3], dstWire := 5 }
-    , { opIdx := 2, op := .mul,      srcWires := [4, 5], dstWire := 6 }
-    , { opIdx := 3, op := .const 10, srcWires := [],     dstWire := 7 }
-    , { opIdx := 4, op := .add,      srcWires := [6, 7], dstWire := 8 } ]
+    [ { opIdx := 0, op := .add,     srcWires := [0, 1], dstWire := 4 }
+    , { opIdx := 1, op := .add,     srcWires := [2, 3], dstWire := 5 }
+    , { opIdx := 2, op := .mul,     srcWires := [4, 5], dstWire := 6 }
+    , { opIdx := 3, op := .const k, srcWires := [],     dstWire := 7 }
+    , { opIdx := 4, op := .add,     srcWires := [6, 7], dstWire := 8 } ]
+
+/-- 4-operation diamond hypergraph computing $(x_0 + x_1) \cdot (x_2 + x_3) + 10$
+(`parametricDiamondHypergraph 10`). -/
+abbrev diamondAddMulConstHypergraph : StrictOpenHypergraph :=
+  parametricDiamondHypergraph 10
 
 /-- Example:
-Verifies that `goldenDiamondHypergraph` is well-formed (`wf = true`), that `layerHypergraph`
+Verifies that `diamondAddMulConstHypergraph` is well-formed (`wf = true`), that `layerHypergraph`
 packs the independent additions (`op 0` and `op 1`) plus constant load (`op 3`) into earlier parallel
 wavefronts across 3 synchronous pipeline stages (`[2, 2, 1]` ops per stage), and that
 `evalHypergraphLayered`, `evalHypergraphLayeredSync`, and `evalHypergraphComb` all evaluate
@@ -580,12 +586,12 @@ $(3 + 4) \cdot (5 + 6) + 10 = 87$. -/
 example :
     let initEnv : Nat → Int := fun w =>
       match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | _ => 0
-    goldenDiamondHypergraph.wf = true ∧
-    (layerHypergraph goldenDiamondHypergraph).length = 3 ∧
-    ((layerHypergraph goldenDiamondHypergraph).map List.length) = [2, 2, 1] ∧
-    evalHypergraphLayered goldenDiamondHypergraph initEnv = [87] ∧
-    evalHypergraphLayeredSync goldenDiamondHypergraph initEnv = [87] ∧
-    evalHypergraphComb goldenDiamondHypergraph initEnv = [87] := by
+    diamondAddMulConstHypergraph.wf = true ∧
+    (layerHypergraph diamondAddMulConstHypergraph).length = 3 ∧
+    ((layerHypergraph diamondAddMulConstHypergraph).map List.length) = [2, 2, 1] ∧
+    evalHypergraphLayered diamondAddMulConstHypergraph initEnv = [87] ∧
+    evalHypergraphLayeredSync diamondAddMulConstHypergraph initEnv = [87] ∧
+    evalHypergraphComb diamondAddMulConstHypergraph initEnv = [87] := by
   decide +kernel
 
 /-! ## 3. `catgrad` Syntactic `Optic` Reverse-Mode AD (`OpticOp`, `compileOpticAdjoint`, `evalOpticFwd`, `evalOpticRev`) -/
@@ -1362,7 +1368,7 @@ set_option maxHeartbeats 1600000 in
    - At unit output seed `dOut = 1`, `evalHypergraphComb` computes the exact analytical partial
      derivatives $\left(L(x,y),\; \frac{\partial L}{\partial x},\; \frac{\partial L}{\partial y}\right)$
      matching forward-mode dual numbers `DualInt`!
-2. **Whole-Graph Adjoint of the 5-Edge `goldenDiamondHypergraph`**:
+2. **Whole-Graph Adjoint of the 5-Edge `diamondAddMulConstHypergraph`**:
    Compiling the 5-edge 4-input diamond hypergraph $f(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + 10$
    through `compileGraphAdjoint` produces a well-formed 21-wire, 14-edge hypergraph whose evaluation
    at $(3, 4, 5, 6)$ with `dOut = 1` returns `[87, 11, 11, 7, 7]`
@@ -1377,7 +1383,7 @@ theorem compileGraphAdjoint_multiEdge_sound (op1 op2 : OpticOp) (x y dOut : Int)
     let envUnit := opticChain2AdjointInitEnv x y 1
     let dualX := evalOpticDual op2 (evalOpticDual op1 ⟨x, 1⟩ ⟨y, 0⟩) ⟨y, 0⟩
     let dualY := evalOpticDual op2 (evalOpticDual op1 ⟨x, 0⟩ ⟨y, 1⟩) ⟨y, 1⟩
-    let diamondAdj := compileGraphAdjoint goldenDiamondHypergraph
+    let diamondAdj := compileGraphAdjoint diamondAddMulConstHypergraph
     let diamondEnv : Nat → Int := fun w =>
       match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0
     gAdj.wf = true ∧
@@ -1413,8 +1419,8 @@ theorem compileGraphAdjoint_multiEdge_sound (op1 op2 : OpticOp) (x y dOut : Int)
     rcases optic_comp_chain_rule_sound op1 op2 x y with ⟨hP, hX, hY⟩
     rw [← hP, ← hX, ← hY]
   have hDiamond :
-      (compileGraphAdjoint goldenDiamondHypergraph).wf = true ∧
-      evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph)
+      (compileGraphAdjoint diamondAddMulConstHypergraph).wf = true ∧
+      evalHypergraphComb (compileGraphAdjoint diamondAddMulConstHypergraph)
         (fun w => match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0) =
         [87, 11, 11, 7, 7] := by
     decide +kernel
@@ -2411,13 +2417,13 @@ theorem evalLayeredStagesSyncBv_ofInt
 
 /-- **Theorem (`compileGraphAdjoint_diamond_symbolic_sound`)**:
 For EVERY symbolic integer assignment `(x0 x1 x2 x3 dOut : Int)` to the 5-edge
-`goldenDiamondHypergraph` ($f(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + 10$),
-evaluating `compileGraphAdjoint goldenDiamondHypergraph` via `evalHypergraphComb`,
+`diamondAddMulConstHypergraph` ($f(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + 10$),
+evaluating `compileGraphAdjoint diamondAddMulConstHypergraph` via `evalHypergraphComb`,
 `evalHypergraphLayered`, or `evalHypergraphLayeredSync` produces the exact symbolic primal
 output and partial derivatives:
 `[(x0 + x1) * (x2 + x3) + 10, (x2 + x3) * dOut, (x2 + x3) * dOut, (x0 + x1) * dOut, (x0 + x1) * dOut]`. -/
 theorem compileGraphAdjoint_diamond_symbolic_sound (x0 x1 x2 x3 dOut : Int) :
-    let gAdj := compileGraphAdjoint goldenDiamondHypergraph
+    let gAdj := compileGraphAdjoint diamondAddMulConstHypergraph
     let env : Nat → Int := fun w =>
       match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0
     let expected :=
@@ -2430,7 +2436,7 @@ theorem compileGraphAdjoint_diamond_symbolic_sound (x0 x1 x2 x3 dOut : Int) :
     evalHypergraphLayered gAdj env = expected ∧
     evalHypergraphLayeredSync gAdj env = expected := by
   have hComb :
-      evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph)
+      evalHypergraphComb (compileGraphAdjoint diamondAddMulConstHypergraph)
         (fun w => match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0) =
       [ (x0 + x1) * (x2 + x3) + 10
       , (x2 + x3) * dOut
@@ -2444,9 +2450,32 @@ theorem compileGraphAdjoint_diamond_symbolic_sound (x0 x1 x2 x3 dOut : Int) :
            , 1 * ((x0 + x1) * (1 * dOut)) ] = _
     simp [Int.one_mul]
   have hPipe := evalHypergraph_pipelined_eq_comb
-    (compileGraphAdjoint goldenDiamondHypergraph)
+    (compileGraphAdjoint diamondAddMulConstHypergraph)
     (fun w => match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0)
   exact ⟨hComb, hPipe.1.trans hComb, hPipe.2.trans hComb⟩
+
+/-- **Universal Parametric Diamond Forward & Pipelined Soundness (`parametricDiamondHypergraph_eval_sound`)**:
+For EVERY bias constant `k : Int` and EVERY symbolic input assignment `(x0, x1, x2, x3 : Int)`,
+`parametricDiamondHypergraph k` is well-formed (`wf = true`) and evaluates under combinational,
+layered, and synchronous wavefront semantics to `[(x0 + x1) * (x2 + x3) + k]`. -/
+theorem parametricDiamondHypergraph_eval_sound (k x0 x1 x2 x3 : Int) :
+    let g := parametricDiamondHypergraph k
+    let env : Nat → Int := fun w =>
+      match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | _ => 0
+    let expected := [(x0 + x1) * (x2 + x3) + k]
+    g.wf = true ∧
+    evalHypergraphComb g env = expected ∧
+    evalHypergraphLayered g env = expected ∧
+    evalHypergraphLayeredSync g env = expected := by
+  have hWf : (parametricDiamondHypergraph k).wf = true := rfl
+  have hComb :
+      evalHypergraphComb (parametricDiamondHypergraph k)
+        (fun w => match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | _ => 0) =
+      [(x0 + x1) * (x2 + x3) + k] := rfl
+  have hPipe := evalHypergraph_pipelined_eq_comb
+    (parametricDiamondHypergraph k)
+    (fun w => match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | _ => 0)
+  exact ⟨hWf, hComb, hPipe.1.trans hComb, hPipe.2.trans hComb⟩
 
 /-! ## 8b. The Single Pass at 64 Bits (`evalHyperEdgesCombBv`)
 
@@ -3126,7 +3155,7 @@ theorem segment_wireConsumersCsr (numWires : Nat) (edges : List HyperEdge) (w : 
    $e_1 \in (\text{operationPredecessorsCsr numWires edges}).\text{segment } e_2$ iff there exists a
    source wire $w \in (\text{sourcesCsr numWires edges}).\text{segment } e_2$ such that
    $e_1 \in ((\text{targetsCsr numWires edges}).\text{values.converse}).\text{segment } w$.
-3. **Concrete Kernel Verification on `goldenDiamondHypergraph`**:
+3. **Concrete Kernel Verification on `diamondAddMulConstHypergraph`**:
    `operationAdjacencyCsr` and `operationPredecessorsCsr` recover the exact diamond DAG adjacency
    (`0 → [2]`, `1 → [2]`, `2 → [4]`, `3 → [4]`, `4 → []`) and predecessor segments
    (`0 ← []`, `1 ← []`, `2 ← [0, 1]`, `3 ← []`, `4 ← [2, 3]`)! -/
@@ -3139,7 +3168,7 @@ theorem operationAdjacencyCsr_sound
     (e1 ∈ (operationPredecessorsCsr numWires edges).segment e2 ↔
       ∃ w ∈ (sourcesCsr numWires edges).segment e2,
         e1 ∈ ((targetsCsr numWires edges).values.converse).segment w) ∧
-    (let dEdges := extractHyperEdges goldenDiamondHypergraph
+    (let dEdges := extractHyperEdges diamondAddMulConstHypergraph
      let adj := operationAdjacencyCsr 9 dEdges
      let preds := operationPredecessorsCsr 9 dEdges
      [adj.segment 0, adj.segment 1, adj.segment 2, adj.segment 3, adj.segment 4] =
@@ -3292,42 +3321,17 @@ theorem layerHyperEdgesCsrAux_all_independent
       rw [peelCsrWavefrontStage_independent, Bool.true_and]
       exact ih _ _
 
-/-- **Theorem (`layerHypergraphCsr_sound_and_agrees`)**:
-1. **Universal CSR Wavefront Stage Independence & Synchronous Equivalence**:
-   For EVERY `StrictOpenHypergraph` `g` and EVERY initial wire environment `initEnv : Nat → Int`:
-   - Every wavefront stage produced by `layerHypergraphCsr g` is conflict-free
-     (`(layerHypergraphCsr g).all checkStageIndependent = true`),
-   - True synchronous stage-entry snapshot evaluation (`evalLayeredStagesSync initEnv (layerHypergraphCsr g)`)
-     equals sequential stage evaluation (`evalLayeredStages initEnv (layerHypergraphCsr g)`), and
-   - `evalHypergraphLayeredCsrSync g initEnv = evalHypergraphLayeredCsr g initEnv`.
-2. **Symbolic & Concrete Agreement with `layerHypergraph` and `evalHypergraphComb` on `goldenDiamondHypergraph`
-   and Multi-Stage Reverse-AD Pipelines (`compileGraphAdjoint goldenDiamondHypergraph`)**:
-   - On `goldenDiamondHypergraph`, `layerHypergraphCsr` peels 3 wavefront stages of sizes `[3, 1, 1]`
-     (coalescing `op 0`, `op 1`, and constant `op 3` into Wavefront 0), and for EVERY symbolic environment
-     `initEnv : Nat → Int`:
-     `evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv = evalHypergraphLayered goldenDiamondHypergraph initEnv`
-     and `evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv = evalHypergraphComb goldenDiamondHypergraph initEnv`!
-   - On the 12-operation multi-stage reverse-mode AD pipeline `compileGraphAdjoint goldenDiamondHypergraph`,
-     `evalHypergraphLayeredCsr` and `evalHypergraphLayeredCsrSync` agree with `evalHypergraphLayered`
-     and `evalHypergraphComb` (`[87, 11, 11, 7, 7]`)! -/
-theorem layerHypergraphCsr_sound_and_agrees
+/-- **Universal CSR Wavefront Independence & Synchronous Equivalence (`layerHypergraphCsr_universal_sync_sound`)**:
+For EVERY `StrictOpenHypergraph` `g` and EVERY initial wire environment `initEnv : Nat → Int`,
+every CSR wavefront stage is conflict-free and synchronous stage-entry snapshot evaluation matches
+sequential stage evaluation pointwise and on all boundary outputs. -/
+theorem layerHypergraphCsr_universal_sync_sound
     (g : StrictOpenHypergraph) (initEnv : Nat → Int) :
-    let diamondEnv : Nat → Int := fun w =>
-      match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0
     (layerHypergraphCsr g).all checkStageIndependent = true ∧
     evalLayeredStagesSync initEnv (layerHypergraphCsr g) =
       evalLayeredStages initEnv (layerHypergraphCsr g) ∧
     evalHypergraphLayeredCsrSync g initEnv =
-      evalHypergraphLayeredCsr g initEnv ∧
-    ((layerHypergraphCsr goldenDiamondHypergraph).map List.length = [3, 1, 1]) ∧
-    evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv =
-      evalHypergraphLayered goldenDiamondHypergraph initEnv ∧
-    evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv =
-      evalHypergraphComb goldenDiamondHypergraph initEnv ∧
-    evalHypergraphLayeredCsr (compileGraphAdjoint goldenDiamondHypergraph) diamondEnv =
-      evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph) diamondEnv ∧
-    evalHypergraphLayeredCsrSync (compileGraphAdjoint goldenDiamondHypergraph) diamondEnv =
-      [87, 11, 11, 7, 7] := by
+      evalHypergraphLayeredCsr g initEnv := by
   have hInd : (layerHypergraphCsr g).all checkStageIndependent = true :=
     layerHyperEdgesCsrAux_all_independent _ [] _ _
   have hSync :
@@ -3338,12 +3342,36 @@ theorem layerHypergraphCsr_sound_and_agrees
       evalHypergraphLayeredCsrSync g initEnv = evalHypergraphLayeredCsr g initEnv := by
     unfold evalHypergraphLayeredCsrSync evalHypergraphLayeredCsr
     rw [hSync]
+  exact ⟨hInd, hSync, hOutSync⟩
+
+/-- **Theorem (`layerHypergraphCsr_sound_and_agrees`)**:
+Combines `layerHypergraphCsr_universal_sync_sound` with symbolic and concrete agreement on
+`diamondAddMulConstHypergraph` and `compileGraphAdjoint diamondAddMulConstHypergraph`. -/
+theorem layerHypergraphCsr_sound_and_agrees
+    (g : StrictOpenHypergraph) (initEnv : Nat → Int) :
+    let diamondEnv : Nat → Int := fun w =>
+      match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0
+    (layerHypergraphCsr g).all checkStageIndependent = true ∧
+    evalLayeredStagesSync initEnv (layerHypergraphCsr g) =
+      evalLayeredStages initEnv (layerHypergraphCsr g) ∧
+    evalHypergraphLayeredCsrSync g initEnv =
+      evalHypergraphLayeredCsr g initEnv ∧
+    ((layerHypergraphCsr diamondAddMulConstHypergraph).map List.length = [3, 1, 1]) ∧
+    evalHypergraphLayeredCsr diamondAddMulConstHypergraph initEnv =
+      evalHypergraphLayered diamondAddMulConstHypergraph initEnv ∧
+    evalHypergraphLayeredCsr diamondAddMulConstHypergraph initEnv =
+      evalHypergraphComb diamondAddMulConstHypergraph initEnv ∧
+    evalHypergraphLayeredCsr (compileGraphAdjoint diamondAddMulConstHypergraph) diamondEnv =
+      evalHypergraphComb (compileGraphAdjoint diamondAddMulConstHypergraph) diamondEnv ∧
+    evalHypergraphLayeredCsrSync (compileGraphAdjoint diamondAddMulConstHypergraph) diamondEnv =
+      [87, 11, 11, 7, 7] := by
+  obtain ⟨hInd, hSync, hOutSync⟩ := layerHypergraphCsr_universal_sync_sound g initEnv
   have hDiamondComb :
-      evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv =
-        evalHypergraphComb goldenDiamondHypergraph initEnv := rfl
+      evalHypergraphLayeredCsr diamondAddMulConstHypergraph initEnv =
+        evalHypergraphComb diamondAddMulConstHypergraph initEnv := rfl
   have hDiamondLay :
-      evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv =
-        evalHypergraphLayered goldenDiamondHypergraph initEnv := rfl
+      evalHypergraphLayeredCsr diamondAddMulConstHypergraph initEnv =
+        evalHypergraphLayered diamondAddMulConstHypergraph initEnv := rfl
   refine ⟨hInd, hSync, hOutSync, by decide +kernel, hDiamondLay, hDiamondComb, by decide +kernel, by decide +kernel⟩
 
 end Obend.Hardware.OpenHypergraph
