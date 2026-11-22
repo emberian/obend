@@ -11,6 +11,7 @@ Provides:
 -/
 public import Obend.Judge.Class
 public import Obend.Analysis.RealAnalysis
+import all Obend.Analysis.RealAnalysis
 
 public section
 namespace Obend.Judge
@@ -25,20 +26,30 @@ structure IntervalQuery where
   expr : RealExpr
   env : List (String × Interval)
   claimedBound : Interval
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Certificate for an interval query: direct evaluation or counterexample refutation point. -/
 inductive IntervalCert where
   | direct
   | counterexample (point : List (String × CanonicalRat))
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Refusal clauses for interval verification. -/
 inductive IntervalClause where
   | boundViolated (computed claimed : Interval)
   | domainUndefined
   | refutationWitness (point : List (String × CanonicalRat))
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
+
+def pointAssignment (pt : List (String × CanonicalRat)) (v : String) : CanonicalRat :=
+  match pt.find? (·.1 == v) with
+  | some (_, x) => x
+  | none => 0
+
+def entryInDomain (pt : List (String × CanonicalRat)) (entry : String × Interval) : Bool :=
+  match pt.find? (·.1 == entry.1) with
+  | some (_, x) => entry.2.containsRat x
+  | none => false
 
 /-- Checker for IntervalJudge. -/
 @[expose] def intervalCheck (_fuel : Nat) (q : IntervalQuery) (c : IntervalCert) : Judge.Verdict IntervalClause :=
@@ -50,19 +61,10 @@ inductive IntervalClause where
       else .refused (.boundViolated comp q.claimedBound) []
     | none => .refused .domainUndefined []
   | .counterexample pt =>
-    -- Domain Validation: verify every declared variable in q.env is assigned a value inside its interval
-    let inDomain := q.env.all fun (s, iv) =>
-      match pt.find? (·.1 == s) with
-      | some (_, v) => iv.containsRat v
-      | none => false
-    if !inDomain then
+    if !q.env.all (entryInDomain pt) then
       .uncovered
     else
-      let rho (s : String) : CanonicalRat :=
-        match pt.find? (·.1 == s) with
-        | some (_, v) => v
-        | none => 0
-      match evalPoint rho q.expr with
+      match evalPoint (pointAssignment pt) q.expr with
       | some v =>
         if decide (v < q.claimedBound.lo ∨ q.claimedBound.hi < v) then
           .refused (.refutationWitness pt) []
@@ -72,7 +74,7 @@ inductive IntervalClause where
 /-- Independent semantic meaning of an `IntervalQuery`:
 for every rational variable assignment `rho : String → CanonicalRat` enclosed by `q.env`,
 evaluating `q.expr` at `rho` lies inside `q.claimedBound`. -/
-@[expose] def IntervalQuery.SemanticMeaning (q : IntervalQuery) : Prop :=
+abbrev IntervalQuery.SemanticMeaning (q : IntervalQuery) : Prop :=
   ∀ (rho : String → CanonicalRat),
     (∀ v iv, q.env.lookup v = some iv → rho v ∈ iv) →
     evalExpr rho q.expr ∈ q.claimedBound
@@ -107,16 +109,149 @@ theorem intervalCheck_sound (fuel : Nat) (q : IntervalQuery) (c : IntervalCert)
       · split at h <;> contradiction
       · contradiction
 
+/-- A binding is visible exactly when no earlier entry shadows its name. -/
+inductive VarBoundInEnv (name : String) (iv : Interval) : List (String × Interval) → Prop where
+  | head {rest} : VarBoundInEnv name iv ((name, iv) :: rest)
+  | tail {k value rest} : k ≠ name → VarBoundInEnv name iv rest →
+      VarBoundInEnv name iv ((k, value) :: rest)
+
+private theorem varBound_iff_lookup {name iv env} :
+    VarBoundInEnv name iv env ↔ env.lookup name = some iv := by
+  constructor
+  · intro h
+    induction h with
+    | head => simp
+    | tail hne _ ih => simpa [List.lookup, beq_eq_false_iff_ne.mpr (Ne.symm hne)] using ih
+  · induction env with
+    | nil => simp
+    | cons hd tl ih =>
+      obtain ⟨k, val⟩ := hd
+      by_cases hk : k = name
+      · subst k
+        simpa using fun h : val = iv => h ▸ VarBoundInEnv.head (rest := tl)
+      · intro h
+        exact .tail hk (ih (by simpa [List.lookup, beq_eq_false_iff_ne.mpr (Ne.symm hk)] using h))
+
+/-- Endpoint arithmetic derived from the expression tree and its visible bindings. -/
+inductive ExprIntervalBounds (env : List (String × Interval)) : RealExpr → Interval → Prop where
+  | const (x) : ExprIntervalBounds env (.const x) (.ofPoint x)
+  | var {v I} : VarBoundInEnv v I env → ExprIntervalBounds env (.var v) I
+  | add {l r A B} : ExprIntervalBounds env l A → ExprIntervalBounds env r B →
+      ExprIntervalBounds env (.add l r) (.add A B)
+  | sub {l r A B} : ExprIntervalBounds env l A → ExprIntervalBounds env r B →
+      ExprIntervalBounds env (.sub l r) (.sub A B)
+  | mul {l r A B} : ExprIntervalBounds env l A → ExprIntervalBounds env r B →
+      ExprIntervalBounds env (.mul l r) (.mul A B)
+  | sqr {e A} : ExprIntervalBounds env e A → ExprIntervalBounds env (.sqr e) (.sqr A)
+
+theorem exprIntervalBounds_iff_evalInterval {env e I} :
+    ExprIntervalBounds env e I ↔ evalInterval env e = some I := by
+  constructor
+  · intro h
+    induction h <;> simp_all [evalInterval, varBound_iff_lookup]
+  · induction e generalizing I with
+    | const x => rintro h; cases h; exact .const x
+    | var v => intro h; exact .var (varBound_iff_lookup.mpr (by simpa [evalInterval] using h))
+    | add l r il ir | sub l r il ir | mul l r il ir =>
+      simp only [evalInterval, Option.bind_eq_bind, Option.bind_eq_some_iff, Option.pure_def,
+        Option.some.injEq]
+      rintro ⟨A, ha, B, hb, rfl⟩
+      constructor <;> first | exact il ha | exact ir hb
+    | sqr e ih =>
+      simp only [evalInterval, Option.bind_eq_bind, Option.bind_eq_some_iff, Option.pure_def,
+        Option.some.injEq]
+      rintro ⟨A, ha, rfl⟩
+      exact .sqr (ih ha)
+
+def DeclarativeIntervalEnclosed (q : IntervalQuery) : Prop :=
+  ∃ B, ExprIntervalBounds q.env q.expr B ∧ q.claimedBound.lo ≤ B.lo ∧ B.hi ≤ q.claimedBound.hi
+
+theorem declarativeIntervalEnclosed_iff_intervalCheck_ok (q : IntervalQuery) :
+    DeclarativeIntervalEnclosed q ↔ ∃ c r, intervalCheck r q c = .ok := by
+  constructor
+  · rintro ⟨B, deriv, lo, hi⟩
+    exact ⟨.direct, 0, by simp [intervalCheck, exprIntervalBounds_iff_evalInterval.mp deriv, lo, hi]⟩
+  · rintro ⟨c, r, ok⟩
+    cases c with
+    | direct =>
+      cases he : evalInterval q.env q.expr with
+      | none => simp [intervalCheck, he] at ok
+      | some B =>
+        refine ⟨B, exprIntervalBounds_iff_evalInterval.mpr he, ?_⟩
+        simpa [intervalCheck, he, apply_ite] using ok
+    | counterexample pt =>
+      simp only [intervalCheck, evalPoint_eq_some_evalExpr] at ok
+      split at ok <;> first | contradiction | split at ok <;> contradiction
+
+/-- A refutation verdict carries the submitted point, with every declared binding checked. -/
+theorem intervalCheck_refutation_witness {r q c pt path}
+    (h : intervalCheck r q c = .refused (.refutationWitness pt) path) :
+    c = .counterexample pt ∧ path = [] ∧ q.env.all (entryInDomain pt) = true ∧
+      (evalExpr (pointAssignment pt) q.expr < q.claimedBound.lo ∨
+       q.claimedBound.hi < evalExpr (pointAssignment pt) q.expr) := by
+  cases c with
+  | direct =>
+    simp only [intervalCheck] at h
+    split at h <;> (try split at h) <;> cases h
+  | counterexample point =>
+    simp only [intervalCheck, evalPoint_eq_some_evalExpr] at h
+    split at h
+    · contradiction
+    · rename_i domain
+      split at h
+      · rename_i outside
+        cases h
+        exact ⟨rfl, rfl, by simpa using domain, of_decide_eq_true outside⟩
+      · contradiction
+
+theorem intervalCheck_refuted {r q c pt path}
+    (h : intervalCheck r q c = .refused (.refutationWitness pt) path) :
+    ¬ IntervalQuery.SemanticMeaning q := by
+  obtain ⟨_, _, domain, outside⟩ := intervalCheck_refutation_witness h
+  intro meaning
+  have inside := meaning (pointAssignment pt) (by
+    intro v iv hv
+    obtain ⟨before, after, henv, _⟩ := List.lookup_eq_some_iff.mp hv
+    have hm : (v, iv) ∈ q.env := by simp [henv]
+    have valid := List.all_eq_true.mp domain (v, iv) hm
+    unfold entryInDomain at valid
+    unfold pointAssignment
+    cases hp : pt.find? (·.1 == v) with
+    | none => simp [hp] at valid
+    | some pair => exact (Interval.containsRat_iff_mem _ _).mp (by simpa [hp] using valid))
+  rw [Interval.mem_iff] at inside
+  grind
+
 instance intervalJudge : Judge IntervalQuery IntervalCert where
   Clause := IntervalClause
   Meaning q _c := IntervalQuery.SemanticMeaning q
   check := intervalCheck
   sound := by intro r q c h; exact intervalCheck_sound r q c h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment q := ∃ c r, intervalCheck r q c = .ok
-  complete := by rintro q ⟨c, r, h⟩ _; exact ⟨c, r, h⟩
+  refutes
+    | .refutationWitness _ => true
+    | _ => false
+  refuted := by
+    intro r q c k path refused refuting _
+    cases k <;> first | contradiction | exact intervalCheck_refuted refused
+  Fragment := DeclarativeIntervalEnclosed
+  complete := fun h _ => (declarativeIntervalEnclosed_iff_intervalCheck_ok _).mp h
   mono := by intro r r' o c le hne; rfl
+
+theorem intervalJudge_refutes_iff (k : IntervalClause) :
+    intervalJudge.refutes k = true ↔ ∃ pt, k = .refutationWitness pt := by
+  cases k with
+  | refutationWitness pt => exact ⟨fun _ => ⟨pt, rfl⟩, fun _ => rfl⟩
+  | boundViolated _ _ | domainUndefined =>
+    constructor
+    · intro h; cases h
+    · rintro ⟨pt, h⟩; cases h
+
+#tooth declarativeIntervalEnclosed_iff_intervalCheck_ok by mutation intervalCheck := fun _ _ _ => .ok
+#tooth intervalCheck_refuted by mutation intervalCheck := fun _ _ _ => .refused (.refutationWitness []) []
+
+example : intervalJudge.check 0 ⟨.var "x", [("x", ⟨0, 2⟩)], ⟨0, 2⟩⟩ .direct = .ok ∧
+    intervalJudge.check 0 ⟨.var "x", [("x", ⟨0, 2⟩)], ⟨0, 1⟩⟩ (.counterexample [("x", 2)]) =
+      .refused (.refutationWitness [("x", 2)]) [] := by constructor <;> rfl
 
 /-! ## Polynomial Sum-of-Squares (SOS) Judge (`sos@1`) & Multiplicative Graded-Lex (`grlex`) Order -/
 
@@ -125,9 +260,12 @@ namespace SOS
 abbrev Monomial := List (Nat × Nat)
 
 /-- Total degree $\sum_{(v, d) \in m} d$ of a monomial $m$. -/
-@[expose] def monoTotalDeg : Monomial → Nat
-  | [] => 0
-  | (_, d) :: rest => d + monoTotalDeg rest
+abbrev monoTotalDeg (m : Monomial) : Nat :=
+  m.foldr (fun power degree => power.2 + degree) 0
+
+@[simp] theorem monoTotalDeg_nil : monoTotalDeg [] = 0 := rfl
+@[simp] theorem monoTotalDeg_cons (v d : Nat) (rest : Monomial) :
+    monoTotalDeg ((v, d) :: rest) = d + monoTotalDeg rest := rfl
 
 /-- Multiply a canonical monomial by $x_v^d$, dropping zero-exponent factors (`d == 0`). -/
 @[expose] def mulVarPow (v d : Nat) : Monomial → Monomial
@@ -145,13 +283,13 @@ abbrev Monomial := List (Nat × Nat)
 
 /-- Normalize an arbitrary `Monomial` list into canonical strictly-increasing-variable,
 positive-exponent form by multiplying into `[]`. -/
-@[expose] def monoNormalize (m : Monomial) : Monomial :=
+abbrev monoNormalize (m : Monomial) : Monomial :=
   Monomial.mul m []
 
 abbrev Monomial.normalize : Monomial → Monomial := monoNormalize
 
 /-- Every entry in a normalized monomial has strictly positive exponent (`0 < d`). -/
-@[expose] def monoAllPos : Monomial → Bool
+def monoAllPos : Monomial → Bool
   | [] => true
   | (_, d) :: rest => decide (0 < d) && monoAllPos rest
 
@@ -196,30 +334,30 @@ theorem monoTotalDeg_mulVarPow (v d : Nat) (m : Monomial) :
     · have h : d = 0 := beq_iff_eq.mp hd0
       subst h
       rfl
-    · simp [hd0, monoTotalDeg]
+    · simp [hd0]
   | cons hd tl ih =>
     rcases hd with ⟨v2, d2⟩
     simp only [mulVarPow]
     by_cases hd0 : d == 0
     · have h : d = 0 := beq_iff_eq.mp hd0
       subst h
-      simp [monoTotalDeg]
+      simp
     · simp only [hd0, Bool.false_eq_true, ↓reduceIte]
       by_cases h1 : v < v2
-      · simp [h1, monoTotalDeg]
+      · simp [h1]
       · by_cases h2 : v2 < v
-        · simp only [h1, h2, ↓reduceIte, monoTotalDeg, ih]
+        · simp only [h1, h2, ↓reduceIte, monoTotalDeg_cons, ih]
           omega
-        · simp only [h1, h2, ↓reduceIte, monoTotalDeg]
+        · simp only [h1, h2, ↓reduceIte, monoTotalDeg_cons]
           omega
 
 theorem monoTotalDeg_mul (m1 m2 : Monomial) :
     monoTotalDeg (Monomial.mul m1 m2) = monoTotalDeg m1 + monoTotalDeg m2 := by
   induction m1 with
-  | nil => simp [Monomial.mul, monoTotalDeg]
+  | nil => simp [Monomial.mul]
   | cons hd tl ih =>
     rcases hd with ⟨v1, d1⟩
-    simp only [Monomial.mul, monoTotalDeg_mulVarPow, ih, monoTotalDeg]
+    simp only [Monomial.mul, monoTotalDeg_mulVarPow, ih, monoTotalDeg_cons]
     omega
 
 theorem mulVarPow_zero (v : Nat) (m : Monomial) :
@@ -482,14 +620,17 @@ theorem grlex_mul_left_compatible (m m1 m2 : Monomial)
     else
       (mNorm', c') :: insertNormalizedTerm m c rest
 
-@[expose] def insertTerm (m : Monomial) (c : CanonicalRat)
+abbrev insertTerm (m : Monomial) (c : CanonicalRat)
     (ts : List (Monomial × CanonicalRat)) : List (Monomial × CanonicalRat) :=
   let mNorm := Monomial.normalize m
   insertNormalizedTerm mNorm c ts
 
 structure Poly where
   terms : List (Monomial × CanonicalRat)
-  deriving @[expose] DecidableEq, Repr
+  deriving Repr
+
+instance instDecidableEqPoly : DecidableEq Poly
+  | ⟨xs⟩, ⟨ys⟩ => decidable_of_iff (xs = ys) ⟨congrArg Poly.mk, congrArg Poly.terms⟩
 
 /-- Alias `SparsePoly` for `Poly` (sparse multivariate polynomials over `CanonicalRat`). -/
 abbrev SparsePoly := Poly
@@ -612,44 +753,44 @@ theorem evalTerms_insertTerm (ρ : Nat → CanonicalRat) (m : Monomial) (c : Can
 
 namespace Poly
 
-@[expose] def zero : Poly := ⟨[]⟩
+abbrev zero : Poly := ⟨[]⟩
 
-@[expose] def one : Poly := ⟨[([], 1)]⟩
+abbrev one : Poly := ⟨[([], 1)]⟩
 
-@[expose] def isZero (p : Poly) : Bool :=
+abbrev isZero (p : Poly) : Bool :=
   p.terms.isEmpty
 
-@[expose] def add (p1 p2 : Poly) : Poly :=
+abbrev add (p1 p2 : Poly) : Poly :=
   ⟨p2.terms.foldl (fun acc (m, c) => insertTerm m c acc) p1.terms⟩
-
-@[expose] def neg (p : Poly) : Poly :=
-  ⟨p.terms.map fun (m, c) => (m, -c)⟩
-
-@[expose] def sub (p1 p2 : Poly) : Poly :=
-  add p1 (neg p2)
-
-@[expose] def scale (c : CanonicalRat) (p : Poly) : Poly :=
-  if c == 0 then zero
-  else ⟨p.terms.map fun (m, k) => (m, c * k)⟩
 
 @[expose] def mulTerm (t : Monomial × CanonicalRat) (p : Poly) : Poly :=
   if t.2 == 0 then zero
   else ⟨p.terms.map fun (m, c) => (Monomial.mul t.1 m, t.2 * c)⟩
 
-@[expose] def mul (p1 p2 : Poly) : Poly :=
-  p1.terms.foldl (fun acc t => add acc (mulTerm t p2)) zero
+@[expose] def scale (c : CanonicalRat) (p : Poly) : Poly :=
+  if c == 0 then zero
+  else ⟨p.terms.map fun (m, k) => (m, c * k)⟩
 
-@[expose] def sqr (p : Poly) : Poly :=
-  mul p p
+abbrev neg (p : Poly) : Poly := scale (-1) p
+
+abbrev sub (p1 p2 : Poly) : Poly := add p1 (neg p2)
+
+/-- Sum a list of polynomial contributions in insertion order. -/
+abbrev sumBy {α : Type} (terms : List α) (term : α → Poly) : Poly :=
+  terms.foldl (fun acc t => add acc (term t)) zero
+
+abbrev mul (p1 p2 : Poly) : Poly := sumBy p1.terms (fun t => mulTerm t p2)
+
+abbrev sqr (p : Poly) : Poly := mul p p
 
 /-- Evaluate a sparse multivariate polynomial `p : Poly` at variable assignment `ρ : Nat → CanonicalRat`. -/
-@[expose] def eval (ρ : Nat → CanonicalRat) (p : Poly) : CanonicalRat :=
+abbrev eval (ρ : Nat → CanonicalRat) (p : Poly) : CanonicalRat :=
   evalTerms ρ p.terms
 
 @[simp] theorem eval_zero (ρ : Nat → CanonicalRat) : Poly.zero.eval ρ = 0 := rfl
 
 @[simp] theorem eval_one (ρ : Nat → CanonicalRat) : Poly.one.eval ρ = 1 := by
-  simp [Poly.one, Poly.eval, evalTerms, Monomial.eval]
+  simp [Poly.eval, evalTerms, Monomial.eval]
   grind
 
 theorem eval_isZero (ρ : Nat → CanonicalRat) (p : Poly) (h : p.isZero = true) :
@@ -678,43 +819,6 @@ theorem evalTerms_foldl_insert (ρ : Nat → CanonicalRat)
   unfold Poly.add Poly.eval
   exact evalTerms_foldl_insert ρ p2.terms p1.terms
 
-/-- **Theorem (`Poly.eval_neg`)**: Polynomial negation commutes with evaluation. -/
-@[simp] theorem eval_neg (ρ : Nat → CanonicalRat) (p : Poly) :
-    (Poly.neg p).eval ρ = -(p.eval ρ) := by
-  rcases p with ⟨ts⟩
-  unfold Poly.neg Poly.eval
-  dsimp only
-  induction ts with
-  | nil => simp [evalTerms]
-  | cons hd tl ih =>
-    rcases hd with ⟨m, c⟩
-    simp only [List.map_cons, evalTerms, ih]
-    grind
-
-/-- **Theorem (`Poly.eval_sub`)**: Polynomial subtraction commutes with evaluation. -/
-@[simp] theorem eval_sub (ρ : Nat → CanonicalRat) (p1 p2 : Poly) :
-    (Poly.sub p1 p2).eval ρ = p1.eval ρ - p2.eval ρ := by
-  unfold Poly.sub
-  rw [eval_add, eval_neg]
-  grind
-
-/-- **Theorem (`Poly.eval_scale`)**: Scalar multiplication commutes with evaluation. -/
-@[simp] theorem eval_scale (ρ : Nat → CanonicalRat) (c : CanonicalRat) (p : Poly) :
-    (Poly.scale c p).eval ρ = c * p.eval ρ := by
-  rcases p with ⟨ts⟩
-  unfold Poly.scale Poly.eval
-  by_cases hc : c == 0
-  · have h0 : c = 0 := beq_iff_eq.mp hc
-    subst h0
-    simp [Poly.zero, evalTerms]
-  · simp only [hc, Bool.false_eq_true, ↓reduceIte]
-    induction ts with
-    | nil => simp [evalTerms]
-    | cons hd tl ih =>
-      rcases hd with ⟨m, k⟩
-      simp only [List.map_cons, evalTerms, ih]
-      grind
-
 theorem eval_mulTerm (ρ : Nat → CanonicalRat) (t : Monomial × CanonicalRat) (p : Poly) :
     (Poly.mulTerm t p).eval ρ = (t.2 * Monomial.eval ρ t.1) * p.eval ρ := by
   rcases p with ⟨ts⟩
@@ -733,6 +837,24 @@ theorem eval_mulTerm (ρ : Nat → CanonicalRat) (t : Monomial × CanonicalRat) 
       simp only [List.map_cons, evalTerms, Monomial.eval_mul, ih]
       grind
 
+@[simp] theorem eval_scale (ρ : Nat → CanonicalRat) (c : CanonicalRat) (p : Poly) :
+    (Poly.scale c p).eval ρ = c * p.eval ρ := by
+  change (mulTerm ([], c) p).eval ρ = c * p.eval ρ
+  rw [eval_mulTerm]
+  simp [Monomial.eval]
+
+@[simp] theorem eval_neg (ρ : Nat → CanonicalRat) (p : Poly) :
+    (Poly.neg p).eval ρ = -(p.eval ρ) := by
+  rw [neg, eval_scale]
+  grind
+
+/-- **Theorem (`Poly.eval_sub`)**: Polynomial subtraction commutes with evaluation. -/
+@[simp] theorem eval_sub (ρ : Nat → CanonicalRat) (p1 p2 : Poly) :
+    (Poly.sub p1 p2).eval ρ = p1.eval ρ - p2.eval ρ := by
+  unfold Poly.sub
+  rw [eval_add, eval_neg]
+  grind
+
 theorem eval_foldl_mulTerm (ρ : Nat → CanonicalRat)
     (ts1 : List (Monomial × CanonicalRat)) (p2 acc : Poly) :
     (ts1.foldl (fun a t => Poly.add a (Poly.mulTerm t p2)) acc).eval ρ =
@@ -747,7 +869,7 @@ theorem eval_foldl_mulTerm (ρ : Nat → CanonicalRat)
 /-- **Theorem (`Poly.eval_mul`)**: Polynomial multiplication commutes with evaluation. -/
 @[simp] theorem eval_mul (ρ : Nat → CanonicalRat) (p1 p2 : Poly) :
     (Poly.mul p1 p2).eval ρ = p1.eval ρ * p2.eval ρ := by
-  unfold Poly.mul
+  unfold Poly.mul sumBy
   rw [eval_foldl_mulTerm, eval_zero]
   unfold Poly.eval
   grind
@@ -769,7 +891,7 @@ end Poly
 namespace SparsePoly
 
 /-- Evaluate a sparse polynomial `p : SparsePoly` at variable assignment `ρ`. -/
-@[expose] def eval (ρ : Nat → CanonicalRat) (p : SparsePoly) : CanonicalRat :=
+def eval (ρ : Nat → CanonicalRat) (p : SparsePoly) : CanonicalRat :=
   Poly.eval ρ p
 
 theorem eval_add (ρ : Nat → CanonicalRat) (p1 p2 : SparsePoly) :
@@ -796,14 +918,14 @@ end SparsePoly
 
 structure SOSPoly where
   terms : List (CanonicalRat × Poly)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 namespace SOSPoly
 
-@[expose] def expand (sos : SOSPoly) : Poly :=
-  sos.terms.foldl (fun acc (c, p) => Poly.add acc (Poly.scale c (Poly.sqr p))) Poly.zero
+abbrev expand (sos : SOSPoly) : Poly :=
+  Poly.sumBy sos.terms (fun (c, p) => Poly.scale c (Poly.sqr p))
 
-@[expose] def allCoeffsPos (sos : SOSPoly) : Bool :=
+abbrev allCoeffsPos (sos : SOSPoly) : Bool :=
   sos.terms.all fun (c, _) => decide (0 < c)
 
 theorem eval_foldl_expand_nonneg (ρ : Nat → CanonicalRat)
@@ -839,48 +961,53 @@ structure SOSQuery where
   goal : Poly
   ineqs : List Poly
   eqs : List Poly
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 structure SOSCert where
   sigma0 : SOSPoly
   sigmas : List (SOSPoly × Nat)
   lambdas : List (Poly × Nat)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 inductive SOSClause where
   | invalidSOSWeights
   | identityMismatch (residual : Poly)
-  deriving @[expose] DecidableEq, Repr
+  | violatedAtOrigin
+  deriving DecidableEq, Repr
 
-@[expose] def sosCheck (_fuel : Nat) (q : SOSQuery) (c : SOSCert) : Judge.Verdict SOSClause :=
-  if !c.sigma0.allCoeffsPos then
-    .refused .invalidSOSWeights []
-  else if !c.sigmas.all (fun (s, _) => s.allCoeffsPos) then
-    .refused .invalidSOSWeights []
-  else if !c.sigmas.all (fun (_, idx) => decide (idx < q.ineqs.length)) then
-    .refused .invalidSOSWeights []
-  else if !c.lambdas.all (fun (_, idx) => decide (idx < q.eqs.length)) then
-    .refused .invalidSOSWeights []
-  else
-    let term0 := c.sigma0.expand
-    let termIneq := c.sigmas.foldl (fun acc (sig, idx) =>
-      match q.ineqs[idx]? with
-      | some gi => Poly.add acc (Poly.mul sig.expand gi)
-      | none => acc) Poly.zero
-    let termEq := c.lambdas.foldl (fun acc (lam, idx) =>
-      match q.eqs[idx]? with
-      | some hj => Poly.add acc (Poly.mul lam hj)
-      | none => acc) Poly.zero
-    let certPoly := Poly.add term0 (Poly.add termIneq termEq)
-    let diff := Poly.sub q.goal certPoly
+/-- A feasible origin with a strictly negative goal is a rational counterexample. -/
+def sosViolatedAtOrigin (q : SOSQuery) : Bool :=
+  (q.ineqs.all fun g => decide (0 ≤ g.eval (fun _ => 0))) &&
+  (q.eqs.all fun h => decide (h.eval (fun _ => 0) = 0)) &&
+  decide (q.goal.eval (fun _ => 0) < 0)
+
+@[expose] def indexedSum {α : Type} (factor : α → Poly) (gens : List Poly)
+    (terms : List (α × Nat)) (acc : Poly) : Poly :=
+  terms.foldl (fun sum (a, idx) =>
+    match gens[idx]? with
+    | some g => Poly.add sum (Poly.mul (factor a) g)
+    | none => sum) acc
+
+abbrev certificateResidual (q : SOSQuery) (c : SOSCert) : Poly :=
+  let ineq := indexedSum SOSPoly.expand q.ineqs c.sigmas Poly.zero
+  let eq := indexedSum id q.eqs c.lambdas Poly.zero
+  Poly.sub q.goal (Poly.add c.sigma0.expand (Poly.add ineq eq))
+
+def sosCheck (_fuel : Nat) (q : SOSQuery) (c : SOSCert) : Judge.Verdict SOSClause :=
+  if c.sigma0.allCoeffsPos && c.sigmas.all (fun (s, _) => s.allCoeffsPos) &&
+      c.sigmas.all (fun (_, idx) => decide (idx < q.ineqs.length)) &&
+      c.lambdas.all (fun (_, idx) => decide (idx < q.eqs.length)) then
+    let diff := certificateResidual q c
     if diff.isZero then .ok
+    else if sosViolatedAtOrigin q then .refused .violatedAtOrigin []
     else .refused (.identityMismatch diff) []
+  else .refused .invalidSOSWeights []
 
 /-- Independent semantic meaning of an `SOSQuery`:
 for every rational variable assignment `ρ : Nat → CanonicalRat`, whenever all inequality generators
 `g ∈ q.ineqs` evaluate to `≥ 0` and all equality generators `h ∈ q.eqs` evaluate to `= 0`,
 the target polynomial `q.goal` evaluates to `≥ 0`. -/
-@[expose] def SOSQuery.SemanticMeaning (q : SOSQuery) : Prop :=
+abbrev SOSQuery.SemanticMeaning (q : SOSQuery) : Prop :=
   ∀ (ρ : Nat → CanonicalRat),
     (∀ g ∈ q.ineqs, 0 ≤ g.eval ρ) →
     (∀ h ∈ q.eqs, h.eval ρ = 0) →
@@ -937,35 +1064,172 @@ theorem eval_foldl_lambdas_zero (ρ : Nat → CanonicalRat) (eqs : List Poly)
       rw [hEqs hj hmem]
       grind
 
-/-- **Theorem (`sosCheck_sound`)**:
-Whenever `sosCheck fuel q c = .ok`, the independent polynomial non-negativity claim
-`SOSQuery.SemanticMeaning q` holds for every assignment `ρ : Nat → CanonicalRat`. -/
-theorem sosCheck_sound (fuel : Nat) (q : SOSQuery) (c : SOSCert)
-    (h : sosCheck fuel q c = .ok) :
-    SOSQuery.SemanticMeaning q := by
+/-- A generator's position as it occurs in the query, including repeated generators. -/
+inductive NthPoly : List Poly → Nat → Poly → Prop where
+  | head {p ps} : NthPoly (p :: ps) 0 p
+  | tail {p ps i g} : NthPoly ps i g → NthPoly (p :: ps) (i + 1) g
+
+private theorem nthPoly_iff_getElem? {gens i g} : NthPoly gens i g ↔ gens[i]? = some g := by
+  constructor
+  · intro h
+    induction h with
+    | head => rfl
+    | tail _ ih => exact ih
+  · induction gens generalizing i with
+    | nil => simp
+    | cons p ps ih =>
+      cases i with
+      | zero => rintro h; cases h; exact .head
+      | succ i => intro h; exact .tail (ih h)
+
+/-- Multiply each coefficient polynomial by its indicated generator and add in certificate order. -/
+inductive GeneratorSum {α : Type} (factor : α → Poly) (gens : List Poly) :
+    List (α × Nat) → Poly → Poly → Prop where
+  | nil {acc} : GeneratorSum factor gens [] acc acc
+  | cons {a i rest acc g total} : NthPoly gens i g →
+      GeneratorSum factor gens rest (Poly.add acc (Poly.mul (factor a) g)) total →
+      GeneratorSum factor gens ((a, i) :: rest) acc total
+
+private theorem generatorSum_iff {α : Type} {factor : α → Poly} {gens terms acc total} :
+    GeneratorSum factor gens terms acc total ↔
+      (∀ t ∈ terms, t.2 < gens.length) ∧ indexedSum factor gens terms acc = total := by
+  constructor
+  · intro deriv
+    induction deriv with
+    | nil => exact ⟨by simp, rfl⟩
+    | cons nth _ ih =>
+      have hx := nthPoly_iff_getElem?.mp nth
+      obtain ⟨hi, _⟩ := List.getElem?_eq_some_iff.mp hx
+      exact ⟨by simpa using And.intro hi ih.1,
+        by simpa [indexedSum, hx] using ih.2⟩
+  · rintro ⟨bounds, rfl⟩
+    induction terms generalizing acc with
+    | nil => exact .nil
+    | cons hd tl ih =>
+      obtain ⟨a, i⟩ := hd
+      have hi : i < gens.length := bounds (a, i) (by simp)
+      have hx := List.getElem?_eq_getElem hi
+      simp only [indexedSum, List.foldl_cons, hx]
+      exact .cons (nthPoly_iff_getElem?.mpr hx) (ih (fun t ht => bounds t (by simp [ht])))
+
+/-- Inductive expansion of a weighted sum-of-squares `SOSPoly` into a polynomial accumulator. -/
+inductive SosExpansion : List (CanonicalRat × Poly) → Poly → Poly → Prop where
+  | nil {acc} : SosExpansion [] acc acc
+  | cons {w p rest acc total} :
+      SosExpansion rest (Poly.add acc (Poly.scale w (Poly.sqr p))) total →
+      SosExpansion ((w, p) :: rest) acc total
+
+private theorem sosExpansion_iff {terms acc total} :
+    SosExpansion terms acc total ↔
+      terms.foldl (fun a (c, p) => Poly.add a (Poly.scale c (Poly.sqr p))) acc = total := by
+  constructor
+  · intro h
+    induction h with
+    | nil => rfl
+    | cons _ ih => simpa using ih
+  · rintro rfl
+    induction terms generalizing acc with
+    | nil => exact .nil
+    | cons hd tl ih =>
+      obtain ⟨w, p⟩ := hd
+      exact .cons ih
+
+/-- A Putinar decomposition with positive square weights and a vanishing polynomial residual. -/
+def SosDecomposition (q : SOSQuery) (c : SOSCert) : Prop :=
+  (∀ cw ∈ c.sigma0.terms, 0 < cw.1) ∧
+  (∀ t ∈ c.sigmas, ∀ cw ∈ t.1.terms, 0 < cw.1) ∧
+  ∃ S₀ I E,
+    SosExpansion c.sigma0.terms Poly.zero S₀ ∧
+    GeneratorSum SOSPoly.expand q.ineqs c.sigmas Poly.zero I ∧
+    GeneratorSum id q.eqs c.lambdas Poly.zero E ∧
+    (Poly.sub q.goal (Poly.add S₀ (Poly.add I E))).terms = []
+
+def DeclarativeSosDecomposable (q : SOSQuery) : Prop := ∃ c, SosDecomposition q c
+
+theorem SosDecomposition.iff_validResidual (q : SOSQuery) (c : SOSCert) :
+    SosDecomposition q c ↔
+      (c.sigma0.allCoeffsPos && c.sigmas.all (fun (s, _) => s.allCoeffsPos) &&
+        c.sigmas.all (fun (_, i) => decide (i < q.ineqs.length)) &&
+        c.lambdas.all (fun (_, i) => decide (i < q.eqs.length))) = true ∧
+      (certificateResidual q c).isZero = true := by
+  simp only [SosDecomposition, sosExpansion_iff, generatorSum_iff, certificateResidual,
+    SOSPoly.expand, Poly.sumBy, Bool.and_eq_true, List.all_eq_true,
+    SOSPoly.allCoeffsPos, decide_eq_true_eq, Poly.isZero, List.isEmpty_iff]
+  constructor
+  · rintro ⟨pos, weights, _, _, _, rfl, ⟨ib, rfl⟩, ⟨eb, rfl⟩, identity⟩
+    exact ⟨⟨⟨⟨pos, weights⟩, ib⟩, eb⟩, identity⟩
+  · rintro ⟨⟨⟨⟨pos, weights⟩, ib⟩, eb⟩, identity⟩
+    exact ⟨pos, weights, _, _, _, rfl, ⟨ib, rfl⟩, ⟨eb, rfl⟩, identity⟩
+
+theorem SosDecomposition.meaning {q c} (h : SosDecomposition q c) : SOSQuery.SemanticMeaning q := by
   intro ρ hIneqs hEqs
+  obtain ⟨weights, identity⟩ := (SosDecomposition.iff_validResidual q c).mp h
+  simp only [Bool.and_eq_true] at weights
+  have h0 := SOSPoly.eval_expand_nonneg ρ c.sigma0 weights.1.1.1
+  have hI : 0 ≤ (indexedSum SOSPoly.expand q.ineqs c.sigmas Poly.zero).eval ρ :=
+    eval_foldl_sigmas_nonneg ρ q.ineqs hIneqs c.sigmas Poly.zero (by simp) weights.1.1.2
+  have hE : (indexedSum id q.eqs c.lambdas Poly.zero).eval ρ = 0 :=
+    eval_foldl_lambdas_zero ρ q.eqs hEqs c.lambdas Poly.zero (by simp)
+  have residual := Poly.eval_isZero ρ _ identity
+  rw [certificateResidual, Poly.eval_sub, Poly.eval_add, Poly.eval_add, hE] at residual
+  grind
+
+private theorem origin_refutes {q} (h : sosViolatedAtOrigin q = true) : ¬ SOSQuery.SemanticMeaning q := by
+  simp only [sosViolatedAtOrigin, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
+  intro meaning
+  have nonneg := meaning (fun _ => 0) h.1.1 h.1.2
+  grind
+
+theorem SosDecomposition.origin_valid {q c} (h : SosDecomposition q c) : sosViolatedAtOrigin q = false := by
+  cases hv : sosViolatedAtOrigin q with
+  | false => rfl
+  | true => exact False.elim (origin_refutes hv h.meaning)
+
+theorem sosCheck_ok_iff (r : Nat) (q : SOSQuery) (c : SOSCert) :
+    sosCheck r q c = .ok ↔ SosDecomposition q c := by
+  constructor
+  · intro h
+    apply (SosDecomposition.iff_validResidual q c).mpr
+    unfold sosCheck at h
+    split at h
+    · rename_i weights
+      dsimp only at h
+      split at h
+      · exact ⟨weights, by assumption⟩
+      · split at h <;> contradiction
+    · contradiction
+  · intro h
+    obtain ⟨weights, identity⟩ := (SosDecomposition.iff_validResidual q c).mp h
+    simp [sosCheck, weights, identity]
+
+/-- Kernel clients deciding acceptance can use the algebraic certificate alone.
+A valid decomposition already excludes the origin refutation. -/
+instance (r : Nat) (q : SOSQuery) (c : SOSCert) : Decidable (sosCheck r q c = .ok) :=
+  decidable_of_iff _ ((sosCheck_ok_iff r q c).trans (SosDecomposition.iff_validResidual q c)).symm
+
+theorem sosCheck_sound (fuel : Nat) (q : SOSQuery) (c : SOSCert)
+    (h : sosCheck fuel q c = .ok) : SOSQuery.SemanticMeaning q :=
+  ((sosCheck_ok_iff fuel q c).mp h).meaning
+
+theorem sosCheck_refuted {r q c path} (h : sosCheck r q c = .refused .violatedAtOrigin path) :
+    ¬ SOSQuery.SemanticMeaning q := by
   unfold sosCheck at h
-  by_cases hPos0 : c.sigma0.allCoeffsPos = true
-  · simp only [hPos0, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-    by_cases hPosS : (c.sigmas.all fun (s, _) => s.allCoeffsPos) = true
-    · simp only [hPosS, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-      by_cases hBndS : (c.sigmas.all fun (_, idx) => decide (idx < q.ineqs.length)) = true
-      · simp only [hBndS, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-        by_cases hBndL : (c.lambdas.all fun (_, idx) => decide (idx < q.eqs.length)) = true
-        · simp only [hBndL, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-          split at h
-          · rename_i hDiffZero
-            have hSub := Poly.eval_isZero ρ _ hDiffZero
-            rw [Poly.eval_sub, Poly.eval_add, Poly.eval_add] at hSub
-            have h0 := SOSPoly.eval_expand_nonneg ρ c.sigma0 hPos0
-            have hIneq := eval_foldl_sigmas_nonneg ρ q.ineqs hIneqs c.sigmas Poly.zero (by simp) hPosS
-            have hEq := eval_foldl_lambdas_zero ρ q.eqs hEqs c.lambdas Poly.zero (by simp)
-            grind
-          · contradiction
-        · simp [hBndL] at h
-      · simp [hBndS] at h
-    · simp [hPosS] at h
-  · simp [hPos0] at h
+  split at h
+  · dsimp only at h
+    split at h
+    · cases h
+    · split at h
+      · exact origin_refutes (by assumption)
+      · cases h
+  · cases h
+
+theorem declarativeSosDecomposable_iff_sosCheck_ok (q : SOSQuery) :
+    DeclarativeSosDecomposable q ↔ ∃ c r, sosCheck r q c = .ok := by
+  constructor
+  · rintro ⟨c, h⟩
+    exact ⟨c, 0, (sosCheck_ok_iff 0 q c).mpr h⟩
+  · rintro ⟨c, r, ok⟩
+    exact ⟨c, (sosCheck_ok_iff r q c).mp ok⟩
 
 /-- **Theorem (`insertTerm_normalizes_and_sosCheck_rejects_oob`)**:
 1. `insertTerm` normalizes unreduced monomials (such as `[(0, 1), (1, 0)]` vs `[(0, 1)]`) so they
@@ -992,11 +1256,30 @@ instance sosJudge : Judge SOSQuery SOSCert where
   Meaning q _c := SOSQuery.SemanticMeaning q
   check := sosCheck
   sound := by intro r q c h; exact sosCheck_sound r q c h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment q := ∃ c r, sosCheck r q c = .ok
-  complete := by rintro q ⟨c, r, h⟩ _; exact ⟨c, r, h⟩
+  refutes
+    | .violatedAtOrigin => true
+    | _ => false
+  refuted := by
+    intro r q c k path refused refuting _
+    cases k <;> first | contradiction | exact sosCheck_refuted refused
+  Fragment := DeclarativeSosDecomposable
+  complete := fun h _ => (declarativeSosDecomposable_iff_sosCheck_ok _).mp h
   mono := by intro r r' o c le hne; rfl
+
+theorem sosJudge_refutes_iff (k : SOSClause) :
+    sosJudge.refutes k = true ↔ k = .violatedAtOrigin := by
+  cases k <;> constructor <;> intro h <;> first | rfl | cases h
+
+#tooth declarativeSosDecomposable_iff_sosCheck_ok by mutation sosCheck := fun _ _ _ => .ok
+#tooth sosCheck_refuted by mutation sosCheck := fun _ _ _ => .refused .violatedAtOrigin []
+
+/-- The sign of the goal at the origin matters only when the origin is feasible. -/
+example : sosCheck 0 ⟨Poly.neg Poly.one, [], [Poly.one]⟩
+    ⟨⟨[]⟩, [], [(Poly.neg Poly.one, 0)]⟩ = .ok := by decide +kernel
+
+example : sosCheck 0 ⟨Poly.one, [], []⟩ ⟨⟨[(1, Poly.one)]⟩, [], []⟩ = .ok ∧
+    sosCheck 0 ⟨Poly.neg Poly.one, [], []⟩ ⟨⟨[]⟩, [], []⟩ =
+      .refused .violatedAtOrigin [] := by decide +kernel
 
 end SOS
 

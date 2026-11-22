@@ -20,6 +20,7 @@ public import Obend.Hardware.PinoutEquiv
 public import Obend.Hardware.Codec
 import all Obend.Hardware.PinoutEquiv
 import all Obend.Hardware.Codec
+import Obend.Tactic.Tooth
 public section
 namespace Obend.Hardware.Judge
 open Lean (Json toJson)
@@ -46,7 +47,7 @@ private theorem pack_canonical {α : Type} [Wire α] (x : α) : CanonicalCbor (p
 @[simp] private theorem pack_wf {α : Type} [Wire α] (x : α) :
     wfVal isValidUtf8 true (pack x) = true := pack_canonical x
 @[simp] private theorem unpack_pack {α : Type} [Wire α] (x : α) : unpack (pack x) = some x := Wire.inverse x
-private def wireIso {α β : Type} [Wire β] (f : α → β) (g : β → α) (h : ∀ x, g (f x) = x) : Wire α where
+@[instance_reducible] private def wireIso {α β : Type} [Wire β] (f : α → β) (g : β → α) (h : ∀ x, g (f x) = x) : Wire α where
   enc x := pack (f x)
   dec v := (unpack v).map g
   canonical x := pack_canonical (f x)
@@ -60,7 +61,7 @@ private instance : Wire (BitVec 64) where
   enc v := .uint (UInt64.ofNat v.toNat)
   dec | .uint n => some (BitVec.ofNat 64 n.toNat) | _ => none
   canonical _ := rfl
-  inverse v := by simp [UInt64.toNat_ofNat', Nat.mod_eq_of_lt v.isLt]
+  inverse _ := by simp
 private def natCborBig (n : Nat) : CborVal :=
   if n = 0 then .array [.uint 0] else
     .array [.uint 1, .uint (UInt64.ofNat (n % 4294967296)), natCborBig (n / 4294967296)]
@@ -122,9 +123,7 @@ private instance : Wire Nat := ⟨natCbor,cborNat,natCbor_canonical,cborNat_natC
 private instance {α β : Type} [Wire α] [Wire β] : Wire (α × β) where
   enc x := .array [pack x.1,pack x.2]
   dec | .array [a,b] => do return (← unpack a, ← unpack b) | _ => none
-  canonical x := by
-    have ha := pack_canonical x.1; have hb := pack_canonical x.2
-    simpa [CanonicalCbor, wfVal, wfList] using And.intro ha hb
+  canonical _ := by simp [CanonicalCbor, wfVal, wfList]
   inverse x := by simp [unpack_pack]
 private def listCbor {α : Type} [Wire α] : List α → CborVal
   | [] => .array [.uint 0]
@@ -166,16 +165,16 @@ private def cborRtlAluOp : CborVal → Option RtlAluOp
   | .array [.uint 12] => some .qmul32 | _ => none
 private instance : Wire RtlAluOp where
   enc := rtlAluOpCbor; dec := cborRtlAluOp
-  canonical x := by cases x <;> simp_all [rtlAluOpCbor, pack_wf, CanonicalCbor, wfVal, wfList]
-  inverse x := by cases x <;> simp_all [rtlAluOpCbor, cborRtlAluOp, unpack_pack]
+  canonical x := by cases x <;> simp_all [rtlAluOpCbor, CanonicalCbor, wfVal, wfList]
+  inverse x := by cases x <;> simp_all [rtlAluOpCbor, cborRtlAluOp]
 private def clkDomainCbor : ClkDomain → CborVal
   | .coreClk => .array [.uint 0] | .axiIoClk => .array [.uint 1] | .cfgJtagClk => .array [.uint 2]
 private def cborClkDomain : CborVal → Option ClkDomain
   | .array [.uint 0] => some .coreClk | .array [.uint 1] => some .axiIoClk | .array [.uint 2] => some .cfgJtagClk | _ => none
 private instance : Wire ClkDomain where
   enc := clkDomainCbor; dec := cborClkDomain
-  canonical x := by cases x <;> simp_all [clkDomainCbor, pack_wf, CanonicalCbor, wfVal, wfList]
-  inverse x := by cases x <;> simp_all [clkDomainCbor, cborClkDomain, unpack_pack]
+  canonical x := by cases x <;> simp_all [clkDomainCbor, CanonicalCbor, wfVal, wfList]
+  inverse x := by cases x <;> simp_all [clkDomainCbor, cborClkDomain]
 private def resetKindCbor : ResetKind → CborVal
   | .resetFree => .array [.uint 0] | .syncReset x0 => .array [.uint 1, pack x0]
 private def cborResetKind : CborVal → Option ResetKind
@@ -249,24 +248,24 @@ private def cborCarryMode : CborVal → Option CarryMode
   | .array [.uint 2] => some .ultCmp | .array [.uint 3] => some .sltCmp | _ => none
 private instance : Wire CarryMode where
   enc := carryModeCbor; dec := cborCarryMode
-  canonical x := by cases x <;> simp_all [carryModeCbor, pack_wf, CanonicalCbor, wfVal, wfList]
-  inverse x := by cases x <;> simp_all [carryModeCbor, cborCarryMode, unpack_pack]
+  canonical x := by cases x <;> simp_all [carryModeCbor, CanonicalCbor, wfVal, wfList]
+  inverse x := by cases x <;> simp_all [carryModeCbor, cborCarryMode]
 private def dspMulModeCbor : DspMulMode → CborVal
   | .mul64 => .array [.uint 0] | .qmul32 => .array [.uint 1]
 private def cborDspMulMode : CborVal → Option DspMulMode
   | .array [.uint 0] => some .mul64 | .array [.uint 1] => some .qmul32 | _ => none
 private instance : Wire DspMulMode where
   enc := dspMulModeCbor; dec := cborDspMulMode
-  canonical x := by cases x <;> simp_all [dspMulModeCbor, pack_wf, CanonicalCbor, wfVal, wfList]
-  inverse x := by cases x <;> simp_all [dspMulModeCbor, cborDspMulMode, unpack_pack]
+  canonical x := by cases x <;> simp_all [dspMulModeCbor, CanonicalCbor, wfVal, wfList]
+  inverse x := by cases x <;> simp_all [dspMulModeCbor, cborDspMulMode]
 private def shiftDirCbor : ShiftDir → CborVal
   | .shl => .array [.uint 0] | .lshr => .array [.uint 1] | .ashr => .array [.uint 2]
 private def cborShiftDir : CborVal → Option ShiftDir
   | .array [.uint 0] => some .shl | .array [.uint 1] => some .lshr | .array [.uint 2] => some .ashr | _ => none
 private instance : Wire ShiftDir where
   enc := shiftDirCbor; dec := cborShiftDir
-  canonical x := by cases x <;> simp_all [shiftDirCbor, pack_wf, CanonicalCbor, wfVal, wfList]
-  inverse x := by cases x <;> simp_all [shiftDirCbor, cborShiftDir, unpack_pack]
+  canonical x := by cases x <;> simp_all [shiftDirCbor, CanonicalCbor, wfVal, wfList]
+  inverse x := by cases x <;> simp_all [shiftDirCbor, cborShiftDir]
 private def belKindCbor : BelKind → CborVal
   | .constBel x0 => .array [.uint 0, pack x0] | .portIn x0 => .array [.uint 1, pack x0]
   | .wireTap x0 => .array [.uint 2, pack x0] | .regTap x0 => .array [.uint 3, pack x0]
@@ -331,46 +330,72 @@ private instance : Wire PnrCertificate := wireIso
   (fun x => (x.designName,x.placedCells,x.routedNets,x.expectedConfigs,x.bitstreamFrames,x.sinkCapFf))
   (fun (designName,placedCells,routedNets,expectedConfigs,bitstreamFrames,sinkCapFf) => ⟨designName,placedCells,routedNets,expectedConfigs,bitstreamFrames,sinkCapFf⟩)
   (by intro x; cases x; rfl)
-private def wireDigit (n : Nat) : Char :=
-  "0123456789abcdef".toList[n]?.getD '0'
-private def wireNibble (c : Char) : Option Nat := "0123456789abcdef".toList.idxOf? c
-private theorem wireDigit_inverse (n : Nat) (h : n < 16) :
-    wireNibble (wireDigit n) = some n ∧ wireDigit n ≠ '"' := by
+private def wireDigit : Nat → Char
+  | 0 => '0' | 1 => '1' | 2 => '2' | 3 => '3'
+  | 4 => '4' | 5 => '5' | 6 => '6' | 7 => '7'
+  | 8 => '8' | 9 => '9' | 10 => 'a' | 11 => 'b'
+  | 12 => 'c' | 13 => 'd' | 14 => 'e' | 15 => 'f'
+  | _ => '0'
+private def wireByteNibble : UInt8 → Option Nat
+  | 48 => some 0 | 49 => some 1 | 50 => some 2 | 51 => some 3
+  | 52 => some 4 | 53 => some 5 | 54 => some 6 | 55 => some 7
+  | 56 => some 8 | 57 => some 9 | 97 => some 10 | 98 => some 11
+  | 99 => some 12 | 100 => some 13 | 101 => some 14 | 102 => some 15
+  | _ => none
+private theorem wireDigit_utf8 (n : Nat) (h : n < 16) :
+    ∃ u : UInt8, [wireDigit n].utf8Encode.data.toList = [u] ∧ wireByteNibble u = some n ∧ u ≠ 34 := by
   have hn : n = 0 ∨ n = 1 ∨ n = 2 ∨ n = 3 ∨ n = 4 ∨ n = 5 ∨ n = 6 ∨ n = 7 ∨
       n = 8 ∨ n = 9 ∨ n = 10 ∨ n = 11 ∨ n = 12 ∨ n = 13 ∨ n = 14 ∨ n = 15 := by omega
   rcases hn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
-    rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide +kernel
+    rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    exact ⟨_, rfl, rfl, by decide⟩
 private def wireHex : List UInt8 → List Char
   | [] => []
   | b :: bs => wireDigit (b.toNat / 16) :: wireDigit (b.toNat % 16) :: wireHex bs
-private def wireHexTail : List Char → Option (List UInt8)
+private def wireHexTailBytes : List UInt8 → Option (List UInt8)
   | a :: b :: rest =>
-    if a == '"' && b == '}' && rest.isEmpty then some [] else do
-      let hi ← wireNibble a
-      let lo ← wireNibble b
-      let bytes ← wireHexTail rest
+    if a == 34 && b == 125 && rest.isEmpty then some [] else do
+      let hi ← wireByteNibble a
+      let lo ← wireByteNibble b
+      let bytes ← wireHexTailBytes rest
       return UInt8.ofNat (hi * 16 + lo) :: bytes
   | _ => none
-private theorem wireHex_inverse (bs : List UInt8) :
-    wireHexTail (wireHex bs ++ ['"','}']) = some bs := by
+private theorem wireHex_utf8_inverse (bs : List UInt8) :
+    wireHexTailBytes ((wireHex bs ++ ['"', '}']).utf8Encode.data.toList) = some bs := by
   induction bs with
   | nil => rfl
   | cons b bs ih =>
     have hb := UInt8.toNat_lt b
-    have hh := wireDigit_inverse (b.toNat / 16) (by omega)
-    have hl := wireDigit_inverse (b.toNat % 16) (Nat.mod_lt _ (by decide))
+    obtain ⟨uhi, hhiEnc, hhiNib, hhiNe⟩ := wireDigit_utf8 (b.toNat / 16) (by omega)
+    obtain ⟨ulo, hloEnc, hloNib, _⟩ := wireDigit_utf8 (b.toNat % 16) (Nat.mod_lt _ (by decide))
     have he : b.toNat / 16 * 16 + b.toNat % 16 = b.toNat := by omega
-    simp only [wireHex, List.cons_append, wireHexTail]
-    simp [hh.1,hh.2,hl.1,ih, -UInt8.ofNat_add, -UInt8.ofNat_mul, he]
+    have hstep : (wireHex (b :: bs) ++ ['"', '}']).utf8Encode.data.toList =
+        uhi :: ulo :: (wireHex bs ++ ['"', '}']).utf8Encode.data.toList := by
+      rw [wireHex, List.cons_append, List.cons_append,
+        List.utf8Encode_cons, ByteArray.toList_data_append, hhiEnc,
+        List.utf8Encode_cons, ByteArray.toList_data_append, hloEnc,
+        List.singleton_append, List.singleton_append]
+    rw [hstep]
+    generalize (wireHex bs ++ ['"', '}']).utf8Encode.data.toList = tail at ih ⊢
+    simp [wireHexTailBytes, hhiNib, hhiNe, hloNib, ih, -UInt8.ofNat_add, -UInt8.ofNat_mul, he]
 private def wireEnvelope (bs : ByteArray) : String :=
   String.ofList (['{','"','c','b','o','r','"',':','"'] ++ wireHex bs.data.toList ++ ['"','}'])
 private def readWireEnvelope (s : String) : Option ByteArray :=
-  match s.toList with
-  | '{' :: '"' :: 'c' :: 'b' :: 'o' :: 'r' :: '"' :: ':' :: '"' :: rest =>
-    (wireHexTail rest).map (fun bs => ⟨bs.toArray⟩)
+  match s.toByteArray.data.toList with
+  | 123 :: 34 :: 99 :: 98 :: 111 :: 114 :: 34 :: 58 :: 34 :: rest =>
+    (wireHexTailBytes rest).map (fun bs => ⟨bs.toArray⟩)
   | _ => none
 private theorem wireEnvelope_inverse (bs : ByteArray) : readWireEnvelope (wireEnvelope bs) = some bs := by
-  simp [wireEnvelope,readWireEnvelope,String.toList_ofList,List.append_assoc,wireHex_inverse]
+  unfold wireEnvelope readWireEnvelope
+  have hpre : ['{','"','c','b','o','r','"',':','"'].utf8Encode.data.toList =
+      [123, 34, 99, 98, 111, 114, 34, 58, 34] := rfl
+  have hbytes : (['{','"','c','b','o','r','"',':','"'] ++ wireHex bs.data.toList ++ ['"','}']).utf8Encode.data.toList =
+      123 :: 34 :: 99 :: 98 :: 111 :: 114 :: 34 :: 58 :: 34 ::
+        (wireHex bs.data.toList ++ ['"','}']).utf8Encode.data.toList := by
+    rw [List.append_assoc, List.utf8Encode_append, ByteArray.toList_data_append, hpre]
+    rfl
+  rw [String.toByteArray_ofList, hbytes]
+  simp only [wireHex_utf8_inverse, Option.map]
 private def encodeWire {α : Type} [Wire α] (x : α) : String := wireEnvelope (encodeDetCbor (pack x))
 private def decodeWire {α : Type} [Wire α] (s : String) : Except String α :=
   match readWireEnvelope s >>= decodeDetCbor >>= unpack with
@@ -444,7 +469,7 @@ theorem checkRetimeSta_ok_iff (r : Nat) (p : RetimeProblem) (c : RetimingCert) :
     checkRetimeSta r p c = .ok ↔ RetimeStaMeaning p c := by
   unfold checkRetimeSta RetimeStaMeaning checkRetimingCert checkAllEdgesNonneg checkEdgeWeightNonneg
   cases hv : checkGraphWellFormed p.1 <;> by_cases hp : p.2 = 0 <;>
-    simp [hv, hp, List.all_eq_true, and_assoc, Nat.pos_iff_ne_zero]
+    simp [hp, List.all_eq_true, and_assoc, Nat.pos_iff_ne_zero]
 instance retimeStaJudge : Obend.Judge RetimeProblem RetimingCert where
   Clause := HwClause
   Meaning := RetimeStaMeaning
@@ -820,7 +845,7 @@ theorem rtlSynthFormat_sound {r : Nat} {obj cert : String}
     ∃ o c, decodeRtlSynthObj obj = .ok o ∧ decodeRtlSynthCert cert = .ok c ∧
       RtlSynthMeaning o c :=
   rtlSynthFormat.checkBytes_sound h
-@[expose] instance {ε α : Type} [DecidableEq ε] [DecidableEq α] : DecidableEq (Except ε α)
+instance {ε α : Type} [DecidableEq ε] [DecidableEq α] : DecidableEq (Except ε α)
   | .error e1, .error e2 =>
     if h : e1 = e2 then isTrue (h ▸ rfl) else isFalse (fun hEq => by cases hEq; exact h rfl)
   | .ok a1, .ok a2 =>
@@ -1170,8 +1195,8 @@ theorem verifyBinaryHwCert_iff (c : BinaryHwCert) :
     · rename_i opK rOp
       dsimp only
       cases h3 : decodeTileIcapWords (encodeTileIcapWords (mkIcapRuleTile p0.toNat opK rOp p3.toNat))
-      · simp [h1, h2, h3]
-      · simp [h1, h2, h3, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq]
+      · simp [h3]
+      · simp [h3, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq]
   · simpa [verifyBinaryHwCert, BinaryHwCertDomainMeaning, checkAgenticEdaSwapBool] using
       (checkAgenticEdaSwapBool_iff p5 { baselineLdoPart with
         vohMinMv := p0.toNat, volMaxMv := p1.toNat, maxTempMc := p2.toNat,
@@ -1193,16 +1218,45 @@ theorem checkBinaryCborJudge_ok_iff (r : Nat) (expectedDom : HwCertDomain) (c : 
   · simp only [hOk, ↓reduceIte, reduceCtorEq, false_iff]
     simp only [Bool.and_eq_true, beq_iff_eq, verifyBinaryHwCert_iff] at hOk
     exact hOk
-instance binaryCborJudge : Obend.Judge HwCertDomain BinaryHwCert where
+/-- A wire domain code selects the specification that the certificate must satisfy. -/
+def BinaryCborCodeMeaning (domCode : Nat) (c : BinaryHwCert) : Prop :=
+  HwCertDomain.fromCode domCode = some c.domain ∧ BinaryHwCertDomainMeaning c
+
+def checkBinaryCborCodeJudge (_grade domCode : Nat) (cert : BinaryHwCert) : Verdict HwClause :=
+  match HwCertDomain.fromCode domCode with
+  | none => .refused (.binaryCborCertViolation domCode) []
+  | some dom => checkBinaryCborJudge 0 dom cert
+
+theorem checkBinaryCborCodeJudge_ok_iff (r domCode : Nat) (c : BinaryHwCert) :
+    checkBinaryCborCodeJudge r domCode c = .ok ↔ BinaryCborCodeMeaning domCode c := by
+  cases hd : HwCertDomain.fromCode domCode <;>
+    simp [checkBinaryCborCodeJudge, BinaryCborCodeMeaning, hd, checkBinaryCborJudge_ok_iff,
+      BinaryHwCertMeaning, eq_comm]
+
+instance binaryCborJudge : Obend.Judge Nat BinaryHwCert where
   Clause := HwClause
-  Meaning := BinaryHwCertMeaning
-  check := checkBinaryCborJudge
-  sound := by intro r o c h; exact (checkBinaryCborJudge_ok_iff r o c).mp h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ hRef; cases hRef
+  Meaning := BinaryCborCodeMeaning
+  check := checkBinaryCborCodeJudge
+  sound := fun {r o c} => (checkBinaryCborCodeJudge_ok_iff r o c).mp
+  refutes | .binaryCborCertViolation d => (HwCertDomain.fromCode d).isNone | _ => false
+  refuted := by
+    intro r code c k path h hk c' hm
+    obtain ⟨hd, _⟩ := hm
+    simp only [checkBinaryCborCodeJudge, hd, checkBinaryCborJudge] at h
+    split at h
+    · cases h
+    · cases h
+      simp [HwCertDomain.fromCode_toCode] at hk
   Fragment _ := True
-  complete := by intro o _ ⟨c, hc⟩; exact ⟨c, 0, (checkBinaryCborJudge_ok_iff 0 o c).mpr hc⟩
+  complete := by intro o _ ⟨c, hc⟩; exact ⟨c, 0, (checkBinaryCborCodeJudge_ok_iff 0 o c).mpr hc⟩
   mono := by intro _ _ _ _ _ _; rfl
+
+theorem unregisteredBinaryCborCode_refused (c : BinaryHwCert) :
+    checkBinaryCborCodeJudge 0 99 c = .refused (.binaryCborCertViolation 99) [] ∧
+    binaryCborJudge.refutes (.binaryCborCertViolation 99) = true := ⟨rfl, rfl⟩
+
+#tooth unregisteredBinaryCborCode_refused by mutation checkBinaryCborCodeJudge := fun _ _ _ => .ok
+
 def badBinaryPnrCert : BinaryHwCert := { goldenBinaryPnrCert with p5 := 100 }
 -- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badBinaryCborCert_refused :
@@ -1225,6 +1279,11 @@ def encodeHexBytes (bytes : List UInt8) : String :=
   String.ofList (bytes.flatMap fun b =>
     let n := b.toNat
     [hexDigits.getD (n / 16) '0', hexDigits.getD (n % 16) '0'])
+def decodeBinaryCborDomainCode (s : String) : Except String Nat :=
+  match s.trimAscii.toString.toNat? <|> extractNatField s "domainId" with
+  | some n => .ok n
+  | none => .error s!"missing required binary CBOR domain id in '{s}'"
+
 def decodeBinaryCborObj (s : String) : Except String HwCertDomain :=
   match s.trimAscii.toString.toNat? with
   | some n =>
@@ -1268,7 +1327,7 @@ theorem verifyBinaryTapeCert_iff (c : BinaryTapeCert) :
   cases dom <;>
     simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff, decide_eq_true_eq,
       beq_iff_eq, List.all_eq_true, Bool.and_false, Bool.false_eq_true, reduceCtorEq, or_self,
-      true_or, or_true, true_and, false_and, false_iff]
+      true_or, or_true, true_and, false_and]
   · constructor
     · rintro ⟨⟨⟨⟨_, hm0⟩, hm1⟩, hws⟩, ⟨hlen, hm1b⟩, hsum⟩
       exact ⟨hlen, hm0, hm1, hm1b, hws, hsum⟩
@@ -1354,15 +1413,15 @@ def verifyRawBinaryCborCert (expectedDom : HwCertDomain) (raw : ByteArray) : Ver
     | some tapeCert => checkBinaryTapeCert 0 expectedDom tapeCert
     | none => .refused (.binaryCborCertViolation expectedDom.toCode) []
 def binaryCborFormat : Format where
-  name := "hw-binary-cbor"; version := "1"; Obj := HwCertDomain; Cert := BinaryHwCert
-  judge := binaryCborJudge; decodeObj := decodeBinaryCborObj; decodeCert := decodeBinaryCborCert
+  name := "hw-binary-cbor"; version := "1"; Obj := Nat; Cert := BinaryHwCert
+  judge := binaryCborJudge; decodeObj := decodeBinaryCborDomainCode; decodeCert := decodeBinaryCborCert
   trust := .kernel; regime := .decidable
-  bad := (.pnr, badBinaryPnrCert); badGrade := 0
+  bad := (1, badBinaryPnrCert); badGrade := 0
   bad_refused := ⟨_, _, badBinaryCborCert_refused⟩
 theorem binaryCborFormat_sound {r : Nat} {obj cert : String}
     (h : binaryCborFormat.checkBytes r obj cert = .ok) :
-    ∃ o c, decodeBinaryCborObj obj = .ok o ∧ decodeBinaryCborCert cert = .ok c ∧
-      BinaryHwCertMeaning o c :=
+    ∃ o c, decodeBinaryCborDomainCode obj = .ok o ∧ decodeBinaryCborCert cert = .ok c ∧
+      BinaryCborCodeMeaning o c :=
   binaryCborFormat.checkBytes_sound h
 def hardwareFormats : List Format :=
   [ hwSynthFormat, rtlSynthFormat, hwRetimeFormat, hwPnrFormat

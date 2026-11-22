@@ -25,12 +25,19 @@ Implements **Pillar 3B** of the Wave 3 Master Roadmap:
      $(\det J_{\text{alg}}(x))^2 - \delta_{\text{reg}} \ge 0$ ($\delta_{\text{reg}} > 0$) on the manifold.
 5. **Universal Judge & Format Registration (`sosLyapunovJudge`, `sosLyapunovFormat` = `"sos-lyapunov-cbf@1"`)**:
    - Instantiates `Judge SosLyapunovProblem SosLyapunovCert` and registers `"sos-lyapunov-cbf@1"`.
+   - The judge's `Fragment` is `SosLyapunovProblemCertifiable` (scope conditions, quadratic-module
+     memberships, a Stengle identity and ideal combinations, stated over the polynomial ring), and
+     `sosLyapunovProblemCertifiable_iff_check_ok` proves it is exactly the set of problems the
+     checker accepts a certificate for.
 -/
 public import Obend.Judge.Class
 import all Obend.Judge.Class
 public import Obend.Judge.RealAnalysis
+import all Obend.Judge.RealAnalysis
 public import Obend.Analysis.RealAnalysis
+import all Obend.Analysis.RealAnalysis
 public import Obend.Analysis.Groebner
+import all Obend.Analysis.Groebner
 public import Obend.Analysis.Diff
 public import Obend.Tactic.Tooth
 public section
@@ -344,6 +351,79 @@ theorem checkPsatzNonneg_sound
         grind
   · simp [hPos0] at hCheck
 
+/-- `checkPsatzNonneg` accepts a non-zero goal: $x_0^2 = 1 \cdot x_0^2$ is its own SOS certificate. -/
+theorem checkPsatzNonneg_inhabited :
+    ∃ goal ineqs eqs cert, checkPsatzNonneg goal ineqs eqs cert = true ∧ 0 < goal.terms.length := by
+  refine ⟨Poly.sqr (polyOfTerm [(0, 1)] 1), [], [],
+    { monoidIndices := [], sigma0 := { terms := [(1, polyOfTerm [(0, 1)] 1)] },
+      coneTerms := [], idealTerms := [] }, ?_⟩
+  decide +kernel
+
+/-- What an acceptance of `checkPsatzNonneg` consists of. -/
+theorem checkPsatzNonneg_true_elim
+    (goal : Poly) (ineqs eqs : List Poly) (cert : PositivstellensatzCert)
+    (hCheck : checkPsatzNonneg goal ineqs eqs cert = true) :
+    cert.sigma0.allCoeffsPos = true ∧
+    ∃ conePoly idealPoly,
+      expandConeSum ineqs cert.coneTerms = some conePoly ∧
+      expandIdealCombination? eqs cert.idealTerms = some idealPoly ∧
+      (Poly.sub goal (Poly.add cert.sigma0.expand (Poly.add conePoly idealPoly))).isZero = true := by
+  unfold checkPsatzNonneg at hCheck
+  by_cases hPos0 : cert.sigma0.allCoeffsPos = true
+  · simp only [hPos0, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hCheck
+    rcases Option.eq_none_or_eq_some (expandConeSum ineqs cert.coneTerms) with hCone | ⟨conePoly, hCone⟩
+    · rw [hCone] at hCheck; contradiction
+    · rw [hCone] at hCheck
+      rcases Option.eq_none_or_eq_some (expandIdealCombination? eqs cert.idealTerms) with
+        hIdeal | ⟨idealPoly, hIdeal⟩
+      · rw [hIdeal] at hCheck; contradiction
+      · rw [hIdeal] at hCheck
+        dsimp only at hCheck
+        exact ⟨hPos0, conePoly, idealPoly, hCone, hIdeal, hCheck⟩
+  · simp [hPos0] at hCheck
+
+/-- The converse of `checkPsatzNonneg_true_elim`. -/
+theorem checkPsatzNonneg_true_intro
+    (goal : Poly) (ineqs eqs : List Poly) (cert : PositivstellensatzCert) (conePoly idealPoly : Poly)
+    (hPos0 : cert.sigma0.allCoeffsPos = true)
+    (hCone : expandConeSum ineqs cert.coneTerms = some conePoly)
+    (hIdeal : expandIdealCombination? eqs cert.idealTerms = some idealPoly)
+    (hZero : (Poly.sub goal (Poly.add cert.sigma0.expand (Poly.add conePoly idealPoly))).isZero = true) :
+    checkPsatzNonneg goal ineqs eqs cert = true := by
+  unfold checkPsatzNonneg
+  simp only [hPos0, hCone, hIdeal, hZero, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+
+/-- **`goal` is in the quadratic module of `ineqs` modulo the ideal of `eqs`**: it equals, as a
+polynomial, a positive-weight SOS term plus a cone sum over `ineqs` plus an ideal combination of
+`eqs`. Stated over the relations of `Obend.Analysis.Groebner`; nothing is run. -/
+def PsatzNonnegCertifiable (goal : Poly) (ineqs eqs : List Poly) : Prop :=
+  ∃ (sigma0 : SOSPoly) (coneTerms : List (SOSPoly × Nat)) (idealTerms : List (Poly × Nat))
+    (conePoly idealPoly : Poly),
+    PosSosWeights sigma0 ∧
+    ConeSumRel ineqs coneTerms conePoly ∧
+    IdealCombRel eqs idealTerms idealPoly ∧
+    (Poly.sub goal (Poly.add sigma0.expand (Poly.add conePoly idealPoly))).terms = []
+
+theorem psatzNonnegCertifiable_iff (goal : Poly) (ineqs eqs : List Poly) :
+    PsatzNonnegCertifiable goal ineqs eqs ↔ ∃ cert, checkPsatzNonneg goal ineqs eqs cert = true := by
+  unfold PsatzNonnegCertifiable
+  constructor
+  · rintro ⟨sigma0, coneTerms, idealTerms, conePoly, idealPoly, hPos, hCone, hIdeal, hZero⟩
+    exact ⟨⟨[], sigma0, coneTerms, idealTerms⟩,
+      checkPsatzNonneg_true_intro goal ineqs eqs ⟨[], sigma0, coneTerms, idealTerms⟩ conePoly idealPoly
+        ((posSosWeights_iff sigma0).mp hPos)
+        ((coneSumRel_iff ineqs coneTerms conePoly).mp hCone)
+        ((idealCombRel_iff eqs idealTerms idealPoly).mp hIdeal)
+        ((polyTermsNil_iff_isZero _).mp hZero)⟩
+  · rintro ⟨cert, hCheck⟩
+    obtain ⟨hPos0, conePoly, idealPoly, hCone, hIdeal, hZero⟩ :=
+      checkPsatzNonneg_true_elim goal ineqs eqs cert hCheck
+    exact ⟨cert.sigma0, cert.coneTerms, cert.idealTerms, conePoly, idealPoly,
+      (posSosWeights_iff cert.sigma0).mpr hPos0,
+      (coneSumRel_iff ineqs cert.coneTerms conePoly).mpr hCone,
+      (idealCombRel_iff eqs cert.idealTerms idealPoly).mpr hIdeal,
+      (polyTermsNil_iff_isZero _).mpr hZero⟩
+
 /-! ## 3. Sum-of-Squares (SOS) Nonlinear Lyapunov Stability (`checkSosLyapunov`, `checkSosLyapunov_sound`) -/
 
 /-- Zero origin assignment `originEnv : Nat → CanonicalRat := fun _ => 0`. -/
@@ -367,6 +447,70 @@ def polyVarsBounded (dim : Nat) (p : Poly) : Bool :=
 def natListNodupB : List Nat → Bool
   | [] => true
   | x :: xs => !(xs.contains x) && natListNodupB xs
+
+theorem monomialVarsBounded_iff (dim : Nat) (m : Monomial) :
+    monomialVarsBounded dim m = true ↔ ∀ ve ∈ m, ve.2 = 0 ∨ ve.1 < dim := by
+  induction m with
+  | nil => exact ⟨fun _ _ h => (nomatch h), fun _ => rfl⟩
+  | cons hd tl ih =>
+    obtain ⟨v, e⟩ := hd
+    constructor
+    · intro hB ve hve
+      dsimp only [monomialVarsBounded] at hB
+      rcases (Bool.and_eq_true _ _).mp hB with ⟨hHead, hRest⟩
+      rcases List.mem_cons.mp hve with hEq | hTl
+      · rw [hEq]
+        rcases (Bool.or_eq_true _ _).mp hHead with he0 | hvLt
+        · exact Or.inl (of_decide_eq_true he0)
+        · exact Or.inr (of_decide_eq_true hvLt)
+      · exact ih.mp hRest ve hTl
+    · intro hAll
+      dsimp only [monomialVarsBounded]
+      refine (Bool.and_eq_true _ _).mpr
+        ⟨?_, ih.mpr (fun ve hve => hAll ve (List.mem_cons.mpr (Or.inr hve)))⟩
+      rcases hAll (v, e) (List.mem_cons.mpr (Or.inl rfl)) with he0 | hvLt
+      · exact (Bool.or_eq_true _ _).mpr (Or.inl (decide_eq_true he0))
+      · exact (Bool.or_eq_true _ _).mpr (Or.inr (decide_eq_true hvLt))
+
+theorem polyTermsVarsBounded_iff (dim : Nat) (terms : List (Monomial × CanonicalRat)) :
+    polyTermsVarsBounded dim terms = true ↔
+      ∀ mc ∈ terms, mc.2 = 0 ∨ ∀ ve ∈ mc.1, ve.2 = 0 ∨ ve.1 < dim := by
+  induction terms with
+  | nil => exact ⟨fun _ _ h => (nomatch h), fun _ => rfl⟩
+  | cons hd tl ih =>
+    obtain ⟨m, c⟩ := hd
+    constructor
+    · intro hB mc hmc
+      dsimp only [polyTermsVarsBounded] at hB
+      rcases (Bool.and_eq_true _ _).mp hB with ⟨hHead, hRest⟩
+      rcases List.mem_cons.mp hmc with hEq | hTl
+      · rw [hEq]
+        rcases (Bool.or_eq_true _ _).mp hHead with hc0 | hmB
+        · exact Or.inl (of_decide_eq_true hc0)
+        · exact Or.inr ((monomialVarsBounded_iff dim m).mp hmB)
+      · exact ih.mp hRest mc hTl
+    · intro hAll
+      dsimp only [polyTermsVarsBounded]
+      refine (Bool.and_eq_true _ _).mpr
+        ⟨?_, ih.mpr (fun mc hmc => hAll mc (List.mem_cons.mpr (Or.inr hmc)))⟩
+      rcases hAll (m, c) (List.mem_cons.mpr (Or.inl rfl)) with hc0 | hmB
+      · exact (Bool.or_eq_true _ _).mpr (Or.inl (decide_eq_true hc0))
+      · exact (Bool.or_eq_true _ _).mpr (Or.inr ((monomialVarsBounded_iff dim m).mpr hmB))
+
+/-- Every term of `p` with a non-zero coefficient mentions, with a non-zero exponent, only state
+variables `v < dim`. -/
+def PolyVarsBoundedProp (dim : Nat) (p : Poly) : Prop :=
+  ∀ mc ∈ p.terms, mc.2 = 0 ∨ ∀ ve ∈ mc.1, ve.2 = 0 ∨ ve.1 < dim
+
+theorem polyVarsBoundedProp_iff (dim : Nat) (p : Poly) :
+    PolyVarsBoundedProp dim p ↔ polyVarsBounded dim p = true := by
+  unfold PolyVarsBoundedProp polyVarsBounded
+  exact (polyTermsVarsBounded_iff dim p.terms).symm
+
+theorem natListNodupB_iff (xs : List Nat) : natListNodupB xs = true ↔ xs.Nodup := by
+  induction xs with
+  | nil => simp [natListNodupB]
+  | cons x xs ih => simp [natListNodupB, ih]
 
 theorem monomialVarsBounded_eval_congr
     (dim : Nat) (env₁ env₂ : Nat → CanonicalRat)
@@ -1012,6 +1156,289 @@ theorem checkSosLyapunovProblem_refuted
     · simp [hC] at hRef
   · simp [hL] at hRef
 
+/-! ### The certifiable fragment, stated over the polynomial ring
+
+What it is for a problem to have a certificate, said without running a checker: scope conditions
+as quantified statements over terms, positivity claims as memberships in a quadratic module
+(`PsatzNonnegCertifiable`), the unsafe-set separation as a Stengle identity
+(`StenglePositivstellensatzRefutable`), and manifold tangency as an ideal combination
+(`IdealCombRel`). `sosLyapunovProblemCertifiable_iff_check_ok` proves this is exactly the set of
+problems the checker accepts some certificate for. -/
+
+/-- Dimension and variable scope of a Lyapunov specification. -/
+def LyapunovSpecWellScoped (spec : SosLyapunovSpec) : Prop :=
+  0 < spec.dim ∧
+  spec.vectorField.length = spec.dim ∧
+  PolyVarsBoundedProp spec.dim spec.lyapunovV ∧
+  (∀ f ∈ spec.vectorField, PolyVarsBoundedProp spec.dim f) ∧
+  (∀ g ∈ spec.domainIneqs, PolyVarsBoundedProp spec.dim g)
+
+theorem lyapunovSpecWellScoped_iff (spec : SosLyapunovSpec) :
+    LyapunovSpecWellScoped spec ↔ checkSosLyapunovDims spec = true := by
+  unfold LyapunovSpecWellScoped checkSosLyapunovDims
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, polyVarsBoundedProp_iff,
+    and_assoc]
+
+/-- Dimension and variable scope of a barrier specification. -/
+def CbfSpecWellScoped (spec : SosCbfSpec) : Prop :=
+  0 < spec.vectorField.length ∧
+  PolyVarsBoundedProp spec.vectorField.length spec.barrierB ∧
+  PolyVarsBoundedProp spec.vectorField.length spec.unsafePoly ∧
+  (∀ f ∈ spec.vectorField, PolyVarsBoundedProp spec.vectorField.length f) ∧
+  (∀ g ∈ spec.domainIneqs, PolyVarsBoundedProp spec.vectorField.length g)
+
+theorem cbfSpecWellScoped_iff (spec : SosCbfSpec) :
+    CbfSpecWellScoped spec ↔ checkSosCbfDims spec = true := by
+  unfold CbfSpecWellScoped checkSosCbfDims
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, polyVarsBoundedProp_iff,
+    and_assoc]
+
+/-- Dimension, squareness, distinct algebraic variables and variable scope of a DAE manifold
+specification. -/
+def DaeSpecWellScoped (spec : DaeManifoldSpec) : Prop :=
+  0 < spec.vectorField.length ∧
+  spec.algConstraints.length = spec.algVars.length ∧
+  spec.algVars.Nodup ∧
+  (∀ v ∈ spec.algVars, v < spec.vectorField.length) ∧
+  PolyVarsBoundedProp spec.vectorField.length spec.algJacobianDet ∧
+  (∀ h ∈ spec.algConstraints, PolyVarsBoundedProp spec.vectorField.length h) ∧
+  (∀ f ∈ spec.vectorField, PolyVarsBoundedProp spec.vectorField.length f) ∧
+  (∀ g ∈ spec.domainIneqs, PolyVarsBoundedProp spec.vectorField.length g)
+
+theorem daeSpecWellScoped_iff (spec : DaeManifoldSpec) :
+    DaeSpecWellScoped spec ↔ checkDaeManifoldDims spec = true := by
+  unfold DaeSpecWellScoped checkDaeManifoldDims
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, polyVarsBoundedProp_iff,
+    natListNodupB_iff, and_assoc]
+
+/-- **A Lyapunov function with algebraic certificates**: well scoped, `ε > 0`, `γ ≥ 0`, `V(0) = 0`,
+and both `V - ε‖x‖²` and `-L_f V - γ V` lie in the quadratic module of the domain. -/
+def LyapunovAlgebraicallyCertifiable (spec : SosLyapunovSpec) : Prop :=
+  LyapunovSpecWellScoped spec ∧
+  0 < spec.radialEps ∧
+  0 ≤ spec.decayGamma ∧
+  spec.lyapunovV.eval originEnv = 0 ∧
+  PsatzNonnegCertifiable
+    (Poly.sub spec.lyapunovV (Poly.scale spec.radialEps (sumVarSquaresPoly spec.dim)))
+    spec.domainIneqs [] ∧
+  PsatzNonnegCertifiable
+    (Poly.sub (Poly.neg (lieDerivativePoly spec.lyapunovV spec.vectorField))
+      (Poly.scale spec.decayGamma spec.lyapunovV))
+    spec.domainIneqs []
+
+theorem lyapunovAlgebraicallyCertifiable_iff (spec : SosLyapunovSpec) :
+    LyapunovAlgebraicallyCertifiable spec ↔ ∃ w, checkSosLyapunov spec w = true := by
+  unfold LyapunovAlgebraicallyCertifiable
+  constructor
+  · rintro ⟨hDims, hEps, hGamma, hOrigin, hPos, hLie⟩
+    obtain ⟨c1, hc1⟩ := (psatzNonnegCertifiable_iff _ _ _).mp hPos
+    obtain ⟨c2, hc2⟩ := (psatzNonnegCertifiable_iff _ _ _).mp hLie
+    refine ⟨⟨c1, c2⟩, ?_⟩
+    unfold checkSosLyapunov
+    dsimp only
+    simp only [Bool.and_eq_true, decide_eq_true_eq]
+    exact ⟨⟨⟨⟨⟨(lyapunovSpecWellScoped_iff spec).mp hDims, hEps⟩, hGamma⟩, hOrigin⟩, hc1⟩, hc2⟩
+  · rintro ⟨w, hCheck⟩
+    unfold checkSosLyapunov at hCheck
+    dsimp only at hCheck
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hCheck
+    obtain ⟨⟨⟨⟨⟨hDims, hEps⟩, hGamma⟩, hOrigin⟩, hc1⟩, hc2⟩ := hCheck
+    exact ⟨(lyapunovSpecWellScoped_iff spec).mpr hDims, hEps, hGamma, hOrigin,
+      (psatzNonnegCertifiable_iff _ _ _).mpr ⟨w.posDefCert, hc1⟩,
+      (psatzNonnegCertifiable_iff _ _ _).mpr ⟨w.lieDecayCert, hc2⟩⟩
+
+/-- **A barrier with algebraic certificates**: well scoped, `α ≥ 0`, a Stengle identity refuting
+`B ≥ 0 ∧ u ≥ 0` on the domain, and `L_f B + α B` in the quadratic module of `B` and the domain. -/
+def CbfAlgebraicallyCertifiable (spec : SosCbfSpec) : Prop :=
+  CbfSpecWellScoped spec ∧
+  0 ≤ spec.classKAlpha ∧
+  StenglePositivstellensatzRefutable
+    { strictPos := []
+    , nonneg    := spec.barrierB :: spec.unsafePoly :: spec.domainIneqs
+    , eqs       := [] } ∧
+  PsatzNonnegCertifiable
+    (Poly.add (lieDerivativePoly spec.barrierB spec.vectorField)
+      (Poly.scale spec.classKAlpha spec.barrierB))
+    (spec.barrierB :: spec.domainIneqs) []
+
+theorem cbfAlgebraicallyCertifiable_iff (spec : SosCbfSpec) :
+    CbfAlgebraicallyCertifiable spec ↔ ∃ w, checkSosCbf spec w = true := by
+  unfold CbfAlgebraicallyCertifiable
+  constructor
+  · rintro ⟨hDims, hAlpha, hRef, hNag⟩
+    obtain ⟨c1, r, hc1⟩ := (stenglePositivstellensatzRefutable_iff_check_ok _).mp hRef
+    have hc1' := (positivstellensatzCheck_fuel_irrelevant 0 r _ c1).trans hc1
+    obtain ⟨c2, hc2⟩ := (psatzNonnegCertifiable_iff _ _ _).mp hNag
+    refine ⟨⟨c1, c2⟩, ?_⟩
+    unfold checkSosCbf
+    dsimp only
+    simp only [Bool.and_eq_true, decide_eq_true_eq]
+    exact ⟨⟨⟨(cbfSpecWellScoped_iff spec).mp hDims, hAlpha⟩, hc1'⟩, hc2⟩
+  · rintro ⟨w, hCheck⟩
+    unfold checkSosCbf at hCheck
+    dsimp only at hCheck
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hCheck
+    obtain ⟨⟨⟨hDims, hAlpha⟩, hc1⟩, hc2⟩ := hCheck
+    exact ⟨(cbfSpecWellScoped_iff spec).mpr hDims, hAlpha,
+      (stenglePositivstellensatzRefutable_iff_check_ok _).mpr ⟨w.unsafeRefuteCert, 0, hc1⟩,
+      (psatzNonnegCertifiable_iff _ _ _).mpr ⟨w.nagumoInvarianceCert, hc2⟩⟩
+
+/-- One witness per element, collected into a list (a finite choice, by induction on the list). -/
+theorem list_exists_any_of_forall_exists {α β : Type} (p : α → β → Bool) (xs : List α)
+    (h : ∀ x ∈ xs, ∃ c, p x c = true) :
+    ∃ cs : List β, ∀ x ∈ xs, cs.any (p x) = true := by
+  induction xs with
+  | nil => exact ⟨[], fun _ hx => (nomatch hx)⟩
+  | cons x xs ih =>
+    obtain ⟨c, hc⟩ := h x (List.mem_cons.mpr (Or.inl rfl))
+    obtain ⟨cs, hcs⟩ := ih (fun y hy => h y (List.mem_cons.mpr (Or.inr hy)))
+    refine ⟨c :: cs, ?_⟩
+    intro y hy
+    rcases List.mem_cons.mp hy with hEq | hTl
+    · rw [hEq]
+      simp only [List.any_cons, hc, Bool.true_or]
+    · simp only [List.any_cons, hcs y hTl, Bool.or_true]
+
+/-- **An index-1 DAE manifold with algebraic certificates**: well scoped, the stated Jacobian
+determinant is the symbolic one, `δ > 0`, `det² - δ` lies in the quadratic module of the domain
+modulo the constraint ideal, and every constraint's Lie derivative is an ideal combination of the
+constraints. -/
+def DaeAlgebraicallyCertifiable (spec : DaeManifoldSpec) : Prop :=
+  DaeSpecWellScoped spec ∧
+  (Poly.sub spec.algJacobianDet
+    (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars)).terms = [] ∧
+  0 < spec.regDelta ∧
+  PsatzNonnegCertifiable
+    (Poly.sub (Poly.sqr spec.algJacobianDet) (polyConst spec.regDelta))
+    spec.domainIneqs spec.algConstraints ∧
+  ∀ h_r ∈ spec.algConstraints, ∃ (quotients : List (Poly × Nat)) (comb : Poly),
+    IdealCombRel spec.algConstraints quotients comb ∧
+    (Poly.sub (lieDerivativePoly h_r spec.vectorField) comb).terms = []
+
+theorem daeAlgebraicallyCertifiable_iff (spec : DaeManifoldSpec) :
+    DaeAlgebraicallyCertifiable spec ↔ ∃ w, checkDaeManifold spec w = true := by
+  unfold DaeAlgebraicallyCertifiable
+  constructor
+  · rintro ⟨hDims, hDet, hDelta, hReg, hTang⟩
+    obtain ⟨cReg, hcReg⟩ := (psatzNonnegCertifiable_iff _ _ _).mp hReg
+    obtain ⟨certs, hCerts⟩ := list_exists_any_of_forall_exists
+      (fun (h_r : Poly) (c : IdealMembershipCert) =>
+        checkIdealMembership (lieDerivativePoly h_r spec.vectorField) spec.algConstraints c)
+      spec.algConstraints
+      (fun h_r hMem => by
+        obtain ⟨quotients, comb, hComb, hZero⟩ := hTang h_r hMem
+        exact ⟨⟨quotients⟩,
+          (checkIdealMembership_true_iff _ _ ⟨quotients⟩).mpr ⟨comb, hComb, hZero⟩⟩)
+    refine ⟨{ tangencyCert := ⟨[]⟩, tangencyCerts := certs, regularityCert := cReg }, ?_⟩
+    unfold checkDaeManifold checkDaeIndex1Regularity
+    dsimp only
+    simp only [Bool.and_eq_true, decide_eq_true_eq]
+    refine ⟨?_, ⟨⟨(daeSpecWellScoped_iff spec).mp hDims, (polyTermsNil_iff_isZero _).mp hDet⟩,
+      hDelta⟩, hcReg⟩
+    rw [sos_list_all_iff_forall]
+    intro h_r hMem
+    unfold checkConstraintTangency
+    dsimp only
+    exact (Bool.or_eq_true _ _).mpr (Or.inr (hCerts h_r hMem))
+  · rintro ⟨w, hCheck⟩
+    unfold checkDaeManifold checkDaeIndex1Regularity at hCheck
+    dsimp only at hCheck
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hCheck
+    obtain ⟨hTang, ⟨⟨hDims, hDet⟩, hDelta⟩, hReg⟩ := hCheck
+    rw [sos_list_all_iff_forall] at hTang
+    refine ⟨(daeSpecWellScoped_iff spec).mpr hDims, (polyTermsNil_iff_isZero _).mpr hDet, hDelta,
+      (psatzNonnegCertifiable_iff _ _ _).mpr ⟨w.regularityCert, hReg⟩, ?_⟩
+    intro h_r hMem
+    have hT := hTang h_r hMem
+    unfold checkConstraintTangency at hT
+    dsimp only at hT
+    rcases (Bool.or_eq_true _ _).mp hT with hPrimary | hAny
+    · obtain ⟨comb, hComb, hZero⟩ := (checkIdealMembership_true_iff _ _ _).mp hPrimary
+      exact ⟨w.tangencyCert.quotients, comb, hComb, hZero⟩
+    · rw [sos_list_any_iff_exists] at hAny
+      obtain ⟨c, _, hc⟩ := hAny
+      obtain ⟨comb, hComb, hZero⟩ := (checkIdealMembership_true_iff _ _ _).mp hc
+      exact ⟨c.quotients, comb, hComb, hZero⟩
+
+/-- **The problems `"sos-lyapunov-cbf@1"` is complete for**: each of the three components has its
+algebraic certificates. -/
+def SosLyapunovProblemCertifiable (prob : SosLyapunovProblem) : Prop :=
+  LyapunovAlgebraicallyCertifiable prob.lyapunov ∧
+  CbfAlgebraicallyCertifiable prob.cbf ∧
+  DaeAlgebraicallyCertifiable prob.dae
+
+/-- An acceptance of `checkSosLyapunovProblem` is the four component checks. -/
+theorem checkSosLyapunovProblem_ok_iff (r : Nat) (prob : SosLyapunovProblem) (cert : SosLyapunovCert) :
+    checkSosLyapunovProblem r prob cert = .ok ↔
+      checkSosProblemWellFormed prob = true ∧
+      checkSosLyapunov prob.lyapunov cert.lyapunovWitness = true ∧
+      checkSosCbf prob.cbf cert.cbfWitness = true ∧
+      checkDaeManifold prob.dae cert.daeWitness = true := by
+  unfold checkSosLyapunovProblem
+  constructor
+  · intro hOk
+    by_cases hWf : checkSosProblemWellFormed prob = true
+    · simp only [hWf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+      by_cases hL : checkSosLyapunov prob.lyapunov cert.lyapunovWitness = true
+      · simp only [hL, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+        by_cases hC : checkSosCbf prob.cbf cert.cbfWitness = true
+        · simp only [hC, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+          by_cases hD : checkDaeManifold prob.dae cert.daeWitness = true
+          · exact ⟨hWf, hL, hC, hD⟩
+          · simp [hD] at hOk
+        · simp [hC] at hOk
+      · simp [hL] at hOk
+    · simp [hWf] at hOk
+  · rintro ⟨hWf, hL, hC, hD⟩
+    simp only [hWf, hL, hC, hD, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+
+/-- The three component checks already contain every clause of the well-formedness gate. -/
+theorem checkSosProblemWellFormed_of_checks (prob : SosLyapunovProblem) (cert : SosLyapunovCert)
+    (hL : checkSosLyapunov prob.lyapunov cert.lyapunovWitness = true)
+    (hC : checkSosCbf prob.cbf cert.cbfWitness = true)
+    (hD : checkDaeManifold prob.dae cert.daeWitness = true) :
+    checkSosProblemWellFormed prob = true := by
+  unfold checkSosLyapunov at hL
+  unfold checkSosCbf at hC
+  unfold checkDaeManifold checkDaeIndex1Regularity at hD
+  dsimp only at hL hC hD
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hL hC hD
+  obtain ⟨⟨⟨⟨⟨hLD, hEps⟩, hGamma⟩, hOrigin⟩, _⟩, _⟩ := hL
+  obtain ⟨⟨⟨hCD, hAlpha⟩, _⟩, _⟩ := hC
+  obtain ⟨_, ⟨⟨hDD, _⟩, hDelta⟩, _⟩ := hD
+  unfold checkSosProblemWellFormed
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
+  exact ⟨⟨⟨⟨⟨⟨⟨hLD, hEps⟩, hGamma⟩, hOrigin⟩, hCD⟩, hAlpha⟩, hDD⟩, hDelta⟩
+
+/-- **Theorem (`sosLyapunovProblemCertifiable_iff_check_ok`)**: the checker accepts some
+certificate for `prob` exactly when `prob` is algebraically certifiable. -/
+theorem sosLyapunovProblemCertifiable_iff_check_ok (prob : SosLyapunovProblem) :
+    SosLyapunovProblemCertifiable prob ↔ ∃ cert r, checkSosLyapunovProblem r prob cert = .ok := by
+  unfold SosLyapunovProblemCertifiable
+  constructor
+  · rintro ⟨hL, hC, hD⟩
+    obtain ⟨wL, hwL⟩ := (lyapunovAlgebraicallyCertifiable_iff prob.lyapunov).mp hL
+    obtain ⟨wC, hwC⟩ := (cbfAlgebraicallyCertifiable_iff prob.cbf).mp hC
+    obtain ⟨wD, hwD⟩ := (daeAlgebraicallyCertifiable_iff prob.dae).mp hD
+    exact ⟨⟨wL, wC, wD⟩, 0, (checkSosLyapunovProblem_ok_iff 0 prob ⟨wL, wC, wD⟩).mpr
+      ⟨checkSosProblemWellFormed_of_checks prob ⟨wL, wC, wD⟩ hwL hwC hwD, hwL, hwC, hwD⟩⟩
+  · rintro ⟨cert, r, hOk⟩
+    obtain ⟨_, hL, hC, hD⟩ := (checkSosLyapunovProblem_ok_iff r prob cert).mp hOk
+    exact ⟨(lyapunovAlgebraicallyCertifiable_iff prob.lyapunov).mpr ⟨cert.lyapunovWitness, hL⟩,
+      (cbfAlgebraicallyCertifiable_iff prob.cbf).mpr ⟨cert.cbfWitness, hC⟩,
+      (daeAlgebraicallyCertifiable_iff prob.dae).mpr ⟨cert.daeWitness, hD⟩⟩
+
+-- Forgetting DAE tangency and regularity enlarges the claimed fragment.
+#tooth sosLyapunovProblemCertifiable_iff_check_ok by mutation SosLyapunovProblemCertifiable :=
+  fun prob => LyapunovAlgebraicallyCertifiable prob.lyapunov ∧ CbfAlgebraicallyCertifiable prob.cbf
+
+-- A bad Lyapunov witness cannot establish that the problem is malformed.
+#tooth checkSosLyapunovProblem_refuted by mutation checkSosLyapunovProblem :=
+  fun _ prob cert =>
+    if !checkSosLyapunov prob.lyapunov cert.lyapunovWitness then
+      .refused .malformedDimensionOrParam []
+    else .ok
+
 /-- Universal Judge instance for `"sos-lyapunov-cbf@1"`. -/
 instance sosLyapunovJudge : Judge SosLyapunovProblem SosLyapunovCert where
   Clause := SosLyapunovClause
@@ -1028,8 +1455,10 @@ instance sosLyapunovJudge : Judge SosLyapunovProblem SosLyapunovCert where
     | lyapunovFailed => cases hRefutes
     | cbfFailed => cases hRefutes
     | daeManifoldFailed => cases hRefutes
-  Fragment prob := ∃ cert r, checkSosLyapunovProblem r prob cert = .ok
-  complete := by rintro prob ⟨cert, r, h⟩ _; exact ⟨cert, r, h⟩
+  Fragment := SosLyapunovProblemCertifiable
+  complete := by
+    intro prob hFrag _
+    exact (sosLyapunovProblemCertifiable_iff_check_ok prob).mp hFrag
   mono := by intro r r' o c le hne; rfl
 
 /-! ## 7. Canonical Showcase Models: 2D Nonlinear Cubic Damping, Barrier Safety & Index-1 DAE Manifold -/
