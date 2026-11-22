@@ -1,6 +1,9 @@
 module
 public import Obend.Core.TypeGraph
-@[expose] public section
+import all Obend.Core.AliasExposure
+import all Obend.Core.TypeGraph
+import all Obend.Core.ResourceSemantics
+public section
 namespace Obend.Core.TypeGraph
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
 open Obend.Core.FiniteBisimulation (Children)

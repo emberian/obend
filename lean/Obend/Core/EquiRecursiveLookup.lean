@@ -1,6 +1,10 @@
 module
 public import Obend.Core.FieldCongruence
-@[expose] public section
+import all Obend.Core.AliasExposure
+import all Obend.Core.Ty
+import all Obend.Core.RecursiveRows
+import all Obend.Core.RowHit
+public section
 namespace Obend.Core.TypeGraph
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
 open Obend.Core.FiniteBisimulation (Children)
@@ -10,10 +14,10 @@ end Rows
 set_option autoImplicit false
 
 /-- Finite directional lookup still consults rigid lower bounds. -/
-def BoundLookup (a : Assumptions) (row : Ty) (name : String) (member : Ty) : Prop :=
+@[expose] def BoundLookup (a : Assumptions) (row : Ty) (name : String) (member : Ty) : Prop :=
   ∃ fuel, row.lookup a.bounds fuel name = some member
 
-def FiniteRow (a : Assumptions) (row : Ty) : Prop :=
+@[expose] def FiniteRow (a : Assumptions) (row : Ty) : Prop :=
   ∃ fuel, row.isRow a.bounds fuel = true
 
  theorem lookup_field (a : Assumptions) (prior name : String) (fieldMember tail member : Ty) :

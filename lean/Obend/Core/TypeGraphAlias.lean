@@ -1,7 +1,9 @@
 module
 public import Obend.Core.RowExposureInvariance
 public import Obend.Core.TypeGraphResource
-@[expose] public section
+import all Obend.Core.AliasExposure
+import all Obend.Core.TypeGraph
+public section
 namespace Obend.Core.TypeGraph
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
 open Obend.Core.FiniteBisimulation (Children)

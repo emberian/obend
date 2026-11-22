@@ -5,7 +5,10 @@ Streams are graph observations: an emission contains the raw tail state. Calling
 many hidden resourceful fields without constructing an infinite Lean list. -/
 public import Obend.Core.AliasExposure
 public import Obend.Core.ResourceSemantics
-@[expose] public section
+import all Obend.Core.AliasExposure
+import all Obend.Core.Ty
+import all Obend.Core.ResourceSemantics
+public section
 namespace Obend.Core.RecursiveRows
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
 set_option autoImplicit false
@@ -13,7 +16,7 @@ set_option autoImplicit false
 /-- Resource observations now use the proved greatest-safe-predicate decision.
 The former branch-local DFS and its implementation-specific helper lemmas are
 retired; stream scanning continues to use this single semantic implementation. -/
-def shareable (assumptions : Assumptions) (t : Ty) : Bool :=
+@[expose] def shareable (assumptions : Assumptions) (t : Ty) : Bool :=
   Obend.Core.ResourceSemantics.shareable assumptions t
 
 theorem shareable_iff (assumptions : Assumptions) (t : Ty) :
@@ -113,7 +116,7 @@ inductive StreamStep where
 /-- A finite epsilon walk to the next field of one label. The first matching
 member is visible; subsequent matching members survive only if resourceful.
 Repeated states on this skip path terminate, rather than emit a false field. -/
-def scanStream (assumptions : Assumptions) (remaining : List Ty)
+@[expose] def scanStream (assumptions : Assumptions) (remaining : List Ty)
     (label : String) (first : Bool) (row : Ty) : StreamStep :=
   match expose assumptions row with
   | .nominal index => .end (.nominal index)
@@ -134,12 +137,12 @@ decreasing_by
     have positive := List.length_pos_of_mem present
     omega
 
-def streamStep (assumptions : Assumptions) (row : Ty) (label : String) (first : Bool) : StreamStep :=
+@[expose] def streamStep (assumptions : Assumptions) (row : Ty) (label : String) (first : Bool) : StreamStep :=
   scanStream assumptions (support assumptions row row) label first row
 
 /-- The residual row tail is independent of its fields. A productive field-tail
 cycle is distinguished from a finite closed row; resource obligations live in label streams. -/
-def scanResidual (assumptions : Assumptions) (remaining : List Ty) (row : Ty) : Tail :=
+@[expose] def scanResidual (assumptions : Assumptions) (remaining : List Ty) (row : Ty) : Tail :=
   match expose assumptions row with
   | .nominal index => .nominal index
   | .unproductive index => .unproductive index
@@ -157,12 +160,12 @@ decreasing_by
     have positive := List.length_pos_of_mem present
     omega
 
-def residual (assumptions : Assumptions) (row : Ty) : Tail :=
+@[expose] def residual (assumptions : Assumptions) (row : Ty) : Tail :=
   scanResidual assumptions (support assumptions row row) row
 
 /-- Sorted insertion with duplicate suppression. This is deliberately local to
 the row's exposed tail path; unrelated bound bodies contribute no labels. -/
-def insertLabel (name : String) : List String → List String
+@[expose] def insertLabel (name : String) : List String → List String
   | [] => [name]
   | prior :: rest =>
     if name = prior then prior :: rest
@@ -181,7 +184,7 @@ theorem mem_insertLabel (name item : String) (labels : List String) :
       simp
     · split <;> simp [ih, or_assoc, or_comm, or_left_comm]
 
-def scanLabels (assumptions : Assumptions) (remaining : List Ty) (row : Ty) : List String :=
+@[expose] def scanLabels (assumptions : Assumptions) (remaining : List Ty) (row : Ty) : List String :=
   match expose assumptions row with
   | .constructor observation =>
     match observation.tag, observation.children with
@@ -200,7 +203,7 @@ decreasing_by
 
 /-- A row-local finite alphabet, sorted and deduplicated as it is collected.
 Alias-only and productive field-tail cycles both terminate the prefix scan. -/
-def labels (assumptions : Assumptions) (row : Ty) : List String :=
+@[expose] def labels (assumptions : Assumptions) (row : Ty) : List String :=
   scanLabels assumptions (support assumptions row row) row
 
 theorem labels_alias_tail_sorted_unique :

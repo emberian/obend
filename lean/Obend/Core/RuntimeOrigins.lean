@@ -5,7 +5,7 @@ actual components and relate their complete constructor type to the requested
 type; exact canonical-head preservation is deliberately absent. -/
 public import Obend.Core.MachineTyping
 public import Obend.Core.TypeGraphHead
-@[expose] public section
+public section
 namespace Obend.Core.MachineTyping.Next
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine
 open Obend.Core.MachineTyping
@@ -23,7 +23,7 @@ structure FunctionOrigin (assumptions : Assumptions) (types : AddressTypes)
   valid : validContext assumptions.shareableVariables (⟨annotation.domain,annotation.parameter⟩ :: context) = true
   captures : reusableAllowed assumptions annotation.reuse context uses.tail = true
 
-def FunctionOrigin.arrow {assumptions : Assumptions} {types : AddressTypes}
+@[expose] def FunctionOrigin.arrow {assumptions : Assumptions} {types : AddressTypes}
     {body : Term} {environment : Environment} (origin : FunctionOrigin assumptions types body environment) : Ty :=
   .arrow origin.annotation.reuse origin.annotation.parameter origin.annotation.domain origin.annotation.codomain
 

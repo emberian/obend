@@ -3,7 +3,7 @@ module
 observations before using this module: an edge is a constructor child, never an
 unproductive alias-unfolding obligation. No user-supplied fuel is involved. -/
 public import Lean
-@[expose] public section
+public section
 namespace Obend.Core.FiniteBisimulation
 set_option autoImplicit false
 
@@ -12,7 +12,7 @@ structure Graph (Label : Type) (n : Nat) where
   successors : Fin n → List (Fin n)
 
 /-- Pointwise related lists, including equality of arity. -/
-def Children {α : Type} (R : α → α → Prop) : List α → List α → Prop
+@[expose] def Children {α : Type} (R : α → α → Prop) : List α → List α → Prop
   | [], [] => True
   | x :: xs, y :: ys => R x y ∧ Children R xs ys
   | _, _ => False
@@ -69,12 +69,12 @@ theorem children_comp {α : Type} {R S : α → α → Prop}
       | nil => exact False.elim two
       | cons z zs => exact ⟨⟨y,one.1,two.1⟩,ih one.2 two.2⟩
 
-def Bisimulation {Label : Type} {n : Nat} (g : Graph Label n)
+@[expose] def Bisimulation {Label : Type} {n : Nat} (g : Graph Label n)
     (R : Fin n → Fin n → Prop) : Prop :=
   ∀ x y, R x y → g.label x = g.label y ∧ Children R (g.successors x) (g.successors y)
 
 /-- Membership in some closed relation; the relation need not be decidable. -/
-def Bisimilar {Label : Type} {n : Nat} (g : Graph Label n) (x y : Fin n) : Prop :=
+@[expose] def Bisimilar {Label : Type} {n : Nat} (g : Graph Label n) (x y : Fin n) : Prop :=
   ∃ R, Bisimulation g R ∧ R x y
 
 theorem bisimilar_refl {Label : Type} {n : Nat} (g : Graph Label n) (x : Fin n) :
@@ -109,7 +109,7 @@ theorem bisimilar_equivalence {Label : Type} {n : Nat} (g : Graph Label n) :
 
 abbrev Pair (n : Nat) := Fin n × Fin n
 
-def InRelation {n : Nat} (pairs : List (Pair n)) (x y : Fin n) : Prop :=
+@[expose] def InRelation {n : Nat} (pairs : List (Pair n)) (x y : Fin n) : Prop :=
   (x,y) ∈ pairs
 
 instance {n : Nat} (pairs : List (Pair n)) : DecidableRel (InRelation pairs) :=
@@ -359,7 +359,7 @@ theorem visited_length_le {n : Nat} (visited : List (Pair n)) (distinct : visite
 
 /-- The longest successor list of `g`, by structural recursion over the nodes so the kernel
 evaluates it: the worklist's measure scales the unvisited pairs by it. -/
-def successorBound {Label : Type} {n : Nat} (g : Graph Label n) : Nat :=
+@[expose] def successorBound {Label : Type} {n : Nat} (g : Graph Label n) : Nat :=
   go n (Nat.le_refl n)
 where
   go : (k : Nat) → k ≤ n → Nat
@@ -397,7 +397,7 @@ matching constructors before its successors are queued. The cardinality proof
 and no-duplicate invariant erase; no `allPairs` list is allocated. The measure is one `Nat`,
 so Lean compiles the recursion through `WellFounded.Nat.fix`, which the kernel reduces on a
 closed graph: `decide +kernel` evaluates the checker's type agreement. -/
-def worklist {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
+@[expose] def worklist {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
     (visited pending : List (Pair n)) (distinct : visited.Nodup)
     (valid : VisitedInvariant g visited pending) : Decidable (Covered g (visited ++ pending)) :=
   match pending with
@@ -409,7 +409,7 @@ def worklist {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
         intro a b h
         rcases h with seen | impossible
         · exact seen
-        · exact False.elim (by simpa [InRelation] using impossible)
+        · exact False.elim (by simp [InRelation] at impossible)
       · intro p hp; simpa [InRelation] using hp)
   | p :: pending =>
     if seen : p ∈ visited then
@@ -441,7 +441,7 @@ decreasing_by
     rw [List.length_zip]
     exact Nat.le_trans (Nat.min_le_left _ _) (successors_length_le g p.1)
 
-def visitedSame {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
+@[expose] def visitedSame {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
     (x y : Fin n) : Bool :=
   letI : Decidable (Covered g ([] ++ [(x,y)])) :=
     worklist g [] [(x,y)] (by simp) (by intro p hp; simp at hp)
@@ -478,7 +478,7 @@ namespace Probes
 
 /-- Node zero has period one; nodes one and two form a period-two cycle.
 All expose the same unary constructor, so cycle length is unobservable. -/
-def differentPeriods : Graph Nat 3 where
+@[expose] def differentPeriods : Graph Nat 3 where
   label := fun _ => 0
   successors := fun x => [if x.val = 0 then 0 else if x.val = 1 then 2 else 1]
 
@@ -491,7 +491,7 @@ theorem different_periods_accepted : visitedSame differentPeriods 0 1 = true :=
   (visitedSame_iff _ _ _).mpr different_periods_bisimilar
 
 /-- The roots agree; their first children expose different labels. -/
-def reachableMismatch : Graph Bool 4 where
+@[expose] def reachableMismatch : Graph Bool 4 where
   label := fun x => x.val == 3
   successors := fun x => [if x.val = 0 then 2 else 3]
 
@@ -510,7 +510,7 @@ theorem reachable_mismatch_rejected : visitedSame reachableMismatch 0 1 = false 
       ((visitedSame_iff _ _ _).mp result))
 
 /-- Equal labels do not excuse a missing constructor child. -/
-def arityMismatch : Graph Nat 2 where
+@[expose] def arityMismatch : Graph Nat 2 where
   label := fun _ => 0
   successors := fun x => if x.val = 0 then [] else [1]
 
