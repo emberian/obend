@@ -50,8 +50,8 @@ open Obend.Core.Term
 open Obend.Core.Traverse (Tree)
 open Obend.Core.TermTraverse (Tag Shape encode decode decode_encode)
 open Obend.Core.Data (Data)
-open Obend.Digest.HashBytes (Hash Collision ofBE be ofBE_lt)
-open Obend.Core.Digest (digestWith deployed Admissible admissible_of_lt binds_or_collides lengthHash)
+open Obend.Digest.HashBytes (Hash CollisionAmong ofBE be ofBE_lt)
+open Obend.Core.Digest (digestWith deployed Admissible admissible_of_lt preimage preimage_injective binds_or_collides lengthHash constHash)
 set_option autoImplicit false
 
 /-! ## §1. The `Syntax` sum: a term's `Tree Tag` as `Data` -/
@@ -284,12 +284,17 @@ theorem lengthHash_short : Short lengthHash := by
 
 theorem small_admissible {n : Nat} (h : n < 2 ^ 256) : Admissible n := admissible_of_lt h
 
-/-- One node of the Merkle tree: equal digests have equal operands, or `H` collides. -/
+/-- Compare the two frames at a node before descending to its operands. -/
+def extractNodeOrCollision {H : Hash} {a b a' b' : Nat}
+    (h : digestWith H a b = digestWith H a' b') (ha : Admissible a) (ha' : Admissible a') :
+    PSum (a = a' ∧ b = b') (Obend.Core.Digest.ExactCollisionPair H (preimage a b) (preimage a' b')) :=
+  if hp : preimage a b = preimage a' b' then .inl (preimage_injective ha ha' hp)
+  else .inr ⟨hp, h⟩
+
 theorem node_binds {H : Hash} {a b a' b' : Nat} (h : digestWith H a b = digestWith H a' b')
-    (ha : Admissible a) (ha' : Admissible a') : (a = a' ∧ b = b') ∨ Collision H := by
-  rcases binds_or_collides H ha ha' h with e | c
-  · exact .inl e
-  · exact .inr c.global
+    (ha : Admissible a) (ha' : Admissible a') :
+    (a = a' ∧ b = b') ∨ CollisionAmong H (fun x => x = preimage a b ∨ x = preimage a' b') :=
+  binds_or_collides H ha ha' h
 
 section Merkle
 variable (H : Hash)
@@ -330,104 +335,242 @@ theorem textDigest_admissible {H : Hash} (hH : Short H) (s : String) : Admissibl
 theorem dataDigest_admissible {H : Hash} (hH : Short H) (d : Data) : Admissible (dataDigest H d) := by
   cases d <;> simp only [dataDigest] <;> exact short_admissible hH _ _
 
-theorem charsDigest_binds {H : Hash} (hH : Short H) :
-    ∀ {cs cs' : List Char}, charsDigest H cs = charsDigest H cs' → cs = cs' ∨ Collision H
+def charsPreimages (H : Hash) : List Char → List (List UInt8)
+  | [] => [preimage 6 0]
+  | c :: cs =>
+    let r := charsDigest H cs
+    preimage 7 (digestWith H c.toNat r) ::
+    preimage c.toNat r ::
+    charsPreimages H cs
+
+def textPreimages (H : Hash) (s : String) : List (List UInt8) :=
+  charsPreimages H s.toList
+
+mutual
+def dataPreimages (H : Hash) : Data → List (List UInt8)
+  | .natural n => [preimage 0 n]
+  | .boolean b => [preimage 1 (if b then 1 else 0)]
+  | .label s => preimage 2 (textDigest H s) :: textPreimages H s
+  | .record fs => preimage 3 (fieldsDigest H fs) :: fieldsPreimages H fs
+  | .variant l p =>
+    let dl := textDigest H l
+    let dp := dataDigest H p
+    preimage 4 (digestWith H dl dp) ::
+    preimage dl dp ::
+    (textPreimages H l ++ dataPreimages H p)
+termination_by structural d => d
+def fieldsPreimages (H : Hash) : List (String × Data) → List (List UInt8)
+  | [] => [preimage 8 0]
+  | (n, d) :: rest =>
+    let dn := textDigest H n
+    let dd := dataDigest H d
+    let dr := fieldsDigest H rest
+    preimage 9 (digestWith H dn (digestWith H dd dr)) ::
+    preimage dn (digestWith H dd dr) ::
+    preimage dd dr ::
+    (textPreimages H n ++ dataPreimages H d ++ fieldsPreimages H rest)
+termination_by structural fs => fs
+end
+
+/-- Finite list of all Merkle preimages hashed when computing `addressWith H t`. -/
+def quotePreimages (H : Hash) (t : Term) : List (List UInt8) :=
+  dataPreimages H (quote t)
+
+/-- Each message belongs to its own evaluation's Merkle trace. -/
+structure MerkleCollisionPair (H : Hash) (left right : List (List UInt8)) where
+  msgA : List UInt8
+  msgB : List UInt8
+  memA : msgA ∈ left
+  memB : msgB ∈ right
+  distinct : msgA ≠ msgB
+  equalHash : ofBE (H msgA) = ofBE (H msgB)
+
+namespace MerkleCollisionPair
+variable {H : Hash} {l r l' r' : List (List UInt8)}
+
+theorem toCollisionAmong (w : MerkleCollisionPair H l r) :
+    CollisionAmong H (fun x => x ∈ l ∨ x ∈ r) :=
+  ⟨w.msgA, w.msgB, .inl w.memA, .inr w.memB, w.distinct, w.equalHash⟩
+
+private def lift (w : MerkleCollisionPair H l r) (hl : l ⊆ l') (hr : r ⊆ r') :
+    MerkleCollisionPair H l' r' :=
+  { w with memA := hl w.memA, memB := hr w.memB }
+
+private theorem binding {P : Prop} (result : PSum P (MerkleCollisionPair H l r)) :
+    P ∨ CollisionAmong H (fun x => x ∈ l ∨ x ∈ r) :=
+  match result with
+  | .inl eq => .inl eq
+  | .inr w => .inr w.toCollisionAmong
+
+end MerkleCollisionPair
+
+private def extractNodeIn {H : Hash} {a b a' b' : Nat} (l r : List (List UInt8))
+    (h : digestWith H a b = digestWith H a' b')
+    (ha : Admissible a := by apply small_admissible; decide)
+    (ha' : Admissible a' := by apply small_admissible; decide)
+    (hl : preimage a b ∈ l := by first | exact .head _ | exact .tail _ (.head _) | exact .tail _ (.tail _ (.head _)))
+    (hr : preimage a' b' ∈ r := by first | exact .head _ | exact .tail _ (.head _) | exact .tail _ (.tail _ (.head _))) :
+    PSum (a = a' ∧ b = b') (MerkleCollisionPair H l r) :=
+  match extractNodeOrCollision h ha ha' with
+  | .inl eq => .inl eq
+  | .inr w => .inr ⟨_, _, hl, hr, w.distinct, w.equalHash⟩
+
+def extractCharsDigestOrCollision {H : Hash} (hH : Short H) :
+    ∀ {cs cs' : List Char}, charsDigest H cs = charsDigest H cs' →
+      PSum (cs = cs') (MerkleCollisionPair H (charsPreimages H cs) (charsPreimages H cs'))
   | [], [], _ => .inl rfl
-  | [], _ :: _, h | _ :: _, [], h => by
+  | [], c' :: cs', h => by
     simp only [charsDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨e, _⟩ | c
+    rcases extractNodeIn (charsPreimages H []) (charsPreimages H (c' :: cs')) h with ⟨e, _⟩ | c
+    · simp at e
+    · exact .inr c
+  | c :: cs, [], h => by
+    simp only [charsDigest] at h
+    rcases extractNodeIn (charsPreimages H (c :: cs)) (charsPreimages H []) h with ⟨e, _⟩ | c
     · simp at e
     · exact .inr c
   | c :: cs, c' :: cs', h => by
     simp only [charsDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨_, e⟩ | col
-    · rcases node_binds e (char_admissible c) (char_admissible c') with ⟨ec, er⟩ | col
-      · rcases charsDigest_binds hH er with rfl | col
+    rcases extractNodeIn (charsPreimages H (c :: cs)) (charsPreimages H (c' :: cs')) h with ⟨_, e⟩ | col
+    · rcases extractNodeIn (charsPreimages H (c :: cs)) (charsPreimages H (c' :: cs')) e
+          (char_admissible c) (char_admissible c') with ⟨ec, er⟩ | col
+      · rcases extractCharsDigestOrCollision hH er with rfl | col
         · exact .inl (by rw [Char.toNat_inj.1 ec])
-        · exact .inr col
+        · exact .inr (col.lift (by intro x hx; simp [charsPreimages, hx]) (by intro x hx; simp [charsPreimages, hx]))
       · exact .inr col
     · exact .inr col
+termination_by structural cs _ _ => cs
 
-theorem textDigest_binds {H : Hash} (hH : Short H) {s s' : String}
-    (h : textDigest H s = textDigest H s') : s = s' ∨ Collision H := by
-  rcases charsDigest_binds hH h with e | c
+def extractTextDigestOrCollision {H : Hash} (hH : Short H) {s s' : String}
+    (h : textDigest H s = textDigest H s') :
+    PSum (s = s') (MerkleCollisionPair H (textPreimages H s) (textPreimages H s')) := by
+  rcases extractCharsDigestOrCollision hH h with e | c
   · exact .inl (String.toList_inj.1 e)
   · exact .inr c
 
+private def extractDifferentTagsOrCollision {H : Hash} {t t' b b' : Nat}
+    (d d' : Data)
+    (ht : t < 2 ^ 256) (ht' : t' < 2 ^ 256) (hne : t ≠ t')
+    (h : digestWith H t b = digestWith H t' b')
+    (hp1 : preimage t b ∈ dataPreimages H d)
+    (hp2 : preimage t' b' ∈ dataPreimages H d') :
+    PSum (d = d') (MerkleCollisionPair H (dataPreimages H d) (dataPreimages H d')) := by
+  rcases extractNodeIn (dataPreimages H d) (dataPreimages H d') h
+      (small_admissible ht) (small_admissible ht') hp1 hp2 with ⟨e, _⟩ | c
+  · exact absurd e hne
+  · exact .inr c
+
 mutual
-/-- **Binding of the Merkle digest.** Equal digests are equal data, or `H` collides. -/
-theorem dataDigest_binds {H : Hash} (hH : Short H) :
-    ∀ {d d' : Data}, dataDigest H d = dataDigest H d' → d = d' ∨ Collision H
+def extractDataDigestOrCollision {H : Hash} (hH : Short H) :
+    ∀ (d d' : Data), dataDigest H d = dataDigest H d' →
+      PSum (d = d') (MerkleCollisionPair H (dataPreimages H d) (dataPreimages H d'))
   | .natural n, .natural n', h => by
-    simp only [dataDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨_, e⟩ | c
+    have h := (dataDigest.eq_1 H n).symm.trans (h.trans (dataDigest.eq_1 H n'))
+    rcases extractNodeIn (dataPreimages H (.natural n)) (dataPreimages H (.natural n')) h with ⟨_, e⟩ | c
     · exact .inl (by rw [e])
     · exact .inr c
   | .boolean b, .boolean b', h => by
     simp only [dataDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨_, e⟩ | c
-    · left; cases b <;> cases b' <;> simp_all
+    rcases extractNodeIn (dataPreimages H (.boolean b)) (dataPreimages H (.boolean b')) h with ⟨_, e⟩ | c
+    · exact .inl (by cases b <;> cases b' <;> simp_all)
     · exact .inr c
   | .label s, .label s', h => by
     simp only [dataDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨_, e⟩ | c
-    · rcases textDigest_binds hH e with rfl | c
+    rcases extractNodeIn (dataPreimages H (.label s)) (dataPreimages H (.label s')) h with ⟨_, e⟩ | c
+    · rcases extractTextDigestOrCollision hH e with rfl | c
       · exact .inl rfl
-      · exact .inr c
+      · exact .inr (c.lift (by intro x hx; simp [dataPreimages, hx]) (by intro x hx; simp [dataPreimages, hx]))
     · exact .inr c
   | .record fs, .record fs', h => by
     simp only [dataDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨_, e⟩ | c
-    · rcases fieldsDigest_binds hH e with rfl | c
+    rcases extractNodeIn (dataPreimages H (.record fs)) (dataPreimages H (.record fs')) h with ⟨_, e⟩ | c
+    · rcases extractFieldsDigestOrCollision hH fs fs' e with rfl | c
       · exact .inl rfl
-      · exact .inr c
+      · exact .inr (c.lift (by intro x hx; simp [dataPreimages, hx]) (by intro x hx; simp [dataPreimages, hx]))
     · exact .inr c
   | .variant l p, .variant l' p', h => by
     simp only [dataDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨_, e⟩ | c
-    · rcases node_binds e (textDigest_admissible hH _) (textDigest_admissible hH _) with ⟨el, ep⟩ | c
-      · rcases textDigest_binds hH el with rfl | c
-        · rcases dataDigest_binds hH ep with rfl | c
+    rcases extractNodeIn (dataPreimages H (.variant l p)) (dataPreimages H (.variant l' p')) h with ⟨_, e⟩ | c
+    · rcases extractNodeIn (dataPreimages H (.variant l p)) (dataPreimages H (.variant l' p')) e
+          (textDigest_admissible hH _) (textDigest_admissible hH _) with ⟨el, ep⟩ | c
+      · rcases extractTextDigestOrCollision hH el with rfl | c
+        · rcases extractDataDigestOrCollision hH p p' ep with rfl | c
           · exact .inl rfl
-          · exact .inr c
-        · exact .inr c
+          · exact .inr (c.lift (by intro x hx; simp [dataPreimages, hx]) (by intro x hx; simp [dataPreimages, hx]))
+        · exact .inr (c.lift (by intro x hx; simp [dataPreimages, hx]) (by intro x hx; simp [dataPreimages, hx]))
       · exact .inr c
     · exact .inr c
-  | .natural _, .boolean _, h | .natural _, .label _, h | .natural _, .record _, h
-  | .natural _, .variant _ _, h | .boolean _, .natural _, h | .boolean _, .label _, h
-  | .boolean _, .record _, h | .boolean _, .variant _ _, h | .label _, .natural _, h
-  | .label _, .boolean _, h | .label _, .record _, h | .label _, .variant _ _, h
-  | .record _, .natural _, h | .record _, .boolean _, h | .record _, .label _, h
-  | .record _, .variant _ _, h | .variant _ _, .natural _, h | .variant _ _, .boolean _, h
-  | .variant _ _, .label _, h | .variant _ _, .record _, h => by
+  | .natural _, .boolean _, h | .natural _, .label _, h
+  | .natural _, .record _, h  | .natural _, .variant _ _, h
+  | .boolean _, .natural _, h | .boolean _, .label _, h
+  | .boolean _, .record _, h  | .boolean _, .variant _ _, h
+  | .label _,   .natural _, h | .label _,   .boolean _, h
+  | .label _,   .record _, h  | .label _,   .variant _ _, h
+  | .record _,  .natural _, h | .record _,  .boolean _, h
+  | .record _,  .label _, h   | .record _,  .variant _ _, h
+  | .variant _ _, .natural _, h | .variant _ _, .boolean _, h
+  | .variant _ _, .label _, h   | .variant _ _, .record _, h => by
     simp only [dataDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨e, _⟩ | c
+    exact extractDifferentTagsOrCollision _ _ (by decide) (by decide) (by decide) h
+      (by simp [dataPreimages]) (by simp [dataPreimages])
+termination_by structural d _ _ => d
+
+def extractFieldsDigestOrCollision {H : Hash} (hH : Short H) :
+    ∀ (fs fs' : List (String × Data)),
+      fieldsDigest H fs = fieldsDigest H fs' →
+      PSum (fs = fs') (MerkleCollisionPair H (fieldsPreimages H fs) (fieldsPreimages H fs'))
+  | [], [], _ => .inl rfl
+  | [], kv' :: rest', h => by
+    simp only [fieldsDigest] at h
+    rcases extractNodeIn (fieldsPreimages H []) (fieldsPreimages H (kv' :: rest')) h with ⟨e, _⟩ | c
     · simp at e
     · exact .inr c
-theorem fieldsDigest_binds {H : Hash} (hH : Short H) :
-    ∀ {fs fs' : List (String × Data)}, fieldsDigest H fs = fieldsDigest H fs' → fs = fs' ∨ Collision H
-  | [], [], _ => .inl rfl
-  | [], _ :: _, h | _ :: _, [], h => by
+  | kv :: rest, [], h => by
     simp only [fieldsDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨e, _⟩ | c
+    rcases extractNodeIn (fieldsPreimages H (kv :: rest)) (fieldsPreimages H []) h with ⟨e, _⟩ | c
     · simp at e
     · exact .inr c
   | (n, d) :: rest, (n', d') :: rest', h => by
     simp only [fieldsDigest] at h
-    rcases node_binds h (small_admissible (by decide)) (small_admissible (by decide)) with ⟨_, e⟩ | c
-    · rcases node_binds e (textDigest_admissible hH _) (textDigest_admissible hH _) with ⟨en, e⟩ | c
-      · rcases node_binds e (dataDigest_admissible hH _) (dataDigest_admissible hH _) with ⟨ed, er⟩ | c
-        · rcases textDigest_binds hH en with rfl | c
-          · rcases dataDigest_binds hH ed with rfl | c
-            · rcases fieldsDigest_binds hH er with rfl | c
+    rcases extractNodeIn (fieldsPreimages H ((n, d) :: rest)) (fieldsPreimages H ((n', d') :: rest')) h with ⟨_, e⟩ | c
+    · rcases extractNodeIn (fieldsPreimages H ((n, d) :: rest)) (fieldsPreimages H ((n', d') :: rest')) e
+          (textDigest_admissible hH _) (textDigest_admissible hH _) with ⟨en, e⟩ | c
+      · rcases extractNodeIn (fieldsPreimages H ((n, d) :: rest)) (fieldsPreimages H ((n', d') :: rest')) e
+            (dataDigest_admissible hH _) (dataDigest_admissible hH _) with ⟨ed, er⟩ | c
+        · rcases extractTextDigestOrCollision hH en with rfl | c
+          · rcases extractDataDigestOrCollision hH d d' ed with rfl | c
+            · rcases extractFieldsDigestOrCollision hH rest rest' er with rfl | c
               · exact .inl rfl
-              · exact .inr c
-            · exact .inr c
-          · exact .inr c
+              · exact .inr (c.lift (by intro x hx; simp [fieldsPreimages, hx]) (by intro x hx; simp [fieldsPreimages, hx]))
+            · exact .inr (c.lift (by intro x hx; simp [fieldsPreimages, hx]) (by intro x hx; simp [fieldsPreimages, hx]))
+          · exact .inr (c.lift (by intro x hx; simp [fieldsPreimages, hx]) (by intro x hx; simp [fieldsPreimages, hx]))
         · exact .inr c
       · exact .inr c
     · exact .inr c
+termination_by structural fs _ _ => fs
 end
+
+theorem charsDigest_binds {H : Hash} (hH : Short H) {cs cs' : List Char}
+    (h : charsDigest H cs = charsDigest H cs') :
+    cs = cs' ∨ CollisionAmong H (fun x => x ∈ charsPreimages H cs ∨ x ∈ charsPreimages H cs') :=
+  MerkleCollisionPair.binding (extractCharsDigestOrCollision hH h)
+
+theorem textDigest_binds {H : Hash} (hH : Short H) {s s' : String}
+    (h : textDigest H s = textDigest H s') :
+    s = s' ∨ CollisionAmong H (fun x => x ∈ textPreimages H s ∨ x ∈ textPreimages H s') :=
+  MerkleCollisionPair.binding (extractTextDigestOrCollision hH h)
+
+theorem dataDigest_binds {H : Hash} (hH : Short H) {d d' : Data}
+    (h : dataDigest H d = dataDigest H d') :
+    d = d' ∨ CollisionAmong H (fun x => x ∈ dataPreimages H d ∨ x ∈ dataPreimages H d') :=
+  MerkleCollisionPair.binding (extractDataDigestOrCollision hH d d' h)
+
+theorem fieldsDigest_binds {H : Hash} (hH : Short H) {fs fs' : List (String × Data)}
+    (h : fieldsDigest H fs = fieldsDigest H fs') :
+    fs = fs' ∨ CollisionAmong H (fun x => x ∈ fieldsPreimages H fs ∨ x ∈ fieldsPreimages H fs') :=
+  MerkleCollisionPair.binding (extractFieldsDigestOrCollision hH fs fs' h)
+
+#tooth dataDigest_binds by mutation dataDigest := fun _ _ => 0
 
 /-- The content address of a term under `H`: the Merkle digest of its quotation. -/
 def addressWith (H : Hash) (t : Term) : Nat := dataDigest H (quote t)
@@ -435,26 +578,43 @@ def addressWith (H : Hash) (t : Term) : Nat := dataDigest H (quote t)
 /-- **The content address**, under the deployed cSHAKE256. -/
 def address (t : Term) : Nat := addressWith deployed t
 
-theorem addressWith_binds {H : Hash} (hH : Short H) {t t' : Term}
-    (h : addressWith H t = addressWith H t') : t = t' ∨ Collision H := by
-  rcases dataDigest_binds hH h with e | c
-  · exact .inl (quote_injective e)
-  · exact .inr c
+def extractAddressWithOrCollision {H : Hash} (hH : Short H) {t t' : Term}
+    (h : addressWith H t = addressWith H t') :
+    PSum (t = t') (MerkleCollisionPair H (quotePreimages H t) (quotePreimages H t')) :=
+  match extractDataDigestOrCollision hH (quote t) (quote t') h with
+  | .inl eq => .inl (quote_injective eq)
+  | .inr w => .inr w
 
-/-- **T2 `digest_of_quote`.** Two terms with one address are one term, or cSHAKE256 (at the
-digest primitive's customization) has a collision. -/
-theorem digest_of_quote {t t' : Term} (h : address t = address t') : t = t' ∨ Collision deployed :=
+theorem addressWith_binds {H : Hash} (hH : Short H) {t t' : Term}
+    (h : addressWith H t = addressWith H t') :
+    t = t' ∨ CollisionAmong H (fun x => x ∈ quotePreimages H t ∨ x ∈ quotePreimages H t') :=
+  MerkleCollisionPair.binding (extractAddressWithOrCollision hH h)
+
+/-- **T2**. Equal addresses bind the terms or exhibit a collision between their quotations' frames. -/
+theorem digest_of_quote {t t' : Term} (h : address t = address t') :
+    t = t' ∨ CollisionAmong deployed (fun x => x ∈ quotePreimages deployed t ∨ x ∈ quotePreimages deployed t') :=
   addressWith_binds deployed_short h
 
-/-- The refuting pole of T2: under a hash that reads only its input's length, `nat 1` and `nat 2`
-have one address. Binding is carried by the hash, not by the encoding. -/
-theorem lengthHash_address_collapses :
-    addressWith lengthHash (.nat 1) = addressWith lengthHash (.nat 2) ∧ Term.nat 1 ≠ Term.nat 2 := by
-  refine ⟨?_, by intro h; cases h⟩
-  have leaf : digestWith lengthHash 0 1 = digestWith lengthHash 0 2 :=
-    Obend.Core.Digest.lengthHash_binding_fails 0 1 2 (by decide)
+#tooth digest_of_quote by mutation address := fun _ => 0
+
+/-- The refuting pole of T2: under a hash that reads only its input's length, two naturals of one
+byte width have one address. Binding is carried by the hash, not by the encoding. -/
+theorem lengthHash_address_collapses {m n : Nat}
+    (hw : (Obend.Digest.Cshake256.natBytesBE m).length = (Obend.Digest.Cshake256.natBytesBE n).length) :
+    addressWith lengthHash (.nat m) = addressWith lengthHash (.nat n) := by
   simp only [addressWith, quote, encode, shapeData, tagData, childrenData, dataDigest, fieldsDigest,
-    leaf]
+    Obend.Core.Digest.lengthHash_binding_fails 0 m n hw]
+
+/-- The collision that pole forces lies among the frames of the two quotations. -/
+theorem lengthHash_quote_collision {m n : Nat} (hne : m ≠ n)
+    (hw : (Obend.Digest.Cshake256.natBytesBE m).length = (Obend.Digest.Cshake256.natBytesBE n).length) :
+    CollisionAmong lengthHash (fun x => x ∈ quotePreimages lengthHash (.nat m) ∨
+      x ∈ quotePreimages lengthHash (.nat n)) :=
+  (addressWith_binds lengthHash_short (lengthHash_address_collapses hw)).resolve_left
+    fun same => hne (Term.nat.inj same)
+
+example : CollisionAmong lengthHash (fun x => x ∈ quotePreimages lengthHash (.nat 1) ∨
+    x ∈ quotePreimages lengthHash (.nat 2)) := lengthHash_quote_collision (by decide) (by decide)
 
 /-! ## §3. The encoding is versioned
 
@@ -725,6 +885,10 @@ or cSHAKE256 collides. -/
 /-- Where argument `i` of a rule goes. No codec renders the label `?`. -/
 @[expose] def hole (i : Nat) : Data := .variant "?" (.natural i)
 
+-- Tooth replays the generated matcher lemmas used by the codec conformance proofs below.
+section
+set_option Elab.async false
+
 mutual
 /-- A rule with its holes filled by the arguments' renderings. -/
 @[expose] def fill (args : List Data) : Data → Data
@@ -978,17 +1142,26 @@ theorem schemaData_injective {s s' : Schema} (h : schemaData s = schemaData s') 
   rw [h, schemaOf_schemaData] at this
   exact (Option.some.inj this).symm
 
-/-- **The encoding's digest**: of the whole schema. Never evaluated by a proof (one cSHAKE256 per
-node). -/
-def encodingVersion : Nat := dataDigest deployed (schemaData schema)
+/-- The version commits to the edition and every codec table. -/
+def schemaVersionWith (H : Hash) (s : Schema) := dataDigest H (schemaData s)
 
-/-- **Equal versions, equal schemas**: a schema with this edition's version is this edition's
-schema (its edition and every rule of every table), or cSHAKE256 collides. -/
+private theorem schemaVersionWith_eq (H : Hash) (s : Schema) :
+    schemaVersionWith H s = dataDigest H (schemaData s) := rfl
+
+def encodingVersion : Nat := schemaVersionWith deployed schema
+
+def schemaPreimages (s : Schema) : List (List UInt8) := dataPreimages deployed (schemaData s)
+
+def extractEncodingVersionOrCollision {s : Schema}
+    (h : dataDigest deployed (schemaData s) = encodingVersion) :
+    PSum (s = schema) (MerkleCollisionPair deployed (schemaPreimages s) (schemaPreimages schema)) :=
+  match extractDataDigestOrCollision deployed_short (schemaData s) (schemaData schema) (h.trans (schemaVersionWith_eq deployed schema)) with
+  | .inl eq => .inl (schemaData_injective eq)
+  | .inr w => .inr w
+
 theorem encodingVersion_binds {s : Schema} (h : dataDigest deployed (schemaData s) = encodingVersion) :
-    s = schema ∨ Collision deployed := by
-  rcases dataDigest_binds deployed_short h with same | collides
-  · exact .inl (schemaData_injective same)
-  · exact .inr collides
+    s = schema ∨ CollisionAmong deployed (fun x => x ∈ schemaPreimages s ∨ x ∈ schemaPreimages schema) :=
+  MerkleCollisionPair.binding (extractEncodingVersionOrCollision h)
 
 /-- **The version fixes every codec on every value**: a reader whose tables have this edition's
 version renders every tag, shape, type, annotation tree and theory as this edition does (and holds
@@ -1001,13 +1174,17 @@ theorem version_fixes_codecs {s : Schema} (h : dataDigest deployed (schemaData s
       (∀ a, byTable s.annotation (annotationView a) = annotationData a) ∧
       (∀ t, byTable s.tree (treeView t) = treeData t) ∧ (∀ ts, byTable s.list (forestView ts) = forestData ts) ∧
       (∀ kv : Obend.Kind.KindVersion, byTable s.kindVersion (0, [.label kv.name, .natural kv.version]) = kindVersionData kv)) ∨
-      Collision deployed := by
+      CollisionAmong deployed (fun x => x ∈ schemaPreimages s ∨ x ∈ schemaPreimages schema) := by
   rcases encodingVersion_binds h with rfl | collides
   · exact .inl ⟨rfl, fun t => (tag_conforms t).symm, fun x => (shape_conforms x).symm,
       fun cs => (children_conforms cs).symm, fun ty => (ty_conforms ty).symm, fun q => (quantity_conforms q).symm,
       fun r => (reuse_conforms r).symm, fun a => (annotation_conforms a).symm, fun t => (tree_conforms t).symm,
       fun ts => (forest_conforms ts).symm, fun kv => (kindVersion_conforms kv).symm⟩
   · exact .inr collides
+
+#tooth version_fixes_codecs by mutation schemaVersionWith := fun _ _ => 0
+
+end
 
 /-- The lossy rendering (`mix` as `app`) is another table: its schema differs from this edition's,
 so its version differs or cSHAKE256 collides. -/
@@ -1016,6 +1193,20 @@ theorem lossy_schema_differs :
   intro h
   have := congrArg Schema.tag h
   simp [schema, tagRules, unitRule] at this
+
+/-- A constant hash gives every schema one version, so two different schemas collide among their
+own frames: the collision disjunct of `encodingVersion_binds` is reachable. -/
+theorem constHash_schema_collision {s s' : Schema} (hne : s ≠ s') :
+    CollisionAmong constHash (fun x => x ∈ dataPreimages constHash (schemaData s) ∨
+      x ∈ dataPreimages constHash (schemaData s')) := by
+  have equal : dataDigest constHash (schemaData s) = dataDigest constHash (schemaData s') := by
+    simp only [schemaData, dataDigest, digestWith, constHash]
+  exact (dataDigest_binds (fun _ => by simp [constHash]) equal).resolve_left
+    fun same => hne (schemaData_injective same)
+
+example : CollisionAmong constHash (fun x =>
+    x ∈ dataPreimages constHash (schemaData { schema with tag := tagRules.set 2 (unitRule "app") }) ∨
+      x ∈ dataPreimages constHash (schemaData schema)) := constHash_schema_collision lossy_schema_differs
 
 /-! ## §6. `Code Ψ A θ` and the checked importer -/
 
@@ -1341,8 +1532,8 @@ theorem admitHeld_ok {r : Reader} {Ψ : Context} {A : Ty} {θ : Assumptions} {h 
     (ok : admitHeld r Ψ A θ h = .ok c) : c.val = h ∧ checkWork h.annotated ≤ r.grant := by
   unfold admitHeld at ok
   by_cases within : checkWork h.annotated ≤ r.grant
-  · rw [if_pos within] at ok; exact ⟨checkHeld_ok ok, within⟩
-  · rw [if_neg within] at ok; cases ok
+  · rw [ite_eq_left within] at ok; exact ⟨checkHeld_ok ok, within⟩
+  · rw [ite_eq_right within] at ok; cases ok
 
 theorem importWith_ok {r : Reader} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
     {c : Code Ψ A θ} (h : importWith r Ψ A θ d = .ok c) :
