@@ -21,7 +21,11 @@ representation of memory (`Agree`: the same dword at every address).
 -/
 module
 public import Obend.Hardware.Gpu.Rdna2.Sym
-@[expose] public section
+import all Obend.Hardware.Gpu.Rdna2.Semantics
+import all Obend.Hardware.Gpu.Rdna2.Term
+import all Obend.Hardware.Gpu.Rdna2.Natural
+import all Obend.Hardware.Gpu.Rdna2.Sym
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 
@@ -79,7 +83,7 @@ theorem run_mono (prog : Program) : ∀ (m d : Nat) (s : GWave V M), (run prog m
     by_cases hl : (s.halted || s.err.isSome) = true
     · cases d with
       | zero => rfl
-      | succ d => simp only [Nat.zero_add, run, hl, ↓reduceIte]
+      | succ d => simp only [run, hl, ↓reduceIte]
     · rw [ite_eq_right hl] at h; exact absurd h (fail_err s _)
   | m + 1, d, s, h => by
     rw [show m + 1 + d = (m + d) + 1 by omega]
@@ -349,7 +353,7 @@ theorem execz_c (r : RW) : (execzV r).c = execzV (FST r) := by
 theorem exec_self (s : WaveState) (e : UInt32 × UInt32) (h : s.exec = e) : { s with exec := e } = s := by
   cases s; simp_all
 
-theorem fst_mem_get (x : RW) (a : UInt64) : (FST x).mem.get? a = x.mem.c.get? a := rfl
+theorem fst_mem_get (x : RW) (a : UInt64) : (FST x).mem.get? a = x.mem.c.get? a := by rfl
 
 /-- What the memory of a pair of runs holds at an address is fixed by the term stores. -/
 theorem mem_c_of_stores (x y : RW) (h : ∀ a, x.mem.t.stores.get? a = y.mem.t.stores.get? a) (a : UInt64) :

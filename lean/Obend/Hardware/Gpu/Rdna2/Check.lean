@@ -6,8 +6,8 @@ The correspondence of rung G2, stated as a decidable check per graph: for every 
 them, running each stage's dumped program (`hardware/gpu/isa/<g>.txt`, decoded by `Decode`) once per
 workgroup on `Semantics.run`, and reading the output wires back gives the expected words. It is a check,
 not a theorem: the universal statements live at the instruction level (`Semantics`); this is the
-known-answer run that `Obend.Teeth.Hardware.Rdna2Runs` pins with `native_decide` and `#assert_compiled`
-and that `hardware/gpu/isa_check.sh` stage 4 runs on every graph, with a planted bit flip that must fail.
+known-answer run pinned by `Obend.Teeth.Hardware.Rdna2Runs`. Stage 4 of `hardware/gpu/isa_check.sh` runs
+it on every graph, including a planted bit flip that must fail.
 
 What the model is told about the host, each fact with its source:
 * the three storage buffers `w`, `c`, `ix` are bindings 0, 1, 2 of one descriptor set (`emitStageWgsl`),
@@ -26,7 +26,9 @@ What the model is told about the host, each fact with its source:
 module
 public import Obend.Hardware.Gpu.Rdna2.Host
 public import Lean.Data.Json
-@[expose] public section
+import all Obend.Hardware.Gpu.Rdna2.Semantics
+import all Obend.Hardware.Gpu.Rdna2.Host
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 open Lean (Json)

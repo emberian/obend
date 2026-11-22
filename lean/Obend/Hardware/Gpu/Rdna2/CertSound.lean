@@ -13,7 +13,17 @@ module
 public import Obend.Hardware.Gpu.Rdna2.Cert
 public import Std.Tactic.BVDecide
 public meta import Std.Tactic.BVDecide.Reflect
-@[expose] public section
+import all Obend.Hardware.Gpu.Rdna2.Cert
+import all Obend.Hardware.Gpu.Rdna2.Host
+import all Obend.Hardware.Gpu.Rdna2.Equiv
+import all Obend.Hardware.Gpu.Rdna2.Lower
+import all Obend.Hardware.Gpu.Rdna2.Join
+import all Obend.Hardware.Gpu.Rdna2.Sym
+import all Obend.Hardware.Gpu.Rdna2.Natural
+import all Obend.Hardware.Gpu.Rdna2.Term
+import all Obend.Hardware.Gpu.Rdna2.Semantics
+
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 open Obend.Hardware.Gpu Obend.Hardware.ArrayHypergraph Tm
@@ -311,6 +321,35 @@ structure WInv (words : Nat) (m0 : Memory) (T : Std.HashMap Nat TP) (V : Nat →
   upd : ∀ x ∈ acc.updates, acc.stored.contains x.1 = true ∧ ∀ v, x.2 = some v → m.get? x.1 = some v
   upd_of : ∀ a, acc.stored.contains a = true → ∃ x ∈ acc.updates, x.1 = a
 
+/-- `WInv` holds in the middle of a dispatch, not only at its empty start: a one-word buffer whose low
+dword `dwLo 0` a wave has stored as the literal `7`. The start memory is empty and memory now holds the
+stored dword, the table holds word 0, and the one update carries the stored value. -/
+example : ∃ words m0 T V m acc, WInv words m0 T V m acc ∧ 0 < words ∧ m0 = {} ∧
+    acc.stored.contains (dwLo 0) = true ∧ acc.updates = [(dwLo 0, some 7)] ∧ m.get? (dwLo 0) = some 7 := by
+  have key : ∀ a, (({} : Std.HashSet UInt64).insert (dwLo 0)).contains a = true ↔ dwLo 0 = a := fun a => by
+    rw [contains_insert64]; simp
+  have hmem : (({} : Memory).insert (dwLo 0) 7).get? (dwLo 0) = some 7 := by
+    rw [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert_self]
+  have hoff : (dwLo 0 - wDw).toNat = 0 := off_dwLo 0 (by omega)
+  have h7 : dwHalf 0 (7#64) = 7 := by decide
+  have hhalf : dwHalf ((dwLo 0 - wDw).toNat % 2) (7#64) = 7 := by rw [hoff]; exact h7
+  refine ⟨1, {}, ({} : Std.HashMap Nat TP).insert 0 (pLit 7#64), fun _ => 7#64,
+    ({} : Memory).insert (dwLo 0) 7, ⟨({} : Std.HashSet UInt64).insert (dwLo 0), [(dwLo 0, some 7)], {}⟩,
+    ⟨?_, ?_, ?_, ?_⟩, Nat.one_pos, rfl, (key _).mpr rfl, rfl, hmem⟩
+  · intro a ha _
+    have hne : dwLo 0 ≠ a := fun e => Bool.false_ne_true (ha.symm.trans ((key a).mpr e))
+    rw [Std.HashMap.get?_eq_getElem?, Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert]
+    simp [hne]
+  · intro a ha
+    obtain rfl := (key a).mp ha
+    refine ⟨(inW_dwLo 1 0 (by omega) (by omega)).1, ⟨pLit 7#64, ?_⟩, hmem.trans (congrArg some hhalf.symm)⟩
+    rw [hoff]; exact Std.HashMap.getElem?_insert_self
+  · intro x hx
+    obtain rfl : x = (dwLo 0, some 7) := List.mem_singleton.mp hx
+    exact ⟨(key _).mpr rfl, fun v hv => hmem.trans hv⟩
+  · intro a ha
+    exact ⟨(dwLo 0, some 7), List.mem_singleton.mpr rfl, (key a).mp ha⟩
+
 theorem checkWaves_mono (words : Nat) (lay : Memory) (T : Std.HashMap Nat TP) (prog : Program) (lds : Nat) (known : Known) :
     ∀ (gs : List Nat) (acc acc' : Acc), checkWaves words lay T prog lds known gs acc = some acc' →
       ∀ r, acc.needed.contains r = true → acc'.needed.contains r = true
@@ -443,14 +482,14 @@ theorem checkWaves_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.H
 
 /-- The owners `O` of a stage's parts over the waves `gs`: each wave's part, rebuilt from `O`, holds exactly
 the words `O` gives it, and `O` gives words only to those waves. -/
-def OwnersOk (part : (Nat → Bool) → Nat → Option (Std.HashMap Nat TP)) (gs : List Nat) (O : Std.HashMap Nat Nat) :
+@[expose] def OwnersOk (part : (Nat → Bool) → Nat → Option (Std.HashMap Nat TP)) (gs : List Nat) (O : Std.HashMap Nat Nat) :
     Prop :=
   (∀ g ∈ gs, ∃ P, part (hasOf O g) g = some P ∧ ∀ j, P.contains j = true ↔ O[j]? = some g) ∧
     (∀ (j h : Nat), O[j]? = some h → h ∈ gs)
 
 /-- A stage's parts are its table: for owners as the first pass leaves them (`OwnersOk`), the table is
 built, it holds every entry of every wave's part, and each of its words has an owner. -/
-def Spec.PartsOk {σ : Type} (s : Spec σ) : Prop :=
+@[expose] def Spec.PartsOk {σ : Type} (s : Spec σ) : Prop :=
   ∀ part, s.part = some part → ∀ (rd : Nat → TP) (O : Std.HashMap Nat Nat),
     OwnersOk (part rd) (List.range (groupsOf s.threads)) O →
       ∃ T, s.table rd = some T ∧
@@ -697,7 +736,7 @@ theorem mergeWaves_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.H
 /-- A stage's promise: for any state `x` (satisfying `Inv`) whose wire buffer `proj x` the start's words
 `rd` describe in `env`, an accepted table lists words inside the buffer, each meaning what the stage
 leaves there (`proj (den x)`), and the stage leaves every other word as it was; `den` keeps `Inv`. -/
-def Spec.Sound {σ : Type} (words : Nat) (proj : σ → Nat → Word) (Inv : σ → Prop) (s : Spec σ) : Prop :=
+@[expose] def Spec.Sound {σ : Type} (words : Nat) (proj : σ → Nat → Word) (Inv : σ → Prop) (s : Spec σ) : Prop :=
   (∀ (rd : Nat → TP) (env : UInt64 → UInt32) (x : σ) (T : Std.HashMap Nat TP),
     Inv x → (∀ j, (rd j).ev env = proj x j) → s.table rd = some T →
       Inv (s.den x) ∧ (∀ i t, T[i]? = some t → i < words ∧ t.ev env = proj (s.den x) i) ∧

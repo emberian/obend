@@ -5,12 +5,12 @@ public import Obend.Hardware.Gpu.LimbsShift
 
 /-! Goldilocks source construction and its register-program field semantics.
 This is the shared source used by array graphs and BlockNtt register networks. -/
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.GoldilocksSource
 open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.ArrayBuild
 
-def goldilocksP : Nat := 18446744069414584321
+@[expose] def goldilocksP : Nat := 18446744069414584321
 
 /-- The field constants a vector of length `n` needs: `p`, the low mask and the shift. -/
 structure GlConsts where

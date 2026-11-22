@@ -3,7 +3,7 @@ module
 MemberPlan.source_to_gpu. Every graph comes from a selected Core4 method of a composition,
 and every expected vector below is computed independently of the compiler and graph evaluator. -/
 public import Obend.Hardware.Gpu.Source
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.SourcePrograms
 open Obend.Core.Term Obend.Logic
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.Gpu.Source

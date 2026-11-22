@@ -13,7 +13,8 @@ which is how a symbolic run says something about every concrete run (the shape o
 -/
 module
 public import Obend.Hardware.Gpu.Rdna2.Semantics
-@[expose] public section
+import all Obend.Hardware.Gpu.Rdna2.Semantics
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 
@@ -56,15 +57,15 @@ variable {V₁ V₂ M₁ M₂ : Type} [Dom V₁] [Dom V₂] [MemDom M₁ V₁] [
 variable (h : DomHom V₁ V₂) (hm : MemHom M₁ M₂ h)
 
 /-- The homomorphism also maps unknown values to unknown values and missing words to missing words. -/
-def Reflects : Prop :=
+@[expose] def Reflects : Prop :=
   (∀ x : V₁, Dom.conc x = none → Dom.conc (h.f x) = none) ∧
     (∀ (m : M₁) (a : UInt64), (MemDom.load m a : Option V₁) = none → (MemDom.load (hm.g m) a : Option V₂) = none)
 
 /-- A domain whose select on a known condition is that branch (every domain here: words, terms, pairs). -/
-def IteLawful (V : Type) [Dom V] : Prop :=
+@[expose] def IteLawful (V : Type) [Dom V] : Prop :=
   ∀ (x : V) (v : UInt32) (a b : V), Dom.conc x = some v → Dom.ite x a b = if v != 0 then a else b
 
-def mapW (s : GWave V₁ M₁) : GWave V₂ M₂ :=
+@[expose] def mapW (s : GWave V₁ M₁) : GWave V₂ M₂ :=
   { sgpr := s.sgpr.map h.f, exec := (h.f s.exec.1, h.f s.exec.2), scc := h.f s.scc, m0 := h.f s.m0, vgpr := s.vgpr.map h.f,
     pc := s.pc, mem := hm.g s.mem, halted := s.halted, err := s.err, ldsBase := s.ldsBase,
     ldsDwords := s.ldsDwords }
@@ -237,7 +238,7 @@ theorem maskSource_rel (R : Prop) (s : GWave V₁ M₁) (code : Nat) :
 /-! ## 4. Writes -/
 
 theorem writeExec_hom (s : GWave V₁ M₁) (lo hi : V₁) :
-    writeExec (mapW h hm s) (h.f lo) (h.f hi) = mapW h hm (writeExec s lo hi) := rfl
+    writeExec (mapW h hm s) (h.f lo) (h.f hi) = mapW h hm (writeExec s lo hi) := by rfl
 
 theorem writeScalarDst_hom (s : GWave V₁ M₁) (code : Nat) (v : V₁) :
     writeScalarDst (mapW h hm s) code (h.f v) = mapW h hm (writeScalarDst s code v) := by
@@ -318,7 +319,7 @@ theorem sdwaLift_hom (i : Inst) (f₁ : List V₁ → Nat → V₁) (f₂ : List
 
 /-- One lane: a lane the source knows to be off is off in the target; a lane the target alone knows to be
 off keeps its old value in both (the source's select on a bit that the target knows is `0`). -/
-theorem laneStep_rel {α β : Type} (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M₁)
+theorem laneStep_rel {α β : Type} (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M₁)
     (lane : Nat) (srcs₁ : Option (List V₁)) (srcs₂ : Option (List V₂)) (hsrc : ORel R (List.map h.f) srcs₁ srcs₂)
     (φ : α → β) (off₁ : α) (off₂ : β) (hoff : off₂ = φ off₁) (k₁ : List V₁ → α) (k₂ : List V₂ → β)
     (hk : ∀ src, k₂ (src.map h.f) = φ (k₁ src)) (sel₁ : V₁ → α → α → α) (sel₂ : V₂ → β → β → β)
@@ -381,7 +382,7 @@ theorem valuLanes_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm
     · rw [ite_eq_left hs, ite_eq_left hs]; exact sdwaLift_hom h i f₁ f₂ hf src lane
     · rw [ite_eq_right hs, ite_eq_right hs]; exact hf src lane
   refine withSome_hom h hm (φ := List.map fun p => (p.1, h.f p.2)) ?_ s _ _ _ (fun rs _ => writeLanes_hom h hm s _ rs) hres
-  exact lanes_rel R h.f _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ (laneSources_rel h hm R hR i s n lane)
+  exact lanes_rel R h.f _ _ fun lane => laneStep_rel h hm R hR s lane _ _ (laneSources_rel h hm R hR i s n lane)
     h.f _ _ (readVgpr_hom h hm s _ lane).symm _ _ (fun src => (hg src lane).symm) _ _ h.ite (ite_law hL)
 
 theorem maskOfBits_hom (bs : List V₁) : pmap h (maskOfBits bs) = maskOfBits (bs.map h.f) := by
@@ -397,7 +398,7 @@ theorem valuLanesCarry_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects
   rw [ite_eq_right hc] at hres; rw [ite_eq_right hc, ite_eq_right hc]
   dsimp only at hres ⊢
   refine withSome_hom h hm (φ := List.map fun p => (p.1, pmap h p.2)) ?_ s _ _ _ ?_ hres
-  · exact lanes_rel R (pmap h) _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ (laneSources_rel h hm R hR i s 2 lane)
+  · exact lanes_rel R (pmap h) _ _ fun lane => laneStep_rel h hm R hR s lane _ _ (laneSources_rel h hm R hR i s 2 lane)
       (pmap h) _ _ (by simp [pmap, readVgpr_hom h hm, h.lit]) _ _
       (fun src => by rw [← f_src h src 0, ← f_src h src 1, ← hf]) _ _ (ite2_hom h) (ite2_law hL)
   · intro rs _
@@ -418,7 +419,7 @@ theorem valuCompare_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h 
   rw [ite_eq_right hc] at hres; rw [ite_eq_right hc, ite_eq_right hc]
   dsimp only at hres ⊢
   refine withSome_hom h hm (φ := List.map fun p => (p.1, h.f p.2)) ?_ s _ _ _ ?_ hres
-  · refine lanes_rel R h.f _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ ?_ h.f _ _ (h.lit 0).symm _ _
+  · refine lanes_rel R h.f _ _ fun lane => laneStep_rel h hm R hR s lane _ _ ?_ h.f _ _ (h.lit 0).symm _ _
       (fun src => (ht src).symm) _ _ h.ite (ite_law hL)
     split
     · refine ORel.bind (source64_rel h hm R s _ lane) fun a => ?_
@@ -440,7 +441,7 @@ theorem valuShift64_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h 
   unfold valuShift64 at hres ⊢
   dsimp only at hres ⊢
   refine withSome_hom h hm (φ := List.map fun p => (p.1, pmap h p.2)) ?_ s _ _ _ ?_ hres
-  · refine lanes_rel R (pmap h) _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ ?_
+  · refine lanes_rel R (pmap h) _ _ fun lane => laneStep_rel h hm R hR s lane _ _ ?_
       (pmap h) _ _ (by simp [pmap, readVgpr_hom h hm]) _ _
       (fun src => by simp only [← f_src h src 0, ← f_src h src 1, ← f_src h src 2, src0, src1, src2, hf]) _ _
       (ite2_hom h) (ite2_law hL)

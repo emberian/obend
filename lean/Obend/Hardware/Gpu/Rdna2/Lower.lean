@@ -14,7 +14,10 @@ public import Obend.Hardware.Gpu.Rdna2.Term
 public import Obend.Hardware.Gpu
 public import Std.Tactic.BVDecide
 public meta import Std.Tactic.BVDecide.Reflect
-@[expose] public section
+import all Obend.Hardware.Gpu.Rdna2.Term
+import all Obend.Hardware.Gpu.Rdna2.Semantics
+
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 open Obend.Hardware.Gpu Obend.Hardware.ArrayHypergraph Obend.Hardware.OpenHypergraph
@@ -121,7 +124,7 @@ theorem split_join (x : UInt64) : join64 x.toUInt32 (x >>> 32).toUInt32 = x := b
 abbrev TP := Tm × Tm
 
 /-- The 64-bit word a pair of 32-bit terms denotes. -/
-def TP.ev (env : UInt64 → UInt32) (p : TP) : Word := (join64 (p.1.eval env) (p.2.eval env)).toBitVec
+@[expose] def TP.ev (env : UInt64 → UInt32) (p : TP) : Word := (join64 (p.1.eval env) (p.2.eval env)).toBitVec
 
 def pLit (w : Word) : TP :=
   let x := UInt64.ofBitVec w
@@ -288,7 +291,8 @@ end
 
 def argP (args : List TP) (i : Nat) : TP := args.getD i (pLit 0#64)
 
-/-- `evalElemOp` on pairs; `none` when a shift amount is not a known constant. -/
+/-- `evalElemOp` on pairs. Every operation has one: a shift by an amount only the data knows is the plant's own
+case split (`shiftV`); the `Option` is the shape `pCode` and `pKernel` thread. -/
 def pElem (op : ElemOp) (args : List TP) : Option TP :=
   match op with
   | .scalar (.const v) => some (pLit (BitVec.ofInt 64 v))
@@ -303,6 +307,9 @@ def pElem (op : ElemOp) (args : List TP) : Option TP :=
   | .bor => some (pOr (argP args 0) (argP args 1))
   | .shr => pShift false (argP args 0) (argP args 1)
   | .shl => pShift true (argP args 0) (argP args 1)
+
+example : ∃ op args r, pElem op args = some r :=
+  ⟨.scalar (.const 7), [], pLit 7#64, rfl⟩
 
 /-- An array lookup is the lookup in its list (the check reads arrays, the plan lists). -/
 theorem array_getD_toList {α : Type} (a : Array α) (i : Nat) (d : α) : a.getD i d = a.toList.getD i d := by
@@ -319,6 +326,9 @@ def pStep (cs : Array Word) (rd : Nat → TP) (e : Nat) (loc : Nat → TP) (i : 
 def pCode (cs : Array Word) (rd : Nat → TP) (e : Nat) : (Nat → TP) → List KInstr → Option (Nat → TP)
   | loc, [] => some loc
   | loc, i :: is => (pStep cs rd e loc i).bind fun loc' => pCode cs rd e loc' is
+
+example : ∃ cs rd e loc code loc', pCode cs rd e loc code = some loc' :=
+  ⟨#[], fun _ => pLit 0#64, 0, fun _ => pLit 0#64, [⟨.scalar (.const 7), [], 0⟩], _, rfl⟩
 
 /-- A fold's combining operation on pairs (`ReduceOp.combine`). -/
 def pCombine : ReduceOp → TP → TP → TP
@@ -381,7 +391,7 @@ theorem pElem_sound (op : ElemOp) (args : List TP) (r : TP) (h : pElem op args =
 theorem pOperand_sound (cs : Array Word) (rd : Nat → TP) (e : Nat) (loc : Nat → TP) (locC : Nat → Word)
     (hloc : ∀ w, (loc w).ev env = locC w) (o : KOperand) :
     (pOperand cs rd e loc o).ev env = readOperand cs.toList (fun a => (rd a).ev env) e locC o := by
-  cases o <;> simp [pOperand, readOperand, ev_lit, hloc, array_getD_toList]
+  cases o <;> simp [pOperand, readOperand, ev_lit, hloc]
 
 theorem pCode_sound (cs : Array Word) (rd : Nat → TP) (e : Nat) :
     ∀ (code : List KInstr) (loc : Nat → TP) (locC : Nat → Word) (loc' : Nat → TP),
@@ -484,7 +494,7 @@ theorem foldValues_get (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k :
     simp only [Option.some.injEq] at h; subst h
     rw [foldCachedGo_get op _ shape.ranges 0 0 _ #[] (by simp [pFoldRange]) e] at he
     simp only [List.size_toArray, List.length_nil, Nat.not_lt_zero, ↓reduceIte, Nat.sub_zero,
-      List.getElem?_map, Array.size_empty] at he
+      List.getElem?_map] at he
     unfold pKernel; rw [hb]
     cases hr : shape.ranges[e]? with
     | none => rw [hr] at he; simp at he
