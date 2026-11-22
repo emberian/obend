@@ -32,8 +32,8 @@ theorem Ty.lookup_mono {bounds : Bounds} : ∀ {fuel fuel' : Nat} {type : Ty} {n
     | field prior m tail =>
       simp only [Ty.lookup] at h ⊢
       split at h
-      · rw [if_pos ‹_›]; exact h
-      · rw [if_neg ‹_›]; exact Ty.lookup_mono h (by omega)
+      · rw [ite_eq_left ‹_›]; exact h
+      · rw [ite_eq_right ‹_›]; exact Ty.lookup_mono h (by omega)
     | «variable» index =>
       simp only [Ty.lookup, Option.bind_eq_bind] at h ⊢
       cases found : bounds.lookup index with
@@ -63,19 +63,19 @@ theorem filter_length_lt {α : Type} (p q : α → Bool) (sub : ∀ x, q x = tru
       | nil => simp
       | cons z zs ih =>
         by_cases hq : q z = true
-        · simp [List.filter_cons, hq, sub z hq]; omega
+        · simp [hq, sub z hq]; omega
         · by_cases hp : p z = true
-          · simp [List.filter_cons, hq, hp]; omega
-          · simp [List.filter_cons, hq, hp]; omega
+          · simp [hq, hp]; omega
+          · simp [hq, hp]; omega
     rcases List.mem_cons.mp mem with rfl | mem
-    · simp [List.filter_cons, px, qx]
+    · simp [px, qx]
       exact Nat.lt_succ_of_le (le ys)
     · have := filter_length_lt p q sub ys x mem px qx
       by_cases hq : q y = true
-      · simp [List.filter_cons, hq, sub y hq]; omega
+      · simp [hq, sub y hq]; omega
       · by_cases hp : p y = true
-        · simp [List.filter_cons, hq, hp]; omega
-        · simp [List.filter_cons, hq, hp]; omega
+        · simp [hq, hp]; omega
+        · simp [hq, hp]; omega
 
 theorem unvisited_lt {bounds : Bounds} {visited : List Nat} {index : Nat} {bound : Ty}
     (found : bounds.lookup index = some bound) (fresh : visited.contains index = false) :
@@ -93,7 +93,7 @@ theorem unvisited_lt {bounds : Bounds} {visited : List Nat} {index : Nat} {bound
         exact ⟨e, List.mem_cons_of_mem _ he, hk⟩
   obtain ⟨entry, member, key⟩ := mem
   unfold unvisited
-  exact filter_length_lt _ _ (fun x h => by simp_all [List.contains_cons]) bounds entry member
+  exact filter_length_lt _ _ (fun x h => by simp_all) bounds entry member
     (by simp only [key]; simpa using fresh) (by simp [key])
 
 /-- Walk a row's explicit fields; at a variable tail, ask `onVariable`. -/
@@ -189,7 +189,7 @@ theorem lookupW_complete_aux {bounds : Bounds} {name : String} {member : Ty} :
         by_cases hit : prior = name
         · left; simp [Ty.lookup, hit] at h
           cases budget <;> simp [lookupW, walkRow_field, hit, h]
-        · simp only [Ty.lookup, hit, if_false] at h
+        · simp only [Ty.lookup, hit, ite_false] at h
           rcases outer fuel (Nat.lt_succ_self _) tail visited budget enough h with
             found | ⟨i, hi, b, hb, less, hl, hlook⟩
           · left
@@ -222,7 +222,7 @@ theorem lookupW_complete_aux {bounds : Bounds} {name : String} {member : Ty} :
                   · exact .inr ⟨i, hi, b, hb, less, by omega, hlook'⟩
             rcases inner fuel (Nat.le_refl _) h with done | other
             · left
-              simp only [lookupW, walkRow, fresh, found, Option.bind_some, Bool.false_eq_true, if_false]
+              simp only [lookupW, walkRow, fresh, found, Option.bind_some, Bool.false_eq_true, ite_false]
               exact done
             · exact .inr other
           · right
@@ -321,8 +321,8 @@ theorem isRowW_complete_aux {bounds : Bounds} :
                   · exact .inr ⟨i, hi, b, hb, less, by omega, hlook'⟩
             rcases inner fuel (Nat.le_refl _) h with done | other
             · left
-              simp only [isRowW, walkRow, fresh, found, Option.bind_some, Bool.false_eq_true, if_false, done,
-                if_true, Option.getD_some]
+              simp only [isRowW, walkRow, fresh, found, Option.bind_some, Bool.false_eq_true, ite_false, done,
+                ite_true, Option.getD_some]
             · exact .inr other
           · right
             exact ⟨index, by simpa using fresh, bound, found, fuel, Nat.lt_succ_self _, h⟩
@@ -764,17 +764,25 @@ theorem partial_beta_law (body argument : Term) :
     Step (.app (.lam body) argument) (instantiate body argument) := .beta body argument
 
 /-- Reusability is justified by a checked capture premise, not by the immutable
-shape of a closure/record wrapper. This holds for every lambda derivation. -/
+shape of a closure/record wrapper. A lambda annotated `reusable` whose premises hold captures only
+bindings it does not use or that are unrestricted and shareable (`reusableCaptures`), and with its
+parameter count fitting, those premises are the whole derivation of its `reusable` arrow
+(`PartialTyping.lambda`). This holds for every lambda derivation. -/
 theorem reusable_lambda_capture_rule {assumptions : Assumptions} {context : Context}
     {body : Term} {annotation : LambdaAnnotation} {uses : Uses}
-    (_bodyTyped : PartialTyping assumptions (⟨annotation.domain,annotation.parameter⟩ :: context)
+    (bodyTyped : PartialTyping assumptions (⟨annotation.domain,annotation.parameter⟩ :: context)
       body annotation.codomain uses)
-    (_safe : safeUses (⟨annotation.domain,annotation.parameter⟩ :: context) uses = true)
-    (_valid : validContext assumptions.shareableVariables (⟨annotation.domain,annotation.parameter⟩ :: context) = true)
+    (safe : safeUses (⟨annotation.domain,annotation.parameter⟩ :: context) uses = true)
+    (valid : validContext assumptions.shareableVariables (⟨annotation.domain,annotation.parameter⟩ :: context) = true)
     (captures : reusableAllowed assumptions annotation.reuse context uses.tail = true)
     (reusable : annotation.reuse = .reusable) :
-    reusableCaptures assumptions.shareableVariables context uses.tail = true := by
-  simpa [reusableAllowed, reusable] using captures
+    reusableCaptures assumptions.shareableVariables context uses.tail = true ∧
+      (annotation.parameter.fits (uses.headD 0) = true →
+        PartialTyping assumptions context (.lam body)
+          (.arrow .reusable annotation.parameter annotation.domain annotation.codomain) uses.tail) := by
+  refine ⟨by simpa [reusableAllowed, reusable] using captures, fun fits => ?_⟩
+  have typed := PartialTyping.lambda bodyTyped safe valid captures fits
+  rwa [reusable] at typed
 
 /-- Total logic proves a contextual reduction law despite the discarded
 argument being any partial computation, including a divergent Fix. -/

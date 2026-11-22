@@ -719,15 +719,42 @@ public theorem fill_preserves_typing {asm : Assumptions} {Γ : Context} {t : Ter
   obtain ⟨u', h, below, lin⟩ := fill_typed typed fillers valid safe
   exact ⟨T, u', h, sameType_refl _ _, below, lin⟩
 
-/-- **Checked once.** What the checker accepted with holes declared is typed after every fill the
-fillers discharge, from the one derivation it returned: no fill is checked again. -/
-public theorem checkAt_fill {asm : Assumptions} {annotations : Annotations} {Γ : Context} {path : List Nat}
+public section
+
+/-- Every typed fill of an accepted term has the expected type, stays within budget and preserves
+linear use counts. For a head hole, the checker accepted its payload against the declared context
+at this path, and charged the sum of those argument uses to the original term. -/
+theorem checkAt_fill {asm : Assumptions} {annotations : Annotations} {Γ : Context} {path : List Nat}
     {t : Term} {T : Ty} {r : Bidirectional.Against asm Γ t T}
-    (_checked : Bidirectional.checkAt asm annotations Γ path t T = .ok r)
+    (checked : Bidirectional.checkAt asm annotations Γ path t T = .ok r)
     (valid : validContext asm.shareableVariables Γ = true) (safe : safeUses Γ r.uses = true)
     {θ : Nat → Option Term} (fillers : FillersTyped asm θ) :
     ∃ u', PartialTyping asm Γ (t.fill θ) T u' ∧ Below Γ u' r.uses ∧
-      ∀ j, LinearAt Γ j → u'.getD j 0 = r.uses.getD j 0 :=
-  fill_typed r.derivation fillers valid safe
+      (∀ j, LinearAt Γ j → u'.getD j 0 = r.uses.getD j 0) ∧
+      safeUses Γ u' = true ∧
+      ∀ (n : Nat) (payload : List Term), t = .hole n payload →
+        ∃ decl args, asm.holes.lookup n = some decl ∧ sameType asm decl.type T = true ∧
+          Bidirectional.checkArgs asm annotations Γ path n 0 payload decl.context = .ok args ∧
+          r.uses = (args.args.map (·.2.2)).foldr addUses (zeroUses Γ) := by
+  obtain ⟨u', typed, below, lin⟩ := fill_typed r.derivation fillers valid safe
+  refine ⟨u', typed, below, lin, safe_below safe (source_uses_length typed) below, ?_⟩
+  intro n payload head
+  subst t
+  unfold Bidirectional.checkAt at checked
+  rw [Bidirectional.elaborate] at checked
+  split at checked
+  · cases checked
+  · rename_i decl found
+    cases accepted : Bidirectional.checkArgs asm annotations Γ path n 0 payload decl.context with
+    | error _ => simp [accepted, bind, Except.bind] at checked
+    | ok args =>
+      simp only [accepted, bind, Except.bind, Bidirectional.finish] at checked
+      split at checked
+      · rename_i agrees
+        cases checked
+        exact ⟨decl, args, found, agrees, accepted, rfl⟩
+      · cases checked
+
+end
 
 end Obend.Core.Proofs.FillTyping

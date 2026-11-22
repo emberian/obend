@@ -16,9 +16,8 @@ Eliminates critical 2026 Fiat–Shamir and field-aliasing vulnerabilities at the
      squeezing from `.unseeded` or `.relationBound` before `bindInstance` is a compile-time Lean type error).
 2. **Canonical Goldilocks Field Lift (`CanonicalLift`, `canonicalLift?`)**:
    Rejects non-canonical `n ≥ goldilocksPrime` witnesses (`0` vs `p = 2^64 - 2^32 + 1` alias).
-3. **Bounded Collision Carrier (`BoundedCollision`) & Constructive Collision Extraction**:
-   Replaces pigeonhole-vacuous unbounded `¬ Collision H` with `BoundedCollision H maxBytes`
-   (`Nonempty (HashCollisionWitness H maxBytes)`) and `0 Classical` collision extractors.
+3. **Constructive collision extraction**: a collision from relation, instance, or message binding
+   identifies the two frames supplied to cSHAKE256. Length-bounded witnesses remain available to callers.
 4. **Collision-Free Canonical Framing (`encodeFrame_injective`, `encodePointBytes_injective`, `encodeSignedIntBytes_injective`)**:
    Unconditional self-delimiting LEB128 length-prefixed framing with zero boundary or sign ambiguity.
 -/
@@ -26,6 +25,7 @@ public import Obend.Digest.Cshake256
 public import Obend.Digest.HashBytes
 public import Obend.Crypto.Multilinear
 public import Obend.Judge.Computational
+import Obend.Tactic.Tooth
 
 public section
 namespace Obend.Crypto
@@ -220,9 +220,76 @@ theorem encodeFrame_injective {a₁ b₁ c₁ a₂ b₂ c₂ : ByteArray}
   obtain ⟨ha, hb, hc⟩ := encodeFrameList_injective hl
   exact ⟨byteArray_eq_of_toList_eq ha, byteArray_eq_of_toList_eq hb, byteArray_eq_of_toList_eq hc⟩
 
-/-- Encode a `String` as LEB128-delimited Unicode scalar values (`Char.toNat`). -/
+/-- Transcode the valid UTF-8 bytes of a protocol identifier directly to LEB128 scalars.
+    `pending` counts continuation bytes still needed to finish `acc`. -/
+private def utf8ToLeb128 : List UInt8 → Nat → Nat → List UInt8
+  | [], _, _ => []
+  | b :: bs, acc, pending =>
+    let n := b.toNat
+    match pending with
+    | 0 => if n < 128 then leb128 n ++ utf8ToLeb128 bs 0 0
+           else if n < 224 then utf8ToLeb128 bs (n % 32) 1
+           else if n < 240 then utf8ToLeb128 bs (n % 16) 2
+           else utf8ToLeb128 bs (n % 8) 3
+    | 1 => leb128 (64 * acc + n % 64) ++ utf8ToLeb128 bs 0 0
+    | k + 2 => utf8ToLeb128 bs (64 * acc + n % 64) (k + 1)
+
+private theorem utf8ToLeb128_char (c : Char) (rest : List UInt8) :
+    utf8ToLeb128 (String.utf8EncodeChar c ++ rest) 0 0 = leb128 c.toNat ++ utf8ToLeb128 rest 0 0 := by
+  have bound := c.valid
+  simp only [UInt32.isValidChar, Nat.isValidChar] at bound
+  dsimp only [String.utf8EncodeChar]
+  split <;> (try split) <;> (try split) <;>
+    simp only [List.cons_append, List.nil_append, utf8ToLeb128, UInt8.toNat_ofNat', Char.toNat]
+  all_goals repeat first | rw [ite_eq_left (by omega)] | rw [ite_eq_right (by omega)]
+  all_goals congr 2 <;> omega
+
+/-- Encode Unicode scalars, preserving the protocol's original wire format. -/
 def encodeStringCodepoints (s : String) : ByteArray :=
-  Native.bytesOfList (s.toList.flatMap fun c => leb128 c.toNat)
+  Native.bytesOfList (utf8ToLeb128 s.toByteArray.data.toList 0 0)
+
+theorem encodeStringCodepoints_ofList (cs : List Char) :
+    encodeStringCodepoints (String.ofList cs) = Native.bytesOfList (cs.flatMap fun c => leb128 c.toNat) := by
+  simp only [encodeStringCodepoints, String.toByteArray_ofList, List.utf8Encode, List.toList_data_toByteArray]
+  apply congrArg Native.bytesOfList
+  induction cs with
+  | nil => rfl
+  | cons c cs ih => simp only [List.flatMap_cons, utf8ToLeb128_char, ih]
+
+/-- The wire format on every `String`: the LEB128 of each scalar, in order. -/
+theorem encodeStringCodepoints_eq_toList (s : String) :
+    encodeStringCodepoints s = Native.bytesOfList (s.toList.flatMap fun c => leb128 c.toNat) := by
+  have h := encodeStringCodepoints_ofList s.toList
+  rwa [String.ofList_toList] at h
+
+private theorem leb128_ne_nil (n : Nat) : leb128 n ≠ [] := by
+  unfold leb128
+  cases n with
+  | zero => simp [leb128Aux]
+  | succ k => simp only [leb128Aux]; split <;> simp
+
+private theorem scalars_injective : ∀ {as bs : List Char},
+    (as.flatMap fun c => leb128 c.toNat) = (bs.flatMap fun c => leb128 c.toNat) → as = bs
+  | [], [], _ => rfl
+  | [], b :: bs, h => by
+    simp only [List.flatMap_nil, List.flatMap_cons] at h
+    exact absurd (List.append_eq_nil_iff.1 h.symm).1 (leb128_ne_nil _)
+  | a :: as, [], h => by
+    simp only [List.flatMap_nil, List.flatMap_cons] at h
+    exact absurd (List.append_eq_nil_iff.1 h).1 (leb128_ne_nil _)
+  | a :: as, b :: bs, h => by
+    simp only [List.flatMap_cons] at h
+    obtain ⟨hn, hrest⟩ := leb128_prefix_inj h
+    rw [Char.toNat_inj.1 hn, scalars_injective hrest]
+
+/-- Equal encodings are equal identifiers: the `encodeStringCodepoints p₁ = encodeStringCodepoints p₂`
+    conjunct of the binding theorems below is `p₁ = p₂`. -/
+theorem encodeStringCodepoints_injective {p₁ p₂ : String}
+    (h : encodeStringCodepoints p₁ = encodeStringCodepoints p₂) : p₁ = p₂ := by
+  rw [encodeStringCodepoints_eq_toList, encodeStringCodepoints_eq_toList] at h
+  have hl := congrArg (fun b : ByteArray => b.data.toList) h
+  simp only [Native.bytesOfList_toList] at hl
+  exact String.toList_inj.1 (scalars_injective hl)
 
 /-- Canonical Fenzi relation-binding prefix framing `(protocolId, canonicalRelBytes, publicIoBytes)`. -/
 def canonicalPrefix (protocolId : String) (canonicalRelBytes publicIoBytes : ByteArray) : ByteArray :=
@@ -293,8 +360,7 @@ example : canonicalLift? goldilocksPrime = none := rfl
 /-- **Domain-Bounded Hash Collision Predicate (`BoundedCollision`)**:
     Asserts the existence of a `HashCollisionWitness H maxBytes` (`msgA.length ≤ maxBytes`,
     `msgB.length ≤ maxBytes`, `msgA ≠ msgB`, `ofBE (H msgA) = ofBE (H msgB)`).
-    Unlike unbounded `Collision H` (which is trivially `True` by pigeonhole on any fixed-width hash),
-    `¬ BoundedCollision H maxBytes` is genuinely satisfiable on bounded preimage domains. -/
+    A bound on length alone need not exclude pigeonhole collisions. -/
 @[expose] def BoundedCollision (H : Hash) (maxBytes : Nat) : Prop :=
   Nonempty (HashCollisionWitness H maxBytes)
 
@@ -656,10 +722,53 @@ theorem bindRelation_state_eq (protocolId : String)
   unfold bindRelation
   rfl
 
-/-- **Constructive Statement-Binding Extractor (`extractBindRelationCollision`, `0 Classical`)**:
-    Two `bindRelation` calls yielding identical 32-byte sponge states either bound the exact same
-    `(seed, protocolId, canonicalRelBytes, publicIoBytes)` tuple, or constructively yield a
-    `HashCollisionWitness` on `cshake256Bytes fsBindCustomization`. -/
+/-- A witness indexed by the two frames supplied to the sponge. -/
+structure ExactPreimageCollision (H : Hash) (a b : List UInt8) where
+  distinct : a ≠ b
+  sameDigest : ofBE (H a) = ofBE (H b)
+
+namespace ExactPreimageCollision
+variable {H : Hash} {a b : List UInt8}
+
+theorem toCollisionAmong (w : ExactPreimageCollision H a b) :
+    CollisionAmong H (fun x => x = a ∨ x = b) :=
+  ⟨a, b, .inl rfl, .inr rfl, w.distinct, w.sameDigest⟩
+
+def toHashCollisionWitness (w : ExactPreimageCollision H a b) :
+    HashCollisionWitness H (Nat.max a.length b.length) :=
+  ⟨a, b, Nat.le_max_left _ _, Nat.le_max_right _ _, w.distinct, w.sameDigest⟩
+
+end ExactPreimageCollision
+
+private theorem cshake32_digest_eq {tag a b : List UInt8}
+    (h : cshake32ByteArray tag a = cshake32ByteArray tag b) :
+    ofBE (cshake256Bytes tag a) = ofBE (cshake256Bytes tag b) := by
+  have hl := congrArg (fun bytes : ByteArray => bytes.data.toList) h
+  simp only [cshake32ByteArray, Native.bytesOfList_toList] at hl
+  exact congrArg ofBE hl
+
+/-- Recover equality or the exact collision from two bindRelation states. -/
+def extractBindRelationExactOrEq
+    (tr₁ tr₂ : Transcript .unseeded)
+    (p₁ p₂ : String) (rel₁ rel₂ io₁ io₂ : ByteArray)
+    (hState : (bindRelation p₁ rel₁ io₁ tr₁).state = (bindRelation p₂ rel₂ io₂ tr₂).state) :
+    PSum
+      (tr₁.state = tr₂.state ∧
+       encodeStringCodepoints p₁ = encodeStringCodepoints p₂ ∧
+       rel₁ = rel₂ ∧ io₁ = io₂)
+      (ExactPreimageCollision (cshake256Bytes fsBindCustomization)
+        (bindPreimageList tr₁.state p₁ rel₁ io₁)
+        (bindPreimageList tr₂.state p₂ rel₂ io₂)) :=
+  let pre₁ := bindPreimageList tr₁.state p₁ rel₁ io₁
+  let pre₂ := bindPreimageList tr₂.state p₂ rel₂ io₂
+  if hpre : pre₁ = pre₂ then
+    .inl (bindPreimageList_injective hpre)
+  else
+    .inr
+      ⟨hpre, cshake32_digest_eq (by
+        simpa only [bindRelation_state_eq] using hState)⟩
+
+/-- Length-bounded projection for existing transcript consumers. -/
 def extractBindRelationOrEq
     (tr₁ tr₂ : Transcript .unseeded)
     (p₁ p₂ : String) (rel₁ rel₂ io₁ io₂ : ByteArray)
@@ -671,29 +780,10 @@ def extractBindRelationOrEq
       (HashCollisionWitness (cshake256Bytes fsBindCustomization)
         (Nat.max (bindPreimageList tr₁.state p₁ rel₁ io₁).length
                  (bindPreimageList tr₂.state p₂ rel₂ io₂).length)) :=
-  let pre₁ := bindPreimageList tr₁.state p₁ rel₁ io₁
-  let pre₂ := bindPreimageList tr₂.state p₂ rel₂ io₂
-  if hpre : pre₁ = pre₂ then
-    .inl (bindPreimageList_injective hpre)
-  else
-    .inr
-      { msgA := pre₁
-        msgB := pre₂
-        lenA := Nat.le_max_left _ _
-        lenB := Nat.le_max_right _ _
-        distinct := hpre
-        sameDigest := by
-          rw [bindRelation_state_eq, bindRelation_state_eq] at hState
-          have hlist : (cshake32ByteArray fsBindCustomization pre₁).data.toList =
-                       (cshake32ByteArray fsBindCustomization pre₂).data.toList :=
-            congrArg (fun b => b.data.toList) hState
-          simp only [cshake32ByteArray, Native.bytesOfList_toList] at hlist
-          exact congrArg ofBE hlist }
+  match extractBindRelationExactOrEq tr₁ tr₂ p₁ p₂ rel₁ rel₂ io₁ io₂ hState with
+  | .inl eq => .inl eq
+  | .inr w => .inr w.toHashCollisionWitness
 
-/-- **Cryptographic Statement Binding (`bindRelation_binds_or_collides`)**:
-    Two `bindRelation` invocations yielding identical 32-byte sponge states either bound
-    the exact same `(seed, protocolId, canonicalRelBytes, publicIoBytes)` tuple, or witness
-    a bounded 256-bit collision in cSHAKE256 under `fsBindCustomization`. -/
 theorem bindRelation_binds_or_collides
     {tr₁ tr₂ : Transcript .unseeded}
     {p₁ p₂ : String} {rel₁ rel₂ io₁ io₂ : ByteArray}
@@ -701,12 +791,17 @@ theorem bindRelation_binds_or_collides
     (tr₁.state = tr₂.state ∧
      encodeStringCodepoints p₁ = encodeStringCodepoints p₂ ∧
      rel₁ = rel₂ ∧ io₁ = io₂) ∨
-    BoundedCollision (cshake256Bytes fsBindCustomization)
-      (Nat.max (bindPreimageList tr₁.state p₁ rel₁ io₁).length
-               (bindPreimageList tr₂.state p₂ rel₂ io₂).length) := by
-  cases extractBindRelationOrEq tr₁ tr₂ p₁ p₂ rel₁ rel₂ io₁ io₂ hState with
+    CollisionAmong (cshake256Bytes fsBindCustomization)
+      (fun x => x = bindPreimageList tr₁.state p₁ rel₁ io₁ ∨
+                x = bindPreimageList tr₂.state p₂ rel₂ io₂) := by
+  cases extractBindRelationExactOrEq tr₁ tr₂ p₁ p₂ rel₁ rel₂ io₁ io₂ hState with
   | inl heq => exact .inl heq
-  | inr w => exact .inr ⟨w⟩
+  | inr w => exact .inr w.toCollisionAmong
+
+#tooth bindRelation_binds_or_collides by mutation bindRelation :=
+  fun p rel _ tr =>
+    Transcript.mk (cshake32ByteArray fsBindCustomization (bindPreimageList tr.state p rel ByteArray.empty))
+      (cshake32ByteArray_size _ _) 1
 
 /-- **The Sole Entry Constructor Producing `BoundTranscript inst` & `.instanceBound` (`bindInstance`)**:
     Absorbs the statement/commitment instance `inst` (such as `(comm, numVars, claimedSum)`) into
@@ -731,21 +826,16 @@ theorem bindInstance_state_eq {ι : Type} [TranscriptEncode ι] (inst : ι)
         (instancePreimageList tr.state tr.stepCount (TranscriptEncode.encodeTranscriptBytes inst)) := by
   unfold bindInstance; rfl
 
-/-- **Constructive Instance-Binding Extractor (`extractBindInstanceOrEq`, `0 Classical`)**:
-    Two `bindInstance` invocations producing the same 32-byte `.instanceBound` state either bound
-    the exact same `(tr, inst)` pair or constructively exhibit a bounded `HashCollisionWitness`. -/
-def extractBindInstanceOrEq {ι : Type} [LawfulTranscriptEncode ι]
+/-- Recover equality or the exact collision from two bindInstance states. -/
+def extractBindInstanceExactOrEq {ι : Type} [LawfulTranscriptEncode ι]
     (inst₁ inst₂ : ι) (tr₁ tr₂ : Transcript .relationBound)
     (hState : (bindInstance inst₁ tr₁).transcript.state =
               (bindInstance inst₂ tr₂).transcript.state) :
     PSum
       (tr₁ = tr₂ ∧ inst₁ = inst₂)
-      (HashCollisionWitness (cshake256Bytes fsInstanceCustomization)
-        (Nat.max
-          (instancePreimageList tr₁.state tr₁.stepCount
-            (TranscriptEncode.encodeTranscriptBytes inst₁)).length
-          (instancePreimageList tr₂.state tr₂.stepCount
-            (TranscriptEncode.encodeTranscriptBytes inst₂)).length)) :=
+      (ExactPreimageCollision (cshake256Bytes fsInstanceCustomization)
+        (instancePreimageList tr₁.state tr₁.stepCount (TranscriptEncode.encodeTranscriptBytes inst₁))
+        (instancePreimageList tr₂.state tr₂.stepCount (TranscriptEncode.encodeTranscriptBytes inst₂))) :=
   let pre₁ := instancePreimageList tr₁.state tr₁.stepCount
     (TranscriptEncode.encodeTranscriptBytes inst₁)
   let pre₂ := instancePreimageList tr₂.state tr₂.stepCount
@@ -761,33 +851,42 @@ def extractBindInstanceOrEq {ι : Type} [LawfulTranscriptEncode ι]
       exact ⟨htr, LawfulTranscriptEncode.encodeTranscriptBytes_injective hi⟩)
   else
     .inr
-      { msgA := pre₁
-        msgB := pre₂
-        lenA := Nat.le_max_left _ _
-        lenB := Nat.le_max_right _ _
-        distinct := hpre
-        sameDigest := by
-          rw [bindInstance_state_eq, bindInstance_state_eq] at hState
-          have hlist : (cshake32ByteArray fsInstanceCustomization pre₁).data.toList =
-                       (cshake32ByteArray fsInstanceCustomization pre₂).data.toList :=
-            congrArg (fun b => b.data.toList) hState
-          simp only [cshake32ByteArray, Native.bytesOfList_toList] at hlist
-          exact congrArg ofBE hlist }
+      ⟨hpre, cshake32_digest_eq (by
+        simpa only [bindInstance_state_eq] using hState)⟩
+
+/-- Length-bounded projection for existing transcript consumers. -/
+def extractBindInstanceOrEq {ι : Type} [LawfulTranscriptEncode ι]
+    (inst₁ inst₂ : ι) (tr₁ tr₂ : Transcript .relationBound)
+    (hState : (bindInstance inst₁ tr₁).transcript.state =
+              (bindInstance inst₂ tr₂).transcript.state) :
+    PSum
+      (tr₁ = tr₂ ∧ inst₁ = inst₂)
+      (HashCollisionWitness (cshake256Bytes fsInstanceCustomization)
+        (Nat.max
+          (instancePreimageList tr₁.state tr₁.stepCount
+            (TranscriptEncode.encodeTranscriptBytes inst₁)).length
+          (instancePreimageList tr₂.state tr₂.stepCount
+            (TranscriptEncode.encodeTranscriptBytes inst₂)).length)) :=
+  match extractBindInstanceExactOrEq inst₁ inst₂ tr₁ tr₂ hState with
+  | .inl eq => .inl eq
+  | .inr w => .inr w.toHashCollisionWitness
 
 theorem bindInstance_binds_or_collides {ι : Type} [LawfulTranscriptEncode ι]
     {inst₁ inst₂ : ι} {tr₁ tr₂ : Transcript .relationBound}
     (hState : (bindInstance inst₁ tr₁).transcript.state =
               (bindInstance inst₂ tr₂).transcript.state) :
     (tr₁ = tr₂ ∧ inst₁ = inst₂) ∨
-    BoundedCollision (cshake256Bytes fsInstanceCustomization)
-      (Nat.max
-        (instancePreimageList tr₁.state tr₁.stepCount
-          (TranscriptEncode.encodeTranscriptBytes inst₁)).length
-        (instancePreimageList tr₂.state tr₂.stepCount
-          (TranscriptEncode.encodeTranscriptBytes inst₂)).length) := by
-  cases extractBindInstanceOrEq inst₁ inst₂ tr₁ tr₂ hState with
+    CollisionAmong (cshake256Bytes fsInstanceCustomization)
+      (fun x => x = instancePreimageList tr₁.state tr₁.stepCount (TranscriptEncode.encodeTranscriptBytes inst₁) ∨
+                x = instancePreimageList tr₂.state tr₂.stepCount (TranscriptEncode.encodeTranscriptBytes inst₂)) := by
+  cases extractBindInstanceExactOrEq inst₁ inst₂ tr₁ tr₂ hState with
   | inl heq => exact .inl heq
-  | inr w => exact .inr ⟨w⟩
+  | inr w => exact .inr w.toCollisionAmong
+
+#tooth bindInstance_binds_or_collides by mutation bindInstance :=
+  fun {_} [_] _ tr =>
+    BoundTranscript.mk (Transcript.mk (cshake32ByteArray fsInstanceCustomization
+      (instancePreimageList tr.state tr.stepCount ByteArray.empty)) (cshake32ByteArray_size _ _) (tr.stepCount + 1))
 
 /-- Absorb a labeled prover message into a seeded (`.relationBound` or `.instanceBound`) transcript.
     Unseeded transcripts are rejected by the Lean typechecker. -/
@@ -809,18 +908,15 @@ theorem absorbMsg_state_eq {phase : TranscriptPhase} [CanSqueezeTranscript phase
           (leb128 tr.stepCount ++ msgBytes.data.toList)) := by
   unfold absorbMsg; rfl
 
-/-- Constructive collision-or-equality extractor for `absorbMsg` (`0 Classical`). -/
+/-- Extract equality or a collision of the two absorbed frames. -/
 def extractAbsorbMsgOrEq {phase : TranscriptPhase} [CanSqueezeTranscript phase]
     (l₁ m₁ l₂ m₂ : ByteArray) (tr₁ tr₂ : Transcript phase)
     (hState : (absorbMsg l₁ m₁ tr₁).state = (absorbMsg l₂ m₂ tr₂).state) :
     PSum
       (tr₁ = tr₂ ∧ l₁ = l₂ ∧ m₁ = m₂)
-      (HashCollisionWitness (cshake256Bytes fsAbsorbCustomization)
-        (Nat.max
-          (encodeFrameList tr₁.state.data.toList l₁.data.toList
-            (leb128 tr₁.stepCount ++ m₁.data.toList)).length
-          (encodeFrameList tr₂.state.data.toList l₂.data.toList
-            (leb128 tr₂.stepCount ++ m₂.data.toList)).length)) :=
+      (ExactPreimageCollision (cshake256Bytes fsAbsorbCustomization)
+        (encodeFrameList tr₁.state.data.toList l₁.data.toList (leb128 tr₁.stepCount ++ m₁.data.toList))
+        (encodeFrameList tr₂.state.data.toList l₂.data.toList (leb128 tr₂.stepCount ++ m₂.data.toList))) :=
   let f₁ := encodeFrameList tr₁.state.data.toList l₁.data.toList
     (leb128 tr₁.stepCount ++ m₁.data.toList)
   let f₂ := encodeFrameList tr₂.state.data.toList l₂.data.toList
@@ -838,18 +934,25 @@ def extractAbsorbMsgOrEq {phase : TranscriptPhase} [CanSqueezeTranscript phase]
       exact ⟨htr, byteArray_eq_of_toList_eq hl, byteArray_eq_of_toList_eq hm⟩)
   else
     .inr
-      { msgA := f₁
-        msgB := f₂
-        lenA := Nat.le_max_left _ _
-        lenB := Nat.le_max_right _ _
-        distinct := hf
-        sameDigest := by
-          rw [absorbMsg_state_eq, absorbMsg_state_eq] at hState
-          have hlist : (cshake32ByteArray fsAbsorbCustomization f₁).data.toList =
-                       (cshake32ByteArray fsAbsorbCustomization f₂).data.toList :=
-            congrArg (fun b => b.data.toList) hState
-          simp only [cshake32ByteArray, Native.bytesOfList_toList] at hlist
-          exact congrArg ofBE hlist }
+      ⟨hf, cshake32_digest_eq (by
+        simpa only [absorbMsg_state_eq] using hState)⟩
+
+theorem absorbMsg_binds_or_collides {phase : TranscriptPhase} [CanSqueezeTranscript phase]
+    {l₁ m₁ l₂ m₂ : ByteArray} {tr₁ tr₂ : Transcript phase}
+    (hState : (absorbMsg l₁ m₁ tr₁).state = (absorbMsg l₂ m₂ tr₂).state) :
+    (tr₁ = tr₂ ∧ l₁ = l₂ ∧ m₁ = m₂) ∨
+    CollisionAmong (cshake256Bytes fsAbsorbCustomization)
+      (fun x => x = encodeFrameList tr₁.state.data.toList l₁.data.toList (leb128 tr₁.stepCount ++ m₁.data.toList) ∨
+                x = encodeFrameList tr₂.state.data.toList l₂.data.toList (leb128 tr₂.stepCount ++ m₂.data.toList)) := by
+  cases extractAbsorbMsgOrEq l₁ m₁ l₂ m₂ tr₁ tr₂ hState with
+  | inl heq => exact .inl heq
+  | inr w => exact .inr w.toCollisionAmong
+
+#tooth absorbMsg_binds_or_collides by mutation absorbMsg :=
+  fun {_} [_] label _ tr =>
+    Transcript.mk (cshake32ByteArray fsAbsorbCustomization
+      (encodeFrameList tr.state.data.toList label.data.toList (leb128 tr.stepCount)))
+      (cshake32ByteArray_size _ _) (tr.stepCount + 1)
 
 /-- Squeeze a full 32-byte (256-bit) challenge and ratchet a seeded sponge state.
     Defeats 1-felt ($2^{15.5}$-bit) truncation bugs by preserving all 256 bits of entropy. -/
