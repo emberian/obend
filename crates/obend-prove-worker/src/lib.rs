@@ -27,6 +27,7 @@
 
 pub mod grinder;
 pub mod service;
+pub mod zkml_gate;
 
 pub use grinder::{
     default_grind_threads, default_grind_window, grind_pow, grind_pow_cancellable, grind_pow_with,
@@ -39,4 +40,16 @@ pub use service::{
     Backend, CancelReport, CancelToken, CancellableBackend, EnqueueError, EnqueueOutcome, JobId,
     JobStatus, Metrics, ProveService, ProveServiceConfig, WaitError, DEFAULT_MAX_RETAINED_SETTLED,
     DEFAULT_QUEUE_DEPTH, DEFAULT_WORKERS,
+};
+pub use zkml_gate::{
+    compute_zkml_chunk_commitment, cshake256_32, decode_chunk_chain_bytes,
+    digest_has_low_zero_bits, encode_chunk_chain_bytes, encode_leb128, encode_zkml_chunk_preimage,
+    fold_chunk_roots, grind_zkml_chunk_pow, jbr_query_milli_bits, legacy_cbr_query_milli_bits,
+    push_framed_field, spawn_streaming_zkml_service, udr_query_milli_bits,
+    verify_candidate_computation, verify_zkml_chunk_chain, CandidateComputation, SecurityRegime,
+    StreamingChunkInput, StreamingZkmlBackend, StreamingZkmlJob, ZkmlChunkReceipt, ZkmlGateRefusal,
+    ZkmlProtocolMode, ZkmlSoundnessReport, ZkmlSuiteArtifact, ZkmlSuiteProfile, BABYBEAR_MODULUS,
+    BABYBEAR_MODULUS_BITS, DEFAULT_ZKML_GRIND_SPAN, KOALABEAR_MODULUS, KOALABEAR_MODULUS_BITS,
+    MILLI_BITS_PER_BIT, PROVEN_MIN_MILLI_BITS, SERIALIZED_CHUNK_RECEIPT_BYTES,
+    ZKML_CHUNK_DOMAIN_TAG,
 };
