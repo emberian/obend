@@ -4,6 +4,9 @@ Forward evaluation lifts across a certified quotient. Reverse evaluation sums co
 public import Obend.Hardware.OpenHypergraph
 public import Obend.Hardware.QuantumMatter
 public import Obend.Analysis.Equitable
+import all Obend.Hardware.OpenHypergraph
+import all Obend.Hardware.QuantumMatter
+import all Obend.Analysis.Equitable
 
 public section
 
