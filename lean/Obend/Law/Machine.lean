@@ -106,7 +106,7 @@ reason; `Refuses` is the case of a literal one). -/
   | .refused why => RefusesAs law o n rq why
 
 /-- The effective law refuses, its record's `by` the label `name` and its `reason` the label `why`. -/
-@[expose] def BlamedAs (law : Term) (o n rq : Data) (name why : String) : Prop :=
+abbrev BlamedAs (law : Term) (o n rq : Data) (name why : String) : Prop :=
   ∃ p, Evaluates (applyLaw law o n rq) (.inject "refused" p) ∧
     Evaluates (.get p "by") (.label name) ∧ Evaluates (.get p "reason") (.label why)
 

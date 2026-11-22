@@ -100,7 +100,7 @@ closed, the law is `λ λ λ b`, and `b` is in certifying shape. -/
     | _, _ => false
 
 /-- The invariant holds of `n`. -/
-@[expose] def Keeps (I : Term) (n : Data) : Prop := Evaluates (.app I n.term) (.boolean true)
+abbrev Keeps (I : Term) (n : Data) : Prop := Evaluates (.app I n.term) (.boolean true)
 
 /-- One step a law admits: from `o`, under `rq`, to `n`; a relaw leaves the state unchanged. -/
 @[expose] def LawStep (law : Term) (o rq n : Data) : Prop :=

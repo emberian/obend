@@ -34,7 +34,7 @@ layer terms; the object built from the operands is `≈b` the object built from 
 about the decoded composition is a fact about the program's own `fix`.
 -/
 public import Obend.Equiv.Behaviour
-@[expose] public section
+public section
 namespace Obend.Logic
 open Obend.Core.Term
 open Obend.Equiv
@@ -55,33 +55,33 @@ structure Layer where
   composeMeta : Term := .record []
 
 /-- What a layer returns over the row beneath it: `extend super {defs}`, or the flat record. -/
-def Layer.provide (L : Layer) (sup : Term) (fields : List (String × Term)) : Term :=
+@[expose] def Layer.provide (L : Layer) (sup : Term) (fields : List (String × Term)) : Term :=
   if L.flat then .record fields else .extend sup fields
 
 /-- `λself. λsuper. extend super {defs}`, or `λself. λsuper. {defs}` (Elaborate `layerAt`). -/
-def Layer.extension (L : Layer) : Term := .lam (.lam (L.provide (.bound 0) L.fields))
+abbrev Layer.extension (L : Layer) : Term := .lam (.lam (L.provide (.bound 0) L.fields))
 
 /-- The layer as the chain operand reduces to: `specification META extension`. -/
-def Layer.term (L : Layer) : Term := .specification L.metadata L.extension
+@[expose] def Layer.term (L : Layer) : Term := .specification L.metadata L.extension
 
 /-- The layer lists the member. -/
-def Layer.provides (L : Layer) (m : String) : Bool := L.fields.any (·.1 == m)
+@[expose] def Layer.provides (L : Layer) (m : String) : Bool := L.fields.any (·.1 == m)
 
 /-- The layer's body for the member, under its two binders. -/
-def Layer.body (L : Layer) (m : String) : Option Term := (L.fields.find? (·.1 == m)).map (·.2)
+@[expose] def Layer.body (L : Layer) (m : String) : Option Term := (L.fields.find? (·.1 == m)).map (·.2)
 
 /-- One composition step over lowered operands (Elaborate `composeStep`):
 `specification (composed{…}) (mix value right)`. -/
-def composeStep (md value right : Term) : Term := .specification md (.mix value right)
+abbrev composeStep (md value right : Term) : Term := .specification md (.mix value right)
 
 /-- The composition of a stack (outermost first) with operand terms `op`: the left fold of the
 elaborator, seen from its last operand. -/
-def composeWith (op : Layer → Term) : Layer → List Layer → Term
+@[expose] def composeWith (op : Layer → Term) : Layer → List Layer → Term
   | top, [] => op top
   | top, next :: rest => composeStep top.composeMeta (composeWith op next rest) (op top)
 
 /-- The composition of the layer terms. -/
-def composeTerm (top : Layer) (below : List Layer) : Term := composeWith Layer.term top below
+abbrev composeTerm (top : Layer) (below : List Layer) : Term := composeWith Layer.term top below
 
 /-- A composition closed by `fix` over a record seed: outermost layer first. -/
 structure Composition where
@@ -91,27 +91,27 @@ structure Composition where
 
 namespace Composition
 
-def layers (C : Composition) : List Layer := C.top :: C.below
+abbrev layers (C : Composition) : List Layer := C.top :: C.below
 
 /-- The object: `fix (compose …) seed`. -/
-def object (C : Composition) : Term := .fix (composeTerm C.top C.below) (.record C.seed)
+abbrev object (C : Composition) : Term := .fix (composeTerm C.top C.below) (.record C.seed)
 
 end Composition
 
 /-- The row beneath a suffix of the stack, as a term over the object `O`: the seed beneath the
 innermost layer, else the composition of the suffix applied to `O` and the seed. -/
-def superBelow (O : Term) (seed : List (String × Term)) : List Layer → Term
+@[expose] def superBelow (O : Term) (seed : List (String × Term)) : List Layer → Term
   | [] => .record seed
   | next :: rest => .app (.app (composeTerm next rest) O) (.record seed)
 
 /-- `super := sup`, `self := O`, every other index down by two. -/
-def selfSuper (O sup : Term) : Nat → Term
+@[expose] def selfSuper (O sup : Term) : Nat → Term
   | 0 => sup
   | 1 => O
   | k + 2 => .bound k
 
 /-- A layer body with `self := O` and `super := sup`: one parallel substitution. -/
-def openTerm (t O sup : Term) : Term := t.substitute (selfSuper O sup)
+abbrev openTerm (t O sup : Term) : Term := t.substitute (selfSuper O sup)
 
 /-- The two β steps leave exactly the parallel substitution. -/
 theorem open_sequential (t O sup : Term) :
@@ -124,40 +124,40 @@ theorem open_sequential (t O sup : Term) :
   | 1 => simp [liftSubstitution, single, selfSuper, shift_one_cancel]
   | k + 2 => simp [liftSubstitution, single, selfSuper, Term.rename, Term.substitute]
 
-def openFields (fields : List (String × Term)) (O sup : Term) : List (String × Term) :=
+abbrev openFields (fields : List (String × Term)) (O sup : Term) : List (String × Term) :=
   fields.map fun f => (f.1, openTerm f.2 O sup)
 
 /-- The record a suffix of the stack reduces to over the object `O`. -/
-def rowOf (O : Term) (seed : List (String × Term)) : List Layer → List (String × Term)
+@[expose] def rowOf (O : Term) (seed : List (String × Term)) : List Layer → List (String × Term)
   | [] => seed
   | L :: rest => if L.flat then openFields L.fields O (superBelow O seed rest)
       else extendFields (rowOf O seed rest) (openFields L.fields O (superBelow O seed rest))
 
 /-- The index (outermost first) of the last layer of the composition giving `m` an entry; a flat
 layer hides the row beneath it. -/
-def providesLast : List Layer → String → Option Nat
+@[expose] def providesLast : List Layer → String → Option Nat
   | [], _ => none
   | L :: rest, m => if L.provides m then some 0 else if L.flat then none else (providesLast rest m).map (· + 1)
 
 /-- The body the `j`-th layer gives `m`. -/
-def bodyAt (layers : List Layer) (j : Nat) (m : String) : Option Term := layers[j]?.bind (·.body m)
+@[expose] def bodyAt (layers : List Layer) (j : Nat) (m : String) : Option Term := layers[j]?.bind (·.body m)
 
 namespace Composition
 
 /-- The `super` a claim or method of layer `j` sees in the object: the row beneath it. -/
-def superAt (C : Composition) (j : Nat) : Term := superBelow C.object C.seed (C.layers.drop (j + 1))
+abbrev superAt (C : Composition) (j : Nat) : Term := superBelow C.object C.seed (C.layers.drop (j + 1))
 
 end Composition
 
 /-- A delegation entry: `super.m` under the layer's binders. -/
-def isDelegation (b : Term) (m : String) : Bool :=
+@[expose] def isDelegation (b : Term) (m : String) : Bool :=
   match b with
   | .get (.bound 0) m' => m' == m
   | _ => false
 
 /-- What `(superBelow O seed ls).m` unfolds to by late binding, delegations chased: the index (in
 `ls`) of the providing layer and the opened body. -/
-def unfoldIn (O : Term) (seed : List (String × Term)) : Nat → List Layer → String → Option (Nat × Term)
+@[expose] def unfoldIn (O : Term) (seed : List (String × Term)) : Nat → List Layer → String → Option (Nat × Term)
   | 0, _, _ => none
   | fuel + 1, ls, m =>
     match providesLast ls m with
@@ -172,7 +172,7 @@ namespace Composition
 
 /-- What `O.m` unfolds to by late binding: the index of the last provider and its body with
 `self := O`, `super := superAt`; none when no layer provides `m`. -/
-def unfold (C : Composition) (m : String) : Option (Nat × Term) :=
+abbrev unfold (C : Composition) (m : String) : Option (Nat × Term) :=
   unfoldIn C.object C.seed C.layers.length C.layers m
 
 end Composition

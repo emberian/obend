@@ -78,7 +78,7 @@ theorem op_assoc_left {a b c bc abc : M}
   | some ab => rw [hab] at hassoc; dsimp only [Option.bind] at hassoc; exact ⟨ab, rfl, hassoc⟩
 
 /-- Compatibility predicate: `a` and `b` have a defined composition. -/
-@[expose] def Compat (a b : M) : Prop := (op? a b).isSome = true
+def Compat (a b : M) : Prop := (op? a b).isSome = true
 theorem compat_symm {a b : M} (h : Compat a b) : Compat b a := by unfold Compat at h ⊢; rw [op_comm]; exact h
 theorem compat_one_right (a : M) : Compat a one := by simp [Compat, op_one]
 theorem compat_one_left (a : M) : Compat one a := by simp [Compat, one_op]
@@ -89,7 +89,7 @@ end LawfulPCM
 @[expose] def FPU {M : Type u} [LawfulPCM M] (a : M) (B : M → Prop) : Prop :=
   ∀ frame : M, (LawfulPCM.op? a frame).isSome = true →
     ∃ b : M, B b ∧ (LawfulPCM.op? b frame).isSome = true
-@[expose] def FPUDet {M : Type u} [LawfulPCM M] (a b : M) : Prop := FPU a (fun x => x = b)
+def FPUDet {M : Type u} [LawfulPCM M] (a b : M) : Prop := FPU a (fun x => x = b)
 theorem fpuDet_iff {M : Type u} [LawfulPCM M] {a b : M} :
     FPUDet a b ↔ ∀ frame : M, (LawfulPCM.op? a frame).isSome = true →
       (LawfulPCM.op? b frame).isSome = true :=
@@ -121,7 +121,7 @@ theorem fpu_frame {M : Type u} [LawfulPCM M] {a r ar : M} {B : M → Prop}
 abbrev SepProp (M : Type u) : Type u := M → Prop
 @[expose] def sepEntails {M : Type u} (P Q : SepProp M) : Prop := ∀ m : M, P m → Q m
 @[expose] def sepEmp {M : Type u} [LawfulPCM M] : SepProp M := fun m => m = LawfulPCM.one
-@[expose] def sepPure {M : Type u} (φ : Prop) : SepProp M := fun _ => φ
+def sepPure {M : Type u} (φ : Prop) : SepProp M := fun _ => φ
 @[expose] def sepConj {M : Type u} [LawfulPCM M] (P Q : SepProp M) : SepProp M :=
   fun m => ∃ m₁ m₂ : M, LawfulPCM.op? m₁ m₂ = some m ∧ P m₁ ∧ Q m₂
 @[expose] def sepWand {M : Type u} [LawfulPCM M] (P Q : SepProp M) : SepProp M :=
@@ -200,10 +200,10 @@ end SepAlgebra
 
 abbrev HeapSpec (Val : Type u) : Type u := Nat → Option Val
 
-@[expose] def specDisjoint {Val : Type u} (f g : HeapSpec Val) : Prop :=
+def specDisjoint {Val : Type u} (f g : HeapSpec Val) : Prop :=
   ∀ k : Nat, f k = none ∨ g k = none
 
-@[expose] def specMerge {Val : Type u} (f g : HeapSpec Val) : HeapSpec Val :=
+def specMerge {Val : Type u} (f g : HeapSpec Val) : HeapSpec Val :=
   fun k => match f k with | some v => some v | none => g k
 
 theorem specDisjoint_symm {Val : Type u} {f g : HeapSpec Val}
@@ -216,7 +216,7 @@ theorem specMerge_comm_of_disjoint {Val : Type u} {f g : HeapSpec Val}
   · simp [specMerge, hf]; cases g k <;> rfl
   · simp [specMerge, hg]; cases f k <;> rfl
 
-@[expose] def lookupEntries {Val : Type u} : List (Nat × Val) → Nat → Option Val
+def lookupEntries {Val : Type u} : List (Nat × Val) → Nat → Option Val
   | [], _ => none
   | (k, v) :: rest, q => if q == k then some v else lookupEntries rest q
 
@@ -264,7 +264,7 @@ theorem sorted_entries_ext {Val : Type u} :
         rw [sorted_entries_ext hs₁ hs₂ htail]
 
 /-- Linear-time two-pointer disjoint merge on strictly sorted `(Nat × Val)` lists. -/
-@[expose] def mergeSortedEntries {Val : Type u} :
+def mergeSortedEntries {Val : Type u} :
     List (Nat × Val) → List (Nat × Val) → Option (List (Nat × Val))
   | [], ys => some ys
   | (k₁, v₁) :: xs, [] => some ((k₁, v₁) :: xs)
@@ -412,7 +412,7 @@ namespace HeapExec
 
 variable {Val : Type u}
 
-@[expose] def toSpec (h : HeapExec Val) : HeapSpec Val := lookupEntries h.entries.toList
+def toSpec (h : HeapExec Val) : HeapSpec Val := lookupEntries h.entries.toList
 
 /-- Canonical extensionality: two sorted `HeapExec` arrays with the same `toSpec` are equal! -/
 theorem ext {h₁ h₂ : HeapExec Val} (heq : ∀ k, h₁.toSpec k = h₂.toSpec k) : h₁ = h₂ := by
@@ -421,17 +421,17 @@ theorem ext {h₁ h₂ : HeapExec Val} (heq : ∀ k, h₁.toSpec k = h₂.toSpec
   have harr : a₁ = a₂ := Array.ext' (sorted_entries_ext s₁ s₂ heq)
   subst harr; rfl
 
-@[expose] def empty : HeapExec Val := ⟨#[], .nil⟩
+def empty : HeapExec Val := ⟨#[], .nil⟩
 
-@[simp] theorem empty_toSpec (k : Nat) : (empty : HeapExec Val).toSpec k = none := rfl
+@[simp] theorem empty_toSpec (k : Nat) : (empty : HeapExec Val).toSpec k = none := by rfl
 
-@[expose] def singleton (k : Nat) (v : Val) : HeapExec Val :=
+def singleton (k : Nat) (v : Val) : HeapExec Val :=
   ⟨#[(k, v)], .cons (fun _ hp => by cases hp) .nil⟩
 
 theorem singleton_toSpec (k q : Nat) (v : Val) :
-    (singleton k v).toSpec q = if q == k then some v else none := rfl
+    (singleton k v).toSpec q = if q == k then some v else none := by rfl
 
-@[expose] def disjointMerge (h₁ h₂ : HeapExec Val) : Option (HeapExec Val) :=
+def disjointMerge (h₁ h₂ : HeapExec Val) : Option (HeapExec Val) :=
   match hm : mergeSortedEntries h₁.entries.toList h₂.entries.toList with
   | none => none
   | some zs => some ⟨Array.mk zs, mergeSortedEntries_sorted h₁.sorted h₂.sorted hm⟩
@@ -480,7 +480,7 @@ theorem disjointMerge_comm (h₁ h₂ : HeapExec Val) : disjointMerge h₁ h₂ 
 instance instLawfulPCMHeapExec : LawfulPCM (HeapExec Val) where
   op? := disjointMerge
   one := empty
-  one_op h := disjointMerge_spec_iff.2 ⟨fun _ => Or.inl rfl, rfl⟩
+  one_op h := by exact disjointMerge_spec_iff.2 ⟨fun _ => Or.inl (by rfl), by rfl⟩
   op_comm := disjointMerge_comm
   op_assoc := option_op_assoc_of_comm_forward disjointMerge disjointMerge_comm
     fun {x y z xy xyz} hab habc => by
@@ -515,7 +515,7 @@ instance instLawfulPCMHeapExec : LawfulPCM (HeapExec Val) where
 end HeapExec
 
 /-- Points-to spatial assertion `ptsTo k v` (`k ↦ₕ v`). -/
-@[expose] def ptsTo {Val : Type u} (k : Nat) (v : Val) : SepProp (HeapExec Val) :=
+def ptsTo {Val : Type u} (k : Nat) (v : Val) : SepProp (HeapExec Val) :=
   fun h => h = HeapExec.singleton k v
 
 infix:75 " ↦ₕ " => ptsTo
@@ -530,13 +530,13 @@ theorem ptsTo_sep_disjoint {Val : Type u} {k₁ k₂ : Nat} {v₁ v₂ : Val} {h
 abbrev HeapOp (Val : Type u) (α : Type v) : Type (max u v) :=
   HeapExec Val → Option (α × HeapExec Val)
 
-@[expose] def IsLocalOp {Val : Type u} {α : Type v} (op : HeapOp Val α) : Prop :=
+def IsLocalOp {Val : Type u} {α : Type v} (op : HeapOp Val α) : Prop :=
   ∀ (h₁ h_frame h h₁' : HeapExec Val) (res : α),
     op h₁ = some (res, h₁') →
     LawfulPCM.op? h₁ h_frame = some h →
     ∃ h' : HeapExec Val, LawfulPCM.op? h₁' h_frame = some h' ∧ op h = some (res, h')
 
-@[expose] def HoareSep {Val : Type u} {α : Type v}
+def HoareSep {Val : Type u} {α : Type v}
     (P : SepProp (HeapExec Val)) (op : HeapOp Val α) (Q : α → SepProp (HeapExec Val)) : Prop :=
   ∀ h : HeapExec Val, P h → ∃ (res : α) (h' : HeapExec Val), op h = some (res, h') ∧ Q res h'
 
@@ -566,7 +566,7 @@ theorem hoare_sep_conseq_frame {Val : Type u} {α : Type v}
 
 /-! ### Concrete Local Heap Operations (`readCell`, `writeCell`, 2-Cell `transferCells`) -/
 
-@[expose] def updateExistingEntries {Val : Type u} (k : Nat) (v : Val) :
+def updateExistingEntries {Val : Type u} (k : Nat) (v : Val) :
     List (Nat × Val) → Option (List (Nat × Val))
   | [] => none
   | (k', v') :: rest =>
@@ -637,16 +637,16 @@ theorem updateExistingEntries_complete {Val : Type u} {k : Nat} {v old : Val} :
       rcases Option.isSome_iff_exists.1 (updateExistingEntries_complete (v := v) h) with ⟨_, hrec⟩
       simp [hrec]
 
-@[expose] def readCell {Val : Type u} (k : Nat) : HeapOp Val Val :=
+def readCell {Val : Type u} (k : Nat) : HeapOp Val Val :=
   fun h => (h.toSpec k).map (fun v => (v, h))
 
-@[expose] def writeCell {Val : Type u} (k : Nat) (v : Val) : HeapOp Val Unit :=
+def writeCell {Val : Type u} (k : Nat) (v : Val) : HeapOp Val Unit :=
   fun h =>
     match hm : updateExistingEntries k v h.entries.toList with
     | none => none
     | some ys => some ((), ⟨Array.mk ys, pairwise_of_keys_eq (updateExistingEntries_keys hm) h.sorted⟩)
 
-@[expose] def transferCells (src dst amount : Nat) : HeapOp Nat Unit :=
+def transferCells (src dst amount : Nat) : HeapOp Nat Unit :=
   fun h => do
     let (balSrc, _) ← readCell src h
     let (balDst, _) ← readCell dst h
@@ -802,7 +802,7 @@ theorem sorted_nat_ext :
          · exact hx₁⟩
     rw [sorted_nat_ext hs₁ hs₂ htail]
 
-@[expose] def insertSortedNat (x : Nat) : List Nat → List Nat
+def insertSortedNat (x : Nat) : List Nat → List Nat
   | [] => [x]
   | y :: ys =>
     if x < y then x :: y :: ys
@@ -836,7 +836,7 @@ theorem pairwise_insertSortedNat (x : Nat) : ∀ {ys : List Nat},
         rcases (mem_insertSortedNat x q ys).1 hq with rfl | hm; exact hyx; exact hy q hm
       · simp [hxy, hyx, List.Pairwise.cons hy hys]
 
-@[expose] def unionSortedNats (xs ys : List Nat) : List Nat :=
+def unionSortedNats (xs ys : List Nat) : List Nat :=
   xs.foldr insertSortedNat ys
 
 theorem mem_unionSortedNats : ∀ (xs ys : List Nat) (q : Nat),
@@ -859,14 +859,14 @@ structure NullifierSet where
 
 namespace NullifierSet
 
-@[expose] def empty : NullifierSet := ⟨[], .nil⟩
-@[expose] def singleton (nf : Nat) : NullifierSet := ⟨[nf], .cons (fun _ h => by cases h) .nil⟩
-@[expose] def union (s₁ s₂ : NullifierSet) : NullifierSet :=
+def empty : NullifierSet := ⟨[], .nil⟩
+def singleton (nf : Nat) : NullifierSet := ⟨[nf], .cons (fun _ h => by cases h) .nil⟩
+def union (s₁ s₂ : NullifierSet) : NullifierSet :=
   ⟨unionSortedNats s₁.items s₂.items, pairwise_unionSortedNats s₁.sorted s₂.sorted⟩
-@[expose] def insert (nf : Nat) (s : NullifierSet) : NullifierSet := union (singleton nf) s
-@[expose] def erase (nf : Nat) (s : NullifierSet) : NullifierSet :=
+def insert (nf : Nat) (s : NullifierSet) : NullifierSet := union (singleton nf) s
+def erase (nf : Nat) (s : NullifierSet) : NullifierSet :=
   ⟨s.items.filter (· != nf), List.Pairwise.filter _ s.sorted⟩
-@[expose] def subsetB (s₁ s₂ : NullifierSet) : Bool := s₁.items.all (fun x => s₂.items.contains x)
+def subsetB (s₁ s₂ : NullifierSet) : Bool := s₁.items.all (fun x => s₂.items.contains x)
 
 theorem ext {s₁ s₂ : NullifierSet} (h : ∀ x, x ∈ s₁.items ↔ x ∈ s₂.items) : s₁ = s₂ := by
   cases s₁; cases s₂; simp only [mk.injEq]; exact sorted_nat_ext ‹_› ‹_› h
@@ -958,7 +958,7 @@ theorem nonZeroSorted_ext :
           ⟨hs₂, fun p hp => hnz₂ p (List.mem_cons_of_mem _ hp)⟩ htail]
 
 /-- Insert/accumulate signed delta `d` at account `k` into a `NonZeroSorted` list. -/
-@[expose] def addAccountDelta (k : Nat) (d : Int) : List (Nat × Int) → List (Nat × Int)
+def addAccountDelta (k : Nat) (d : Int) : List (Nat × Int) → List (Nat × Int)
   | [] => if d == 0 then [] else [(k, d)]
   | (k', d') :: xs =>
     if k < k' then if d == 0 then (k', d') :: xs else (k, d) :: (k', d') :: xs
@@ -1089,7 +1089,7 @@ theorem sumDeltas_addAccountDelta (k : Nat) (d : Int) :
         · simp only [hsum, Bool.false_eq_true, ↓reduceIte, sumDeltas]; omega
 
 /-- Canonical sparse addition of two `NonZeroSorted` account-delta lists. -/
-@[expose] def addDeltaLists (xs ys : List (Nat × Int)) : List (Nat × Int) :=
+def addDeltaLists (xs ys : List (Nat × Int)) : List (Nat × Int) :=
   xs.foldr (fun p acc => addAccountDelta p.1 p.2 acc) ys
 
 theorem addDeltaLists_nonZeroSorted :
@@ -1143,7 +1143,7 @@ namespace ConservedValue
 
 /-- Construct a conserved 2-account transfer `(-amount)` from `src` and `(+amount)` to `dst`
     satisfying $\sum \delta = (-amount) + amount = 0$! -/
-@[expose] def transfer (src dst : Nat) (amount : Int) : ConservedValue where
+def transfer (src dst : Nat) (amount : Int) : ConservedValue where
   entries := addAccountDelta src (-amount) (addAccountDelta dst amount [])
   wf := addAccountDelta_nonZeroSorted src (-amount)
     (addAccountDelta_nonZeroSorted dst amount ⟨.nil, fun _ h => by cases h⟩)
@@ -1180,7 +1180,7 @@ theorem add_assoc (v₁ v₂ v₃ : ConservedValue) :
     rw [deltaAt_addDeltaLists v₁.wf v₂.wf, deltaAt_addDeltaLists v₂.wf v₃.wf]
     omega
 
-@[simp] theorem zero_add (v : ConservedValue) : add zero v = v := ext fun _ => rfl
+@[simp] theorem zero_add (v : ConservedValue) : add zero v = v := by exact ext fun _ => by rfl
 
 @[simp] theorem add_zero (v : ConservedValue) : add v zero = v := by rw [add_comm, zero_add]
 
@@ -1208,9 +1208,9 @@ theorem ext {a b : AuthCamera}
     (hFN : a.fragNullifiers = b.fragNullifiers) (hVal : a.value = b.value) : a = b := by
   cases a; cases b; simp only [mk.injEq] at *; exact ⟨hAuth, hFA, hFN, hVal⟩
 
-@[expose] def empty : AuthCamera := ⟨none, 0, .empty, .zero, fun _ h => by cases h⟩
+def empty : AuthCamera := ⟨none, 0, .empty, .zero, fun _ h => by cases h⟩
 
-@[expose] def mkAuth (authority : Nat) (nullifiers : NullifierSet)
+def mkAuth (authority : Nat) (nullifiers : NullifierSet)
     (val : ConservedValue := .zero) : AuthCamera where
   auth? := some ⟨authority, nullifiers⟩
   fragAuthority := authority
@@ -1218,7 +1218,7 @@ theorem ext {a b : AuthCamera}
   value := val
   coherent w hw := by cases hw; exact ⟨Nat.le_refl _, NullifierSet.subsetB_iff.2 (fun _ hx => hx)⟩
 
-@[expose] def mkFrag (fragAuthority : Nat) (fragNullifiers : NullifierSet)
+def mkFrag (fragAuthority : Nat) (fragNullifiers : NullifierSet)
     (val : ConservedValue := .zero) : AuthCamera :=
   ⟨none, fragAuthority, fragNullifiers, val, fun _ h => by cases h⟩
 
@@ -1240,14 +1240,14 @@ private theorem subsetB_of_union_right {s₁ s₂ w : NullifierSet}
   NullifierSet.subsetB_iff.2 fun x hx =>
     NullifierSet.subsetB_iff.1 h x ((mem_unionSortedNats s₁.items s₂.items x).2 (Or.inr hx))
 
-@[expose] def composeWithWorld? (w : AuthWorld) (fa : Nat) (fn : NullifierSet)
+def composeWithWorld? (w : AuthWorld) (fa : Nat) (fn : NullifierSet)
     (val : ConservedValue) : Option AuthCamera :=
   if h : decide (fa ≤ w.authority) && fn.subsetB w.nullifiers then
     some ⟨some w, fa, fn, val, fun _ hw => by
       cases hw; simp only [Bool.and_eq_true, decide_eq_true_eq] at h; exact ⟨h.1, h.2⟩⟩
   else none
 
-@[expose] def compose? (a b : AuthCamera) : Option AuthCamera :=
+def compose? (a b : AuthCamera) : Option AuthCamera :=
   let fa := max a.fragAuthority b.fragAuthority
   let fn := a.fragNullifiers.union b.fragNullifiers
   let val := a.value.add b.value

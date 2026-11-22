@@ -53,7 +53,7 @@ structure Graph where
 @[expose] def Graph.suffixPart (g : Graph) (l : List String) : List String := l.dropWhile fun x => !g.isSuffix x
 
 /-- A parent's suffix tail: its precedence list from its first suffix node on. -/
-@[expose] def Graph.tailAt (g : Graph) (p : String) : List String := g.suffixPart (g.precedence p)
+abbrev Graph.tailAt (g : Graph) (p : String) : List String := g.suffixPart (g.precedence p)
 
 /-- No name twice. -/
 @[expose] def nodupB : List String → Bool
@@ -104,7 +104,7 @@ and nothing before it is in the tail. -/
   | [] => []
 
 /-- Remove `c` from the front of every candidate it heads. -/
-@[expose] def pop (c : String) (ls : List (List String)) : List (List String) := ls.map (popOne c)
+abbrev pop (c : String) (ls : List (List String)) : List (List String) := ls.map (popOne c)
 
 /-- The merge, bounded by `n`; `merge` passes the candidates' total length, which no merge exceeds
 (each step removes an element). -/

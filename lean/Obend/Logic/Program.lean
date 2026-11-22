@@ -21,7 +21,10 @@ output (the erased term of a package, `Spec.FrontEnd`): nothing here is trusted.
   the left side; `groundAt` instances for the ground judge.
 -/
 public import Obend.Logic.Obligation
-@[expose] public section
+import all Obend.Logic.LateBinding
+import all Obend.Logic.Claim
+import all Obend.Logic.Ground
+public section
 namespace Obend.Logic.Program
 open Obend.Core.Term
 open Obend.Core.Data (Data)

@@ -28,7 +28,7 @@ onto `Obend.Spec.Law` (`LawExpr`):
    to synthesize a multi-field satisfying state `w : Data`, proved sound by `solveLawWitness_sound`.
 -/
 public import Obend.Spec.Law
-@[expose] public section
+public section
 namespace Obend.Spec.LawDial
 open Obend.Core.Data (Data)
 open Obend.Spec.Law
@@ -71,7 +71,7 @@ def maxScalarFields (fs₁ fs₂ : List (String × Data)) : List (String × Data
   fs₁.map fun (k, v) => (k, joinField fs₂ k v)
 
 /-- Join of two state `Data` values: field-wise `max` on scalar record fields. -/
-def joinData (n₁ n₂ : Data) : Data :=
+@[expose] def joinData (n₁ n₂ : Data) : Data :=
   match n₁, n₂ with
   | .record fs₁, .record fs₂ => .record (maxScalarFields fs₁ fs₂)
   | _, _ => n₁
@@ -165,7 +165,7 @@ def DialVerdict.combine : DialVerdict → DialVerdict → DialVerdict
 /-- **The Confluence Dial** on `.obend` `LawExpr`. A comparison with a label field (`new.decider ==
 "ember"`) is `.ordering`, as every equality on a field is: `joinData` keeps the left state's label,
 so two admitted writes of different labels join to one of them. No label clause is `.free`. -/
-def dial : LawExpr → DialVerdict
+@[expose] def dial : LawExpr → DialVerdict
   | .leC (.field _) _ => .free
   | .monotone _ => .free
   | .eqC r _ | .leC r _ | .inC r _ => if isFactOnly r then .free else .ordering
@@ -302,27 +302,27 @@ def demoCoupledLaw : LawExpr := .and (.eqR (.field "x") (.field "y")) (.inC (.fi
 /-! ## 3. Difference-Constraint Relaxation & Satisfiability Witness Finder (`solveLawWitness`) -/
 
 /-- Read a natural field from an association list (defaulting to `0`). -/
-def lookupVal (vals : List (String × Nat)) (f : String) : Nat :=
+@[expose] def lookupVal (vals : List (String × Nat)) (f : String) : Nat :=
   (vals.lookup f).getD 0
 
 /-- Update a natural field in an association list. -/
-def updateVal (vals : List (String × Nat)) (f : String) (v : Nat) : List (String × Nat) :=
+@[expose] def updateVal (vals : List (String × Nat)) (f : String) (v : Nat) : List (String × Nat) :=
   match vals with
   | [] => [(f, v)]
   | (k, oldV) :: rest => if k == f then (k, v) :: rest else (k, oldV) :: updateVal rest f v
 
 /-- Build a `Data.record` from a list of `(field, Nat)` pairs. -/
-def recordOfVals (vals : List (String × Nat)) : Data :=
+@[expose] def recordOfVals (vals : List (String × Nat)) : Data :=
   .record (vals.map fun (k, v) => (k, .natural v))
 
 /-- Read a `Nat` scalar from an optional old state. -/
-def oldNatAt (old : Option Data) (f : String) : Nat :=
+@[expose] def oldNatAt (old : Option Data) (f : String) : Nat :=
   match old.bind (fieldOf f) with
   | some v => Int.toNat v
   | none => 0
 
 /-- One relaxation pass of atomic lower/upper/difference bounds in `e` over `vals`. -/
-def relaxPass (facts : Facts) (old : Option Data) (vals : List (String × Nat)) : LawExpr → List (String × Nat)
+@[expose] def relaxPass (facts : Facts) (old : Option Data) (vals : List (String × Nat)) : LawExpr → List (String × Nat)
   | .eqC (.field f) c =>
     if 0 ≤ c then updateVal vals f c.toNat else vals
   | .leC (.field f) c =>
@@ -364,7 +364,7 @@ def relaxPass (facts : Facts) (old : Option Data) (vals : List (String × Nat)) 
   | _ => vals
 
 /-- Run `rounds` Bellman-Ford-style constraint relaxation passes. -/
-def relaxRounds (rounds : Nat) (facts : Facts) (old : Option Data) (e : LawExpr)
+@[expose] def relaxRounds (rounds : Nat) (facts : Facts) (old : Option Data) (e : LawExpr)
     (vals : List (String × Nat)) : List (String × Nat) :=
   match rounds with
   | 0 => vals
@@ -373,7 +373,7 @@ def relaxRounds (rounds : Nat) (facts : Facts) (old : Option Data) (e : LawExpr)
 /-- **`solveLawWitness`**: given field names `keys`, a law `e`, `facts`, and `old` state,
 runs `keys.length + 2` relaxation passes from the initial state (inheriting `old` values where
 present) and returns `some w` iff `e.denote facts old w = true`. -/
-def solveLawWitness (keys : List String) (e : LawExpr) (facts : Facts) (old : Option Data) : Option Data :=
+@[expose] def solveLawWitness (keys : List String) (e : LawExpr) (facts : Facts) (old : Option Data) : Option Data :=
   let initVals := keys.map fun f => (f, oldNatAt old f)
   let solvedVals := relaxRounds (keys.length + 2) facts old e initVals
   let cand := recordOfVals solvedVals
@@ -399,6 +399,17 @@ def coupledMultiFieldLaw : LawExpr :=
   .and (.and (.monotone "a") (.leR (.field "a") (.field "b"))) (.leC (.field "b") 10)
 
 def coupledOldState : Data := .record [("a", .natural 4), ("b", .natural 1)]
+
+/-- Constructive inhabitedness witness for `dial` on a `.free` multi-field law. -/
+theorem dial_free_inhabited :
+    ∃ e : LawExpr, dial e = .free :=
+  ⟨.and (.monotone "a") (.leC (.field "b") 10), rfl⟩
+
+/-- Constructive inhabitedness witness for `solveLawWitness` on the coupled multi-field law. -/
+theorem solveLawWitness_inhabited :
+    ∃ w : Data,
+      solveLawWitness ["a", "b"] coupledMultiFieldLaw demoFacts (some coupledOldState) = some w :=
+  ⟨.record [("a", .natural 4), ("b", .natural 4)], by rfl⟩
 
 end Obend.Spec.LawDial
 end

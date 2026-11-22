@@ -27,6 +27,8 @@ public import Obend.Core.MachineTyping
 public import Obend.Tactic.Tooth
 public import Obend.Core.Proofs.TypedSubstitution
 import all Obend.Core.Check
+import all Obend.Law.Syntax
+import all Obend.Law.Std
 namespace Obend.Law.Typing
 open Obend.Law
 open Obend.Core.Ty
@@ -287,7 +289,7 @@ theorem checkArms_ok {ctx : Context} {row result : Ty} (hctx : Clean ctx) :
     simp only [ha]
     rw [need_ok (safeUses_clean hc hl), need_ok (show Quantity.unrestricted.fits (a.uses.headD 0) = true from rfl)]
     simp only [ht, pure, Except.pure, need_ok (show (_ || branchesAgree ctx a.uses.tail t.uses) = true by
-      simp [branchesAgree_noLinear hctx.noLinear]), dif_pos hq]
+      simp [branchesAgree_noLinear hctx.noLinear]), hq, ↓reduceDIte]
     exact ⟨_, rfl, by simp [hr], rfl⟩
 
 public theorem chk_case {ctx : Context} {s : Term} {arms : List (String × Term)} {V row result : Ty}
@@ -413,9 +415,9 @@ public theorem lawOf6_checks {S : Ty} {b ad rl rt wr iv : At → Term} (hS : S.i
         (by rw [reqTy_canonical, verdictTy_canonical]; exact body)
   have l2 : Chk [⟨S, .unrestricted⟩] (.lam (.lam (lawCase6 b ad rl rt wr iv)))
       (fnTy S (fnTy reqTy verdictTy)) := chk_lam c1 (by rw [hc]; exact hsh) (by
-        rw [hc]; simp only [fnTy, Ty.canonical, reqTy_canonical, verdictTy_canonical]; exact l3)
+        rw [hc]; simp only [Ty.canonical]; exact l3)
   have l1 : Chk [] (lawOf6 b ad rl rt wr iv) (lawTy S) := chk_lam c0 (by rw [hc]; exact hsh) (by
-        rw [hc]; simp only [fnTy, Ty.canonical, reqTy_canonical, verdictTy_canonical, hc]; exact l2)
+        rw [hc]; simp only [Ty.canonical, hc]; exact l2)
   obtain ⟨r, hr⟩ := l1 c0.noLinear []
   have hl := Obend.Core.MachineTyping.source_uses_length r.derivation
   unfold ChecksAt checkAgainst Obend.Core.Bidirectional.checkAt
@@ -569,7 +571,7 @@ public theorem windowed_checks {S T : Ty} (W limit : Nat) (g : String) (hS : S.i
 /-! ### Machines -/
 
 /-- The row of `stateTy states`. -/
-@[expose] public def stateRow (states : List String) : Ty :=
+public def stateRow (states : List String) : Ty :=
   states.foldr (fun s row => .field s .emptyRow row) .emptyRow
 
 theorem rowMember_stateRow {y : String} : ∀ {states : List String}, y ∈ states →
@@ -811,7 +813,7 @@ public theorem chk_app {ctx : Context} {f a : Term} {D C : Ty} (hctx : Clean ctx
     exact absurd rfl (hs .reusable .unrestricted D.canonical C.canonical)
 
 /-- Each of the six clauses checks at `verdictTy` under its payload, with `Γ` outside the law. -/
-@[expose] public def ClausesIn (Γ : Context) (S : Ty) (b ad rl rt wr iv : At → Term) : Prop :=
+public def ClausesIn (Γ : Context) (S : Ty) (b ad rl rt wr iv : At → Term) : Prop :=
   Chk (clauseCtx S .label ++ Γ) (ad ⟨1⟩) verdictTy ∧ Chk (clauseCtx S unitTy ++ Γ) (b ⟨1⟩) verdictTy ∧
   Chk (clauseCtx S .natural ++ Γ) (iv ⟨1⟩) verdictTy ∧ Chk (clauseCtx S .label ++ Γ) (rl ⟨1⟩) verdictTy ∧
   Chk (clauseCtx S unitTy ++ Γ) (rt ⟨1⟩) verdictTy ∧ Chk (clauseCtx S unitTy ++ Γ) (wr ⟨1⟩) verdictTy
@@ -835,15 +837,15 @@ public theorem lawOf6_chk_in {S : Ty} {Γ : Context} {b ad rl rt wr iv : At → 
         (by rw [reqTy_canonical, verdictTy_canonical]; exact body)
   have l2 : Chk (⟨S, .unrestricted⟩ :: Γ) (.lam (.lam (lawCase6 b ad rl rt wr iv)))
       (fnTy S (fnTy reqTy verdictTy)) := chk_lam c1 (by rw [hc]; exact hsh) (by
-        rw [hc]; simp only [fnTy, Ty.canonical, reqTy_canonical, verdictTy_canonical]; exact l3)
+        rw [hc]; simp only [Ty.canonical]; exact l3)
   exact chk_lam hΓ (by rw [hc]; exact hsh) (by
-        rw [hc]; simp only [fnTy, Ty.canonical, reqTy_canonical, verdictTy_canonical, hc]; exact l2)
+        rw [hc]; simp only [Ty.canonical, hc]; exact l2)
 
 /-- The binding of a `keeps` invariant: a reusable `S → boolean`. -/
-@[expose] public def invBinding (S : Ty) : Binding := ⟨fnTy S .boolean, .unrestricted⟩
+public def invBinding (S : Ty) : Binding := ⟨fnTy S .boolean, .unrestricted⟩
 
 /-- `keeps S` with its invariant a free variable (index `0` outside the law). -/
-@[expose] public def keepsOpen (S : Ty) : Term :=
+public def keepsOpen (S : Ty) : Term :=
   let c (a : At) := guard (.app (.bound (a.depth + 3)) a.new) "invariant" okT
   lawOf S c c (fun _ => okT) c c
 
@@ -927,7 +929,7 @@ public theorem keeps_typed {S : Ty} (hS : S.isCanonical) (hsh : S.shareable = tr
     intro x f hf
     by_cases hx : x = 0
     · subst hx
-      simp only [σ, if_pos rfl, Option.some.injEq] at hf
+      simp only [σ, ↓reduceIte, Option.some.injEq] at hf
       subst hf
       refine ⟨closed, hasm, invBinding S, rfl, ?_⟩
       have hv : validContext I.assumptions.shareableVariables [invBinding S] = true := by
@@ -979,12 +981,12 @@ namespace Teeth
 
 public theorem isCanonical_of {S : Ty} (h : S.canonical = S) : S.isCanonical := h ▸ Ty.canonical_isCanonical S
 
-@[expose] public def totalTy : Ty := .field "total" .natural .emptyRow
-@[expose] public def councilTy : Ty :=
+public def totalTy : Ty := .field "total" .natural .emptyRow
+public def councilTy : Ty :=
   .field "approvals" .natural (.field "proposal" (proposalTy .natural) (.field "total" .natural .emptyRow))
-@[expose] public def ratedTy : Ty :=
+public def ratedTy : Ty :=
   .field "count" .natural (.field "epoch" .natural (.field "total" .natural .emptyRow))
-@[expose] public def doorTy : Ty := .field "door" (stateTy ["open", "shut"]) .emptyRow
+public def doorTy : Ty := .field "door" (stateTy ["open", "shut"]) .emptyRow
 
 theorem bounded_typed : ChecksAt (bounded totalTy "total" 5) totalTy :=
   bounded_checks "total" 5 (isCanonical_of (by decide)) rfl rfl
@@ -1007,10 +1009,10 @@ example :
     (checkAgainst ⟨bounded totalTy "total" 5, noAnn, {}⟩ [] (fnTy totalTy totalTy)).toBool = false := by decide
 
 /-- A record type: a pair of naturals. -/
-@[expose] public def pairTy : Ty := .field "hi" .natural (.field "lo" .natural .emptyRow)
-@[expose] public def councilPairTy : Ty :=
+public def pairTy : Ty := .field "hi" .natural (.field "lo" .natural .emptyRow)
+public def councilPairTy : Ty :=
   .field "approvals" .natural (.field "proposal" (proposalTy pairTy) (.field "total" pairTy .emptyRow))
-@[expose] public def ratedPairTy : Ty :=
+public def ratedPairTy : Ty :=
   .field "count" .natural (.field "epoch" .natural (.field "total" pairTy .emptyRow))
 
 public theorem pairTy_eq : EqTy pairTy :=
@@ -1024,7 +1026,7 @@ theorem windowed_typed_record : ChecksAt (windowedLaw ratedPairTy pairTy 10 1 "t
   windowed_checks 10 1 "total" (isCanonical_of (by decide)) rfl pairTy_eq rfl rfl rfl
 
 /-- A closed invariant: the total is at most 5. -/
-@[expose] public def totalAtMost5 : Term := .lam (leNat (.get (.bound 0) "total") (natT 5))
+public def totalAtMost5 : Term := .lam (leNat (.get (.bound 0) "total") (natT 5))
 
 theorem totalAtMost5_checked :
     ∃ c, checkAgainst ⟨totalAtMost5, noAnn, {}⟩ [] (fnTy totalTy .boolean) = .ok c := by
