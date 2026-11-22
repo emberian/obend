@@ -5,9 +5,13 @@ module
 **The certificate** of a lowering is the lowered term with the digest of its source (`Cert`); the
 object is the source, the Lean-lite term the reader produced. The judge re-lowers the source and
 compares (`check`): the simplest honest format, whose trust base is the compiled lowering. An accepted
-certificate means its term *is* the lowering of the source and so computes what the source computes
-(`Meaning`, through `lower_sound_nat`). Its planted bad certificate is `5 - 3` with the term of `5 + 3`
-(the `subAdd` mutation), refused by the term clause.
+certificate means the source is a closed program, its term *is* the lowering of the source and so
+computes what the source computes (`Meaning`, through `lower_sound_nat`). Its planted bad certificate
+is `5 - 3` with the term of `5 + 3` (the `subAdd` mutation), refused by the term clause.
+
+A source with a free variable (`LExpr.closedAt`) is no program: it is refused before it is lowered
+(`openSource`), and that refusal is a refutation, since no certificate means an open source
+(`check_openSource`). Completeness is claimed on the closed sources.
 
 **Annotations** (`annotate`): the tree of lambda (and injection) annotations `checkAgainst` reads at
 synthesis positions, computed from the source's types (`typeOf`); the checker's run is the test that
@@ -19,6 +23,7 @@ public import Obend.Core.Code
 public import Obend.Spec.DataWire
 public import Obend.Law.Proofs.Claim
 public import Obend.Logic.Obligation
+import Obend.Tactic.Tooth
 public section
 namespace Obend.Lower
 open Obend.Core.Term Obend.Core.Ty
@@ -111,6 +116,35 @@ partial def lexprOf : Data → Option LExpr
 def sourceDigest (src : LExpr) : Nat :=
   Obend.Core.Code.textDigest Obend.Core.Digest.deployed (Obend.Spec.DataWire.dataJson (lexprData src)).compress
 
+/-! ## Closed sources -/
+
+/-- Syntactic closedness: every variable is bound by one of the `depth` enclosing binders (`lam`,
+the body of `letE`, the body of `recConst`). -/
+def LExpr.closedAt (depth : Nat) : LExpr → Bool
+  | .bvar i => decide (i < depth)
+  | .erased | .lit _ | .boolLit _ => true
+  | .const _ b => b.closedAt depth
+  | .app f a => f.closedAt depth && a.closedAt depth
+  | .lam _ b => b.closedAt (depth + 1)
+  | .letE _ v b => v.closedAt depth && b.closedAt (depth + 1)
+  | .natSucc a => a.closedAt depth
+  | .natBin _ l r => l.closedAt depth && r.closedAt depth
+  | .natRec _ z s m => z.closedAt depth && s.closedAt depth && m.closedAt depth
+  | .boolRec _ x y m => x.closedAt depth && y.closedAt depth && m.closedAt depth
+  | .record fs => fs.attach.all fun ⟨f, _⟩ => f.2.closedAt depth
+  | .split _ F m => F.closedAt depth && m.closedAt depth
+  | .proj _ t => t.closedAt depth
+  | .inject _ fs => fs.attach.all fun ⟨f, _⟩ => f.2.closedAt depth
+  | .cases _ arms m => (arms.attach.all fun ⟨a, _⟩ => a.2.2.closedAt depth) && m.closedAt depth
+  | .recConst _ _ b => b.closedAt (depth + 1)
+termination_by e => sizeOf e
+decreasing_by
+  all_goals simp_wf
+  all_goals first
+    | omega
+    | (rename_i h; have := LExpr.sizeOf_snd_lt h; omega)
+    | (rename_i h; have := LExpr.sizeOf_arm_lt h; omega)
+
 /-! ## The judge -/
 
 /-- A certificate: the source's digest and the lowered term. -/
@@ -123,28 +157,57 @@ inductive Clause where
   | notTheLowering
   /-- the certificate names another source -/
   | otherSource
+  /-- the source has a free variable: it is no program, under any certificate -/
+  | openSource
   deriving DecidableEq, Repr
 
 def check (_ : Nat) (src : LExpr) (c : Cert) : Obend.Judge.Verdict Clause :=
-  if Obend.Law.termEq (lowerT src) c.term then
-    if c.digest == sourceDigest src then .ok else .refused .otherSource []
-  else .refused .notTheLowering []
+  if src.closedAt 0 then
+    if Obend.Law.termEq (lowerT src) c.term then
+      if c.digest == sourceDigest src then .ok else .refused .otherSource []
+    else .refused .notTheLowering []
+  else .refused .openSource []
 
-/-- What an accepted certificate means: its term is the lowering of the source it names, so it
-evaluates to every literal the source reduces to. -/
+/-- What an accepted certificate means: the source is a closed program, the certificate's term is
+the lowering of the source it names, and so it evaluates to every literal the source reduces to. -/
 def Meaning (src : LExpr) (c : Cert) : Prop :=
-  c.digest = sourceDigest src ∧ c.term = lowerT src ∧
+  src.closedAt 0 = true ∧ c.digest = sourceDigest src ∧ c.term = lowerT src ∧
     ∀ n : Nat, SSteps src (.lit n) → Evaluates c.term (.nat n)
 
 theorem check_ok {r : Nat} {src : LExpr} {c : Cert} (h : check r src c = .ok) :
     c.digest = sourceDigest src ∧ c.term = lowerT src := by
   unfold check at h
   split at h
-  · rename_i ht
-    split at h
-    · rename_i hd; exact ⟨by simpa using hd, (Obend.Law.termEq_sound ht).symm⟩
+  · split at h
+    · rename_i ht
+      split at h
+      · rename_i hd; exact ⟨by simpa using hd, (Obend.Law.termEq_sound ht).symm⟩
+      · cases h
     · cases h
   · cases h
+
+/-- An accepted source is closed. -/
+theorem check_closed {r : Nat} {src : LExpr} {c : Cert} (h : check r src c = .ok) :
+    src.closedAt 0 = true := by
+  unfold check at h
+  split at h
+  · assumption
+  · cases h
+
+/-- **The open-source refusal is about the source alone**: it is reported only for a source with a
+free variable, whatever the certificate. -/
+theorem check_openSource {r : Nat} {src : LExpr} {c : Cert} {p : List Nat}
+    (h : check r src c = .refused .openSource p) : src.closedAt 0 = false := by
+  unfold check at h
+  split at h
+  · split at h
+    · split at h <;> cases h
+    · cases h
+  · rename_i hc; exact Bool.eq_false_iff.2 hc
+
+/-- A free variable is refused as an open source at every grade, under every certificate. -/
+theorem check_bvar (r i : Nat) (c : Cert) : check r (.bvar i) c = .refused .openSource [] := by
+  simp [check, LExpr.closedAt]
 
 instance judge : Obend.Judge LExpr Cert where
   Clause := Clause
@@ -153,19 +216,32 @@ instance judge : Obend.Judge LExpr Cert where
   sound := by
     intro r src c h
     obtain ⟨hd, ht⟩ := check_ok h
-    exact ⟨hd, ht, fun n run => ht ▸ (by simpa [lowerT] using lower_sound_nat run)⟩
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment _ := True
+    exact ⟨check_closed h, hd, ht, fun n run => ht ▸ (by simpa [lowerT] using lower_sound_nat run)⟩
+  refutes
+    | .openSource => true
+    | _ => false
+  refuted := by
+    intro r src c k p h hk c' hm
+    cases k with
+    | notTheLowering => cases hk
+    | otherSource => cases hk
+    | openSource =>
+      obtain ⟨hc, _⟩ := hm
+      rw [check_openSource h] at hc
+      cases hc
+  Fragment (src : LExpr) : Prop := src.closedAt 0 = true
   complete := by
-    intro src _ _
+    intro src hc _
+    have hclosed : src.closedAt 0 = true := hc
     refine ⟨⟨sourceDigest src, lowerT src⟩, 0, ?_⟩
-    simp [check, Obend.Logic.termEq_refl']
+    simp [check, hclosed, Obend.Logic.termEq_refl']
   mono := by intros; rfl
 
 /-- The planted bad certificate: `5 - 3` with the term of `5 + 3`. -/
 def badSource : LExpr := .natBin .sub (.lit 5) (.lit 3)
 def badCert : Cert := ⟨0, lowerT (.natBin .add (.lit 5) (.lit 3))⟩
+
+theorem badSource_closed : badSource.closedAt 0 = true := by simp [badSource, LExpr.closedAt]
 
 theorem bad_refused : check 0 badSource badCert = .refused .notTheLowering [] := by
   have h : Obend.Law.termEq (lowerT badSource) badCert.term = false := by
@@ -173,7 +249,20 @@ theorem bad_refused : check 0 badSource badCert = .refused .notTheLowering [] :=
     · rfl
     · have := Obend.Law.termEq_sound e
       simp [badSource, badCert, lowerT, NatOp.prim] at this
-  simp only [check, h]; rfl
+  unfold check
+  rw [badSource_closed, h]
+  rfl
+
+/-- The planted source's own lowering is accepted: the closed fragment is inhabited. -/
+example : check 0 badSource ⟨sourceDigest badSource, lowerT badSource⟩ = .ok := by
+  simp [check, badSource_closed, Obend.Logic.termEq_refl']
+
+/-- A free variable is refuted, not merely refused: no certificate means it. -/
+example (c : Cert) : ¬ Meaning (.bvar 0) c :=
+  judge.refuted (r := 0) (c := c) (k := .openSource) (p := []) (check_bvar 0 0 c) rfl c
+
+#tooth check_openSource by mutation check := fun _ _ _ => .refused .openSource []
+#tooth check_bvar by mutation LExpr.closedAt := fun _ _ => true
 
 def certJson (c : Cert) : Lean.Json :=
   Lean.Json.mkObj [("format", "lower@1"), ("digest", Lean.toJson (toString c.digest)),

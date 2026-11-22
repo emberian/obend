@@ -26,14 +26,15 @@ The checker is generic in a **resolver**: what `X.m` unfolds to. The rewrite jud
 (`Obend.Logic.Frame`) unfolds the object *variable* of a claim through its composition.
 `replay_frame`: a derivation consults its resolver only at the members it unfolds (its supports).
 
-The judge never refutes: a rejected derivation says nothing about the equation. The planted bad
+Unequal natural literals refute the equation independently of the supplied derivation. The planted bad
 derivation (`badDerivation`) names the wrong layer at its late-binding step and is refused
 `stepMismatch` at that step's index.
 -/
 public import Obend.Logic.Claim
 public import Obend.Judge.Class
 public import Obend.Law.Proofs.Run
-@[expose] public section
+import Obend.Tactic.Tooth
+public section
 namespace Obend.Logic
 open Obend.Core.Term
 open Obend.Core.Data (Data)
@@ -62,7 +63,7 @@ inductive RStep where
 abbrev Resolver := Term → String → Option (String × Term)
 
 /-- `n` reference steps. -/
-def stepN : Nat → Term → Option Term
+@[expose] def stepN : Nat → Term → Option Term
   | 0, t => some t
   | n + 1, t => (Obend.Law.step? t).bind (stepN n)
 
@@ -106,7 +107,7 @@ def recompose (d : Bool) (t : Term) : Option Term :=
       if free a && free b && free c then some (compose (compose a b) c) else none
 
 /-- Unfold `X.m` through the named layer. -/
-def unfoldAt (R : Resolver) (m layer : String) : Term → Option Term
+@[expose] def unfoldAt (R : Resolver) (m layer : String) : Term → Option Term
   | .get X m' => if m' == m then
       match R X m with
       | some (layer', u) => if layer' == layer then some u else none
@@ -117,7 +118,7 @@ def unfoldAt (R : Resolver) (m layer : String) : Term → Option Term
 mutual
 /-- Replay a derivation from `t`: the term reached, or the path (step indices, outermost first) of
 the step that does not apply. -/
-def replay (R : Resolver) : List RStep → Term → Except (List Nat) Term
+@[expose] def replay (R : Resolver) : List RStep → Term → Except (List Nat) Term
   | [], t => .ok t
   | s :: rest, t =>
     match apply R s t with
@@ -126,7 +127,7 @@ def replay (R : Resolver) : List RStep → Term → Except (List Nat) Term
       | .error p => .error (match p with | [] => [] | i :: q => (i + 1) :: q)
     | .error p => .error (0 :: p)
 /-- Apply one step. -/
-def apply (R : Resolver) : RStep → Term → Except (List Nat) Term
+@[expose] def apply (R : Resolver) : RStep → Term → Except (List Nat) Term
   | .run n, t => match stepN n t with
     | some t' => .ok t'
     | none => .error []
@@ -152,23 +153,23 @@ end
 
 mutual
 /-- The number of steps, nested ones counted. -/
-def RStep.size : RStep → Nat
+@[expose] def RStep.size : RStep → Nat
   | .congr _ _ inner => sizeList inner + 1
   | .trans first second => sizeList first + sizeList second + 1
   | _ => 1
-def sizeList : List RStep → Nat
+@[expose] def sizeList : List RStep → Nat
   | [] => 0
   | s :: rest => s.size + sizeList rest
 end
 
 mutual
 /-- The members a derivation unfolds by late binding: its supports. -/
-def RStep.members : RStep → List String
+@[expose] def RStep.members : RStep → List String
   | .lateBinding m _ => [m]
   | .congr _ _ inner => membersList inner
   | .trans first second => membersList first ++ membersList second
   | _ => []
-def membersList : List RStep → List String
+@[expose] def membersList : List RStep → List String
   | [] => []
   | s :: rest => s.members ++ membersList rest
 end
@@ -188,16 +189,34 @@ end
 /-! ## Soundness -/
 
 /-- The resolver is sound under `σ`: what it unfolds `X.m` to, `X.m` reduces to, after `σ`. -/
-def RSound (R : Resolver) (σ : Nat → Term) : Prop :=
+@[expose] def RSound (R : Resolver) (σ : Nat → Term) : Prop :=
   ∀ X m layer u, R X m = some (layer, u) → Steps ((Term.get X m).substitute σ) (u.substitute σ)
 
 /-- A substitution of observer-free terms. -/
-def SubstFree (σ : Nat → Term) : Prop := ∀ n, ObsFree (σ n)
+@[expose] def SubstFree (σ : Nat → Term) : Prop := ∀ n, ObsFree (σ n)
 
 /-- The two levels a derivation is sound at, and what each asks. -/
 structure Licence (k : Level) (σ : Nat → Term) : Prop where
   level : k = .b ∨ k = .r
   free : k = .b → SubstFree σ
+
+theorem reassoc_inhabited : ∃ d t t', reassoc d t = some t' :=
+  ⟨true, .mix (.mix (.nat 1) (.nat 2)) (.nat 3), _, rfl⟩
+
+theorem composeOf_compose (a b : Term) : composeOf (compose a b) = some (a, b) := by
+  simp [compose, composeOf, termEq_refl']
+
+theorem recompose_inhabited : ∃ d t t', recompose d t = some t' := by
+  exact ⟨true, compose (compose (.nat 1) (.nat 2)) (.nat 3), compose (.nat 1) (compose (.nat 2) (.nat 3)),
+    by simp [recompose, composeOf_compose, observes]⟩
+
+theorem substFree_inhabited : ∃ σ, SubstFree σ := ⟨Term.bound, fun n => .bound n⟩
+
+theorem unfoldAt_inhabited : ∃ R m layer t t', unfoldAt R m layer t = some t' :=
+  ⟨fun _ _ => some ("outer", .nat 1), "m", "outer", .get (.bound 0) "m", _, rfl⟩
+
+theorem licence_inhabited : ∃ k σ, Licence k σ :=
+  ⟨.b, Term.bound, .inl rfl, fun _ n => .bound n⟩
 
 theorem observed_of_bequiv {k : Level} {t t' : Term} (hk : k = .b ∨ k = .r) (h : t ≈b t') : Observed k t t' := by
   have hr : Observed .r t t' := fun ρ C _ => h ρ C
@@ -457,7 +476,7 @@ theorem decodeObject_object {X : Term} {C : Composition} (h : decodeObject X = s
   · cases h
 
 /-- The name of a layer of the stack. -/
-def layerName (layers : List Layer) (j : Nat) : String := (layers[j]?.map (·.name)).getD ""
+@[expose] def layerName (layers : List Layer) (j : Nat) : String := (layers[j]?.map (·.name)).getD ""
 
 /-- The rewrite judge's resolver: `X` read as a composition, unfolded by late binding. -/
 def objectResolver : Resolver := fun X m =>
@@ -471,6 +490,179 @@ theorem objectResolver_sound (σ : Nat → Term) : RSound objectResolver σ := b
   rw [← decodeObject_object hC]
   exact steps_substitute σ (late_binding_unfold hu)
 
+theorem rSound_inhabited : ∃ R σ, RSound R σ :=
+  ⟨objectResolver, Term.bound, objectResolver_sound _⟩
+
+/-! ## Declarative rewrite derivations -/
+
+inductive StepNRel : Nat → Term → Term → Prop where
+  | zero (t) : StepNRel 0 t t
+  | next {n t u v} : Step t u → StepNRel n u v → StepNRel (n+1) t v
+
+private theorem stepNRel_iff {n : Nat} {t v : Term} : StepNRel n t v ↔ stepN n t = some v := by
+  constructor
+  · intro h
+    induction h with
+    | zero => rfl
+    | next hs _ ih => simp [stepN, Obend.Law.step_iff.mp hs, ih]
+  · induction n generalizing t with
+    | zero => simp only [stepN, Option.some.injEq]; rintro rfl; constructor
+    | succ n ih =>
+      intro h
+      obtain ⟨u, hs, hr⟩ := Option.bind_eq_some_iff.mp h
+      exact .next (Obend.Law.step_iff.mpr hs) (ih hr)
+
+inductive UnfoldAtRel (R : Resolver) (m layer : String) : Term → Term → Prop where
+  | get {x u} : R x m = some (layer, u) → UnfoldAtRel R m layer (.get x m) u
+
+private theorem unfoldAtRel_iff {R : Resolver} {m layer : String} {t u : Term} :
+    UnfoldAtRel R m layer t u ↔ unfoldAt R m layer t = some u := by
+  constructor
+  · rintro ⟨hr⟩
+    simp [unfoldAt, hr]
+  · cases t with
+    | get x k =>
+      by_cases hk : k = m
+      · subst k
+        cases hr : R x m with
+        | none => simp [unfoldAt, hr]
+        | some pair =>
+          obtain ⟨l, a⟩ := pair
+          by_cases hl : l = layer
+          · subst l
+            simp only [unfoldAt, beq_self_eq_true, ite_true, hr, Option.some.injEq]
+            rintro rfl
+            exact .get hr
+          · simp [unfoldAt, hr, hl]
+      · simp [unfoldAt, hk]
+    | _ => simp [unfoldAt]
+
+inductive MixAssocRel : Bool → Term → Term → Prop where
+  | ltr (a b c) : MixAssocRel true (.mix (.mix a b) c) (.mix a (.mix b c))
+  | rtl (a b c) : MixAssocRel false (.mix a (.mix b c)) (.mix (.mix a b) c)
+
+private theorem mixAssocRel_iff {d : Bool} {t u : Term} : MixAssocRel d t u ↔ reassoc d t = some u := by
+  constructor
+  · intro h; cases h <;> rfl
+  · unfold reassoc
+    split <;> intro h <;> cases h <;> constructor
+
+private theorem diagonal_mem {α : Type} {x : α} {xs : List α} (h : x ∈ xs) : (x, x) ∈ xs.zip xs := by
+  induction xs with
+  | nil => cases h
+  | cons y ys ih =>
+    simp only [List.zip_cons_cons, List.mem_cons] at *
+    rcases h with rfl | h
+    · exact .inl rfl
+    · exact .inr (ih h)
+
+private theorem fields_unobserved {fs : List (String × Term)}
+    (ih : ∀ f ∈ fs, ObsFree f.2 → observes f.2 = false)
+    (hf : ∀ p ∈ fs.zip fs, Blind p.1.2 p.2.2) :
+    (fs.map fun f => observes f.2).any id = false := by
+  apply List.any_eq_false.mpr
+  intro b hb
+  obtain ⟨f, hm, rfl⟩ := List.mem_map.mp hb
+  simp [ih f hm (hf (f, f) (diagonal_mem hm))]
+
+theorem obsFree_iff_observes (t : Term) : ObsFree t ↔ observes t = false := by
+  refine ⟨?_, obsFree_of_observes t⟩
+  fun_induction observes t <;> intro hf <;> cases hf <;>
+    first
+    | exact fields_unobserved (by assumption) (by assumption)
+    | exact Bool.or_eq_false_iff.mpr ⟨by solve_by_elim, fields_unobserved (by assumption) (by assumption)⟩
+    | solve | simp_all [ObsFree, Function.comp_def] <;> grind [ObsFree, diagonal_mem]
+
+inductive ComposeAssocRel : Bool → Term → Term → Prop where
+  | ltr {a b c} : ObsFree a → ObsFree b → ObsFree c →
+      ComposeAssocRel true (compose (compose a b) c) (compose a (compose b c))
+  | rtl {a b c} : ObsFree a → ObsFree b → ObsFree c →
+      ComposeAssocRel false (compose a (compose b c)) (compose (compose a b) c)
+
+private theorem composeAssocRel_iff {d : Bool} {t u : Term} :
+    ComposeAssocRel d t u ↔ recompose d t = some u := by
+  constructor
+  · intro h
+    cases h <;> simp_all [recompose, composeOf_compose, obsFree_iff_observes]
+  · intro h
+    unfold recompose at h
+    cases d <;> simp only [Bool.false_eq_true, ite_false, ite_true] at h <;>
+      obtain ⟨⟨x, y⟩, hxy, inner⟩ := Option.bind_eq_some_iff.mp h <;>
+      obtain ⟨⟨a, b⟩, hab, cond⟩ := Option.bind_eq_some_iff.mp inner <;>
+      split at cond <;> cases cond <;>
+      simp only at hab ⊢ <;> rw [composeOf_some hxy, composeOf_some hab] <;> constructor <;>
+      apply obsFree_of_observes <;> simp_all
+
+mutual
+inductive DerivesSteps (R : Resolver) : List RStep → Term → Term → Prop where
+  | nil (t) : DerivesSteps R [] t t
+  | cons {s ss t u v} : AppliesRStep R s t u → DerivesSteps R ss u v → DerivesSteps R (s :: ss) t v
+inductive AppliesRStep (R : Resolver) : RStep → Term → Term → Prop where
+  | run {n t u} : StepNRel n t u → AppliesRStep R (.run n) t u
+  | lateBinding {m layer t u} : UnfoldAtRel R m layer t u → AppliesRStep R (.lateBinding m layer) t u
+  | assoc {d t u} : MixAssocRel d t u → AppliesRStep R (.assoc d) t u
+  | composeAssoc {d t u} : ComposeAssocRel d t u → AppliesRStep R (.composeAssoc d) t u
+  | congr {C a b inner} : ObsFree C → DerivesSteps R inner a b →
+      AppliesRStep R (.congr C a inner) (instantiate C a) (instantiate C b)
+  | trans {first second t u v} : DerivesSteps R first t u → DerivesSteps R second u v →
+      AppliesRStep R (.trans first second) t v
+end
+
+mutual
+private theorem derives_replay {R : Resolver} {ss : List RStep} {t v : Term} :
+    DerivesSteps R ss t v → replay R ss t = .ok v
+  | .nil _ => rfl
+  | .cons h₁ h₂ => by simp only [replay, applies_apply h₁, derives_replay h₂]
+private theorem applies_apply {R : Resolver} {s : RStep} {t v : Term} :
+    AppliesRStep R s t v → apply R s t = .ok v
+  | .run h => by simp [apply, stepNRel_iff.mp h]
+  | .lateBinding h => by simp [apply, unfoldAtRel_iff.mp h]
+  | .assoc h => by simp [apply, mixAssocRel_iff.mp h]
+  | .composeAssoc h => by simp [apply, composeAssocRel_iff.mp h]
+  | .congr hf h => by simp [apply, termEq_refl', (obsFree_iff_observes _).mp hf, derives_replay h]
+  | .trans h₁ h₂ => by simp [apply, derives_replay h₁, derives_replay h₂]
+end
+
+mutual
+private theorem derives_of_replay {R : Resolver} : ∀ (ss : List RStep) {t v : Term},
+    replay R ss t = .ok v → DerivesSteps R ss t v
+  | [], _, _, h => by cases h; constructor
+  | s :: rest, t, v, h => by
+    simp only [replay] at h
+    split at h <;> try contradiction
+    rename_i u hu
+    split at h <;> cases h
+    exact .cons (applies_of_apply s hu) (derives_of_replay rest (by assumption))
+private theorem applies_of_apply {R : Resolver} : ∀ (s : RStep) {t v : Term},
+    apply R s t = .ok v → AppliesRStep R s t v
+  | .run _, _, _, h => by
+    simp only [apply] at h; split at h <;> cases h; exact .run (stepNRel_iff.mpr (by assumption))
+  | .lateBinding .., _, _, h => by
+    simp only [apply] at h; split at h <;> cases h; exact .lateBinding (unfoldAtRel_iff.mpr (by assumption))
+  | .assoc _, _, _, h => by
+    simp only [apply] at h; split at h <;> cases h; exact .assoc (mixAssocRel_iff.mpr (by assumption))
+  | .composeAssoc _, _, _, h => by
+    simp only [apply] at h; split at h <;> cases h; exact .composeAssoc (composeAssocRel_iff.mpr (by assumption))
+  | .congr C a inner, t, _, h => by
+    simp only [apply] at h
+    split at h <;> try contradiction
+    rename_i hc
+    simp only [Bool.and_eq_true, Bool.not_eq_true'] at hc
+    cases termEq_sound' hc.1
+    split at h <;> cases h
+    exact .congr (obsFree_of_observes C hc.2) (derives_of_replay inner (by assumption))
+  | .trans first second, _, _, h => by
+    simp only [apply] at h
+    split at h <;> try contradiction
+    exact .trans (derives_of_replay first (by assumption)) (derives_of_replay second h)
+end
+
+def ObjectEquationalDerivable (o : Term × Term) : Prop := ∃ ss, DerivesSteps objectResolver ss o.1 o.2
+
+theorem objectEquationalDerivable_iff_replay_ok (o : Term × Term) :
+    ObjectEquationalDerivable o ↔ ∃ ss, replay objectResolver ss o.1 = .ok o.2 :=
+  ⟨fun ⟨ss, h⟩ => ⟨ss, derives_replay h⟩, fun ⟨ss, h⟩ => ⟨ss, derives_of_replay ss h⟩⟩
+
 /-! ## The rewrite judge -/
 
 /-- Why a derivation is rejected. -/
@@ -479,10 +671,12 @@ inductive RClause where
   | stepMismatch
   /-- the derivation ends elsewhere than the right side -/
   | endMismatch
+  /-- unequal natural literals have different observations -/
+  | distinctGroundLiterals
   deriving DecidableEq, Repr
 
 /-- Replay a derivation with a resolver and compare with the right side. -/
-def rewriteWith (R : Resolver) (k : Nat) (l r : Term) (steps : List RStep) : Judge.Verdict RClause :=
+@[expose] def rewriteWith (R : Resolver) (k : Nat) (l r : Term) (steps : List RStep) : Judge.Verdict RClause :=
   if sizeList steps ≤ k then
     match replay R steps l with
     | .ok t => if Obend.Law.termEq t r then .ok else .refused .endMismatch []
@@ -508,9 +702,33 @@ theorem rewriteWith_mono {R : Resolver} {k k' : Nat} {l r : Term} {steps : List 
   · rename_i h; simp [Nat.le_trans h le, h]
   · exact absurd rfl hne
 
+def distinctNatLiterals : Term → Term → Bool
+  | .nat a, .nat b => a != b
+  | _, _ => false
+
+private theorem distinctNatLiterals_refute {l r : Term} (hd : distinctNatLiterals l r = true) :
+    ¬ Observed .b l r := by
+  unfold distinctNatLiterals at hd
+  split at hd <;> try contradiction
+  rename_i a b
+  intro h
+  have ha : Halts (.nat a) (.natural a) := ⟨_, ⟨.refl _, .natural _⟩, .natural _⟩
+  obtain ⟨v, ev, obs⟩ := (holdsEq_of_observed h (.natural a)).mp ha
+  have eqv := Obend.Law.evaluates_unique ev (show Evaluates (.nat b) (.nat b) from ⟨.refl _, .natural _⟩)
+  subst v
+  cases obs
+  simp at hd
+
 /-- The rewrite checker. -/
 def rewriteCheck (k : Nat) (o : Term × Term) (steps : List RStep) : Judge.Verdict RClause :=
-  rewriteWith objectResolver k o.1 o.2 steps
+  if distinctNatLiterals o.1 o.2 then .refused .distinctGroundLiterals []
+  else rewriteWith objectResolver k o.1 o.2 steps
+
+private theorem rewriteCheck_ok {k : Nat} {o : Term × Term} {steps : List RStep}
+    (h : rewriteCheck k o steps = .ok) : replay objectResolver steps o.1 = .ok o.2 := by
+  unfold rewriteCheck at h
+  split at h <;> try contradiction
+  exact rewriteWith_ok h
 
 theorem replay_object_b {steps : List RStep} {l r : Term} (h : replay objectResolver steps l = .ok r) : l ≈[.b] r := by
   have := replay_sound objectResolver (k := .b) (σ := Term.bound) ⟨.inl rfl, fun _ n => .bound n⟩
@@ -521,14 +739,14 @@ theorem replay_object_b {steps : List RStep} {l r : Term} (h : replay objectReso
 /-- **T2 `rewrite_sound`.** An accepted derivation is an equation of the logic at `b`: `l ≈[b] r`. -/
 theorem rewrite_sound {l r : Term} {steps : List RStep} {k : Nat}
     (h : rewriteCheck k (l, r) steps = .ok) : l ≈[.b] r :=
-  replay_object_b (rewriteWith_ok h)
+  replay_object_b (rewriteCheck_ok h)
 
 /-- **T2 at `r`.** A derivation without `composeAssoc` proves full `≈b`: every substitution, every
 context, metadata observers included. -/
 theorem rewrite_sound_r {l r : Term} {steps : List RStep} {k : Nat}
     (h : rewriteCheck k (l, r) steps = .ok) (hb : atBList steps = false) : l ≈b r := by
   have := replay_sound objectResolver (k := .r) (σ := Term.bound) ⟨.inr rfl, fun e => by cases e⟩
-    (objectResolver_sound _) steps (fun _ => hb) (rewriteWith_ok h)
+    (objectResolver_sound _) steps (fun _ => hb) (rewriteCheck_ok h)
   intro ρ C
   simpa [substitute_bound] using this ρ C trivial
 
@@ -540,19 +758,40 @@ theorem holdsEq_of_rewrite {l r : Term} {steps : List RStep} {k : Nat}
   holdsEq_of_observed (rewrite_sound h)
 
 /-- **The rewrite judge.** Objects are equations, certificates derivations; the grade bounds their
-size. It never refutes. -/
+size. Distinct natural literals give an object-level refutation. -/
 instance rewrite : Judge (Term × Term) (List RStep) where
   Clause := RClause
   Meaning o _ := o.1 ≈[.b] o.2
   check := rewriteCheck
   sound := by intro r o steps h; exact rewrite_sound (l := o.1) (r := o.2) h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment o := ∃ steps, replay objectResolver steps o.1 = .ok o.2
+  refutes | .distinctGroundLiterals => true | _ => false
+  refuted := by
+    intro k o steps clause p hc hk _ hm
+    cases clause <;> try contradiction
+    unfold rewriteCheck at hc
+    split at hc
+    · exact distinctNatLiterals_refute (by assumption) hm
+    · unfold rewriteWith at hc
+      repeat
+        first | cases hc | split at hc
+  Fragment := ObjectEquationalDerivable
   complete := by
-    rintro o ⟨steps, hrun⟩ _
-    exact ⟨steps, sizeList steps, by simp [rewriteCheck, rewriteWith, hrun, termEq_refl']⟩
-  mono := by intro r r' o steps le hne; exact rewriteWith_mono le hne
+    intro o hf _
+    obtain ⟨ss, hr⟩ := (objectEquationalDerivable_iff_replay_ok o).mp hf
+    have hn : distinctNatLiterals o.1 o.2 ≠ true := fun hd => distinctNatLiterals_refute hd (replay_object_b hr)
+    exact ⟨ss, sizeList ss, by simp [rewriteCheck, hn, rewriteWith, hr, termEq_refl']⟩
+  mono := by
+    intro k k' o steps le hn
+    unfold rewriteCheck at hn ⊢
+    cases hd : distinctNatLiterals o.1 o.2 with
+    | true => rfl
+    | false => simpa [hd] using rewriteWith_mono le (by simpa [hd] using hn)
+
+theorem distinctGroundLiterals_refused (steps : List RStep) :
+    rewriteCheck 0 (.nat 0, .nat 1) steps = .refused .distinctGroundLiterals [] := by simp [rewriteCheck, distinctNatLiterals]
+
+#tooth distinctGroundLiterals_refused by mutation distinctNatLiterals := fun _ _ => false
+#tooth rewriteWith_ok by mutation rewriteWith := fun _ _ _ _ _ => .ok
 
 /-! ## A derivation, accepted and planted -/
 
@@ -571,7 +810,7 @@ def badDerivation : List RStep := [.lateBinding "m" "Inner"]
 
 theorem badDerivation_refused :
     rewriteCheck 1 (.get twoProviders.object "m", .nat 1) badDerivation = .refused .stepMismatch [0] := by
-  simp [rewriteCheck, rewriteWith, sizeList, badDerivation, RStep.size, replay, apply, unfoldAt, objectResolver,
+  simp [rewriteCheck, distinctNatLiterals, rewriteWith, sizeList, badDerivation, RStep.size, replay, apply, unfoldAt, objectResolver,
     decodeObject, twoProviders, Composition.object, composeTerm, composeWith, composeStep, decodeCompose,
     constLayer, Layer.term, Layer.extension,
     Layer.provide, decodeLayer, decodeBody, metaName, Composition.unfold, unfoldIn, Composition.layers,
@@ -579,11 +818,14 @@ theorem badDerivation_refused :
 
 theorem goodDerivation_accepted :
     rewriteCheck 1 (.get twoProviders.object "m", .nat 2) goodDerivation = .ok := by
-  simp [rewriteCheck, rewriteWith, sizeList, goodDerivation, RStep.size, replay, apply, unfoldAt, objectResolver,
+  simp [rewriteCheck, distinctNatLiterals, rewriteWith, sizeList, goodDerivation, RStep.size, replay, apply, unfoldAt, objectResolver,
     decodeObject, twoProviders, Composition.object, composeTerm, composeWith, composeStep, decodeCompose,
     termEq_refl', constLayer, Layer.term, Layer.extension,
     Layer.provide, decodeLayer, decodeBody, metaName, Composition.unfold, unfoldIn, Composition.layers,
     providesLast, Layer.provides, bodyAt, Layer.body, layerName, isDelegation, openTerm, Term.substitute]
+
+theorem objectEquationalDerivable_inhabited : ∃ o, ObjectEquationalDerivable o :=
+  ⟨_, (objectEquationalDerivable_iff_replay_ok _).mpr ⟨_, rewriteCheck_ok goodDerivation_accepted⟩⟩
 
 end Obend.Logic
 end

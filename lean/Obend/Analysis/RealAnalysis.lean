@@ -24,33 +24,32 @@ abbrev CanonicalRat := Rat
 namespace CanonicalRat
 
 /-- Smart canonicalizing constructor reducing numerator and denominator to lowest terms. -/
-@[expose] def mk (n : Int) (d : Nat) : CanonicalRat :=
-  mkRat n d
+abbrev mk (n : Int) (d : Nat) : CanonicalRat := mkRat n d
 
-@[expose] def ofInt (n : Int) : CanonicalRat :=
+abbrev ofInt (n : Int) : CanonicalRat :=
   Rat.ofInt n
 
-@[expose] def ofNat (n : Nat) : CanonicalRat :=
+abbrev ofNat (n : Nat) : CanonicalRat :=
   Rat.ofInt (Int.ofNat n)
 
-@[expose] def zero : CanonicalRat := 0
-@[expose] def one : CanonicalRat := 1
+def zero : CanonicalRat := 0
+def one : CanonicalRat := 1
 
-@[expose] def add (a b : CanonicalRat) : CanonicalRat := a + b
-@[expose] def sub (a b : CanonicalRat) : CanonicalRat := a - b
-@[expose] def mul (a b : CanonicalRat) : CanonicalRat := a * b
-@[expose] def div (a b : CanonicalRat) : CanonicalRat := a / b
-@[expose] def neg (a : CanonicalRat) : CanonicalRat := -a
-@[expose] def inv (a : CanonicalRat) : CanonicalRat := a⁻¹
+def add (a b : CanonicalRat) : CanonicalRat := a + b
+def sub (a b : CanonicalRat) : CanonicalRat := a - b
+def mul (a b : CanonicalRat) : CanonicalRat := a * b
+def div (a b : CanonicalRat) : CanonicalRat := a / b
+def neg (a : CanonicalRat) : CanonicalRat := -a
+def inv (a : CanonicalRat) : CanonicalRat := a⁻¹
 
-@[expose] def le (a b : CanonicalRat) : Prop := a ≤ b
-@[expose] def lt (a b : CanonicalRat) : Prop := a < b
+def le (a b : CanonicalRat) : Prop := a ≤ b
+def lt (a b : CanonicalRat) : Prop := a < b
 
-@[expose] def ble (a b : CanonicalRat) : Bool := decide (a ≤ b)
-@[expose] def blt (a b : CanonicalRat) : Bool := decide (a < b)
+def ble (a b : CanonicalRat) : Bool := decide (a ≤ b)
+def blt (a b : CanonicalRat) : Bool := decide (a < b)
 
 /-- Wire encoding of CanonicalRat into Core.Data. -/
-@[expose] def toData (r : CanonicalRat) : Data :=
+def toData (r : CanonicalRat) : Data :=
   .variant "rat" (.record [
     ("num", .natural r.num.natAbs),
     ("neg", .boolean (r.num < 0)),
@@ -58,7 +57,7 @@ namespace CanonicalRat
   ])
 
 /-- Wire decoding of Core.Data into CanonicalRat. -/
-@[expose] def ofData? : Data → Option CanonicalRat
+def ofData? : Data → Option CanonicalRat
   | .variant "rat" (.record [("num", .natural n), ("neg", .boolean isNeg), ("den", .natural d)]) =>
     if d == 0 then none
     else
@@ -92,17 +91,25 @@ instance (x : CanonicalRat) (I : Interval) : Decidable (x ∈ I) :=
   inferInstanceAs (Decidable (I.lo ≤ x ∧ x ≤ I.hi))
 
 @[simp] theorem mem_iff (x : CanonicalRat) (I : Interval) :
-    (x ∈ I) ↔ (I.lo ≤ x ∧ x ≤ I.hi) := Iff.rfl
+    (x ∈ I) ↔ (I.lo ≤ x ∧ x ≤ I.hi) :=
+  ⟨fun ⟨h₁, h₂⟩ => ⟨h₁, h₂⟩, fun ⟨h₁, h₂⟩ => ⟨h₁, h₂⟩⟩
 
-@[simp] theorem Mem_iff_mem (x : CanonicalRat) (I : Interval) :
-    Interval.Mem x I ↔ x ∈ I := Iff.rfl
+/-- Twice the displacement from the midpoint is bounded by the signed width.
+This also characterizes empty intervals with reversed endpoints. -/
+theorem mem_iff_midpoint_width (x : CanonicalRat) (I : Interval) :
+    x ∈ I ↔ (-(I.hi - I.lo) ≤ 2 * x - (I.lo + I.hi) ∧
+      2 * x - (I.lo + I.hi) ≤ I.hi - I.lo) := by
+  change (I.lo ≤ x ∧ x ≤ I.hi) ↔ _
+  grind
+
+#tooth mem_iff_midpoint_width by mutation Mem := fun x I => I.lo ≤ x
 
 /-- Well-formedness of an interval: `I.lo ≤ I.hi`. -/
-@[expose] def Wf (I : Interval) : Prop :=
+abbrev Wf (I : Interval) : Prop :=
   I.lo ≤ I.hi
 
 /-- Smart constructor verifying that `lo ≤ hi`. -/
-@[expose] def make (lo hi : CanonicalRat) : Option Interval :=
+def make (lo hi : CanonicalRat) : Option Interval :=
   if decide (lo ≤ hi) then some ⟨lo, hi⟩ else none
 
 /-- Degenerate point interval `[q, q]`. -/
@@ -148,17 +155,17 @@ theorem ofPoint_wf (q : CanonicalRat) : (Interval.ofPoint q).Wf :=
   ⟨a.lo + b.lo, a.hi + b.hi⟩
 
 /-- Interval negation: `[-a.hi, -a.lo]`. -/
-@[expose] def neg (a : Interval) : Interval :=
+def neg (a : Interval) : Interval :=
   ⟨-a.hi, -a.lo⟩
 
 /-- Interval subtraction: `[a.lo - b.hi, a.hi - b.lo]`. -/
 @[expose] def sub (a b : Interval) : Interval :=
   ⟨a.lo - b.hi, a.hi - b.lo⟩
 
-@[expose] def min4 (a b c d : CanonicalRat) : CanonicalRat :=
+abbrev min4 (a b c d : CanonicalRat) : CanonicalRat :=
   min (min a b) (min c d)
 
-@[expose] def max4 (a b c d : CanonicalRat) : CanonicalRat :=
+abbrev max4 (a b c d : CanonicalRat) : CanonicalRat :=
   max (max a b) (max c d)
 
 /-- Interval multiplication: enclosure over all 4 endpoint products. -/
@@ -318,7 +325,7 @@ inductive RealExpr where
   | sub (l r : RealExpr)
   | mul (l r : RealExpr)
   | sqr (a : RealExpr)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Evaluate a RealExpr over an interval environment. -/
 @[expose] def evalInterval (env : List (String × Interval)) : RealExpr → Option Interval
@@ -394,6 +401,11 @@ theorem evalPoint_eq_some_evalExpr (rho : String → CanonicalRat) :
     rw [h]
     cases v == k <;> simp [ih]
 
+/-- Squaring a variable ranging across zero produces a nondegenerate enclosure. -/
+theorem evalInterval_inhabited :
+    ∃ env e I, evalInterval env e = some I ∧ I.lo < I.hi :=
+  ⟨[("x", ⟨-1, 2⟩)], .sqr (.var "x"), ⟨0, 4⟩, by decide +kernel, by decide⟩
+
 /-- **Theorem (`evalInterval_sound`)**:
 Fundamental Theorem of Interval Arithmetic for `RealExpr`:
 For any expression `e : RealExpr`, interval environment `env`, and point assignment `rho`
@@ -462,6 +474,8 @@ theorem evalInterval_sound
       simp only [pure, Option.some.injEq] at hEval
       subst hEval
       exact Interval.sqr_mem (iha ia ha)
+
+#tooth evalInterval_sound by mutation Interval.sqr := fun a => ⟨a.lo * a.lo, a.hi * a.hi⟩
 
 end Obend.Analysis
 end

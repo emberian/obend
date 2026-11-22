@@ -51,11 +51,15 @@ public import Obend.Lower.Judge
 public import Obend.Spec.Syntax
 public import Obend.Spec.Elaborate
 import all Obend.Judge.Class
+import Obend.Tactic.Tooth
+import all Obend.Analysis.RealAnalysis
 import all Obend.Judge.RealAnalysis
 import all Obend.Analysis.Groebner
 import all Obend.Analysis.SosLyapunov
 import all Obend.Logic.Obligation
 import all Obend.Spec.Syntax
+import all Obend.Hardware.Compiler
+import all Obend.Hardware.Types
 
 public section
 
@@ -413,15 +417,199 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
       | refused _ _ => rw [hL] at h; contradiction
       | uncovered => rw [hL] at h; contradiction
 
+/-- The first binding for a variable, including in boxes with shadowed names. -/
+inductive VarLookupRel (v : String) (iv : Interval) : List (String × Interval) → Prop where
+  | head {rest} : VarLookupRel v iv ((v, iv) :: rest)
+  | tail {k other rest} : k ≠ v → VarLookupRel v iv rest → VarLookupRel v iv ((k, other) :: rest)
+
+private theorem varLookup_iff {v : String} {iv : Interval} {env : List (String × Interval)} :
+    VarLookupRel v iv env ↔ env.lookup v = some iv := by
+  constructor
+  · intro h
+    induction h with
+    | head => simp [List.lookup]
+    | tail hn _ ih => simpa [List.lookup, beq_eq_false_iff_ne.mpr (Ne.symm hn)] using ih
+  · induction env with
+    | nil => simp
+    | cons hd rest ih =>
+      obtain ⟨k, b⟩ := hd
+      by_cases hk : k = v
+      · subst k
+        simp only [List.lookup, beq_self_eq_true, Option.some.injEq]
+        rintro rfl
+        exact .head
+      · intro h
+        exact .tail hk (ih (by simpa [List.lookup, beq_eq_false_iff_ne.mpr (Ne.symm hk)] using h))
+
+/-- Interval bounds derived by the arithmetic rules on the expression tree. -/
+inductive AutoExprBounds (env : List (String × Interval)) : RealExpr → Interval → Prop where
+  | const (c) : AutoExprBounds env (.const c) (Interval.ofPoint c)
+  | var {v b} : VarLookupRel v b env → AutoExprBounds env (.var v) b
+  | add {x y a b} : AutoExprBounds env x a → AutoExprBounds env y b →
+      AutoExprBounds env (.add x y) (a.add b)
+  | sub {x y a b} : AutoExprBounds env x a → AutoExprBounds env y b →
+      AutoExprBounds env (.sub x y) (a.sub b)
+  | mul {x y a b} : AutoExprBounds env x a → AutoExprBounds env y b →
+      AutoExprBounds env (.mul x y) (a.mul b)
+  | sqr {x a} : AutoExprBounds env x a → AutoExprBounds env (.sqr x) a.sqr
+
+private theorem autoExprBounds_iff {env : List (String × Interval)} {e : RealExpr} {b : Interval} :
+    AutoExprBounds env e b ↔ evalInterval env e = some b := by
+  constructor
+  · intro h
+    induction h <;> simp_all [evalInterval, varLookup_iff]
+  · induction e generalizing b with
+    | const => simp only [evalInterval, Option.some.injEq]; rintro rfl; constructor
+    | var => intro h; exact .var (varLookup_iff.mpr (by simpa [evalInterval] using h))
+    | add x y ix iy | sub x y ix iy | mul x y ix iy =>
+      cases hx : evalInterval env x <;> cases hy : evalInterval env y <;>
+        simp [evalInterval, hx, hy] <;> rintro rfl <;> constructor <;> first | exact ix hx | exact iy hy
+    | sqr x ix =>
+      cases hx : evalInterval env x <;> simp [evalInterval, hx]
+      rintro rfl
+      exact .sqr (ix hx)
+
+/-- A finite partition with a derivation of the claimed enclosure at every leaf. -/
+inductive BisectBoxEnclosed : IntervalObj → Prop where
+  | direct {q : IntervalObj} {b : Interval} : AutoExprBounds q.env q.expr b →
+      q.claimedBound.lo ≤ b.lo → b.hi ≤ q.claimedBound.hi → BisectBoxEnclosed q
+  | bisect {q : IntervalObj} (v : String) (iv : Interval) : VarLookupRel v iv q.env →
+      BisectBoxEnclosed { q with env := replaceVarInterval v ⟨iv.lo, (iv.lo + iv.hi) / 2⟩ q.env } →
+      BisectBoxEnclosed { q with env := replaceVarInterval v ⟨(iv.lo + iv.hi) / 2, iv.hi⟩ q.env } →
+      BisectBoxEnclosed q
+
+theorem bisectBoxEnclosed_iff_check_ok (q : IntervalObj) :
+    BisectBoxEnclosed q ↔ ∃ c, checkIntervalAutoCert q c = .ok := by
+  constructor
+  · intro deriv
+    induction deriv with
+    | direct hb hlo hhi =>
+      exact ⟨.direct, by simp [checkIntervalAutoCert, intervalCheck, IntervalObj.toQuery,
+        autoExprBounds_iff.mp hb, hlo, hhi]⟩
+    | bisect v iv hv _ _ il ir =>
+      obtain ⟨l, hl⟩ := il
+      obtain ⟨r, hr⟩ := ir
+      exact ⟨.bisect v l r, by simp [checkIntervalAutoCert, varLookup_iff.mp hv, hl, hr]⟩
+  · rintro ⟨c, h⟩
+    induction c generalizing q with
+    | direct =>
+      simp only [checkIntervalAutoCert, intervalCheck, IntervalObj.toQuery] at h
+      split at h <;> try contradiction
+      split at h <;> try contradiction
+      exact .direct (autoExprBounds_iff.mpr (by assumption)) (by grind) (by grind)
+    | counterexample =>
+      simp only [checkIntervalAutoCert, intervalCheck] at h
+      repeat split at h <;> try contradiction
+    | bisect v l r il ir =>
+      simp only [checkIntervalAutoCert] at h
+      split at h <;> try contradiction
+      rename_i iv hv
+      split at h
+      · exact .bisect v iv (varLookup_iff.mpr hv) (il _ (by assumption)) (ir _ h)
+      · rename_i hn
+        exact (hn h).elim
+
+theorem lookup_replaceVarInterval_eq {env : List (String × Interval)} {v : String} {old : Interval}
+    (hv : env.lookup v = some old) (newIv : Interval) :
+    (replaceVarInterval v newIv env).lookup v = some newIv := by
+  obtain hb := varLookup_iff.mpr hv
+  clear hv
+  induction hb with
+  | head => simp [replaceVarInterval]
+  | tail hn _ ih => simpa [replaceVarInterval, List.lookup, hn, beq_eq_false_iff_ne.mpr (Ne.symm hn)] using ih
+
+#tooth lookup_replaceVarInterval_eq by mutation replaceVarInterval := fun _ _ env => env
+
+private theorem lookup_replaceVarInterval_other {v w : String} (hne : w ≠ v) (b : Interval)
+    (env : List (String × Interval)) : (replaceVarInterval v b env).lookup w = env.lookup w := by
+  induction env with
+  | nil => rfl
+  | cons hd rest ih =>
+    obtain ⟨k, old⟩ := hd
+    by_cases hk : k = v
+    · subst k
+      simp [replaceVarInterval, List.lookup, beq_eq_false_iff_ne.mpr hne]
+    · simp [replaceVarInterval, List.lookup, hk, ih]
+
+private theorem semantic_restrict {q : IntervalObj} {v : String} {iv b : Interval}
+    (hv : q.env.lookup v = some iv) (sub : ∀ x, x ∈ b → x ∈ iv)
+    (hm : IntervalQuery.SemanticMeaning q.toQuery) :
+    IntervalQuery.SemanticMeaning ({ q with env := replaceVarInterval v b q.env } : IntervalObj).toQuery := by
+  intro rho hbox
+  apply hm rho
+  intro w a ha
+  change q.env.lookup w = some a at ha
+  by_cases hw : w = v
+  · subst w
+    rw [hv] at ha
+    cases ha
+    exact sub _ (hbox v b (lookup_replaceVarInterval_eq hv b))
+  · exact hbox w a (by simpa [IntervalObj.toQuery, lookup_replaceVarInterval_other hw] using ha)
+
+private theorem counterexample_refuted (q : IntervalQuery) (pt witness : List (String × CanonicalRat))
+    (path : List Nat) (h : intervalCheck 0 q (.counterexample pt) = .refused (.refutationWitness witness) path) :
+    ¬ IntervalQuery.SemanticMeaning q := by
+  let rho (s : String) : CanonicalRat := match pt.find? (·.1 == s) with
+    | some (_, x) => x
+    | none => 0
+  simp only [intervalCheck, evalPoint_eq_some_evalExpr] at h
+  split at h <;> try contradiction
+  rename_i hdom
+  simp only [Bool.not_eq_true', Bool.not_eq_false, List.all_eq_true] at hdom
+  split at h <;> try contradiction
+  rename_i hout
+  intro hm
+  have hin := hm rho (by
+    intro v b hv
+    obtain ⟨before, after, he, _⟩ := List.lookup_eq_some_iff.mp hv
+    have mem : (v, b) ∈ q.env := by simp [he]
+    have hp := hdom (v, b) mem
+    change (match pt.find? (·.1 == v) with
+      | some (_, x) => b.containsRat x
+      | none => false) = true at hp
+    cases he : pt.find? (·.1 == v) with
+    | none => simp [he] at hp
+    | some pair => simpa [rho, he, Interval.containsRat] using hp)
+  rw [Interval.mem_iff] at hin
+  change decide (evalExpr rho q.expr < q.claimedBound.lo ∨ q.claimedBound.hi < evalExpr rho q.expr) = true at hout
+  grind
+
+theorem checkIntervalAutoCert_refuted {q : IntervalObj} {c : IntervalCert} {pt : List (String × CanonicalRat)}
+    {p : List Nat} (h : checkIntervalAutoCert q c = .refused (.refutationWitness pt) p) :
+    ¬ IntervalQuery.SemanticMeaning q.toQuery := by
+  induction c generalizing q with
+  | direct =>
+    simp only [checkIntervalAutoCert, intervalCheck] at h
+    split at h <;> (try split at h) <;> cases h
+  | counterexample point => exact counterexample_refuted _ _ _ _ h
+  | bisect v l r il ir =>
+    simp only [checkIntervalAutoCert] at h
+    split at h
+    · cases h
+    rename_i iv hv
+    intro hm
+    split at h
+    · exact ir h (semantic_restrict hv (by
+        intro x hx; simp only [Interval.mem_iff] at hx ⊢; grind) hm)
+    · apply il h
+      exact semantic_restrict hv (by
+        intro x hx; simp only [Interval.mem_iff] at hx ⊢; grind) hm
+
 instance intervalAutoJudge : Judge IntervalObj IntervalCert where
   Clause := IntervalClause
   Meaning q _c := IntervalQuery.SemanticMeaning q.toQuery
   check _ q c := checkIntervalAutoCert q c
   sound := by intro _ q c h; exact checkIntervalAutoCert_sound q c h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment q := ∃ c, checkIntervalAutoCert q c = .ok
-  complete := by rintro q ⟨c, h⟩ _; exact ⟨c, 0, h⟩
+  refutes | .refutationWitness _ => true | _ => false
+  refuted := by
+    intro _ q c k p h hk _ hm
+    cases k <;> try contradiction
+    exact checkIntervalAutoCert_refuted h hm
+  Fragment := BisectBoxEnclosed
+  complete := by
+    intro q h _
+    obtain ⟨c, hc⟩ := (bisectBoxEnclosed_iff_check_ok q).mp h
+    exact ⟨c, 0, hc⟩
   mono := by intro _ _ _ _ _ _; rfl
 
 /-- Pick the variable with the largest interval width `iv.hi - iv.lo` in `env`. -/
@@ -771,6 +959,24 @@ def badIntervalObj : IntervalObj where
 theorem badIntervalCert_refused :
     checkIntervalAutoCert badIntervalObj .direct =
       .refused (.boundViolated ⟨0, 10⟩ ⟨0, 2⟩) [] := by rfl
+
+/-- A left-hand refusal is independent of the certificate in the other half. -/
+theorem bisect_left_refused {q : IntervalObj} {v : String} {iv : Interval} {l : IntervalCert}
+    {clause : IntervalClause} {path : List Nat} (hv : q.env.lookup v = some iv)
+    (hl : checkIntervalAutoCert
+      { q with env := replaceVarInterval v ⟨iv.lo, (iv.lo + iv.hi) / 2⟩ q.env } l = .refused clause path)
+    (r : IntervalCert) : checkIntervalAutoCert q (.bisect v l r) = .refused clause path := by
+  unfold checkIntervalAutoCert
+  rw [hv]
+  dsimp only
+  rw [hl]
+
+theorem bisectCounterexample_refused (right : IntervalCert) :
+    checkIntervalAutoCert badIntervalObj (.bisect "x" (.counterexample [("x", 4)]) right) =
+      .refused (.refutationWitness [("x", 4)]) [] := by
+  apply bisect_left_refused (iv := ⟨0, 10⟩)
+  · decide +kernel
+  · decide +kernel
 
 /-- Registered `Obend.Judge.Format` for `"interval@1"`. -/
 @[expose] def intervalFormat : Format where
@@ -2735,6 +2941,13 @@ theorem findSome_synthesizeClaimJudgeTag_ok
     | none =>
       rw [hHd] at h
       exact ih h
+
+theorem synthesizeClaimExternalJudge_inhabited :
+    ∃ modName claimName claimDecl? co just,
+      synthesizeClaimExternalJudge autoCertFormats 64 modName claimName claimDecl? none co = some just := by
+  refine ⟨"", "interval", none, reflexiveClaimObj, ?_⟩
+  apply Option.isSome_iff_exists.mp
+  decide +kernel
 
 /-- **Master Soundness Theorem (`synthesizeClaimExternalJudge_sound`)**:
 Whenever `synthesizeClaimExternalJudge formats grade modName claimName claimDecl? book? co = some just`,
