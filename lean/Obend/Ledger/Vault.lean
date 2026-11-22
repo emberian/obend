@@ -17,7 +17,7 @@ the register a vault keeps is balanced and conserved because its kind page says 
 -/
 public import Obend.Ledger.Register
 public import Obend.Vault.Law
-@[expose] public section
+public section
 
 namespace Obend.Ledger
 

@@ -32,7 +32,7 @@ judgment (`unitOf`, a `CheckUnit`) is that term with those parts declared holes
 public import Obend.Vault.Form
 public import Obend.Core.Proofs.FillTyping
 public import Obend.Law.Proofs.Fill
-@[expose] public section
+public section
 
 namespace Obend.Vault.Form
 
@@ -756,7 +756,7 @@ def keyOf (page : String) (moved : List String) (c : JudgeCall) : CheckKey :=
 
 /-- **A judgment's check does not read its request**: a key makes the judgment's own check. -/
 theorem keyOf_unit (page : String) (moved : List String) (c : JudgeCall) :
-    (keyOf page moved c).unit = unitOf page moved c := rfl
+    (keyOf page moved c).unit = unitOf page moved c := by cases c; rfl
 
 /-- A check the vault made and the checker accepted, of a judgment of the form `form`. -/
 structure Checked where
@@ -773,12 +773,12 @@ instance : DecidableEq Checked := fun a b =>
   else isFalse fun e => h (by subst e; exact ⟨rfl, rfl⟩)
 
 /-- Keep a key whose check the checker accepts. -/
-def Checked.of (form : String) (k : CheckKey) : Option Checked :=
+@[expose] def Checked.of (form : String) (k : CheckKey) : Option Checked :=
   if h : k.unit.accepted = true then some ⟨form, k, h⟩ else none
 
 /-- **What a capture checks, once**: the check of every judgment a fill of the form makes at the store
 `s`, for each witness fill (`preparedOf`, `callsOf`), each once, those the checker accepts. -/
-def Form.checksAt (H : Obend.Digest.HashBytes.Hash) (s : Store) (f : Form) : List Checked :=
+@[expose] def Form.checksAt (H : Obend.Digest.HashBytes.Hash) (s : Store) (f : Form) : List Checked :=
   let keys := f.witnesses.flatMap fun a =>
     match preparedOf H s f [] a with
     | .ok (_, prs) => (callsOf s.entries prs).map fun x => keyOf x.1 f.assets x.2
@@ -815,8 +815,8 @@ theorem checksOf_records (cs : List Checked) (form : String) :
   | cons c cs ih =>
     simp only [checksOf, List.map_cons, List.filterMap_cons, List.filter_cons, Checked.record] at ih ⊢
     by_cases h : c.form == form
-    · simp only [h, ite_true, Checked.of_record, ↓reduceIte]; exact congrArg _ ih
-    · simp only [h, Bool.false_eq_true, ite_false, ↓reduceIte]; exact ih
+    · simp only [h, Checked.of_record, ↓reduceIte]; exact congrArg _ ih
+    · simp only [h, Bool.false_eq_true, ↓reduceIte]; exact ih
 
 /-! ## A proposal's judgments: kept from the capture, or checked now -/
 
@@ -829,7 +829,7 @@ structure Judged where
 
 /-- The judgments of a proposal against the checks the vault keeps for its form: each is kept when
 its check is one the capture made. -/
-def classify (checked : List Checked) (form : String) (moved : List String) (calls : List (String × JudgeCall)) :
+@[expose] def classify (checked : List Checked) (form : String) (moved : List String) (calls : List (String × JudgeCall)) :
     List Judged :=
   calls.map fun x =>
     let u := unitOf x.1 moved x.2

@@ -32,7 +32,7 @@ concatenation renaming, a constant constants. Folds append shared accumulator wi
 -/
 public import Obend.Hardware.Gpu
 public import Obend.Hardware.RtlFold
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Square
 open Obend.Hardware.HDL
@@ -340,7 +340,7 @@ def wireStep (ins regs : Nat → Word) (W : Nat → Word) (a : WireAssign) : Nat
   fun i => if i == a.wireIdx then v else W i
 
 theorem evalWireTable_eq_foldl (ins regs : Nat → Word) (assigns : List WireAssign) :
-    evalWireTable ins regs assigns = assigns.foldl (wireStep ins regs) (fun _ => 0#64) := rfl
+    evalWireTable ins regs assigns = assigns.foldl (wireStep ins regs) (fun _ => 0#64) := by rfl
 
 theorem define_defs (st : LowerSt) (w m : Nat) (x : Nat → RtlExpr) :
     (st.define w m x).defs.toList =
@@ -435,13 +435,13 @@ theorem Rep_define (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) (env
     rw [define_size] at hW'
     by_cases huw : u = w
     · subst huw
-      simp only [LowerSt.read, hSlot, ite_eq_left rfl, evalRtlExpr, beq_self_eq_true, if_true]
+      simp only [LowerSt.read, hSlot, evalRtlExpr, beq_self_eq_true, ite_true]
       rw [hW' (st.defs.size + e) (by omega), hTable, hFold.2 e he, getD_range_map _ _ _ e he]
     · have hRead : (st.define w (ls.getD w 0) x).read u e = st.read u e := by
         simp only [LowerSt.read, hSlot, ite_eq_right huw]
       rw [hRead]
       have hne : (u == w) = false := by simpa using huw
-      simp only [hne, Bool.false_eq_true, if_false]
+      simp only [hne, Bool.false_eq_true, ite_false]
       apply hVal W' _ u e hu he
       intro i hi
       rw [hW' i (by omega), hTable]
@@ -450,7 +450,7 @@ theorem Rep_define (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) (env
     by_cases huw : u = w
     · subst huw; simp
     · have hne : (u == w) = false := by simpa using huw
-      simp only [hne, Bool.false_eq_true, if_false]
+      simp only [hne, Bool.false_eq_true, ite_false]
       exact hGood u hu
 
 theorem map_range_getD {α : Type} (l : List α) (z : α) (m : Nat) (h : l.length = m) :
@@ -548,9 +548,9 @@ theorem Rep_defineEdge_ordinary (ls : List Nat) (ins regs : Nat → Word) (st : 
     funext u
     simp only [stepEdge]
     by_cases h : u == d.dstWire
-    · simp only [h, if_true]
+    · simp only [h, ite_true]
       exact map_range_getD _ _ _ hLen
-    · simp only [h, Bool.false_eq_true, if_false]
+    · simp only [h, Bool.false_eq_true, ite_false]
   rw [← hEnv]
   have hd : defineEdge ls st d = st.define d.dstWire (ls.getD d.dstWire 0) (edgeElemExpr st ls d) := by
     cases hop : d.op <;> simp [defineEdge, hop]
@@ -586,7 +586,7 @@ def inputStep (ls : List Nat) (ins : Nat → Word) (acc : (Nat → Vec) × Nat) 
 
 theorem inputEnvOf_eq (g : ArrayGraph) (ins : Nat → Word) :
     inputEnvOf g ins =
-      (g.inputs.foldl (inputStep g.lengths ins) (fun u => List.replicate (g.lengths.getD u 0) 0#64, 0)).1 := rfl
+      (g.inputs.foldl (inputStep g.lengths ins) (fun u => List.replicate (g.lengths.getD u 0) 0#64, 0)).1 := by rfl
 
 theorem Rep_inputs (ls : List Nat) (ins regs : Nat → Word) (xs : List Nat) (hxs : ∀ w ∈ xs, w < ls.length) :
     ∀ (st : LowerSt) (env : Nat → Vec) (p : Nat), Rep ls ins regs st env →
@@ -611,7 +611,7 @@ theorem Rep_init (ls : List Nat) (ins regs : Nat → Word) :
   · intro W' _ w e _ he
     have he' : e < ls[w]?.getD 0 := by simpa [List.getD_eq_getElem?_getD] using he
     simp only [LowerSt.read, hNone, evalRtlExpr]
-    simp [List.getD_eq_getElem?_getD, List.getElem?_replicate, he']
+    simp [List.getD_eq_getElem?_getD, he']
   · intro w _
     simp
 
@@ -720,9 +720,9 @@ theorem evalComb_congr (ls : List Nat) (es : List ArrayEdge) (hOk : ∀ d ∈ es
     simp only [edgeOk, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hOkd
     simp only [stepEdge]
     by_cases hud : u == d.dstWire
-    · simp only [hud, if_true]
+    · simp only [hud, ite_true]
       exact edgeValue_congr env2 env1 d (fun s hs => h s (hOkd.1.1.2 s hs))
-    · simp only [hud, Bool.false_eq_true, if_false]
+    · simp only [hud, Bool.false_eq_true, ite_false]
       exact h u hu
 
 /-- A scalar graph's input environment, one word per wire. -/
@@ -740,7 +740,7 @@ theorem evalGraph_ofScalar (g : StrictOpenHypergraph) (hwf : (ofScalar g).wf = t
   have hLen : ∀ u, u < (ofScalar g).lengths.length → (ofScalar g).lengths.getD u 0 = 1 := by
     intro u hu
     simp only [ofScalar, List.length_replicate] at hu ⊢
-    simp [List.getD_eq_getElem?_getD, List.getElem?_replicate, hu]
+    simp [List.getD_eq_getElem?_getD, hu]
   have hAgree : ∀ u, u < (ofScalar g).lengths.length →
       inputEnvOf (ofScalar g) ins u = singletonEnv (scalarInputEnv g ins) u := by
     intro u hu

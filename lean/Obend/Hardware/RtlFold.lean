@@ -6,16 +6,16 @@ as an SSA circuit rather than duplicating an expression tree for every prefix.
 The clean referent is ArrayFold's Futhark/Accelerate fold and scan semantics. -/
 public import Obend.Hardware.HDL
 public import Obend.Hardware.ArrayFold
-@[expose] public section
+public section
 namespace Obend.Hardware.RtlFold
 open Obend.Hardware.HDL Obend.Hardware.ArrayHypergraph
 set_option autoImplicit false
 abbrev Defs := Array WireAssign
 
-def Agrees (ins regs : Nat → Word) (defs : Defs) (wires : Nat → Word) : Prop :=
+@[expose] def Agrees (ins regs : Nat → Word) (defs : Defs) (wires : Nat → Word) : Prop :=
   ∀ i, i < defs.size → wires i = evalWireTable ins regs defs.toList i
 
-def Denotes (ins regs : Nat → Word) (defs : Defs) (expr : RtlExpr) (value : Word) : Prop :=
+@[expose] def Denotes (ins regs : Nat → Word) (defs : Defs) (expr : RtlExpr) (value : Word) : Prop :=
   ∀ wires, Agrees ins regs defs wires → evalRtlExpr ins wires regs expr = value
 
 /-- A circuit extension preserves all previously defined wires, including for any
@@ -107,12 +107,37 @@ theorem range_sound (op : ReduceOp) (read : Nat → RtlExpr) (values : Nat → W
     refine ⟨he.trans hi.1, ?_⟩
     simpa [range, foldRange, List.range'_succ] using hi.2
 
-def ExprsDenote (ins regs : Nat → Word) (defs : Defs) (exprs : List RtlExpr) (values : Vec) : Prop :=
+@[expose] def ExprsDenote (ins regs : Nat → Word) (defs : Defs) (exprs : List RtlExpr) (values : Vec) : Prop :=
   ∀ wires, Agrees ins regs defs wires → exprs.map (evalRtlExpr ins wires regs) = values
 
 theorem ExprsDenote.mono {ins regs : Nat → Word} {a b : Defs} {es : List RtlExpr} {vs : Vec}
     (h : ExprsDenote ins regs a es vs) (he : Extends ins regs a b) : ExprsDenote ins regs b es vs :=
   fun w hw => h w (he.agrees w hw)
+
+/-- `Denotes` is inhabited on a non-empty table: after `emit` places `in0 + in1` on wire `0`, the
+reference to that wire denotes the sum of the two input ports, whatever the inputs and registers. -/
+theorem denotes_inhabited :
+    ∃ (defs : Defs) (expr : RtlExpr), 0 < defs.size ∧
+      ∀ ins regs : Nat → Word, Denotes ins regs defs expr (ins 0 + ins 1) := by
+  refine ⟨emit #[] (combine .add (.inputPort 0) (.inputPort 1)), .wireRef 0, by simp, ?_⟩
+  intro ins regs
+  exact emit_denotes ins regs #[] (combine .add (.inputPort 0) (.inputPort 1)) (ins 0 + ins 1)
+    (fun wires _ => by simp [evalRtlExpr, ReduceOp.combine])
+
+/-- `ExprsDenote` is inhabited on the same table: the shared wire and a bare input port denote the
+two-element vector `[in0 + in1, in0]`. -/
+theorem exprsDenote_inhabited :
+    ∃ (defs : Defs) (exprs : List RtlExpr), 0 < defs.size ∧ 0 < exprs.length ∧
+      ∀ ins regs : Nat → Word, ExprsDenote ins regs defs exprs [ins 0 + ins 1, ins 0] := by
+  refine ⟨emit #[] (combine .add (.inputPort 0) (.inputPort 1)), [.wireRef 0, .inputPort 0],
+    by simp, by simp, ?_⟩
+  intro ins regs wires hw
+  have h := emit_denotes ins regs #[] (combine .add (.inputPort 0) (.inputPort 1)) (ins 0 + ins 1)
+    (fun wires _ => by simp [evalRtlExpr, ReduceOp.combine]) wires hw
+  simp only [List.map_cons, List.map_nil]
+  rw [show (#[] : Defs).size = 0 from rfl] at h
+  rw [h]
+  simp [evalRtlExpr]
 
 /-- Results are accumulated in reverse and reversed once, avoiding a growing
 append; only the proof's value lists use append. Prefixes reuse the previous wire. -/

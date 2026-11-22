@@ -13,14 +13,15 @@ by level (`muxPairs_getD`): level `j` pairs neighbours under select bit `base + 
 value is read lowest bit first (`selFrom`).
 -/
 public import Obend.Hardware.Fabulous.Tile
-@[expose] public section
+import all Obend.Hardware.Fabulous.Tile
+public section
 
 namespace Obend.Hardware.Fabulous
 
 open Obend.Hardware.HDL
 
 /-- A bit as a 0/1 word. -/
-def boolBV (b : Bool) : BitVec 64 := if b then 1#64 else 0#64
+@[expose] def boolBV (b : Bool) : BitVec 64 := if b then 1#64 else 0#64
 
 theorem boolBV_ne_zero (b : Bool) : (boolBV b != 0#64) = b := by cases b <;> decide
 
@@ -36,7 +37,7 @@ theorem truncToWidth_one_boolBV (b : Bool) : truncToWidth 1 (boolBV b) = boolBV 
   cases b <;> decide
 
 /-- Configuration bit `i` of an input vector whose words after the `nIn` user ports hold `ConfigBits`. -/
-def cfgBitOf (ins : Nat → BitVec 64) (nIn i : Nat) : Bool := (ins (nIn + i / 64)).getLsbD (i % 64)
+@[expose] def cfgBitOf (ins : Nat → BitVec 64) (nIn i : Nat) : Bool := (ins (nIn + i / 64)).getLsbD (i % 64)
 
 theorem eval_cfgBitExpr (ins w r : Nat → BitVec 64) (nIn i : Nat) :
     evalRtlExpr ins w r (cfgBitExpr nIn i) = boolBV (cfgBitOf ins nIn i) := by
@@ -45,7 +46,7 @@ theorem eval_cfgBitExpr (ins w r : Nat → BitVec 64) (nIn i : Nat) :
   simp
 
 /-- The select value of `k` select bits from `base + j`, lowest first. -/
-def selFrom (bit : Nat → Bool) (base : Nat) : Nat → Nat → Nat
+@[expose] def selFrom (bit : Nat → Bool) (base : Nat) : Nat → Nat → Nat
   | _, 0 => 0
   | j, k + 1 => (if bit (base + j) then 1 else 0) + 2 * selFrom bit base (j + 1) k
 
@@ -121,7 +122,7 @@ theorem SmPrim.sel_eq_selFrom (p : SmPrim) (cfg : Nat → Bool) :
 
 /-- Each multiplexer has exactly `2^selBits` inputs, its select bits are configuration bits, and every
 input it reads is a port of the switch matrix. `parseSwitchMatrix` refuses the first and last otherwise. -/
-def SwitchMatrix.wf (sm : SwitchMatrix) : Bool :=
+@[expose] def SwitchMatrix.wf (sm : SwitchMatrix) : Bool :=
   sm.prims.all fun (_, p) =>
     (p.selBits == 0 || p.ins.length == 2 ^ p.selBits) && p.base + p.selBits ≤ sm.nCfg &&
       p.ins.all fun s => match s with
@@ -130,7 +131,7 @@ def SwitchMatrix.wf (sm : SwitchMatrix) : Bool :=
 
 /-- `ins` carries input `inp` and configuration `cfg` as `smModule sm` reads them: switch-matrix input
 `k` as a 0/1 word at index `k`, configuration bit `i` at bit `i % 64` of word `nIn + i / 64`. -/
-def SmEncodes (sm : SwitchMatrix) (cfg : Nat → Bool) (inp : String → Bool) (ins : Nat → BitVec 64) : Prop :=
+@[expose] def SmEncodes (sm : SwitchMatrix) (cfg : Nat → Bool) (inp : String → Bool) (ins : Nat → BitVec 64) : Prop :=
   (∀ k (h : k < sm.inputs.length), ins k = boolBV (inp sm.inputs[k])) ∧
     ∀ i < sm.nCfg, cfgBitOf ins sm.inputs.length i = cfg i
 

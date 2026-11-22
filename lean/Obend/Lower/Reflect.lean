@@ -18,7 +18,7 @@ public import Obend.Lower.Fragment
 public import Obend.Lower.Transport
 public import Obend.Tactic.Tooth
 
-@[expose] public section
+public section
 namespace Obend.Lower.Reflect
 
 open Obend.Core.Term (Term)
@@ -42,25 +42,25 @@ structure LayoutEnv where
 so the earlier `toUTF8` walk left `labelToNat` and `strEq` stuck, and every `#import_obend`
 `<def>_lowerTerm_eq` whose term carries a label failed its kernel `Eq.refl` (2026-11-05). Not
 `String.toList` either, which depends on `Classical.choice`. -/
-def utf8Bytes (s : String) : List UInt8 :=
+@[expose] def utf8Bytes (s : String) : List UInt8 :=
   s.toByteArray.data.toList
 
 /-- Byte-level equality on `String` (kernel-reducible and choice-free, see `utf8Bytes`). -/
-def strEq (a b : String) : Bool :=
+@[expose] def strEq (a b : String) : Bool :=
   utf8Bytes a == utf8Bytes b
 
 /-- Structural lookup by `strEq`. -/
-def lookupByStr {α : Type} (k : String) : List (String × α) → Option α
+@[expose] def lookupByStr {α : Type} (k : String) : List (String × α) → Option α
   | [] => none
   | (m, v) :: rest => if strEq k m then some v else lookupByStr k rest
 
 /-- Deterministic numeric encoding of surface labels for `.label`, `.inject`, and `.case`: the
 UTF-8 bytes in order, `acc * 257 + byte + 1` (the same number the earlier `ByteArray` walk gave). -/
-def labelToNat (s : String) : Nat :=
+@[expose] def labelToNat (s : String) : Nat :=
   (utf8Bytes s).foldl (fun acc b => acc * 257 + b.toNat + 1) 0
 
 /-- Structural insertion helper for `canonicalizeFields` (avoids `Array.qsort` / `Classical.choice`). -/
-def insertFieldByLayout (env : LayoutEnv) (x : String × LExpr) : List (String × LExpr) → List (String × LExpr)
+@[expose] def insertFieldByLayout (env : LayoutEnv) (x : String × LExpr) : List (String × LExpr) → List (String × LExpr)
   | [] => [x]
   | y :: ys =>
     if Nat.ble ((lookupByStr x.1 env.fields).getD 1000000) ((lookupByStr y.1 env.fields).getD 1000000) then
@@ -69,14 +69,14 @@ def insertFieldByLayout (env : LayoutEnv) (x : String × LExpr) : List (String �
       y :: insertFieldByLayout env x ys
 
 /-- Canonicalize record field ordering using slot indices in `env.fields` if populated. -/
-def canonicalizeFields (env : LayoutEnv) (loweredFields : List (String × LExpr)) : List (String × LExpr) :=
+@[expose] def canonicalizeFields (env : LayoutEnv) (loweredFields : List (String × LExpr)) : List (String × LExpr) :=
   if env.fields.isEmpty then
     loweredFields
   else
     loweredFields.foldr (insertFieldByLayout env) []
 
 /-- Lower `.extend base fields` by updating/appending field projections on `baseLow`. -/
-def lowerExtend (env : LayoutEnv) (baseLow : LExpr) (newFields : List (String × LExpr)) : LExpr :=
+@[expose] def lowerExtend (env : LayoutEnv) (baseLow : LExpr) (newFields : List (String × LExpr)) : LExpr :=
   let inheritedFields : List (String × LExpr) :=
     match baseLow with
     | .record baseFs =>
@@ -90,7 +90,7 @@ def lowerExtend (env : LayoutEnv) (baseLow : LExpr) (newFields : List (String ×
 
 /-- Lower `.case scrut branches` into nested conditionals over the `"tag"` field literal,
     binding `.proj "payload" scrutLow` at de Bruijn index 0 for each branch body. -/
-def lowerCaseArms (scrutLow : LExpr) : List (String × LExpr) → LExpr
+@[expose] def lowerCaseArms (scrutLow : LExpr) : List (String × LExpr) → LExpr
   | [] => .erased
   | (tag, bodyLow) :: rest =>
       .boolRec .emptyRow
@@ -99,7 +99,7 @@ def lowerCaseArms (scrutLow : LExpr) : List (String × LExpr) → LExpr
         (.natBin .beq (.proj "tag" scrutLow) (.lit (labelToNat tag)))
 
 /-- Structural helper mapping a fuel-stepped lowering function over `(String × Term)` pairs. -/
-def lowerFieldList (f : Term → Option LExpr) : List (String × Term) → Option (List (String × LExpr))
+@[expose] def lowerFieldList (f : Term → Option LExpr) : List (String × Term) → Option (List (String × LExpr))
   | [] => some []
   | (m, t) :: rest => do
       let v ← f t
@@ -108,7 +108,7 @@ def lowerFieldList (f : Term → Option LExpr) : List (String × Term) → Optio
 
 /-- Structural recursion on `fuel : Nat` (first parameter) so Lean compiles `lowerTermFuel`
     via `Nat.rec` with `0 Classical.choice`. -/
-def lowerTermFuelAux : Nat → LayoutEnv → Term → Option LExpr
+@[expose] def lowerTermFuelAux : Nat → LayoutEnv → Term → Option LExpr
   | 0, _, _ => none
   | fuel + 1, env, t =>
     match t with
@@ -175,7 +175,7 @@ def lowerTermFuelAux : Nat → LayoutEnv → Term → Option LExpr
     | _ => none
 
 /-- Lower a first-order Core4 term into an `LExpr` under fuel, actively utilizing LayoutEnv. -/
-def lowerTermFuel (env : LayoutEnv) (fuel : Nat) (t : Term) : Option LExpr :=
+@[expose] def lowerTermFuel (env : LayoutEnv) (fuel : Nat) (t : Term) : Option LExpr :=
   lowerTermFuelAux fuel env t
 
 /-- Helper to construct a canonical LayoutEnv from an emitted Leaf Book. -/
@@ -185,7 +185,7 @@ def layoutEnvOfBook (b : Obend.Leaf.Book) (selfIndex : Nat := 0) : LayoutEnv :=
     arity := 0 }
 
 /-- Lower a first-order Core4 term into an `LExpr`. -/
-def lowerTerm (env : LayoutEnv) (t : Term) : Option LExpr :=
+@[expose] def lowerTerm (env : LayoutEnv) (t : Term) : Option LExpr :=
   lowerTermFuel env 1024 t
 
 /-- Lower a first-order flattened Book definition into Lean-lite `LExpr`.
@@ -533,6 +533,16 @@ theorem holdsAt_overrideMethodView_same
   unfold overrideMethodView
   rw [hcell]
   simp
+
+/-- A one-method composition lowers to a literal and its member pins hold in the canonical view. -/
+theorem fusedPrototypeSlot_usable_inhabited :
+    ∃ (C : Composition) (targetMethod : String) (c : FusedPrototypeCert) (v : LeafView),
+      (fusedPrototypeSlot C targetMethod).usable (holdsAt v) c = true := by
+  let C : Composition :=
+    { top := { name := "base", metadata := .record [], fields := [("value", .nat 7)], flat := true },
+      below := [], seed := [] }
+  exact ⟨C, "value", { targetMethod := "value", loweredExpr := .lit 7 },
+    fusedMemberView 0 C, by decide +revert +kernel⟩
 
 /-- **1. Soundness & Conservatism of `fusedPrototypeSlot` (`fusedPrototypeSlot_usable_sound`)**:
     When `c` is `.usable` in `fusedPrototypeSlot C targetMethod` at view `v`:

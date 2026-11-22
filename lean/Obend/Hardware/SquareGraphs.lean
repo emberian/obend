@@ -17,7 +17,7 @@ public import Obend.Hardware.Gpu.ArrayPrograms
 public import Obend.Hardware.Gpu.SoacPrograms
 public import Obend.Hardware.Gpu.SourcePrograms
 public import Obend.Hardware.Gpu.GoldilocksSource
-@[expose] public section
+public section
 
 namespace Obend.Hardware.SquareGraphs
 open Obend.Hardware.HDL

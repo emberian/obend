@@ -11,7 +11,7 @@ public import Obend.Vault.Store
 public import Obend.Doc.Structured
 public import Obend.Spec.DataWire
 public import Lean.Data.Json
-@[expose] public section
+public section
 
 namespace Obend.Vault.Json
 
@@ -20,17 +20,17 @@ set_option autoImplicit false
 open Lean (Json ToJson FromJson toJson fromJson?)
 open Obend.Doc Obend.Vault
 
-def hexDigit (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
+@[expose] def hexDigit (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
 
-def hex (b : List UInt8) : String :=
+@[expose] def hex (b : List UInt8) : String :=
   String.ofList (b.flatMap fun x => [hexDigit (x.toNat / 16), hexDigit (x.toNat % 16)])
 
-def unhexDigit (c : Char) : Option Nat :=
+@[expose] def unhexDigit (c : Char) : Option Nat :=
   if '0' ≤ c && c ≤ '9' then some (c.toNat - 48)
   else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 87)
   else none
 
-def unhex : List Char → Option (List UInt8)
+@[expose] def unhex : List Char → Option (List UInt8)
   | [] => some []
   | a :: b :: rest => do
     let x ← unhexDigit a

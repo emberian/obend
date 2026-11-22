@@ -37,7 +37,7 @@ no longer checks), and `drop_last_refused` (a producer that drops a selected row
 -/
 public import Obend.Judge.Class
 public import Obend.Tactic.Tooth
-@[expose] public section
+public section
 
 namespace Obend.Analysis.Coverage
 

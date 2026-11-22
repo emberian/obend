@@ -13,7 +13,7 @@ The LUT4 cell is FABulous's `LUT4c_frame_config_dffesr`: `O = INIT[{I3,I2,I1,I0}
 bit set, the flop, which on a clock edge with `EN` loads `SR ? SET_NORESET : LUT` and otherwise holds.
 -/
 public import Obend.Hardware.HDL
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Fabulous
 
@@ -56,11 +56,11 @@ structure Net where
   deriving DecidableEq, Repr, Inhabited
 
 /-- A 2:1 multiplexer (`cus_mux21`: `S ? A1 : A0`). -/
-def mux2 (s x0 x1 : Bool) : Bool := (s && x1) || (!s && x0)
+@[expose] def mux2 (s x0 x1 : Bool) : Bool := (s && x1) || (!s && x0)
 
 /-- The LUT4 function, as `cus_mux161` computes it: a tree of 2:1 multiplexers over the truth table,
 selected by `I0` first. Bit `k` of `init` is the value at `I0 + 2·I1 + 4·I2 + 8·I3 = k` (`lut4_eq_getLsbD`). -/
-def lut4 (init : BitVec 16) (a b c d : Bool) : Bool :=
+@[expose] def lut4 (init : BitVec 16) (a b c d : Bool) : Bool :=
   let l := init.getLsbD
   mux2 d
     (mux2 c (mux2 b (mux2 a (l 0) (l 1)) (mux2 a (l 2) (l 3))) (mux2 b (mux2 a (l 4) (l 5)) (mux2 a (l 6) (l 7))))
@@ -71,7 +71,7 @@ theorem lut4_eq_getLsbD (init : BitVec 16) (a b c d : Bool) :
   cases a <;> cases b <;> cases c <;> cases d <;> simp [lut4, mux2]
 
 /-- A literal's value given the pins, the flop state and the gate values so far. -/
-def Lit.eval (pins q : Nat → Bool) (vals : Array Bool) : Lit → Bool
+@[expose] def Lit.eval (pins q : Nat → Bool) (vals : Array Bool) : Lit → Bool
   | .const b => b
   | .pin k => pins k
   | .ff k => q k
@@ -85,26 +85,26 @@ def evalGates (pins q : Nat → Bool) : List Gate → Array Bool → Array Bool
   | [], vals => vals
   | g :: gs, vals => evalGates pins q gs (vals.push (g.eval pins q vals))
 
-def Net.gateVals (N : Net) (pins q : Nat → Bool) : Array Bool := evalGates pins q N.gates #[]
+abbrev Net.gateVals (N : Net) (pins q : Nat → Bool) : Array Bool := evalGates pins q N.gates #[]
 
 /-- One flop's next value. -/
-def Flop.next (pins q : Nat → Bool) (vals : Array Bool) (f : Flop) (cur : Bool) : Bool :=
+abbrev Flop.next (pins q : Nat → Bool) (vals : Array Bool) (f : Flop) (cur : Bool) : Bool :=
   mux2 (f.en.eval pins q vals) cur (mux2 (f.sr.eval pins q vals) (f.d.eval pins q vals) f.rv)
 
 /-- The flop state after one clock edge (`false` past the last flop). -/
-def Net.step (N : Net) (pins q : Nat → Bool) : Nat → Bool :=
+@[expose] def Net.step (N : Net) (pins q : Nat → Bool) : Nat → Bool :=
   let vals := N.gateVals pins q
   fun k => match N.flops[k]? with
     | some f => f.next pins q vals (q k)
     | none => false
 
 /-- The output pins' values before the edge. -/
-def Net.outputs (N : Net) (pins q : Nat → Bool) : List (Nat × Bool) :=
+abbrev Net.outputs (N : Net) (pins q : Nat → Bool) : List (Nat × Bool) :=
   let vals := N.gateVals pins q
   N.outs.map fun (p, l) => (p, l.eval pins q vals)
 
 /-- Outputs on every cycle of a trace of pin vectors, and the state after it. -/
-def Net.run (N : Net) : (Nat → Bool) → List (Nat → Bool) → List (List (Nat × Bool)) × (Nat → Bool)
+@[expose] def Net.run (N : Net) : (Nat → Bool) → List (Nat → Bool) → List (List (Nat × Bool)) × (Nat → Bool)
   | q, [] => ([], q)
   | q, p :: ps => let r := N.run (N.step p q) ps; (N.outputs p q :: r.1, r.2)
 
@@ -115,25 +115,25 @@ are a solution of the gate equations `gatesHold`, which is how the bit-level obl
 net state them: one Boolean per gate and one equation each, so shared logic stays shared. -/
 
 /-- Every gate reads only gates below it. -/
-def Lit.below (k : Nat) : Lit → Bool
+@[expose] def Lit.below (k : Nat) : Lit → Bool
   | .gate j => j < k
   | _ => true
 
-def gatesTopo : List Gate → Nat → Bool
+@[expose] def gatesTopo : List Gate → Nat → Bool
   | [], _ => true
   | g :: gs, k => g.i0.below k && g.i1.below k && g.i2.below k && g.i3.below k && gatesTopo gs (k + 1)
 
-def Net.topo (N : Net) : Bool := gatesTopo N.gates 0
+abbrev Net.topo (N : Net) : Bool := gatesTopo N.gates 0
 
 /-- A literal's value with the gate values given as a function. -/
-def Lit.evalF (pins q v : Nat → Bool) : Lit → Bool
+@[expose] def Lit.evalF (pins q v : Nat → Bool) : Lit → Bool
   | .const b => b
   | .pin k => pins k
   | .ff k => q k
   | .gate k => v k
 
 /-- `v` solves the equations of gates `gs`, numbered from `k`. -/
-def gatesHold (pins q v : Nat → Bool) : List Gate → Nat → Prop
+@[expose] def gatesHold (pins q v : Nat → Bool) : List Gate → Nat → Prop
   | [], _ => True
   | g :: gs, k =>
     v k = lut4 g.init (g.i0.evalF pins q v) (g.i1.evalF pins q v) (g.i2.evalF pins q v) (g.i3.evalF pins q v) ∧
@@ -197,7 +197,7 @@ theorem Net.gatesHold_gateVals (N : Net) (hT : N.topo = true) (pins q : Nat → 
 
 /-- The flop state a register file gives, through a correspondence `M` (flop `k` holds bit `M[k].2`
 of register `M[k].1`; past `M`'s end, `false`). -/
-def projOf (M : List (Nat × Nat)) (regs : Nat → BitVec 64) (k : Nat) : Bool :=
+@[expose] def projOf (M : List (Nat × Nat)) (regs : Nat → BitVec 64) (k : Nat) : Bool :=
   match M[k]? with
   | some (r, j) => (regs r).getLsbD j
   | none => false
@@ -258,18 +258,18 @@ structure Pin where
 def tileName (x y : Nat) : String := s!"X{x}Y{y}"
 
 /-- Pins in order: pin `k` is IO BEL `A` (even `k`) or `B` (odd) of `W_IO` tile `X0Y(1 + k/2)`. -/
-def pinsInOrder (roles : List PinRole) : List Pin :=
+abbrev pinsInOrder (roles : List PinRole) : List Pin :=
   roles.zipIdx.map fun (r, k) => { tile := tileName 0 (1 + k / 2), bel := if k % 2 == 0 then "A" else "B", role := r }
 
 /-- The pin vector of one module cycle: input pins carry their port bit, the reset pin the reset. -/
-def pinValues (pm : List Pin) (c : Bool × (Nat → BitVec 64)) : Nat → Bool := fun k =>
+@[expose] def pinValues (pm : List Pin) (c : Bool × (Nat → BitVec 64)) : Nat → Bool := fun k =>
   match pm[k]? with
   | some ⟨_, _, .input port bit⟩ => (c.2 port).getLsbD bit
   | some ⟨_, _, .reset⟩ => c.1
   | _ => false
 
 /-- The value an output pin should show, from the module's port values (in `m.outputs` order). -/
-def outPinValue (pm : List Pin) (outs : List (String × BitVec 64)) (k : Nat) : Bool :=
+@[expose] def outPinValue (pm : List Pin) (outs : List (String × BitVec 64)) (k : Nat) : Bool :=
   match pm[k]? with
   | some ⟨_, _, .output port bit⟩ => match outs[port]? with
     | some (_, v) => v.getLsbD bit
@@ -277,17 +277,17 @@ def outPinValue (pm : List Pin) (outs : List (String × BitVec 64)) (k : Nat) : 
   | _ => false
 
 /-- A cycle whose inputs are within the module's input widths. -/
-def InputsFit (m : RtlModule) (c : Bool × (Nat → BitVec 64)) : Prop :=
+abbrev InputsFit (m : RtlModule) (c : Bool × (Nat → BitVec 64)) : Prop :=
   ∀ i, (c.2 i).toNat < 2 ^ inputWidth m i
 
 /-- A register file within the module's register widths. -/
-def RegsFit (m : RtlModule) (regs : Nat → BitVec 64) : Prop :=
+abbrev RegsFit (m : RtlModule) (regs : Nat → BitVec 64) : Prop :=
   ∀ i, (regs i).toNat < 2 ^ regWidthOf m i
 
 /-- The one-step condition: from every in-width register file `regs`, with the flops holding
 `proj regs`, every in-width cycle leaves the flops holding `proj` of the module's next registers,
 and every output pin `p` of `N.outs` shows the module's port bit. -/
-def StepRealizes (N : Net) (m : RtlModule) (pm : List Pin) (proj : (Nat → BitVec 64) → Nat → Bool) : Prop :=
+abbrev StepRealizes (N : Net) (m : RtlModule) (pm : List Pin) (proj : (Nat → BitVec 64) → Nat → Bool) : Prop :=
   ∀ regs c, RegsFit m regs → InputsFit m c →
     N.step (pinValues pm c) (proj regs) = proj (stepModuleRegs m c.1 c.2 regs) ∧
     N.outputs (pinValues pm c) (proj regs) =
@@ -320,7 +320,7 @@ theorem fabric_realizes_module (N : Net) (m : RtlModule) (pm : List Pin)
 
 /-- The reset condition: a reset cycle, from any flop state, leaves the flops holding `proj` of the
 module's registers after reset (whatever they were). -/
-def ResetRealizes (N : Net) (m : RtlModule) (pm : List Pin) (proj : (Nat → BitVec 64) → Nat → Bool) : Prop :=
+abbrev ResetRealizes (N : Net) (m : RtlModule) (pm : List Pin) (proj : (Nat → BitVec 64) → Nat → Bool) : Prop :=
   ∀ (q : Nat → Bool) regs (ins : Nat → BitVec 64), InputsFit m (true, ins) →
     N.step (pinValues pm (true, ins)) q = proj (stepModuleRegs m true ins regs)
 

@@ -35,9 +35,11 @@ Connects Lean propositions and proofs over the `Obend.Lower` fragment to `Obend.
      overridden.
 -/
 public import Obend.Lower.Proofs.Complete
+import all Obend.Lower.Proofs.Complete
+import Obend.Tactic.Tooth
 public import Obend.Lower.Judge
 public import Obend.Logic.Obligation
-@[expose] public section
+public section
 namespace Obend.Lower
 open Obend.Core.Term Obend.Core.Ty
 open Obend.Core.Data (Data)
@@ -171,7 +173,7 @@ end
 
 /-- Lower a decidable proposition's boolean decision procedure `decideExpr : LExpr` into a `Core4`
 claim term. -/
-def lowerProp (decideExpr : LExpr) : Term := lowerT decideExpr
+@[expose] def lowerProp (decideExpr : LExpr) : Term := lowerT decideExpr
 
 /-! ## 2. Source Theory Consistency, the Stuck-Axiom Countermodel, and `transport` -/
 
@@ -461,7 +463,7 @@ inductive TransportClause where
   | illTyped
   deriving DecidableEq, Repr
 
-def transportCheck (_ : Nat) (o : TransportObj) (c : TransportCert) :
+@[expose] def transportCheck (_ : Nat) (o : TransportObj) (c : TransportCert) :
     Obend.Judge.Verdict TransportClause :=
   if Obend.Law.termEq (lowerProp o.decideExpr) c.claim then
     if c.digest == sourceDigest o.decideExpr then
@@ -517,6 +519,24 @@ theorem transportCheck_ok {r : Nat} {o : TransportObj} {c : TransportCert}
     · cases h
   · cases h
 
+/-- Empty-split refusal contradicts an object-level requirement on every certificate. -/
+def transportRefutes : TransportClause → Bool
+  | .emptySplit => true
+  | _ => false
+
+theorem transportCheck_refuted {r : Nat} {o : TransportObj} {c : TransportCert}
+    {k : TransportClause} {p : List Nat}
+    (h : transportCheck r o c = .refused k p) (hr : transportRefutes k = true) :
+    ∀ c', ¬ TransportMeaning o c' := by
+  cases k <;> simp only [transportRefutes, Bool.false_eq_true] at hr
+  intro c' hm
+  simp only [transportCheck, hm.2.2.2.2.1, ite_true] at h
+  repeat' split at h
+  all_goals cases h
+
+#tooth transportCheck_refuted by mutation transportRefutes := fun _ => true
+#tooth transportCheck_refuted by mutation transportCheck := fun _ _ _ => .refused .emptySplit []
+
 instance transportJudge : Obend.Judge TransportObj TransportCert where
   Clause := TransportClause
   Meaning := TransportMeaning
@@ -529,8 +549,8 @@ instance transportJudge : Obend.Judge TransportObj TransportCert where
     intro th ds hcons hlen hfrag hred hprov
     rw [ht]
     exact transport_ltyped_holds th htyped hs hlen hfrag hred hcons hprov
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
+  refutes := transportRefutes
+  refuted := transportCheck_refuted
   Fragment o := nonEmptySplits o.decideExpr = true ∧ checkL [] o.decideExpr (curry o.argTys .boolean) = true
   complete := by
     intro o ⟨hs, hc⟩ _
@@ -538,11 +558,25 @@ instance transportJudge : Obend.Judge TransportObj TransportCert where
     simp [transportCheck, lowerProp, Obend.Logic.termEq_refl', hs, hc]
   mono := by intros; rfl
 
+private def badEmptySplitObj : TransportObj := ⟨.split [] (.boolLit true) .erased, []⟩
+
+private def badEmptySplitCert : TransportCert :=
+  ⟨sourceDigest badEmptySplitObj.decideExpr, lowerProp badEmptySplitObj.decideExpr, [], []⟩
+
+theorem transportCheck_emptySplit_inhabited :
+    ∃ (o : TransportObj) (c : TransportCert),
+      transportCheck 0 o c = .refused .emptySplit [] ∧ transportRefutes .emptySplit = true ∧
+      ∀ c', ¬ TransportMeaning o c' := by
+  have h : transportCheck 0 badEmptySplitObj badEmptySplitCert = .refused .emptySplit [] := by
+    simp [transportCheck, badEmptySplitCert, badEmptySplitObj,
+      Obend.Logic.termEq_refl', nonEmptySplits]
+  exact ⟨badEmptySplitObj, badEmptySplitCert, h, rfl, transportCheck_refuted h rfl⟩
+
 /-- The planted bad transport certificate: a natural literal `.lit 5` claimed as a boolean decision
 procedure, refused `illTyped` when `claim` and `digest` match, or refused `notTheLowering` when the
 claim term is tampered with. -/
-def badTransportObj : TransportObj := ⟨.natBin .beq (.lit 5) (.lit 3), []⟩
-def badTransportCert : TransportCert := ⟨0, lowerProp (.boolLit true), [], []⟩
+@[expose] def badTransportObj : TransportObj := ⟨.natBin .beq (.lit 5) (.lit 3), []⟩
+@[expose] def badTransportCert : TransportCert := ⟨0, lowerProp (.boolLit true), [], []⟩
 
 theorem badTransport_refused :
     transportCheck 0 badTransportObj badTransportCert = .refused .notTheLowering [] := by
@@ -608,7 +642,7 @@ def transportFormat : Obend.Judge.Format where
 
 /-- An `Obend.Slot.Slot` over `TransportCert` candidates whose supports are open-recursion
 composition `Support`s. -/
-def transportSlot (o : TransportObj) : Obend.Slot.Slot Support TransportCert where
+@[expose] def transportSlot (o : TransportObj) : Obend.Slot.Slot Support TransportCert where
   supports c := c.supports
   judge c := transportCheck 0 o c == .ok
 

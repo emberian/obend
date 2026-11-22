@@ -58,7 +58,7 @@ signed it: there are no signatures. Migration-time relinking stays out of scope,
 `Obend.Vault.Replay`.
 -/
 public import Obend.Vault.Form
-@[expose] public section
+public section
 
 namespace Obend.Vault.Transport
 
@@ -224,7 +224,7 @@ theorem unfold_fields (f : Form) : ∀ m ∈ f.moves, RFields (reads f) m.unfold
     simp only [reads, List.mem_flatMap, List.mem_cons]
     exact ⟨m, hm, hx⟩
   refine ⟨hin _ (.inl rfl), fun x hx => hin x (.inr hx), fun x hx => ?_, fun x hx => ?_⟩ <;>
-    simp only [Move.unfold, nfields, List.mem_append, List.mem_singleton] at hx <;>
+    simp only [nfields, List.mem_append, List.mem_singleton] at hx <;>
     rcases hx with hx | hx <;> first | exact hin x (.inl hx) | exact hin x (.inr hx)
 
 /-- **The residual is kept**: where the form's values hold, the fresh capture's residual is the
@@ -364,7 +364,7 @@ theorem admitsAt_recapture (Γ : Ctx) {f : Form} (hv : ValuesHold Γ.live f) (ho
     obtain ⟨m, hm, rfl⟩ := hr
     obtain ⟨h1, h2, h3, h4⟩ := unfold_fields f m hm
     refine ⟨h1, ?_, ?_, ?_⟩ <;> intro x hx <;>
-      simp only [RMove.subst, Move.unfold, nfields, nfields_subst] at hx <;>
+      simp only [nfields, nfields_subst] at hx <;>
       first
         | exact h2 x hx
         | exact h3 x (by simpa [Move.unfold, nfields] using hx)
@@ -648,7 +648,7 @@ theorem judge_recapture_iff (H : Obend.Digest.HashBytes.Hash) (s : Store) {f : F
 structure Standing where
   id : String
   grant : Grant
-deriving DecidableEq, Repr
+deriving @[expose] DecidableEq, Repr
 
 /-- **The grants a vault issued**, and those it revoked: a grow-only set of each (a two-phase set).
 Revocation is the one act that takes authority away, and it is never undone. -/
@@ -658,7 +658,7 @@ structure Grants where
 deriving DecidableEq, Repr
 
 /-- The grants that stand: issued, and not revoked. -/
-def Grants.live (G : Grants) : List Standing := G.standing.filter fun s => !G.revoked.contains s.id
+@[expose] def Grants.live (G : Grants) : List Standing := G.standing.filter fun s => !G.revoked.contains s.id
 
 def Grants.issue (G : Grants) (s : Standing) : Grants := { G with standing := G.standing ++ [s] }
 
@@ -863,6 +863,26 @@ theorem valuesHoldB_sound {live : VaultStore} {f : Form} (h : valuesHoldB live f
   | some d =>
     simp only [hl, List.all_eq_true, beq_iff_eq] at this
     exact ⟨d, rfl, this⟩
+
+/-- A form that pays out of `desk`, captured when the page read `gold = 7` at version 1. -/
+private def paidFromDesk : Form :=
+  { name := "pay", grants := [],
+    cells := [{ name := "desk", state := .record [("gold", .natural 7), ("version", .natural 1)] }],
+    holes := [("to", .page)],
+    moves := [⟨"gold", .page "desk", .hole "to", .lit 3⟩] }
+
+/-- A store where `desk` reads `gold` and `version` as given, and holds no other page. -/
+private def deskAt (gold version : Nat) : VaultStore := fun n =>
+  if n == "desk" then some (.record [("gold", .natural gold), ("version", .natural version)]) else none
+
+/-- **The form's values hold at a store that moved on**: `desk` is a version later, and the field the
+form reads is as it was captured. The check passes off the diagonal (`live` is not the capture). -/
+theorem valuesHoldB_inhabited : ∃ live f, valuesHoldB live f = true :=
+  ⟨deskAt 7 2, paidFromDesk, by decide⟩
+
+/-- The same form is refused where the field it reads moved, and where its page is gone. -/
+example : valuesHoldB (deskAt 4 2) paidFromDesk = false ∧ valuesHoldB (fun _ => none) paidFromDesk = false :=
+  ⟨by decide, by decide⟩
 
 /-- What moved under the pages a form captured: a value it reads, a page gone, or only its support. -/
 def cellMoves (s : Store) (f : Form) : List Moved :=

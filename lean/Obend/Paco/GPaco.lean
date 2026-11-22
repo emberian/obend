@@ -45,16 +45,16 @@ namespace Rel
 variable {α : Type u}
 
 /-- Empty relation `⊥`. -/
-@[expose] def bot : Rel α := fun _ _ => False
+def bot : Rel α := fun _ _ => False
 
 /-- Full relation `⊤`. -/
-@[expose] def top : Rel α := fun _ _ => True
+def top : Rel α := fun _ _ => True
 
 /-- Relational union `R ⊔ S`. -/
 @[expose] def union (R S : Rel α) : Rel α := fun x y => R x y ∨ S x y
 
 /-- Relational intersection `R ⊓ S`. -/
-@[expose] def inter (R S : Rel α) : Rel α := fun x y => R x y ∧ S x y
+def inter (R S : Rel α) : Rel α := fun x y => R x y ∧ S x y
 
 /-- Relational inclusion `R ≤ S`. -/
 @[expose] def le (R S : Rel α) : Prop := ∀ x y, R x y → S x y
@@ -163,7 +163,7 @@ theorem mono' (F : MonoRel α) {R S : Rel α} (h : R ≤ S) : F R ≤ F S :=
   F.mono R S h
 
 /-- Greatest fixed point of `F` (Knaster–Tarski union of all post-fixpoints). -/
-@[expose] def gfp (F : MonoRel α) : Rel α :=
+def gfp (F : MonoRel α) : Rel α :=
   fun x y => ∃ R : Rel α, (∀ a b, R a b → F R a b) ∧ R x y
 
 /-- Standard coinduction into `F.gfp`: every post-fixpoint is below `F.gfp`. -/
@@ -193,7 +193,7 @@ section PacoCore
 variable {α : Type u}
 
 /-- Parameterized greatest fixed point `paco F r := gfp (λ R. F (R ⊔ r))`. -/
-@[expose] def paco (F : MonoRel α) (r : Rel α) : Rel α :=
+def paco (F : MonoRel α) (r : Rel α) : Rel α :=
   fun x y => ∃ R : Rel α, (∀ a b, R a b → F (R ⊔ r) a b) ∧ R x y
 
 /-- Usable coinductive hypothesis `upaco F r := paco F r ⊔ r`. -/
@@ -529,7 +529,7 @@ end rclo
 abbrev CloMono (clo : Rel α → Rel α) : Prop := Monotone2 clo
 
 /-- Compatibility of a closure operator `clo` with `F`: `clo (F R) ≤ F (clo R)`. -/
-@[expose] def Compatible (F : MonoRel α) (clo : Rel α → Rel α) : Prop :=
+def Compatible (F : MonoRel α) (clo : Rel α → Rel α) : Prop :=
   ∀ R, clo (F R) ≤ F (clo R)
 
 theorem cloMono_id : CloMono (id : Rel α → Rel α) :=
@@ -560,7 +560,7 @@ theorem rclo_compatible (F : MonoRel α) {clo : Rel α → Rel α}
     exact h3 _ _ (h2 _ _ (h1 _ _ hclo))
 
 /-- Modified generator `F ∘ rclo clo` for `gpaco_clo`. -/
-@[expose] def composeRclo (F : MonoRel α) (clo : Rel α → Rel α) : MonoRel α where
+def composeRclo (F : MonoRel α) (clo : Rel α → Rel α) : MonoRel α where
   F := F ∘ rclo clo
   mono := fun _ _ hRS => F.mono' (rclo.mono hRS)
 
@@ -577,11 +577,11 @@ theorem composeRclo_id (F : MonoRel α) : composeRclo F id = F := by
   rclo clo (paco (composeRclo F clo) (rg ⊔ r) ⊔ r)
 
 /-- Symmetric up-to hypothesis `gupaco_clo F clo r := gpaco_clo F clo r r`. -/
-@[expose] def gupaco_clo (F : MonoRel α) (clo : Rel α → Rel α) (r : Rel α) : Rel α :=
+def gupaco_clo (F : MonoRel α) (clo : Rel α → Rel α) (r : Rel α) : Rel α :=
   gpaco_clo F clo r r
 
 /-- Weak compatibility of `clo` with `F`: `clo (F R) ≤ F (gupaco_clo F clo R)`. -/
-@[expose] def WCompatible (F : MonoRel α) (clo : Rel α → Rel α) : Prop :=
+def WCompatible (F : MonoRel α) (clo : Rel α → Rel α) : Prop :=
   ∀ R, clo (F R) ≤ F (gupaco_clo F clo R)
 
 theorem r_le_gpaco_clo (F : MonoRel α) (clo : Rel α → Rel α) (r rg : Rel α) :
@@ -802,7 +802,7 @@ structure Companion (F : MonoRel α) where
   extensive : ∀ R, R ≤ C R
 
 /-- Canonical companion operator `companion F := cpn F`. -/
-@[expose] def companion (F : MonoRel α) : Rel α → Rel α := cpn F
+def companion (F : MonoRel α) : Rel α → Rel α := cpn F
 
 theorem companion_mono (F : MonoRel α) : CloMono (companion F) := by
   intro R S hRS x y ⟨clo, h_mono, h_compat, h_clo⟩

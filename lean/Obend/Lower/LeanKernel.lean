@@ -53,7 +53,8 @@ set_option autoImplicit false
   | .str p _ => by simp [KName.beq, KName.beq_refl p]
   | .num p _ => by simp [KName.beq, KName.beq_refl p]
 
-@[expose] instance (priority := high) : BEq KName := ⟨KName.beq⟩
+abbrev instBEqKName : BEq KName := ⟨KName.beq⟩
+attribute [instance high] instBEqKName
 
 /-- Transparent structural `BEq` for `KLevel`. -/
 @[expose] def KLevel.beq : KLevel → KLevel → Bool
@@ -71,7 +72,8 @@ set_option autoImplicit false
   | .imax a b => by simp [KLevel.beq, KLevel.beq_refl a, KLevel.beq_refl b]
   | .param n => KName.beq_refl n
 
-@[expose] instance (priority := high) : BEq KLevel := ⟨KLevel.beq⟩
+abbrev instBEqKLevel : BEq KLevel := ⟨KLevel.beq⟩
+attribute [instance high] instBEqKLevel
 
 /-- Transparent structural `BEq` for `List KLevel`. -/
 @[expose] def KLevel.listBeq : List KLevel → List KLevel → Bool
@@ -83,10 +85,11 @@ set_option autoImplicit false
   | [] => rfl
   | _ :: us => by simp [KLevel.listBeq, KLevel.listBeq_refl us]
 
-@[expose] instance (priority := high) : BEq (List KLevel) := ⟨KLevel.listBeq⟩
+abbrev instBEqListKLevel : BEq (List KLevel) := ⟨KLevel.listBeq⟩
+attribute [instance high] instBEqListKLevel
 
 /-- Transparent structural `BEq` for `KLiteral`. -/
-@[expose] def KLiteral.beq : KLiteral → KLiteral → Bool
+abbrev KLiteral.beq : KLiteral → KLiteral → Bool
   | .natVal n1, .natVal n2 => n1 == n2
   | .strVal s1, .strVal s2 => s1 == s2
   | _, _ => false
@@ -95,7 +98,8 @@ set_option autoImplicit false
   | .natVal _ => by simp [KLiteral.beq]
   | .strVal _ => by simp [KLiteral.beq]
 
-@[expose] instance (priority := high) : BEq KLiteral := ⟨KLiteral.beq⟩
+abbrev instBEqKLiteral : BEq KLiteral := ⟨KLiteral.beq⟩
+attribute [instance high] instBEqKLiteral
 
 /-- Transparent structural `BEq` for `KExpr`. -/
 @[expose] def KExpr.beq : KExpr → KExpr → Bool
@@ -125,7 +129,8 @@ set_option autoImplicit false
   | .lit _ => by simp [KExpr.beq]
   | .proj _ _ e => by simp [KExpr.beq, KExpr.beq_refl e]
 
-@[expose] instance (priority := high) : BEq KExpr := ⟨KExpr.beq⟩
+abbrev instBEqKExpr : BEq KExpr := ⟨KExpr.beq⟩
+attribute [instance high] instBEqKExpr
 
 /-- Self-hosted kernel constant declaration (`Lean.ConstantInfo`). -/
 inductive KConstInfo where
@@ -134,10 +139,10 @@ inductive KConstInfo where
   | thmInfo    (name : KName) (levelParams : List KName) (type : KExpr) (value : KExpr)
   | inductInfo (name : KName) (levelParams : List KName) (type : KExpr)
   | ctorInfo   (name : KName) (levelParams : List KName) (type : KExpr) (inductName : KName)
-  deriving @[expose] DecidableEq, Repr, Inhabited
+  deriving DecidableEq, Repr, Inhabited
 
 /-- Declaration name of a `KConstInfo`. -/
-@[expose] def KConstInfo.name : KConstInfo → KName
+abbrev KConstInfo.name : KConstInfo → KName
   | .axiomInfo n _ _    => n
   | .defnInfo n _ _ _   => n
   | .thmInfo n _ _ _    => n
@@ -145,7 +150,7 @@ inductive KConstInfo where
   | .ctorInfo n _ _ _   => n
 
 /-- Universe level parameter names of a `KConstInfo`. -/
-@[expose] def KConstInfo.levelParams : KConstInfo → List KName
+abbrev KConstInfo.levelParams : KConstInfo → List KName
   | .axiomInfo _ ps _    => ps
   | .defnInfo _ ps _ _   => ps
   | .thmInfo _ ps _ _    => ps
@@ -153,7 +158,7 @@ inductive KConstInfo where
   | .ctorInfo _ ps _ _   => ps
 
 /-- Type expression of a `KConstInfo`. -/
-@[expose] def KConstInfo.type : KConstInfo → KExpr
+abbrev KConstInfo.type : KConstInfo → KExpr
   | .axiomInfo _ _ t    => t
   | .defnInfo _ _ t _   => t
   | .thmInfo _ _ t _    => t
@@ -172,7 +177,7 @@ structure KRecRule where
   numPrefixArgs : Nat
   numFields     : Nat
   rhs           : KExpr
-  deriving @[expose] DecidableEq, Repr, Inhabited
+  deriving DecidableEq, Repr, Inhabited
 
 /-- User-defined inductive family declaration (`Lean.InductiveVal`) together with its constructors
 and generated recursor $\iota$-rules. -/
@@ -184,29 +189,29 @@ structure KInductDecl where
   type        : KExpr
   ctors       : List (KName × KExpr × Nat)
   recRules    : List KRecRule
-  deriving @[expose] DecidableEq, Repr, Inhabited
+  deriving DecidableEq, Repr, Inhabited
 
 /-- Self-hosted kernel environment (`Lean.Environment`). -/
 structure KEnv where
   constants   : List KConstInfo
   recRules    : List KRecRule := []
   inductDecls : List KInductDecl := []
-  deriving @[expose] DecidableEq, Repr, Inhabited
+  deriving DecidableEq, Repr, Inhabited
 
 /-- Look up a declaration by `KName` in a `KEnv`. -/
-@[expose] def KEnv.find? (env : KEnv) (name : KName) : Option KConstInfo :=
+abbrev KEnv.find? (env : KEnv) (name : KName) : Option KConstInfo :=
   env.constants.find? (fun info => info.name == name)
 
 /-- Look up a recursor $\iota$-rule by `(recName, ctorName)` in a `KEnv`. -/
-@[expose] def KEnv.findRecRule? (env : KEnv) (recName ctorName : KName) : Option KRecRule :=
+def KEnv.findRecRule? (env : KEnv) (recName ctorName : KName) : Option KRecRule :=
   env.recRules.find? (fun r => r.recName == recName && r.ctorName == ctorName)
 
 /-- Extend a `KEnv` with a verified `KConstInfo`. -/
-@[expose] def KEnv.add (env : KEnv) (info : KConstInfo) : KEnv :=
+def KEnv.add (env : KEnv) (info : KConstInfo) : KEnv :=
   { env with constants := info :: env.constants }
 
 /-- Register a user-defined `KInductDecl` (its type, constructors, and recursor $\iota$-rules) into `KEnv`. -/
-@[expose] def KEnv.addInductDecl (env : KEnv) (decl : KInductDecl) : KEnv :=
+def KEnv.addInductDecl (env : KEnv) (decl : KInductDecl) : KEnv :=
   let indConst : KConstInfo := .inductInfo decl.name decl.levelParams decl.type
   let ctorConsts : List KConstInfo :=
     decl.ctors.map (fun (cName, cTy, _) => .ctorInfo cName decl.levelParams cTy decl.name)
@@ -217,7 +222,7 @@ structure KEnv where
 /-! ## 2. Universe Level Normalization, `imax`, and Equivalence (`kernelImax`, `kernelLevelEq`) -/
 
 /-- Substitute universe level parameters in a `KLevel`. -/
-@[expose] def KLevel.substParams (subst : List (KName × KLevel)) : KLevel → KLevel
+abbrev KLevel.substParams (subst : List (KName × KLevel)) : KLevel → KLevel
   | .zero       => .zero
   | .succ l     => .succ (KLevel.substParams subst l)
   | .max l1 l2  => .max (KLevel.substParams subst l1) (KLevel.substParams subst l2)
@@ -229,7 +234,7 @@ structure KEnv where
 
 /-- Normalize a closed/concrete universe level to its numeric level offset when parameter-free,
 evaluating `max` and impredicative `imax` (`imax u 0 = 0`). -/
-@[expose] def KLevel.evalConcrete : KLevel → Option Nat
+def KLevel.evalConcrete : KLevel → Option Nat
   | .zero => some 0
   | .succ l => do
     let k ← KLevel.evalConcrete l
@@ -245,7 +250,7 @@ evaluating `max` and impredicative `imax` (`imax u 0 = 0`). -/
   | .param _ => none
 
 /-- Algebraic `max` smart constructor simplifying `max 0 u = u`, `max u 0 = u`, and `max u u = u`. -/
-@[expose] def KLevel.mkMax (u v : KLevel) : KLevel :=
+def KLevel.mkMax (u v : KLevel) : KLevel :=
   if u == .zero then v
   else if v == .zero then u
   else if u == v then u
@@ -253,7 +258,7 @@ evaluating `max` and impredicative `imax` (`imax u 0 = 0`). -/
 
 /-- Algebraic `imax` smart constructor simplifying `imax u 0 = 0`, `imax 0 u = u`, `imax u u = u`,
 `imax u (succ v) = max u (succ v)`, and `imax w (max u v) = max (imax w u) (imax w v)`. -/
-@[expose] def KLevel.mkIMax (u : KLevel) : KLevel → KLevel
+def KLevel.mkIMax (u : KLevel) : KLevel → KLevel
   | .zero => .zero
   | .succ v' =>
     if u == .zero then .succ v'
@@ -273,7 +278,7 @@ evaluating `max` and impredicative `imax` (`imax u 0 = 0`). -/
 
 /-- Normalize a universe level algebraically (simplifying `max` and impredicative `imax` laws,
 including `imax w (max u v) = max (imax w u) (imax w v)`, even in the presence of universe parameters `.param`). -/
-@[expose] def KLevel.normalize : KLevel → KLevel
+def KLevel.normalize : KLevel → KLevel
   | .zero       => .zero
   | .succ l     => .succ (KLevel.normalize l)
   | .max l1 l2  => KLevel.mkMax (KLevel.normalize l1) (KLevel.normalize l2)
@@ -281,14 +286,14 @@ including `imax w (max u v) = max (imax w u) (imax w v)`, even in the presence o
   | .param n    => .param n
 
 /-- Alias `KLevel.norm` to `KLevel.normalize`. -/
-@[expose] abbrev KLevel.norm : KLevel → KLevel := KLevel.normalize
+abbrev KLevel.norm : KLevel → KLevel := KLevel.normalize
 
 /-- Construct the impredicative `imax` universe level, simplifying `imax u 0 = 0` immediately. -/
-@[expose] def kernelImax (u v : KLevel) : KLevel :=
+def kernelImax (u v : KLevel) : KLevel :=
   KLevel.mkIMax (KLevel.normalize u) (KLevel.normalize v)
 
 /-- Symmetric/commutative equivalence on normalized `KLevel`s (`max u v ≡ max v u`). -/
-@[expose] def KLevel.equivComm : KLevel → KLevel → Bool
+def KLevel.equivComm : KLevel → KLevel → Bool
   | u, v =>
     if u == v then true
     else
@@ -304,19 +309,45 @@ including `imax w (max u v) = max (imax w u) (imax w v)`, even in the presence o
 /-- Decide universe level equivalence: checks syntactic equality, algebraic `imax`/`max`
 normalization (`KLevel.normalize`) with symmetric `max u v == max v u` (`KLevel.equivComm`),
 and concrete level evaluation (`KLevel.evalConcrete`). -/
-@[expose] def kernelLevelEq (u v : KLevel) : Bool :=
+abbrev kernelLevelEq (u v : KLevel) : Bool :=
   if u == v then true
   else
-    let nu := KLevel.normalize u
-    let nv := KLevel.normalize v
-    if KLevel.equivComm nu nv then true
-    else
-      match KLevel.evalConcrete u, KLevel.evalConcrete v with
-      | some ku, some kv => ku == kv
-      | _, _ => false
+    match u, v with
+    | .succ _, .zero | .zero, .succ _ => false
+    | _, _ =>
+      let nu := KLevel.normalize u
+      let nv := KLevel.normalize v
+      if KLevel.equivComm nu nv then true
+      else
+        match KLevel.evalConcrete u, KLevel.evalConcrete v with
+        | some ku, some kv => ku == kv
+        | _, _ => false
+
+theorem kernelLevelEq_eq_base (u v : KLevel) :
+    kernelLevelEq u v =
+      (if u == v then true
+       else
+         let nu := KLevel.normalize u
+         let nv := KLevel.normalize v
+         if KLevel.equivComm nu nv then true
+         else
+           match KLevel.evalConcrete u, KLevel.evalConcrete v with
+           | some ku, some kv => ku == kv
+           | _, _ => false) := by
+  unfold kernelLevelEq
+  by_cases hEq : (u == v) = true
+  · simp [hEq]
+  · simp only [hEq]
+    cases u <;> cases v <;> try rfl
+    · rename_i l
+      simp only [KLevel.normalize, KLevel.equivComm, BEq.beq, KLevel.beq, KLevel.evalConcrete]
+      cases hc : KLevel.evalConcrete l <;> simp
+    · rename_i l
+      simp only [KLevel.normalize, KLevel.equivComm, BEq.beq, KLevel.beq, KLevel.evalConcrete]
+      cases hc : KLevel.evalConcrete l <;> simp
 
 /-- Alias `klevelEquivB` to `kernelLevelEq`. -/
-@[expose] abbrev klevelEquivB : KLevel → KLevel → Bool := kernelLevelEq
+abbrev klevelEquivB : KLevel → KLevel → Bool := kernelLevelEq
 
 theorem kernelLevelEq_refl (u : KLevel) : kernelLevelEq u u = true := by
   simp [kernelLevelEq, BEq.beq]
@@ -333,7 +364,7 @@ theorem kernelLevelEq_parametric_laws (u v : KName) :
     simp [kernelLevelEq, KLevel.normalize, KLevel.mkMax, KLevel.mkIMax, KLevel.equivComm, BEq.beq, KLevel.beq]
 
 /-- List-wise universe level equality. -/
-@[expose] def kernelLevelListEq : List KLevel → List KLevel → Bool
+def kernelLevelListEq : List KLevel → List KLevel → Bool
   | [], [] => true
   | u :: us, v :: vs => kernelLevelEq u v && kernelLevelListEq us vs
   | _, _ => false
@@ -345,7 +376,7 @@ theorem kernelLevelListEq_refl : ∀ (us : List KLevel), kernelLevelListEq us us
 /-! ## 3. De Bruijn Instantiation and Level Substitution on `KExpr` -/
 
 /-- Substitute universe level parameters throughout a `KExpr`. -/
-@[expose] def KExpr.instantiateLevelParams (subst : List (KName × KLevel)) : KExpr → KExpr
+def KExpr.instantiateLevelParams (subst : List (KName × KLevel)) : KExpr → KExpr
   | .bvar i        => .bvar i
   | .fvar id       => .fvar id
   | .mvar id       => .mvar id
@@ -394,13 +425,13 @@ down by 1. -/
   | .proj s idx e  => .proj s idx (KExpr.instantiateAt depth arg e)
 
 /-- Instantiate bound variable `0` of `body` with `arg` (β/ζ-instantiation). -/
-@[expose] def KExpr.instantiate1 (body arg : KExpr) : KExpr :=
+abbrev KExpr.instantiate1 (body arg : KExpr) : KExpr :=
   KExpr.instantiateAt 0 arg body
 
 /-! ## 4. Pure Kernel WHNF, Definitional Equality, Type Inference, and Declaration Checking -/
 
 /-- Extract the head constant name and argument spine of a constructor application `C a₀ … aₖ`. -/
-@[expose] def extractCtorArgs : KExpr → Option (KName × List KExpr)
+def extractCtorArgs : KExpr → Option (KName × List KExpr)
   | .const n _ => some (n, [])
   | .app f a => do
     let (n, args) ← extractCtorArgs f
@@ -408,7 +439,7 @@ down by 1. -/
   | _ => none
 
 /-- Extract the head constant name, universe levels, and argument spine of `C.{us} a₀ … aₖ`. -/
-@[expose] def extractCtorArgsWithLevels : KExpr → Option (KName × List KLevel × List KExpr)
+def extractCtorArgsWithLevels : KExpr → Option (KName × List KLevel × List KExpr)
   | .const n us => some (n, us, [])
   | .app f a => do
     let (n, us, args) ← extractCtorArgsWithLevels f
@@ -418,7 +449,7 @@ down by 1. -/
 /-- Kernel `Nat` literal & `Bool.rec` ι-reduction rule (`reduceNatIota?`):
 reduces closed `Nat.succ`, `Nat.add`, `Nat.sub`, `Nat.mul`, `Nat.beq`, `Nat.ble` on `.natVal` literals
 and `Bool.rec` on `Bool.true`/`Bool.false`. -/
-@[expose] def reduceNatIota? (f' a' : KExpr) : Option KExpr :=
+abbrev reduceNatIota? (f' a' : KExpr) : Option KExpr :=
   match f', a' with
   | .const fn _, .lit (.natVal n) =>
     if fn == KName.mkSimple "Nat.succ" then some (.lit (.natVal (n + 1))) else none
@@ -442,7 +473,7 @@ and `Bool.rec` on `Bool.true`/`Bool.false`. -/
 /-- Quotient computation rule (`Quot.lift` on `Quot.mk`):
 reduces `Quot.lift f h (Quot.mk α r a) ↦ f a` and `Quot.lift α r β f h (Quot.mk α r a) ↦ f a`,
 requiring `mkArgs.length == 3` (`[α, r, a]`) on `Quot.mk`. -/
-@[expose] def reduceQuotLift? (f' a' : KExpr) : Option KExpr := do
+def reduceQuotLift? (f' a' : KExpr) : Option KExpr := do
   let (fnName, prefixArgs) ← extractCtorArgs f'
   let (ctorName, mkArgs) ← extractCtorArgs a'
   if fnName == KName.mkSimple "Quot.lift" && ctorName == KName.mkSimple "Quot.mk" && mkArgs.length == 3 then
@@ -461,7 +492,7 @@ in WHNF, looks up a matching `KRecRule` in `env.recRules`, resolves the recursor
 `prefixArgs.length == rule.numPrefixArgs`, and `ctorArgs.length >= rule.numFields`, instantiates
 universe level parameters in `rule.rhs` with `recLevels`, and returns
 `(prefixArgs ++ fieldArgs).foldl KExpr.app rhsInst`. -/
-@[expose] def reduceGeneralIota? (env : KEnv) (f' a' : KExpr) : Option KExpr := do
+def reduceGeneralIota? (env : KEnv) (f' a' : KExpr) : Option KExpr := do
   let (recName, recLevels, prefixArgs) ← extractCtorArgsWithLevels f'
   let (ctorName, ctorArgs) ← extractCtorArgs a'
   let rule ← env.findRecRule? recName ctorName
@@ -503,10 +534,10 @@ and structure projection reduction (`.proj`, applying `numParams` offset `args[n
         match reduceNatIota? fNorm a' with
         | some reduced => kernelWhnf env fuel reduced
         | none =>
-          match reduceQuotLift? f' a' with
+          match (match a' with | .app _ _ => reduceQuotLift? f' a' | _ => none) with
           | some reduced => kernelWhnf env fuel reduced
           | none =>
-            match reduceGeneralIota? env f' a' with
+            match (if env.recRules.isEmpty then none else reduceGeneralIota? env f' a') with
             | some reduced => kernelWhnf env fuel reduced
             | none => .app f' a
     | .letE _ val body =>
@@ -514,7 +545,9 @@ and structure projection reduction (`.proj`, applying `numParams` offset `args[n
     | .const name us =>
       match env.find? name with
       | some (.defnInfo _ lparams _ val) =>
-        if lparams.length == us.length then
+        if lparams.isEmpty && us.isEmpty then
+          kernelWhnf env fuel val
+        else if lparams.length == us.length then
           kernelWhnf env fuel (KExpr.instantiateLevelParams (lparams.zip us) val)
         else e
       | _ => e
@@ -537,8 +570,54 @@ and structure projection reduction (`.proj`, applying `numParams` offset `args[n
       | none => .proj s idx e'
     | _ => e
 
+theorem KLevel.substParams_nil : ∀ (u : KLevel), KLevel.substParams [] u = u
+  | .zero => rfl
+  | .succ l => by simp [KLevel.substParams, KLevel.substParams_nil l]
+  | .max a b => by simp [KLevel.substParams, KLevel.substParams_nil a, KLevel.substParams_nil b]
+  | .imax a b => by simp [KLevel.substParams, KLevel.substParams_nil a, KLevel.substParams_nil b]
+  | .param _ => rfl
+
+theorem KExpr.instantiateLevelParams_nil : ∀ (e : KExpr), KExpr.instantiateLevelParams [] e = e
+  | .bvar _ | .fvar _ | .mvar _ | .lit _ => rfl
+  | .sort u => congrArg KExpr.sort (KLevel.substParams_nil u)
+  | .const n us => by
+    have hmap : us.map (KLevel.substParams []) = us := by
+      induction us with
+      | nil => rfl
+      | cons u rest ih => simp [KLevel.substParams_nil, ih]
+    exact congrArg (KExpr.const n) hmap
+  | .app f a => by
+    simp [KExpr.instantiateLevelParams, KExpr.instantiateLevelParams_nil f,
+      KExpr.instantiateLevelParams_nil a]
+  | .lam d b => by
+    simp [KExpr.instantiateLevelParams, KExpr.instantiateLevelParams_nil d,
+      KExpr.instantiateLevelParams_nil b]
+  | .forallE d b => by
+    simp [KExpr.instantiateLevelParams, KExpr.instantiateLevelParams_nil d,
+      KExpr.instantiateLevelParams_nil b]
+  | .letE t v b => by
+    simp [KExpr.instantiateLevelParams, KExpr.instantiateLevelParams_nil t,
+      KExpr.instantiateLevelParams_nil v, KExpr.instantiateLevelParams_nil b]
+  | .proj s i e => congrArg (KExpr.proj s i) (KExpr.instantiateLevelParams_nil e)
+
+theorem reduceQuotLift?_non_app (f' a' : KExpr) :
+    (match a' with | .app _ _ => reduceQuotLift? f' a' | _ => none) = reduceQuotLift? f' a' := by
+  cases a' <;> simp [reduceQuotLift?, extractCtorArgs]
+
+theorem reduceGeneralIota?_empty_recRules (env : KEnv) (f' a' : KExpr) :
+    (if env.recRules.isEmpty then none else reduceGeneralIota? env f' a') = reduceGeneralIota? env f' a' := by
+  cases h : env.recRules with
+  | cons _ _ => simp
+  | nil =>
+    simp only [List.isEmpty_nil, ↓reduceIte]
+    unfold reduceGeneralIota? KEnv.findRecRule?
+    rw [h]
+    cases extractCtorArgsWithLevels f' with
+    | none => rfl
+    | some _ => cases extractCtorArgs a' <;> rfl
+
 /-- Expand a `Nat` literal one constructor layer (`0 ↦ Nat.zero`, `n + 1 ↦ Nat.succ (.lit n)`). -/
-@[expose] def natLitToKExpr : Nat → KExpr
+def natLitToKExpr : Nat → KExpr
   | 0     => .const (KName.mkSimple "Nat.zero") []
   | n + 1 => .app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n))
 
@@ -555,7 +634,7 @@ and structure projection reduction (`.proj`, applying `numParams` offset `args[n
   | _, _ => none
 
 /-- Single-step $\lambda$-$\eta$ expansion candidate `(dom, lhsBody, rhsBody)`. -/
-@[expose] def stepLamEta : KExpr → KExpr → Option (KExpr × KExpr × KExpr)
+abbrev stepLamEta : KExpr → KExpr → Option (KExpr × KExpr × KExpr)
   | .lam dom body, other =>
     some (dom, body, .app (KExpr.liftLooseBVars 0 1 other) (.bvar 0))
   | other, .lam dom body =>
@@ -564,7 +643,7 @@ and structure projection reduction (`.proj`, applying `numParams` offset `args[n
 
 /-- Check domain compatibility (`etaDomCompat`) during one-sided $\lambda$-$\eta$ expansion:
 fails closed (`false`) whenever `inferPrev ctx other` returns `none` or its WHNF is not `.forallE`! -/
-@[expose] def etaDomCompat (env : KEnv) (fuel : Nat)
+def etaDomCompat (env : KEnv) (fuel : Nat)
     (inferPrev : List KExpr → KExpr → Option KExpr)
     (defEqPrev : List KExpr → KExpr → KExpr → Bool)
     (ctx : List KExpr) (dom other : KExpr) : Bool :=
@@ -576,7 +655,7 @@ fails closed (`false`) whenever `inferPrev ctx other` returns `none` or its WHNF
   | none => false
 
 /-- Single-step proposition check (`ty : Sort 0` / `Prop`) given the previous fuel's `inferPrev`. -/
-@[expose] def isPropTypeStep (env : KEnv) (fuel : Nat)
+abbrev isPropTypeStep (env : KEnv) (fuel : Nat)
     (inferPrev : List KExpr → KExpr → Option KExpr)
     (ctx : List KExpr) (ty : KExpr) : Bool :=
   match inferPrev ctx ty with
@@ -587,14 +666,14 @@ fails closed (`false`) whenever `inferPrev ctx other` returns `none` or its WHNF
   | none => false
 
 /-- Instantiate leading `.forallE` binders of a constructor telescope with `paramArgs`. -/
-@[expose] def instantiateParamsTele : List KExpr → KExpr → Option KExpr
+def instantiateParamsTele : List KExpr → KExpr → Option KExpr
   | [], tele => some tele
   | p :: ps, .forallE _ body => instantiateParamsTele ps (KExpr.instantiate1 body p)
   | _ :: _, _ => none
 
 /-- Walk a constructor's field telescope to extract the type of field `targetIdx`, instantiating
 earlier fields `j < targetIdx` with `.proj s j structExpr`. -/
-@[expose] def inferFieldFromTele? (s : KName) (structExpr : KExpr) (curIdx : Nat) :
+def inferFieldFromTele? (s : KName) (structExpr : KExpr) (curIdx : Nat) :
     Nat → KExpr → Option KExpr
   | 0, .forallE dom _ => some dom
   | k + 1, .forallE _ body =>
@@ -603,7 +682,7 @@ earlier fields `j < targetIdx` with `.proj s j structExpr`. -/
 
 /-- Infer the type of a structure projection `.proj s idx structExpr` from `structExpr`'s inferred
 type `structTy` and the structure constructor's `.forallE` field telescope in `env`. -/
-@[expose] def inferProjFieldType? (env : KEnv) (fuel : Nat) (s : KName) (idx : Nat)
+def inferProjFieldType? (env : KEnv) (fuel : Nat) (s : KName) (idx : Nat)
     (structExpr structTy : KExpr) : Option KExpr := do
   let structTyWhnf := kernelWhnf env fuel structTy
   let (indName, indLevels, indArgs) ← extractCtorArgsWithLevels structTyWhnf
@@ -639,7 +718,9 @@ type `structTy` and the structure constructor's `.forallE` field telescope in `e
   | .const name us =>
     match env.find? name with
     | some info =>
-      if info.levelParams.length == us.length then
+      if info.levelParams.isEmpty && us.isEmpty then
+        some info.type
+      else if info.levelParams.length == us.length then
         some (KExpr.instantiateLevelParams (info.levelParams.zip us) info.type)
       else none
     | none => none
@@ -684,7 +765,7 @@ type `structTy` and the structure constructor's `.forallE` field telescope in `e
 /-- Single fuel step of Context-Aware Definitional Equality (`isDefEq`) given `(inferPrev, defEqPrev)`,
 natively executing full $\beta\delta\iota\zeta\eta$ + `Nat`-literal bridging (`stepNatLitBridge`)
 + $\lambda$-$\eta$ (`stepLamEta`) + `Sort 0` (`Prop`) proof-irrelevant conversion (`isPropTypeStep`). -/
-@[expose] def kernelIsDefEqStep (env : KEnv) (fuel : Nat)
+abbrev kernelIsDefEqStep (env : KEnv) (fuel : Nat)
     (inferPrev : List KExpr → KExpr → Option KExpr)
     (defEqPrev : List KExpr → KExpr → KExpr → Bool)
     (ctx : List KExpr) (t s : KExpr) : Bool :=
@@ -752,28 +833,28 @@ natively executing full $\beta\delta\iota\zeta\eta$ + `Nat`-literal bridging (`s
      kernelIsDefEqStep env fuel prev.1 prev.2)
 
 /-- Check whether `ty : KExpr` is a proposition (`ty : Sort 0` / `Prop`) in context `ctx`. -/
-@[expose] def isPropType? (env : KEnv) (fuel : Nat) (ctx : List KExpr) (ty : KExpr) : Bool :=
+def isPropType? (env : KEnv) (fuel : Nat) (ctx : List KExpr) (ty : KExpr) : Bool :=
   isPropTypeStep env fuel (kernelEngineFuel env fuel).1 ctx ty
 
 /-- Alias `isPropType` to `isPropType?`. -/
-@[expose] abbrev isPropType := isPropType?
+abbrev isPropType := isPropType?
 
 /-- Fuel-bounded Bidirectional Type Inference (`inferType`) in the self-hosted Lean kernel.
 `ctx` stores types of bound variables (innermost binder at index `0`, shifted appropriately). -/
-@[expose] def kernelInferType (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e : KExpr) : Option KExpr :=
+abbrev kernelInferType (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e : KExpr) : Option KExpr :=
   (kernelEngineFuel env fuel).1 ctx e
 
 /-- Context-aware fuel-bounded Definitional Equality (`isDefEq`) in the self-hosted Lean kernel. -/
-@[expose] def kernelIsDefEqAux (env : KEnv) (fuel : Nat) (ctx : List KExpr) (t s : KExpr) : Bool :=
+abbrev kernelIsDefEqAux (env : KEnv) (fuel : Nat) (ctx : List KExpr) (t s : KExpr) : Bool :=
   (kernelEngineFuel env fuel).2 ctx t s
 
 /-- Canonical Fuel-bounded Definitional Equality (`isDefEq`) in the self-hosted Lean kernel,
 executing full $\beta\delta\iota\zeta\eta$ + `Nat`-literal bridging + `Prop` proof-irrelevant conversion. -/
-@[expose, reducible] def kernelIsDefEq (env : KEnv) (fuel : Nat) (t s : KExpr) (ctx : List KExpr := []) : Bool :=
+abbrev kernelIsDefEq (env : KEnv) (fuel : Nat) (t s : KExpr) (ctx : List KExpr := []) : Bool :=
   kernelIsDefEqAux env fuel ctx t s
 
 /-- Alias `kernelIsDefEqFull` to the single canonical `kernelIsDefEq`. -/
-@[expose, reducible] def kernelIsDefEqFull (env : KEnv) (fuel : Nat) (t s : KExpr) (ctx : List KExpr := []) : Bool :=
+abbrev kernelIsDefEqFull (env : KEnv) (fuel : Nat) (t s : KExpr) (ctx : List KExpr := []) : Bool :=
   kernelIsDefEq env fuel t s ctx
 
 theorem kernelIsDefEqAux_refl (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e : KExpr) :
@@ -793,7 +874,7 @@ theorem kernelIsDefEq_refl (env : KEnv) (fuel : Nat) (e : KExpr) (ctx : List KEx
   | .proj _ _ e => exprContainsSorry e
 
 /-- Check whether an expression mentions constant `target` anywhere in its AST. -/
-@[expose] def exprMentionsConst (target : KName) : KExpr → Bool
+def exprMentionsConst (target : KName) : KExpr → Bool
   | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => false
   | .const n _ => n == target
   | .app f a | .lam f a | .forallE f a => exprMentionsConst target f || exprMentionsConst target a
@@ -802,7 +883,7 @@ theorem kernelIsDefEq_refl (env : KEnv) (fuel : Nat) (e : KExpr) (ctx : List KEx
 
 /-- Check that a constructor parameter domain `dom` is strictly positive in `indName`
 (`indName` never appears to the left of an arrow or inside an argument to another type former). -/
-@[expose] def isStrictlyPositiveArg (indName : KName) : KExpr → Bool
+def isStrictlyPositiveArg (indName : KName) : KExpr → Bool
   | .forallE argDom argCod =>
     !exprMentionsConst indName argDom && isStrictlyPositiveArg indName argCod
   | dom =>
@@ -815,7 +896,7 @@ theorem kernelIsDefEq_refl (env : KEnv) (fuel : Nat) (e : KExpr) (ctx : List KEx
 
 /-- Check that a constructor type telescope `ctorTy` is strictly positive in `indName`
 and returns an application headed by `indName`. -/
-@[expose] def checkCtorStrictPositivity (indName : KName) : KExpr → Bool
+def checkCtorStrictPositivity (indName : KName) : KExpr → Bool
   | .forallE dom body =>
     isStrictlyPositiveArg indName dom && checkCtorStrictPositivity indName body
   | retTy =>
@@ -826,7 +907,7 @@ and returns an application headed by `indName`. -/
 
 /-- Check strict positivity (`checkInductiveStrictPositivity`) for an inductive type `indName`
 across its own type signature and all constructors of `indName` registered in `env`. -/
-@[expose] def checkInductiveStrictPositivity (env : KEnv) (indName : KName) (indType : KExpr) : Bool :=
+def checkInductiveStrictPositivity (env : KEnv) (indName : KName) (indType : KExpr) : Bool :=
   if exprMentionsConst indName indType then false
   else
     let ctorsInConsts := env.constants.filterMap fun info =>
@@ -838,7 +919,7 @@ across its own type signature and all constructors of `indName` registered in `e
     (ctorsInConsts ++ ctorsInDecls).all (checkCtorStrictPositivity indName)
 
 /-- Check whether a `KExpr` is well-typed as a universe sort `.sort u`. -/
-@[expose] def kernelIsValidType (env : KEnv) (fuel : Nat) (ty : KExpr) : Bool :=
+abbrev kernelIsValidType (env : KEnv) (fuel : Nat) (ty : KExpr) : Bool :=
   match kernelInferType env fuel [] ty with
   | some kind =>
     match kernelWhnf env fuel kind with
@@ -853,7 +934,7 @@ across its own type signature and all constructors of `indName` registered in `e
    `checkCtorStrictPositivity`),
 4. For `.defnInfo` and `.thmInfo`, infers the type of `value` and verifies definitional equality
    with `type`. -/
-@[expose] def kernelCheckDecl (env : KEnv) (fuel : Nat) (decl : KConstInfo) : Bool :=
+abbrev kernelCheckDecl (env : KEnv) (fuel : Nat) (decl : KConstInfo) : Bool :=
   match decl with
   | .axiomInfo _ _ ty =>
     !exprContainsSorry ty && kernelIsValidType env fuel ty
@@ -874,24 +955,24 @@ across its own type signature and all constructors of `indName` registered in `e
 /-! ## 5. Standard Kernel Prelude Environment & Concrete Verification Cases -/
 
 /-- `Type 0` (`Sort 1`). -/
-@[expose] def kType0 : KExpr := .sort (.succ .zero)
+abbrev kType0 : KExpr := .sort (.succ .zero)
 
 /-- `Prop` (`Sort 0`). -/
-@[expose] def kProp : KExpr := .sort .zero
+abbrev kProp : KExpr := .sort .zero
 
 /-- Constant expression `Nat`. -/
 @[expose] def kNatConst : KExpr := .const (KName.mkSimple "Nat") []
 
 /-- Constant expression `Bool`. -/
-@[expose] def kBoolConst : KExpr := .const (KName.mkSimple "Bool") []
+abbrev kBoolConst : KExpr := .const (KName.mkSimple "Bool") []
 
 /-- Non-dependent arrow `A → B` (`∀ (_ : A), B` where `B` has no loose `.bvar 0`). -/
-@[expose] def kArrow (a b : KExpr) : KExpr :=
+abbrev kArrow (a b : KExpr) : KExpr :=
   .forallE a (KExpr.liftLooseBVars 0 1 b)
 
 /-- Standard prelude environment containing `Nat : Type 0`, `Bool : Type 0`, `Nat.zero : Nat`,
 `Bool.true : Bool`, and `idNat : Nat → Nat := λ x : Nat => x`. -/
-@[expose] def stdKernelEnv : KEnv where
+abbrev stdKernelEnv : KEnv where
   constants :=
     [ .defnInfo (KName.mkSimple "idNat") [] (kArrow kNatConst kNatConst) (.lam kNatConst (.bvar 0))
     , .ctorInfo (KName.mkSimple "Bool.true") [] kBoolConst (KName.mkSimple "Bool")
@@ -900,42 +981,42 @@ across its own type signature and all constructors of `indName` registered in `e
     , .inductInfo (KName.mkSimple "Nat") [] kType0 ]
 
 /-- Valid declaration: `idNat : Nat → Nat := λ (x : Nat) => x`. -/
-@[expose] def validIdNatDecl : KConstInfo :=
+abbrev validIdNatDecl : KConstInfo :=
   .defnInfo (KName.mkSimple "idNat") [] (kArrow kNatConst kNatConst) (.lam kNatConst (.bvar 0))
 
 /-- Valid theorem: `propId : ∀ (P : Prop), P → P := λ (P : Prop) (h : P) => h`. -/
-@[expose] def validPropIdDecl : KConstInfo :=
+abbrev validPropIdDecl : KConstInfo :=
   .thmInfo (KName.mkSimple "propId") []
     (.forallE kProp (.forallE (.bvar 0) (.bvar 1)))
     (.lam kProp (.lam (.bvar 0) (.bvar 0)))
 
 /-- Valid definition using δ-unfolding: `applyId42 : Nat := idNat 42`. -/
-@[expose] def validApplyId42Decl : KConstInfo :=
+def validApplyId42Decl : KConstInfo :=
   .defnInfo (KName.mkSimple "applyId42") [] kNatConst
     (.app (.const (KName.mkSimple "idNat") []) (.lit (.natVal 42)))
 
 /-- Invalid declaration 1 (type mismatch): claims `Bool.true` has type `Nat`. -/
-@[expose] def invalidMismatchDecl : KConstInfo :=
+abbrev invalidMismatchDecl : KConstInfo :=
   .defnInfo (KName.mkSimple "badMismatch") [] kNatConst
     (.const (KName.mkSimple "Bool.true") [])
 
 /-- Invalid declaration 2 (ill-typed application): applies `idNat : Nat → Nat` to `Bool.true : Bool`. -/
-@[expose] def invalidBadAppDecl : KConstInfo :=
+def invalidBadAppDecl : KConstInfo :=
   .defnInfo (KName.mkSimple "badApp") [] kNatConst
     (.app (.const (KName.mkSimple "idNat") []) (.const (KName.mkSimple "Bool.true") []))
 
 /-- Invalid declaration 3 (universe mismatch): claims `Nat : Prop` (`Sort 0`) when `Nat : Type 0` (`Sort 1`). -/
-@[expose] def invalidUniverseDecl : KConstInfo :=
+def invalidUniverseDecl : KConstInfo :=
   .defnInfo (KName.mkSimple "badUniv") [] kProp kNatConst
 
 /-- Invalid declaration 4 (`sorryAx` contamination): proves `∀ (P : Prop), P` using `sorryAx`. -/
-@[expose] def invalidSorryDecl : KConstInfo :=
+abbrev invalidSorryDecl : KConstInfo :=
   .thmInfo (KName.mkSimple "badSorry") []
     (.forallE kProp (.bvar 0))
     (.const (KName.mkSimple "sorryAx") [.zero])
 
 /-- Check whether any expression in a `KConstInfo` declaration references `sorryAx`. -/
-@[expose] def declContainsSorry : KConstInfo → Bool
+abbrev declContainsSorry : KConstInfo → Bool
   | .axiomInfo _ _ ty | .inductInfo _ _ ty | .ctorInfo _ _ ty _ =>
     exprContainsSorry ty
   | .defnInfo _ _ ty val | .thmInfo _ _ ty val =>
@@ -972,7 +1053,7 @@ theorem kernelWhnf_nat_iota_sound (n1 n2 : Nat) :
 - `OptionNat.none : OptionNat` (`0` fields),
 - `OptionNat.some : Nat → OptionNat` (`1` field),
 and recursor `OptionNat.rec` (`2` minor premises: `onNone` and `onSome : Nat → R`). -/
-@[expose] def optionNatInductDecl : KInductDecl where
+def optionNatInductDecl : KInductDecl where
   name        := KName.mkSimple "OptionNat"
   levelParams := []
   numParams   := 0
@@ -996,7 +1077,7 @@ and recursor `OptionNat.rec` (`2` minor premises: `onNone` and `onSome : Nat →
 /-- User-defined 2-field inductive structure `PairNat : Type 0` with constructor
 `PairNat.mk : Nat → Nat → PairNat` (`2` fields) and recursor `PairNat.rec` (`1` minor premise
 `onMk : Nat → Nat → R`). -/
-@[expose] def pairNatInductDecl : KInductDecl where
+def pairNatInductDecl : KInductDecl where
   name        := KName.mkSimple "PairNat"
   levelParams := []
   numParams   := 0
@@ -1016,7 +1097,7 @@ and recursor `OptionNat.rec` (`2` minor premises: `onNone` and `onSome : Nat →
 - `ListNat.nil : ListNat` (`0` fields),
 - `ListNat.cons : Nat → ListNat → ListNat` (`2` fields: `head` and recursive `tail`),
 and recursor `ListNat.rec` whose `cons` rule recursively invokes `ListNat.rec onNil onCons tail`. -/
-@[expose] def listNatInductDecl : KInductDecl where
+def listNatInductDecl : KInductDecl where
   name        := KName.mkSimple "ListNat"
   levelParams := []
   numParams   := 0
@@ -1047,7 +1128,7 @@ and recursor `ListNat.rec` whose `cons` rule recursively invokes `ListNat.rec on
 `PolyBox.mk.{u} : Sort u → PolyBox.{u}` (`1` field) and universe-polymorphic recursor
 `PolyBox.rec.{v, u}` (`levelParams := ["v", "u"]`) whose `rhs` instantiates `.sort (.param "v")`
 and `.sort (.param "u")`. -/
-@[expose] def polyBoxInductDecl : KInductDecl where
+def polyBoxInductDecl : KInductDecl where
   name        := KName.mkSimple "PolyBox"
   levelParams := [KName.mkSimple "u"]
   numParams   := 0
@@ -1072,7 +1153,7 @@ and `.sort (.param "u")`. -/
 /-- Extended kernel environment containing `stdKernelEnv` plus user-defined inductive families
 `OptionNat`, `PairNat`, recursive `ListNat`, and universe-polymorphic `PolyBox.{u}` with their
 dynamic recursor $\iota$-rules. -/
-@[expose] def inductKernelEnv : KEnv :=
+def inductKernelEnv : KEnv :=
   (((stdKernelEnv.addInductDecl optionNatInductDecl).addInductDecl pairNatInductDecl).addInductDecl
     listNatInductDecl).addInductDecl polyBoxInductDecl
 
@@ -1154,7 +1235,7 @@ theorem kernelWhnf_quot_lift_sound (n : Nat) :
 
 /-- Check `Sort 0` (`Prop`) proof irrelevance for `t` and `s` in context `ctx`:
 returns `true` when `t` and `s` infer definitionally equal types `tyT ≡ tyS` and `tyT : Prop` (`Sort 0`). -/
-@[expose] def isProofIrrelDefEq (env : KEnv) (fuel : Nat) (ctx : List KExpr) (t s : KExpr) : Bool :=
+def isProofIrrelDefEq (env : KEnv) (fuel : Nat) (ctx : List KExpr) (t s : KExpr) : Bool :=
   match kernelInferType env fuel ctx t, kernelInferType env fuel ctx s with
   | some tyT, some tyS =>
     isPropType? env fuel ctx tyT && kernelIsDefEq env fuel tyT tyS ctx
@@ -1190,7 +1271,7 @@ theorem kernelIsDefEqFull_natLit_bridge (env : KEnv) (fuel : Nat) (n : Nat) (ctx
 plus a neutral function `extFn : Nat → Nat` and indexed family `Vec : Nat → Type 0` for testing
 $\eta$-equivalence, `Nat`-literal bridging, and proof irrelevance inside `kernelIsDefEq`,
 `kernelInferType`, and `kernelCheckDecl`. -/
-@[expose] def defEqFullTestEnv : KEnv :=
+def defEqFullTestEnv : KEnv :=
   (((((stdKernelEnv.add
     (.axiomInfo (KName.mkSimple "P") [] kProp)).add
     (.axiomInfo (KName.mkSimple "proof1") [] (.const (KName.mkSimple "P") []))).add
@@ -1231,7 +1312,7 @@ theorem kernelIsDefEqFull_prop_proofIrrel :
 
 /-- Predicate for the scalar/control `LExpr` fragment (including 0-field `Unit.unit` `.record []`),
 on which substitution and renaming are purely structural (`LExpr.rec`) and reduce by `rfl` in the kernel. -/
-@[expose] def isScalarLExpr : LExpr → Bool
+def isScalarLExpr : LExpr → Bool
   | .bvar _ | .erased | .lit _ | .boolLit _ | .record [] => true
   | .const _ b | .lam _ b | .natSucc b | .proj _ b | .recConst _ _ b => isScalarLExpr b
   | .app a b | .letE _ a b | .natBin _ a b | .split _ a b => isScalarLExpr a && isScalarLExpr b
@@ -1239,7 +1320,7 @@ on which substitution and renaming are purely structural (`LExpr.rec`) and reduc
   | .record (_ :: _) | .inject _ _ | .cases _ _ _ => false
 
 /-- Structurally recursive renaming on the scalar/control `LExpr` fragment. -/
-@[expose] def renameScalar (f : Nat → Nat) : LExpr → LExpr
+def renameScalar (f : Nat → Nat) : LExpr → LExpr
   | .bvar i => .bvar (f i)
   | .erased => .erased
   | .const n b => .const n (renameScalar f b)
@@ -1300,7 +1381,7 @@ theorem renameScalar_eq_rename : ∀ (e : LExpr) (f : Nat → Nat),
       renameScalar_eq_rename y f h.1.2, renameScalar_eq_rename z f h.2]
   | .record (_ :: _), _, h | .inject _ _, _, h | .cases _ _ _, _, h => by cases h
 
-@[expose] def liftSubstScalar (σ : Nat → LExpr) : Nat → LExpr
+def liftSubstScalar (σ : Nat → LExpr) : Nat → LExpr
   | 0 => .bvar 0
   | n + 1 => renameScalar Nat.succ (σ n)
 
@@ -1318,7 +1399,7 @@ theorem liftSubstScalar_eq_liftSubst {σ : Nat → LExpr} (hσ : ∀ i, isScalar
     simp [liftSubstScalar, LExpr.liftSubst, renameScalar_eq_rename (σ n) Nat.succ (hσ n)]
 
 /-- Structurally recursive substitution on the scalar/control `LExpr` fragment. -/
-@[expose] def substScalar (σ : Nat → LExpr) : LExpr → LExpr
+def substScalar (σ : Nat → LExpr) : LExpr → LExpr
   | .bvar i => σ i
   | .erased => .erased
   | .const n b => .const n (substScalar σ b)
@@ -1366,7 +1447,7 @@ theorem substScalar_eq_subst : ∀ (e : LExpr) (σ : Nat → LExpr),
   | .record (_ :: _), _, h, _ | .inject _ _, _, h, _ | .cases _ _ _, _, h, _ => by cases h
 
 /-- Kernel-reducible single-binder instantiation on the scalar/control `LExpr` fragment. -/
-@[expose] def instScalar (body a : LExpr) : LExpr :=
+def instScalar (body a : LExpr) : LExpr :=
   substScalar (LExpr.single a) body
 
 theorem single_isScalar {a : LExpr} (ha : isScalarLExpr a = true) :
@@ -1381,7 +1462,7 @@ theorem instScalar_eq_inst (body a : LExpr)
 
 /-- Deterministic single-step small-step reducer (`stepLExpr?`) for the scalar/control `LExpr` fragment,
 used to drive verified multi-step `SSteps` reductions of lowered multi-argument kernel programs. -/
-@[expose] def stepLExpr? : LExpr → Option LExpr
+def stepLExpr? : LExpr → Option LExpr
   | .const _ b => some b
   | .app (.lam _ body) arg =>
     if isScalarLExpr body && isScalarLExpr arg then
@@ -1403,6 +1484,9 @@ used to drive verified multi-step `SSteps` reductions of lowered multi-argument 
   | .boolRec _ _ y (.boolLit true) => some y
   | .boolRec T x y m => (stepLExpr? m).map (fun m' => .boolRec T x y m')
   | _ => none
+
+theorem stepLExpr?_inhabited : ∃ e e' : LExpr, stepLExpr? e = some e' :=
+  ⟨.natSucc (.lit 4), .lit 5, rfl⟩
 
 /-- Soundness of `stepLExpr?` with respect to `Obend.Lower.SStep`. -/
 theorem stepLExpr?_sound : ∀ (e e' : LExpr), stepLExpr? e = some e' → SStep e e'
@@ -1552,7 +1636,7 @@ theorem stepLExpr?_sound : ∀ (e e' : LExpr), stepLExpr? e = some e' → SStep 
     cases h
 
 /-- Run `stepLExpr?` for up to `k` steps. -/
-@[expose] def runLExprSteps : Nat → LExpr → LExpr
+def runLExprSteps : Nat → LExpr → LExpr
   | 0, e => e
   | k + 1, e =>
     match stepLExpr? e with
