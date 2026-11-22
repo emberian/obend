@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::PathBuf;
@@ -7,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::grain::{ReproducibilityTier, sha256};
+use crate::policy::{EnvAllowlistPolicy, parse_egress_grant};
 
 /// Default maximum combined stdout/stderr capture size (4 MiB) for a sandboxed child process.
 pub const DEFAULT_MAX_PROCESS_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -22,6 +24,16 @@ pub struct SandboxConfig {
     pub memory_max_mb: u32,
     pub program: PathBuf,
     pub args: Vec<String>,
+    /// Strict explicit environment-variable allowlist (`CAP-17`: scrubs 100% of parent secrets by default).
+    pub env_policy: EnvAllowlistPolicy,
+    /// Optional structured outbound `"host:port"` egress doors (loopback-pinned on macOS Seatbelt).
+    pub egress_endpoints: Vec<String>,
+    /// Optional named Mach global-names allowed under macOS Seatbelt (NEVER blanket `mach-lookup`).
+    pub mach_services: Vec<String>,
+    /// Enforce `prctl(PR_SET_PDEATHSIG, SIGKILL)` + parent-PID liveness check in forked children (`CAP-17`).
+    pub pdeathsig_sigkill: bool,
+    /// Explicitly permit `process-fork` under macOS Seatbelt (off by default; single-binary `process-exec` floor).
+    pub allow_child_fork: bool,
 }
 
 impl Default for SandboxConfig {
@@ -36,6 +48,11 @@ impl Default for SandboxConfig {
             memory_max_mb: 2048,
             program: PathBuf::from("/agent/bin/obend"),
             args: Vec::new(),
+            env_policy: EnvAllowlistPolicy::strict(),
+            egress_endpoints: Vec::new(),
+            mach_services: Vec::new(),
+            pdeathsig_sigkill: true,
+            allow_child_fork: false,
         }
     }
 }
@@ -115,6 +132,7 @@ pub struct SandboxRunReceipt {
     pub stderr: Vec<u8>,
     pub stdout_digest: [u8; 32],
     pub stderr_digest: [u8; 32],
+    pub env_digest: [u8; 32],
     pub peak_rss_bytes: usize,
     pub backend: SandboxBackend,
     pub is_fallback: bool,
@@ -124,10 +142,10 @@ pub struct SandboxRunReceipt {
 
 impl SandboxRunReceipt {
     /// Compute a canonical length-framed SHA-256 commitment over the full process run receipt,
-    /// including `command`, `args`, `backend`, `seatbelt_profile`, exit status, RSS, and I/O digests.
+    /// including `command`, `args`, `env_digest`, `backend`, `seatbelt_profile`, exit status, RSS, and I/O digests.
     pub fn receipt_digest(&self) -> [u8; 32] {
-        let mut buf = Vec::with_capacity(256);
-        buf.extend_from_slice(b"OBEND-SANDBOX-RUN-RECEIPT-V2:");
+        let mut buf = Vec::with_capacity(288);
+        buf.extend_from_slice(b"OBEND-SANDBOX-RUN-RECEIPT-V3:");
         buf.extend_from_slice(&(self.command.len() as u64).to_be_bytes());
         buf.extend_from_slice(self.command.as_bytes());
         buf.extend_from_slice(&(self.args.len() as u64).to_be_bytes());
@@ -135,6 +153,7 @@ impl SandboxRunReceipt {
             buf.extend_from_slice(&(arg.len() as u64).to_be_bytes());
             buf.extend_from_slice(arg.as_bytes());
         }
+        buf.extend_from_slice(&self.env_digest);
         buf.push(self.backend.tag_byte());
         match &self.seatbelt_profile {
             None => buf.push(0x00),
@@ -160,6 +179,65 @@ impl SandboxRunReceipt {
         buf.push(self.tier.tag_byte());
         buf.push(u8::from(self.is_fallback));
         sha256(&buf)
+    }
+}
+
+/// Install `PR_SET_PDEATHSIG(SIGKILL)` inside a freshly forked child process and immediately
+/// verify `getppid() == expected_parent_pid` to close the parent-died-before-`prctl` TOCTOU window (`CAP-17`).
+pub fn install_pdeathsig_sigkill(expected_parent_pid: libc::pid_t) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::getppid() != expected_parent_pid {
+            let _ = libc::raise(libc::SIGKILL);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "parent exited prior to PR_SET_PDEATHSIG installation",
+            ));
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    unsafe {
+        if libc::getppid() != expected_parent_pid {
+            let _ = libc::raise(libc::SIGKILL);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "parent exited prior to child confinement hook",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Close inherited non-`FD_CLOEXEC` file descriptors `>= min_fd` not listed in `keep`,
+/// preventing open parent files/locks from leaking across `execve` while preserving Rust's
+/// internal `FD_CLOEXEC` `pre_exec` error pipe.
+fn close_non_cloexec_fds_from(min_fd: libc::c_int, keep: &[libc::c_int]) {
+    let mut rl = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    let ceiling: libc::c_int = 65_536;
+    let max_fd = unsafe {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 && rl.rlim_cur != libc::RLIM_INFINITY
+        {
+            (rl.rlim_cur as libc::c_int).clamp(16, ceiling)
+        } else {
+            4096
+        }
+    };
+    for fd in min_fd..max_fd {
+        if keep.contains(&fd) {
+            continue;
+        }
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 && (flags & libc::FD_CLOEXEC) == 0 {
+                let _ = libc::close(fd);
+            }
+        }
     }
 }
 
@@ -220,7 +298,10 @@ fn escape_sbpl_string(raw: &str) -> String {
     out
 }
 
-// A single deadline bounds both readers after the entire process group is killed.
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "::1" | "localhost")
+}
+
 fn drain_pipe_readers(
     out_done: &Receiver<()>,
     err_done: &Receiver<()>,
@@ -236,7 +317,6 @@ fn drain_pipe_readers(
             }
         }
     }
-
     Ok(())
 }
 
@@ -298,6 +378,23 @@ impl BubblewrapRunner {
     }
 
     pub fn build_flags(config: &SandboxConfig) -> Vec<String> {
+        let resolved_env = config
+            .env_policy
+            .validate_and_resolve(std::env::vars())
+            .unwrap_or_else(|_| {
+                let mut m = BTreeMap::new();
+                m.insert("HOME".into(), "/workspace".into());
+                m.insert("PATH".into(), "/usr/bin:/bin:/agent/bin".into());
+                m.insert("LC_ALL".into(), "C".into());
+                m
+            });
+        Self::build_flags_with_env(config, &resolved_env)
+    }
+
+    fn build_flags_with_env(
+        config: &SandboxConfig,
+        resolved_env: &BTreeMap<String, String>,
+    ) -> Vec<String> {
         let mut flags = vec![
             "--die-with-parent".into(),
             "--new-session".into(),
@@ -336,13 +433,11 @@ impl BubblewrapRunner {
             "/workspace".into(),
             "--chdir".into(),
             "/workspace".into(),
-            "--setenv".into(),
-            "HOME".into(),
-            "/workspace".into(),
-            "--setenv".into(),
-            "PATH".into(),
-            "/usr/bin:/bin:/agent/bin".into(),
         ];
+
+        for (k, v) in resolved_env {
+            flags.extend_from_slice(&["--setenv".into(), k.clone(), v.clone()]);
+        }
 
         if let Some(scratch) = config.scratch_mib {
             flags.extend_from_slice(&[
@@ -359,7 +454,7 @@ impl BubblewrapRunner {
             flags.extend_from_slice(&["--tmpfs".into(), "/tmp".into()]);
         }
 
-        if !config.allow_network {
+        if !config.allow_network && config.egress_endpoints.is_empty() {
             flags.push("--unshare-net".into());
         } else {
             flags.push("--share-net".into());
@@ -381,24 +476,98 @@ impl BubblewrapRunner {
     }
 
     pub fn prepare_command(config: &SandboxConfig) -> Command {
+        let resolved_env = config
+            .env_policy
+            .validate_and_resolve(std::env::vars())
+            .unwrap_or_default();
         let mut cmd = Command::new(&config.bwrap_binary);
-        cmd.args(Self::build_flags(config));
+        cmd.env_clear();
+        cmd.envs(&resolved_env);
+        cmd.args(Self::build_flags_with_env(config, &resolved_env));
         cmd
     }
 
-    /// Generate a macOS Seatbelt (`sandbox-exec -p`) SBPL confinement profile for `config`.
-    /// Escapes `\` before `"` so crafted workspace/runtime paths cannot break out of SBPL string literals.
-    pub fn build_seatbelt_profile(config: &SandboxConfig) -> String {
+    /// Fallible macOS Seatbelt (`sandbox-exec -p` / `sandbox_init`) default-deny profile builder
+    /// (`G11` replacement for permissive `bwrap.rs:391-402`):
+    /// - **NEVER** emits `(allow process*)`, blanket `(allow mach-lookup)`, host `/tmp` or `/private/tmp`
+    ///   write rules, or `/etc`/`/private`/`/var`/`/tmp` ambient read rules.
+    /// - Grants `process-exec` strictly to the exact `config.program` literal (plus `process-fork`
+    ///   only when `config.allow_child_fork` is explicitly enabled).
+    /// - Fails closed (`Err(SandboxError::InvalidCommand)`) if any `egress_endpoints` entry names a
+    ///   non-loopback host (preventing SBPL `*:PORT` exfiltration widening) or if a Mach service
+    ///   entry contains wildcards.
+    pub fn try_build_seatbelt_profile(config: &SandboxConfig) -> Result<String, SandboxError> {
         let workspace = escape_sbpl_string(&config.workspace_dir.to_string_lossy());
         let runtime_root = escape_sbpl_string(&config.runtime_root.to_string_lossy());
-        let net_rule = if config.allow_network {
-            "(allow network*)"
+        let program = escape_sbpl_string(&config.program.to_string_lossy());
+
+        for svc in &config.mach_services {
+            if svc.trim().is_empty() || svc.contains('*') || svc.contains('\0') {
+                return Err(SandboxError::InvalidCommand(format!(
+                    "invalid or wildcard mach-lookup service {svc:?} refused"
+                )));
+            }
+        }
+
+        let mut net_clauses = String::new();
+        if !config.egress_endpoints.is_empty() {
+            for ep in &config.egress_endpoints {
+                let Some((host, port_s)) = ep.rsplit_once(':') else {
+                    return Err(SandboxError::InvalidCommand(format!(
+                        "malformed egress endpoint {ep:?}"
+                    )));
+                };
+                if !is_loopback_host(host) {
+                    return Err(SandboxError::InvalidCommand(format!(
+                        "non-loopback egress endpoint {ep:?} cannot be host-pinned in macOS SBPL; front with loopback proxy"
+                    )));
+                }
+                if parse_egress_grant(ep).is_none() {
+                    return Err(SandboxError::InvalidCommand(format!(
+                        "invalid egress endpoint port in {ep:?}"
+                    )));
+                }
+                let escaped_port = escape_sbpl_string(port_s);
+                net_clauses.push_str(&format!(
+                    " (allow network-outbound (remote ip \"localhost:{escaped_port}\"))"
+                ));
+            }
+        } else if config.allow_network {
+            // Loopback outbound only — never blanket `(allow network*)` which opens inbound bind/listen.
+            net_clauses.push_str(" (allow network-outbound (remote ip \"localhost:*\"))");
         } else {
-            "(deny network*)"
+            net_clauses.push_str(" (deny network*)");
+        }
+
+        let mut mach_clauses = String::new();
+        for svc in &config.mach_services {
+            let escaped = escape_sbpl_string(svc);
+            mach_clauses.push_str(&format!(" (allow mach-lookup (global-name \"{escaped}\"))"));
+        }
+
+        let fork_clause = if config.allow_child_fork {
+            " (allow process-fork)"
+        } else {
+            ""
         };
-        format!(
-            "(version 1) (deny default) (allow process*) (allow sysctl-read) (allow mach-lookup) (allow file-read* (literal \"/\") (subpath \"/usr\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/AppleInternal\") (subpath \"/private\") (subpath \"/dev\") (subpath \"/tmp\") (subpath \"/var\") (subpath \"/etc\") (subpath \"{runtime_root}\") (subpath \"{workspace}\")) (allow file-write* (subpath \"/private/tmp\") (subpath \"/tmp\") (subpath \"/dev/null\") (subpath \"{workspace}\")) {net_rule}"
-        )
+
+        Ok(format!(
+            "(version 1) (deny default) (allow file-read-metadata) (allow sysctl-read) (allow file-ioctl) (allow signal (target self)) (allow process-exec (literal \"{program}\")){fork_clause}{mach_clauses} (allow file-read* (literal \"/\") (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/Library/Apple\") (literal \"/dev/null\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"{program}\") (subpath \"{runtime_root}\") (subpath \"{workspace}\")) (allow file-write* (literal \"/dev/null\") (subpath \"{workspace}\")){net_clauses}"
+        ))
+    }
+
+    /// Generate a default-deny macOS Seatbelt SBPL confinement profile for `config`.
+    /// Any invalid non-loopback egress or wildcard Mach entry falls back to `(deny network*)` and
+    /// zero Mach services (fail-closed!).
+    pub fn build_seatbelt_profile(config: &SandboxConfig) -> String {
+        Self::try_build_seatbelt_profile(config).unwrap_or_else(|_| {
+            let mut safe = config.clone();
+            safe.allow_network = false;
+            safe.egress_endpoints.clear();
+            safe.mach_services.clear();
+            Self::try_build_seatbelt_profile(&safe)
+                .expect("sanitized default-deny seatbelt profile")
+        })
     }
 
     /// Execute `command` with `args` under OS sandboxing and resource metering (`timeout_ms`).
@@ -424,9 +593,11 @@ impl BubblewrapRunner {
 
     /// Execute `command` with custom `SandboxConfig`, wall-clock `timeout_ms`, and `max_output_bytes`.
     ///
-    /// Security invariant: once a sandboxed child (`sandbox-exec` or `bwrap`) has been invoked,
-    /// its `stderr` content or exit code (`71`, `"Operation not permitted"`, `"bwrap:"`, etc.)
-    /// MUST NEVER trigger a second unsandboxed execution on the host.
+    /// Security invariants:
+    /// 1. Parent environment secrets (`std::env::vars()`) are **unconditionally scrubbed** via
+    ///    `EnvAllowlistPolicy::validate_and_resolve` + `Command::env_clear()` across every backend (`CAP-17`).
+    /// 2. Once a sandboxed child (`sandbox-exec` or `bwrap`) has been invoked, its `stderr` or exit
+    ///    code MUST NEVER trigger a second unsandboxed execution on the host.
     pub fn execute_sandboxed_with_config(
         &self,
         config: &SandboxConfig,
@@ -447,9 +618,19 @@ impl BubblewrapRunner {
             });
         }
 
+        let resolved_env = config
+            .env_policy
+            .validate_and_resolve(std::env::vars())
+            .map_err(|e| SandboxError::InvalidCommand(e.to_string()))?;
+
+        let mut effective_cfg = config.clone();
+        effective_cfg.program = PathBuf::from(command);
+        effective_cfg.args = args.iter().map(|s| (*s).to_string()).collect();
+        // Validate Seatbelt egress/Mach constraints on all platforms so policy bugs fail fast everywhere.
+        let profile = Self::try_build_seatbelt_profile(&effective_cfg)?;
+
         #[cfg(target_os = "macos")]
         {
-            let profile = Self::build_seatbelt_profile(config);
             let sandbox_exec = std::path::Path::new("/usr/bin/sandbox-exec");
             if sandbox_exec.exists() {
                 let mut sb_args: Vec<String> =
@@ -461,6 +642,8 @@ impl BubblewrapRunner {
                     &sb_arg_refs,
                     command,
                     args,
+                    &resolved_env,
+                    config.pdeathsig_sigkill,
                     timeout_ms,
                     max_output_bytes,
                     config.memory_max_mb,
@@ -480,6 +663,8 @@ impl BubblewrapRunner {
                 args,
                 command,
                 args,
+                &resolved_env,
+                config.pdeathsig_sigkill,
                 timeout_ms,
                 max_output_bytes,
                 config.memory_max_mb,
@@ -490,14 +675,12 @@ impl BubblewrapRunner {
 
         #[cfg(target_os = "linux")]
         {
+            let _ = &profile;
             if config.bwrap_binary.exists()
                 && config.workspace_dir.exists()
                 && config.runtime_root.exists()
             {
-                let mut bwrap_cfg = config.clone();
-                bwrap_cfg.program = PathBuf::from(command);
-                bwrap_cfg.args = args.iter().map(|s| (*s).to_string()).collect();
-                let flags = Self::build_flags(&bwrap_cfg);
+                let flags = Self::build_flags_with_env(&effective_cfg, &resolved_env);
                 let flag_refs: Vec<&str> = flags.iter().map(String::as_str).collect();
                 let bwrap_bin = config.bwrap_binary.to_string_lossy().to_string();
                 return Self::run_metered_child(
@@ -505,6 +688,8 @@ impl BubblewrapRunner {
                     &flag_refs,
                     command,
                     args,
+                    &resolved_env,
+                    config.pdeathsig_sigkill,
                     timeout_ms,
                     max_output_bytes,
                     config.memory_max_mb,
@@ -522,6 +707,8 @@ impl BubblewrapRunner {
                 args,
                 command,
                 args,
+                &resolved_env,
+                config.pdeathsig_sigkill,
                 timeout_ms,
                 max_output_bytes,
                 config.memory_max_mb,
@@ -532,6 +719,7 @@ impl BubblewrapRunner {
 
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
+            let _ = &profile;
             if !config.allow_unsandboxed_fallback {
                 return Err(SandboxError::SandboxUnavailable(
                     "OS sandbox confinement unavailable on target platform and allow_unsandboxed_fallback is false".to_string(),
@@ -542,6 +730,8 @@ impl BubblewrapRunner {
                 args,
                 command,
                 args,
+                &resolved_env,
+                config.pdeathsig_sigkill,
                 timeout_ms,
                 max_output_bytes,
                 config.memory_max_mb,
@@ -557,6 +747,8 @@ impl BubblewrapRunner {
         exec_args: &[&str],
         logical_command: &str,
         logical_args: &[&str],
+        resolved_env: &BTreeMap<String, String>,
+        pdeathsig_sigkill: bool,
         timeout_ms: u64,
         max_output_bytes: usize,
         memory_max_mb: u32,
@@ -565,17 +757,25 @@ impl BubblewrapRunner {
     ) -> Result<SandboxRunReceipt, SandboxError> {
         let start = Instant::now();
         let mem_limit_bytes = (memory_max_mb as u64).saturating_mul(1024 * 1024);
+        let env_digest = EnvAllowlistPolicy::digest_resolved(resolved_env);
+        let expected_ppid = unsafe { libc::getpid() };
 
         let mut cmd = Command::new(exec_bin);
-        cmd.args(exec_args)
+        cmd.env_clear()
+            .envs(resolved_env)
+            .args(exec_args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
 
-        if mem_limit_bytes > 0 {
-            unsafe {
-                cmd.pre_exec(move || {
+        unsafe {
+            cmd.pre_exec(move || {
+                if pdeathsig_sigkill {
+                    install_pdeathsig_sigkill(expected_ppid)?;
+                }
+                close_non_cloexec_fds_from(3, &[]);
+                if mem_limit_bytes > 0 {
                     let mut cur: libc::rlimit = std::mem::zeroed();
                     let limit_result = libc::getrlimit(libc::RLIMIT_AS, &mut cur);
                     #[cfg(target_os = "linux")]
@@ -602,9 +802,9 @@ impl BubblewrapRunner {
                             let _ = libc::setrlimit(libc::RLIMIT_AS, &rlim);
                         }
                     }
-                    Ok(())
-                });
-            }
+                }
+                Ok(())
+            });
         }
 
         let child = cmd
@@ -680,7 +880,6 @@ impl BubblewrapRunner {
         let stdout_digest = sha256(&stdout);
         let stderr_digest = sha256(&stderr);
 
-        // Convert wall-clock microseconds + I/O volume to deterministic fuel units
         let cpu_fuel = (wall_clock_usec / 10_000).max(1);
         let io_fuel = (observed_bytes as u64) / 64;
         let fuel_consumed = cpu_fuel.saturating_add(io_fuel);
@@ -698,6 +897,7 @@ impl BubblewrapRunner {
             stderr,
             stdout_digest,
             stderr_digest,
+            env_digest,
             peak_rss_bytes,
             backend,
             is_fallback,
@@ -734,6 +934,7 @@ mod tests {
     fn test_bwrap_flags_default() {
         let config = SandboxConfig::default();
         assert!(!config.allow_unsandboxed_fallback);
+        assert!(config.pdeathsig_sigkill);
         let flags = BubblewrapRunner::build_flags(&config);
 
         assert!(flags.contains(&"--die-with-parent".to_string()));
@@ -742,6 +943,7 @@ mod tests {
         assert!(flags.contains(&"--unshare-pid".to_string()));
         assert!(flags.contains(&"--unshare-net".to_string()));
         assert!(flags.contains(&"--cap-drop".to_string()));
+        assert!(flags.contains(&"--clearenv".to_string()));
         assert!(flags.contains(&"/workspace".to_string()));
     }
 
@@ -758,19 +960,63 @@ mod tests {
     }
 
     #[test]
-    fn test_seatbelt_profile_generation() {
+    fn test_seatbelt_profile_default_deny_hardened() {
         let mut config = SandboxConfig::default();
-        let profile_offline = BubblewrapRunner::build_seatbelt_profile(&config);
+        let profile_offline = BubblewrapRunner::try_build_seatbelt_profile(&config).unwrap();
         assert!(profile_offline.contains("(version 1)"));
         assert!(profile_offline.contains("(deny default)"));
-        assert!(profile_offline.contains("(allow process*)"));
-        assert!(profile_offline.contains("(allow file-read* (literal \"/\")"));
-        assert!(!profile_offline.contains("(allow file-read*)"));
+        // Permissive blanket rules MUST NOT appear (`G11` hardening!)
+        assert!(!profile_offline.contains("(allow process*)"));
+        assert!(!profile_offline.contains("(allow mach-lookup)"));
+        assert!(!profile_offline.contains("(subpath \"/tmp\")"));
+        assert!(!profile_offline.contains("(subpath \"/private/tmp\")"));
+        assert!(!profile_offline.contains("(subpath \"/etc\")"));
+        assert!(!profile_offline.contains("(subpath \"/var\")"));
+        assert!(!profile_offline.contains("(allow network*)"));
+        assert!(profile_offline.contains("(allow process-exec (literal \"/agent/bin/obend\"))"));
         assert!(profile_offline.contains("(deny network*)"));
 
-        config.allow_network = true;
-        let profile_online = BubblewrapRunner::build_seatbelt_profile(&config);
-        assert!(profile_online.contains("(allow network*)"));
+        // Explicit loopback egress door opens ONLY `localhost:<port>`, never `(allow network*)`
+        config.egress_endpoints = vec!["127.0.0.1:8080".into()];
+        let profile_loopback = BubblewrapRunner::try_build_seatbelt_profile(&config).unwrap();
+        assert!(
+            profile_loopback.contains("(allow network-outbound (remote ip \"localhost:8080\"))")
+        );
+        assert!(!profile_loopback.contains("(allow network*)"));
+
+        // Non-loopback egress on Seatbelt MUST fail closed rather than widening to `*:443`
+        config.egress_endpoints = vec!["api.example.com:443".into()];
+        assert!(matches!(
+            BubblewrapRunner::try_build_seatbelt_profile(&config),
+            Err(SandboxError::InvalidCommand(_))
+        ));
+    }
+
+    #[test]
+    fn test_cap17_parent_env_secrets_scrubbed_in_spawned_child() {
+        let runner = BubblewrapRunner::new();
+        let secret_key = "OBEND_TEST_CAP17_HOST_SECRET";
+        std::env::set_var(secret_key, "SUPER_SECRET_CREDENTIAL_VALUE_999");
+        let cfg = SandboxConfig {
+            allow_unsandboxed_fallback: true,
+            ..SandboxConfig::default()
+        };
+        let receipt = runner
+            .execute_sandboxed_with_config(
+                &cfg,
+                "/usr/bin/env",
+                &[],
+                3000,
+                DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
+            )
+            .expect("env execution");
+        let child_env = String::from_utf8_lossy(&receipt.stdout);
+        assert!(
+            !child_env.contains(secret_key)
+                && !child_env.contains("SUPER_SECRET_CREDENTIAL_VALUE_999"),
+            "CAP-17 regression: parent secret leaked into child environment:\n{child_env}"
+        );
+        assert!(child_env.contains("HOME=/workspace"));
     }
 
     #[test]
@@ -849,6 +1095,14 @@ mod tests {
             "receipt_digest must bind is_fallback"
         );
 
+        let mut env_mutated = receipt.clone();
+        env_mutated.env_digest[0] ^= 0xff;
+        assert_ne!(
+            receipt.receipt_digest(),
+            env_mutated.receipt_digest(),
+            "receipt_digest must bind env_digest"
+        );
+
         let mut cmd_mutated = receipt.clone();
         cmd_mutated.command = "/bin/true".to_string();
         assert_ne!(
@@ -912,7 +1166,6 @@ mod tests {
         std::fs::create_dir_all(&ws).unwrap();
         std::fs::create_dir_all(&rt).unwrap();
 
-        // Fake bwrap wrapper records each invocation and prints attacker-controlled stderr + exits 71
         let script = format!(
             "#!/bin/sh\necho invoked >> '{}'\necho 'bwrap: Operation not permitted sandbox_apply' >&2\nexit 71\n",
             marker.display()
@@ -967,10 +1220,10 @@ mod tests {
         let runner = BubblewrapRunner::new();
         let cfg = SandboxConfig {
             allow_unsandboxed_fallback: true,
+            allow_child_fork: true,
             ..SandboxConfig::default()
         };
 
-        // 1. Background grandchild holding stdout pipe open must NOT hang past drain grace
         let t0 = Instant::now();
         let bg_receipt = runner
             .execute_sandboxed_with_config(
@@ -989,12 +1242,16 @@ mod tests {
             "bounded pipe reader must not wait 15s on background grandchild, took {bg_ms}ms"
         );
 
-        // Descendants closing both pipes still belong to the killed process group.
+        let clean_env = EnvAllowlistPolicy::strict()
+            .validate_and_resolve(std::iter::empty())
+            .unwrap();
         let detached = BubblewrapRunner::run_metered_child(
             "/bin/sh",
             &["-c", "sleep 3600 >/dev/null 2>&1 & echo $!"],
             "/bin/sh",
             &[],
+            &clean_env,
+            true,
             2000,
             DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
             0,
@@ -1028,7 +1285,6 @@ mod tests {
         #[cfg(not(target_os = "linux"))]
         let _ = child_pid;
 
-        // 2. RLIMIT_AS enforcement on Linux: 32 MiB cap rejects 128 MiB allocation
         #[cfg(target_os = "linux")]
         if std::path::Path::new("/usr/bin/python3").exists() {
             let mut mem_cfg = cfg.clone();
@@ -1053,7 +1309,6 @@ mod tests {
     fn test_execute_sandboxed_timeout_and_output_limits() {
         let runner = BubblewrapRunner::new();
 
-        // 1. Empty command rejected
         assert!(matches!(
             runner.execute_sandboxed("", &[], 1000),
             Err(SandboxError::InvalidCommand(_))
@@ -1064,7 +1319,6 @@ mod tests {
             ..SandboxConfig::default()
         };
 
-        // 2. Timeout enforcement with kill_on_drop
         let timeout_res = runner.execute_sandboxed_with_config(
             &cfg,
             "/bin/sleep",
@@ -1083,7 +1337,6 @@ mod tests {
             other => panic!("expected TimeoutExceeded, got {other:?}"),
         }
 
-        // 3. Output size limit enforcement
         let out_res = runner.execute_sandboxed_with_config(
             &cfg,
             "/bin/echo",
