@@ -8,5 +8,6 @@ members = [
     "crates/obend-pq-mpc",
     "crates/obend-surfaces",
     "crates/obend-lightclients",
+    "crates/obend-prove-worker",
 ]
 resolver = "2"

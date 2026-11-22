@@ -1,0 +1,9 @@
+[package]
+name = "obend-prove-worker"
+version = "0.1.0"
+edition = "2021"
+description = "Off-lock bounded-backpressure async proving worker pool (ProveService<I, O> with bounded LRU/TTL eviction, epoch cancellation, and idempotent deduplication) and deterministic parallel c=1/4 windowed PoW grinder (windowed_find_map_first)"
+license = "Apache-2.0"
+
+[dependencies]
+# Zero external dependencies: pure std Rust (#![forbid(unsafe_code)]).
