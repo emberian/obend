@@ -14,8 +14,9 @@ storage/work across levels. The recursive value functions below are reference
 invariants, not the executable evaluator: actual execution materializes each row
 once using Array-backed maps (or the corresponding ArrayKernel phases).
 -/
+import all Obend.Hardware.ArrayFold
 public import Obend.Hardware.ArrayFold
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.CollectiveTree
 open Obend.Hardware.ArrayHypergraph
 set_option autoImplicit false

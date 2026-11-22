@@ -1,6 +1,14 @@
 module
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.CollectiveTrace
+import all Obend.Hardware.Gpu.CollectiveHierarchy
+import all Obend.Hardware.Gpu.CollectiveCorrect
+import all Obend.Hardware.Gpu.CollectiveCompose
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.PhaseSemantics
 public import Obend.Hardware.Gpu.CollectiveCompose
-@[expose] public section
+public section
 
 /-! End-to-end execution of the actual collective builder. Predicate definitions
 below package only numeric metadata, input readback, and memory framing. -/
@@ -13,13 +21,13 @@ open Obend.Hardware.Gpu.CollectiveCorrect Obend.Hardware.Gpu.CollectiveCompose
 set_option autoImplicit false
 
 /-- A device array is outside all shared rows of the allocated tree. -/
-def Outside (tree : Trees) (a : Nat) : Prop :=
+@[expose] def Outside (tree : Trees) (a : Nat) : Prop :=
   ∀ k ≤ tree.depth, tree.up+k ≠ a ∧ tree.down+k ≠ a
 
-def RowsBelow (tree : Trees) (bound : Nat) : Prop :=
+@[expose] def RowsBelow (tree : Trees) (bound : Nat) : Prop :=
   ∀ k ≤ tree.depth, tree.up+k < bound ∧ tree.down+k < bound
 
-def Split (tree : Trees) : Prop :=
+@[expose] def Split (tree : Trees) : Prop :=
   ∀ k ≤ tree.depth, ∀ j ≤ tree.depth, tree.up+k ≠ tree.down+j
 
 /-- Numeric ownership invariant for a descriptor list, before local tiling. -/

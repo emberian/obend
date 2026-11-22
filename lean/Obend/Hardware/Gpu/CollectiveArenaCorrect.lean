@@ -1,7 +1,24 @@
 module
+import all Obend.Hardware.ArrayFold
+import all Obend.Hardware.Gpu.CollectiveArena
+import all Obend.Hardware.Gpu.CollectiveBuildCorrect
+import all Obend.Hardware.Gpu.CollectiveReduceBuild
+import all Obend.Hardware.Gpu.CollectiveReduceExec
+import all Obend.Hardware.Gpu.CollectiveScanExec
+import all Obend.Hardware.Gpu.CollectiveBuildFacts
+import all Obend.Hardware.Gpu.CollectiveExecute
+import all Obend.Hardware.Gpu.CollectiveCompose
+import all Obend.Hardware.Gpu.CollectiveCorrect
+import all Obend.Hardware.Gpu.CollectiveHierarchy
+import all Obend.Hardware.Gpu.CollectiveTrace
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.ArrayEmit
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.PhaseSemantics
 public import Obend.Hardware.Gpu.CollectiveArena
 public import Obend.Hardware.Gpu.CollectiveBuildCorrect
-@[expose] public section
+public section
 
 /-! Public physical collective semantics. The only premises are successful
 executable construction and admission. Flat memory and scratch are arbitrary. -/

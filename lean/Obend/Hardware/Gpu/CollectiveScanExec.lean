@@ -1,7 +1,18 @@
 module
+import all Obend.Hardware.ArrayFold
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.PhaseSemantics
+import all Obend.Hardware.Gpu.CollectiveCorrect
+import all Obend.Hardware.Gpu.CollectiveTrace
+import all Obend.Hardware.Gpu.CollectiveHierarchy
+import all Obend.Hardware.Gpu.CollectiveCompose
+import all Obend.Hardware.Gpu.CollectiveBuildFacts
+import all Obend.Hardware.Gpu.CollectiveExecute
 public import Obend.Hardware.Gpu.CollectiveExecute
 public import Obend.Hardware.Gpu.CollectiveBuildFacts
-@[expose] public section
+public section
 
 /-! Actual pruned scan hierarchy: short descriptors finish once, and only long
 ones participate in recursive summary scans and seeded local fix-up. -/

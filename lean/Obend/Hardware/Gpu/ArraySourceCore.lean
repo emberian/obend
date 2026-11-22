@@ -1,4 +1,5 @@
 module
+import all Obend.Hardware.Gpu.ArraySource
 /- Compact Core4 interpretation of the lexical array source. Arrays are total
 index functions, zero outside their finite shape. Each source let is one Core4
 lambda application. Maps retain a single scalar body rather than expanding it
@@ -8,7 +9,7 @@ public import Obend.Hardware.Gpu.ArraySource
 public import Obend.Hardware.Gpu.ArrayEncoding
 public import Obend.Hardware.Gpu.SourceElem
 public import Obend.Hardware.Gpu.FoldCore
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.ArraySource.Core
 open Obend.Core.Term Obend.Equiv
 open Obend.Core.TermTraverse
@@ -19,6 +20,33 @@ set_option autoImplicit false
 /-- A source array denotes a total Core4 index function. -/
 def ArrayDenotes (term : Term) (values : Vec) : Prop :=
   ∀ i, Steps (.app term (.nat i)) (.nat (values.getD i 0#64).toNat)
+
+/-- Every finite word array is denoted by its literal index function. -/
+theorem literal_denotes (values : Vec) :
+    ArrayDenotes (encodeNats (values.map (·.toNat))) values := by
+  intro i
+  have heq : (values.map (·.toNat)).getD i 0 = (values.getD i 0#64).toNat := by
+    induction values generalizing i with
+    | nil => cases i <;> rfl
+    | cons x xs ih =>
+      cases i with
+      | zero => rfl
+      | succ i => exact ih i
+  have h := encodeNats_apply (values.map (·.toNat)) i
+  rw [heq] at h
+  exact h
+
+/-- The premise shared by `map_arguments_sound`, `Rhs.at_sound`, `Rhs.term_sound` and
+`Program.term_sound` is inhabited at every array environment. -/
+theorem arrayDenotes_inhabited (values : Env) :
+    ∃ terms : Nat → Term, ∀ a, ArrayDenotes (terms a) (values a) :=
+  ⟨fun a => encodeNats ((values a).map (·.toNat)), fun a => literal_denotes (values a)⟩
+
+-- A two-lane array: its index function reduces to the stored word and to zero past the end.
+example : ∃ t, ArrayDenotes t [3#64, 8#64] ∧
+    Steps (.app t (.nat 1)) (.nat 8) ∧ Steps (.app t (.nat 2)) (.nat 0) :=
+  ⟨encodeNats ([3#64, 8#64].map (·.toNat)), literal_denotes [3#64, 8#64],
+    literal_denotes [3#64, 8#64] 1, literal_denotes [3#64, 8#64] 2⟩
 
 def extend {α : Type} (head : α) (tail : Nat → α) : Nat → α
   | 0 => head
@@ -32,7 +60,7 @@ theorem instantiate_lift (body argument : Term) (σ : Nat → Term) :
   congr 1
   funext i
   cases i with
-  | zero => simp [liftSubstitution, single, Term.substitute, extend]
+  | zero => simp [liftSubstitution, single, extend]
   | succ i =>
     simp only [liftSubstitution, rename_substitute, single, extend]
     exact substitute_bound _
@@ -111,14 +139,7 @@ theorem _root_.Obend.Hardware.Gpu.ArraySource.Rhs.at_sound (r : Rhs) (lens : Nat
     Steps (r.at lens terms (.nat i)) (.nat ((r.eval values).getD i 0#64).toNat) := by
   cases r with
   | fold op shape a => exact foldTerm_sound op shape (terms a) (values a) (h a) i
-  | literal vs =>
-    have hm : (vs.map (·.toNat)).getD i 0 = (vs.getD i 0#64).toNat := by
-      induction vs generalizing i with
-      | nil => simp
-      | cons v vs ih => cases i with
-        | zero => rfl
-        | succ i => exact ih i
-    simpa only [Rhs.at, Rhs.eval, hm] using encodeNats_apply (vs.map (·.toNat)) i
+  | literal vs => exact literal_denotes vs i
   | map n op args =>
     apply steps_trans (ifLess_steps i n _ _)
     by_cases hi : i < n

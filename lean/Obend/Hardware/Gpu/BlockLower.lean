@@ -1,7 +1,7 @@
 module
 import all Obend.Hardware.ArrayKernel
 public import Obend.Hardware.ArrayKernel
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu.BlockLower
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.ArrayKernel
@@ -48,7 +48,7 @@ theorem checkedIndex_sound (g l : Nat) (i : Ix) (h : i.u32Safe g l = true) :
     simp only [Ix.u32Safe, Bool.and_eq_true, decide_eq_true_eq] at h
     simp [evalIndex32, Ix.eval, ih h.1.1, Nat.mod_eq_of_lt h.2]
 
-def wirePrefix : List Nat → Nat → Nat
+@[expose] def wirePrefix : List Nat → Nat → Nat
   | [], _ => 0
   | _ :: _, 0 => 0
   | n :: ns, i+1 => n + wirePrefix ns i
@@ -72,10 +72,10 @@ theorem wirePrefix_mono (ns : List Nat) (a b : Nat) (hab : a < b) (ha : a < ns.l
 def lengths (p : Program) (s : Storage) : List Nat :=
   p.buffers.map fun b => if b.storage == s then b.size else 0
 
-def buffer (p : Program) (a : Nat) : Buffer := p.buffers.getD a default
+@[expose] def buffer (p : Program) (a : Nat) : Buffer := p.buffers.getD a default
 
-def bufferBase (p : Program) (a : Nat) : Nat :=
-  wirePrefix (lengths p (buffer p a).storage) a
+@[expose] def bufferBase (p : Program) (a : Nat) : Nat :=
+  wirePrefix (p.buffers.map fun b => if b.storage == (buffer p a).storage then b.size else 0) a
 
 def bufferBases (p : Program) : List Nat :=
   (List.range p.buffers.length).map (bufferBase p)
@@ -84,10 +84,10 @@ abbrev Address := Storage × Nat
 abbrev FlatMemory := Address → Word
 abbrev FlatWrite := Address × Word
 
-def address (p : Program) (a i : Nat) : Address :=
+abbrev address (p : Program) (a i : Nat) : Address :=
   ((buffer p a).storage, bufferBase p a + i)
 
-def Valid (p : Program) (a i : Nat) : Prop :=
+abbrev Valid (p : Program) (a i : Nat) : Prop :=
   a < p.buffers.length ∧ i < (buffer p a).size
 
 theorem lengths_getD (p : Program) (a : Nat) (ha : a < p.buffers.length) (s : Storage) :
@@ -109,7 +109,9 @@ theorem address_injective (p : Program) (a i b j : Nat)
       rw [lengths_getD p a ha.1]; simp
     have hlb : (lengths p (buffer p a).storage).getD b 0 = (buffer p b).size := by
       rw [lengths_getD p b hb.1]; simp [hs]
-    simp only [bufferBase, ← hs] at hi
+    change wirePrefix (lengths p (buffer p a).storage) a + i =
+      wirePrefix (lengths p (buffer p b).storage) b + j at hi
+    rw [← hs] at hi
     rcases Nat.lt_or_gt_of_ne hab with hab | hba
     · have hm := wirePrefix_mono (lengths p (buffer p a).storage) a b hab (by simpa [lengths] using ha.1)
       rw [hla] at hm
@@ -120,7 +122,7 @@ theorem address_injective (p : Program) (a i b j : Nat)
       have := hb.2
       omega
 
-def Good (p : Program) (mem : Memory) : Prop :=
+abbrev Good (p : Program) (mem : Memory) : Prop :=
   mem.size = p.buffers.length ∧
     ∀ a < p.buffers.length, (mem.getD a #[]).size = (buffer p a).size
 
@@ -131,20 +133,20 @@ theorem applyWrite_get (mem : Memory) (a i : Nat) (v : Word)
   by_cases hab : a = b
   · subst b
     simp only [applyWrite, Array.getD_eq_getD_getElem?, Array.getElem?_modify,
-      if_pos rfl, Array.getElem?_eq_getElem ha, Option.map_some, Option.getD_some]
+      Array.getElem?_eq_getElem ha, Option.map_some, Option.getD_some]
     by_cases hij : i = j
     · subst j
       have hi' : i < (mem[a]'ha).size := by
         simpa only [Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem ha,
           Option.getD_some] using hi
-      simp [Array.getElem?_setIfInBounds, hi']
-    · simp [Array.getElem?_setIfInBounds, hij]
+      simp [hi']
+    · simp [hij]
   · simp [applyWrite, Array.getD_eq_getD_getElem?, Array.getElem?_modify, hab]
 
-def flatStore (flat : FlatMemory) (w : FlatWrite) : FlatMemory :=
+@[expose] def flatStore (flat : FlatMemory) (w : FlatWrite) : FlatMemory :=
   fun a => if a = w.1 then w.2 else flat a
 
-def Represents (p : Program) (mem : Memory) (flat : FlatMemory) : Prop :=
+abbrev Represents (p : Program) (mem : Memory) (flat : FlatMemory) : Prop :=
   ∀ a i, Valid p a i → flat (address p a i) = (mem.getD a #[]).getD i 0#64
 
 theorem applyWrite_good (p : Program) (mem : Memory) (w : Nat × Nat × Word)
@@ -177,7 +179,7 @@ theorem flatStore_sound (p : Program) (mem : Memory) (flat : FlatMemory)
     simp only [flatStore, he, ite_false, hne]
     exact hf b j hb
 
-def lowerLoads (p : Program) (flat : FlatMemory) (g l : Nat)
+@[expose] def lowerLoads (p : Program) (flat : FlatMemory) (g l : Nat)
     (reads : List Read) (regs : Registers) : Registers :=
   reads.foldl (fun m r => m.insert r.dst (flat (address p r.array (r.index.eval g l)))) regs
 
@@ -198,7 +200,7 @@ def lowerWrite (p : Program) (w : Nat × Nat × Word) : FlatWrite :=
 
 /-- The target independently loads flat addresses, executes registers, and writes
 flat addresses. This is the model read by the generic WGSL emitter. -/
-def lowerLaneWrites (p : Program) (ph : Phase) (flat : FlatMemory) (g l : Nat) : List FlatWrite :=
+@[expose] def lowerLaneWrites (p : Program) (ph : Phase) (flat : FlatMemory) (g l : Nat) : List FlatWrite :=
   let regs := runRegisters ph.code (lowerLoads p flat g l ph.reads ∅)
   ph.writes.map fun w => (address p w.array (w.index.eval g l), regs.getD w.value 0#64)
 
@@ -210,10 +212,10 @@ theorem lowerLaneWrites_sound (p : Program) (ph : Phase) (mem : Memory)
   rw [lowerLoads_eq p mem flat g l ph.reads ∅ hf hv]
   simp [laneWrites, loadRegisters, lowerWrite, List.map_map]
 
-def phaseWrites (ph : Phase) (mem : Memory) (g : Nat) : List (Nat × Nat × Word) :=
+@[expose] def phaseWrites (ph : Phase) (mem : Memory) (g : Nat) : List (Nat × Nat × Word) :=
   (List.range ph.lanes).flatMap (laneWrites ph mem g)
 
-def lowerPhaseWrites (p : Program) (ph : Phase) (flat : FlatMemory) (g : Nat) : List FlatWrite :=
+@[expose] def lowerPhaseWrites (p : Program) (ph : Phase) (flat : FlatMemory) (g : Nat) : List FlatWrite :=
   (List.range ph.lanes).flatMap (lowerLaneWrites p ph flat g)
 
 /-- All output addresses and values, for all lanes of every source map. This
@@ -247,10 +249,10 @@ theorem foldWrites_sound (p : Program) (mem : Memory) (flat : FlatMemory)
       (flatStore_sound p mem flat w.1 w.2.1 w.2.2 hg hf (hv w (by simp)))
       (fun w hw => hv w (by simp [hw]))
 
-def lowerPhase (p : Program) (ph : Phase) (g : Nat) (flat : FlatMemory) : FlatMemory :=
+@[expose] def lowerPhase (p : Program) (ph : Phase) (g : Nat) (flat : FlatMemory) : FlatMemory :=
   (lowerPhaseWrites p ph flat g).foldl flatStore flat
 
-def PhaseInBounds (p : Program) (ph : Phase) (g : Nat) : Prop :=
+abbrev PhaseInBounds (p : Program) (ph : Phase) (g : Nat) : Prop :=
   (∀ l < ph.lanes, ∀ r ∈ ph.reads, Valid p r.array (r.index.eval g l)) ∧
   (∀ l < ph.lanes, ∀ w ∈ ph.writes, Valid p w.array (w.index.eval g l))
 
@@ -271,7 +273,7 @@ theorem lowerPhase_sound (p : Program) (ph : Phase) (mem : Memory)
   subst w
   exact hb.2 l (List.mem_range.mp hl) v hv
 
-def lowerPhases (p : Program) (phases : List Phase) (g : Nat) (flat : FlatMemory) : FlatMemory :=
+@[expose] def lowerPhases (p : Program) (phases : List Phase) (g : Nat) (flat : FlatMemory) : FlatMemory :=
   phases.foldl (fun f ph => lowerPhase p ph g f) flat
 
 /-- Composition across every shared-memory exchange in an upload. -/
@@ -312,10 +314,10 @@ theorem fold_sim {α : Type} (p : Program) (xs : List α)
     obtain ⟨hgood, hsim⟩ := hs x (by simp) mem flat hg hf
     exact ih (fun x hx => hs x (by simp [hx])) _ _ hgood hsim
 
-def lowerDispatch (p : Program) (d : Dispatch) (flat : FlatMemory) : FlatMemory :=
+@[expose] def lowerDispatch (p : Program) (d : Dispatch) (flat : FlatMemory) : FlatMemory :=
   (List.range d.groups).foldl (fun f g => lowerPhases p d.phases g f) flat
 
-def DispatchInBounds (p : Program) (d : Dispatch) : Prop :=
+abbrev DispatchInBounds (p : Program) (d : Dispatch) : Prop :=
   ∀ g < d.groups, ∀ ph ∈ d.phases, PhaseInBounds p ph g
 
 theorem boundsSafe_sound (p : Program) (h : p.boundsSafe = true) :
@@ -331,6 +333,33 @@ theorem boundsSafe_sound (p : Program) (h : p.boundsSafe = true) :
     have hh := (h d hd g hg ph hph l hl).2 w hw
     exact ⟨hh.1.1, hh.2⟩
 
+/-- One lane copies a word between adjacent device buffers. For any initial
+contents, both memory layouts and all bounds premises hold for the same dispatch. -/
+theorem copy_inhabited (src dst : Word) :
+    let ph : Phase := ⟨1, [⟨0, 0, .lane⟩], [], [⟨1, .lane, 0⟩]⟩
+    let d : Dispatch := ⟨1, [ph]⟩
+    let p : Program := ⟨[⟨1, .device, []⟩, ⟨1, .device, []⟩], [0], [1], [d]⟩
+    let mem : Memory := #[#[src], #[dst]]
+    ∃ flat, Good p mem ∧ Represents p mem flat ∧ Valid p 0 0 ∧ Valid p 1 0 ∧
+      PhaseInBounds p ph 0 ∧ DispatchInBounds p d := by
+  intro ph d p mem
+  have buffers (a : Nat) (ha : a < p.buffers.length) : a = 0 ∨ a = 1 := by
+    change a < 2 at ha
+    omega
+  have hd : DispatchInBounds p d := boundsSafe_sound p (by rfl) d (by simp [p])
+  refine ⟨fun addr => if addr.2 = 0 then src else dst, ⟨rfl, ?_⟩, ?_,
+    ⟨Nat.zero_lt_succ 1, Nat.zero_lt_succ 0⟩, ⟨Nat.lt_succ_self 1, Nat.zero_lt_succ 0⟩,
+    hd 0 (Nat.zero_lt_succ 0) ph (by simp [d]), hd⟩
+  · intro a ha
+    rcases buffers a ha with rfl | rfl <;> rfl
+  · intro a i hv
+    rcases buffers a hv.1 with rfl | rfl
+    all_goals
+      have hi : i < 1 := hv.2
+      have : i = 0 := by omega
+      subst i
+      rfl
+
 theorem lowerDispatch_sound (p : Program) (d : Dispatch) (mem : Memory)
     (flat : FlatMemory) (hg : Good p mem) (hf : Represents p mem flat)
     (hb : DispatchInBounds p d) :
@@ -342,7 +371,7 @@ theorem lowerDispatch_sound (p : Program) (d : Dispatch) (mem : Memory)
   exact ⟨evalGroup_good p d g m hm,
     lowerPhases_sound p d.phases m f g hm hmf (hb g (List.mem_range.mp h))⟩
 
-def lowerProgram (p : Program) (flat : FlatMemory) : FlatMemory :=
+@[expose] def lowerProgram (p : Program) (flat : FlatMemory) : FlatMemory :=
   p.dispatches.foldl (fun f d => lowerDispatch p d f) flat
 
 /-- Universal indexed-array to flat-storage lowering, through all phases,

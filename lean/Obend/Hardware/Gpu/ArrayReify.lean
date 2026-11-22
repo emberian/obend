@@ -5,7 +5,7 @@ round trip, ignoring only the unused operation label. Arithmetic is neither copi
 nor recognized by sampled values. Field, array and indexed-kernel constructions can
 therefore share one arithmetic source without bypassing the Core4 member frontend. -/
 public import Obend.Hardware.Gpu.ArraySource
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.ArrayReify
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.Gpu.ArraySource
 set_option autoImplicit false
@@ -15,7 +15,7 @@ def normalize (e : ArrayEdge) : ArrayEdge := { e with opIdx := e.dstWire }
 
 def canonical (g : ArrayGraph) : ArrayGraph := { g with edges := g.edges.map normalize }
 
-def sameGraph (a b : ArrayGraph) : Prop :=
+@[expose] def sameGraph (a b : ArrayGraph) : Prop :=
   a.lengths = b.lengths ∧ a.inputs = b.inputs ∧ a.outputs = b.outputs ∧ a.edges = b.edges
 
 instance (a b : ArrayGraph) : Decidable (sameGraph a b) := by unfold sameGraph; infer_instance

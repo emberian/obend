@@ -1,8 +1,11 @@
 module
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.BlockLower
 import all Obend.Hardware.ArrayKernel
 public import Obend.Hardware.Gpu.CollectiveBlock
 public import Obend.Hardware.Gpu.BlockLower
-@[expose] public section
+public section
 
 /-! Builder traces and source execution composition for GPU collectives.
 These lemmas describe the actual StateT builder and ArrayKernel evaluator. They
@@ -23,7 +26,7 @@ def evalTrace (ds : List Dispatch) (mem : Memory) : Memory :=
 def evalTail (before after : Build) (mem : Memory) : Memory :=
   evalTrace (after.dispatches.toList.drop before.dispatches.size) mem
 
-def Extends (before after : Build) : Prop :=
+@[expose] def Extends (before after : Build) : Prop :=
   (∃ bs, after.buffers.toList = before.buffers.toList ++ bs) ∧
   (∃ ds, after.dispatches.toList = before.dispatches.toList ++ ds)
 
@@ -50,10 +53,10 @@ theorem extends_trans (a b c : Build) (hab : Extends a b) (hbc : Extends b c) :
   exact ⟨⟨bs ++ cs, by simp [hcs, hbs, List.append_assoc]⟩,
     ⟨ds ++ es, by simp [hes, hds, List.append_assoc]⟩⟩
 
-@[simp] theorem evalTrace_nil (mem : Memory) : evalTrace [] mem = mem := rfl
+@[simp] theorem evalTrace_nil (mem : Memory) : evalTrace [] mem = mem := by rfl
 
 @[simp] theorem evalTrace_cons (d : Dispatch) (ds : List Dispatch) (mem : Memory) :
-    evalTrace (d::ds) mem = evalTrace ds (evalDispatch d mem) := rfl
+    evalTrace (d::ds) mem = evalTrace ds (evalDispatch d mem) := by rfl
 
 theorem evalTrace_append (as bs : List Dispatch) (mem : Memory) :
     evalTrace (as ++ bs) mem = evalTrace bs (evalTrace as mem) := by
@@ -68,7 +71,7 @@ theorem evalTrace_flatMap {α : Type} (xs : List α) (f : α → List Dispatch) 
 theorem evalTail_of_append (before after : Build) (ds : List Dispatch)
     (h : after.dispatches.toList = before.dispatches.toList ++ ds) (mem : Memory) :
     evalTail before after mem = evalTrace ds mem := by
-  simp [evalTail, h, ← Array.length_toList, List.drop_append_length]
+  simp [evalTail, h, ← Array.length_toList]
 
 @[simp] theorem evalTail_refl (s : Build) (mem : Memory) : evalTail s s mem = mem := by
   simp [evalTail, evalTrace, ← Array.length_toList]
@@ -88,7 +91,7 @@ theorem evalProgram_append (p : Program) (ds : List Dispatch) (mem : Memory) :
   simp [evalProgram, evalTrace, List.foldl_append]
 
 @[simp] theorem evalTail_empty (s : Build) (mem : Memory) (ins outs : List Nat) :
-    evalTail {} s mem = evalProgram (toProgram s ins outs) mem := rfl
+    evalTail {} s mem = evalProgram (toProgram s ins outs) mem := by rfl
 
 theorem evalDispatch_good (p : Program) (d : Dispatch) (mem : Memory)
     (hg : Good p mem) : Good p (evalDispatch d mem) := by
@@ -109,7 +112,7 @@ theorem evalTail_good (p : Program) (before after : Build) (mem : Memory)
 
 @[simp] theorem allocate_run (size : Nat) (storage : Storage) (s : Build) :
     (allocate size storage).run s =
-      .ok (s.buffers.size, {s with buffers := s.buffers.push ⟨size,storage,[]⟩}) := rfl
+      .ok (s.buffers.size, {s with buffers := s.buffers.push ⟨size,storage,[]⟩}) := by rfl
 
 theorem allocate_extends (size : Nat) (storage : Storage) (s : Build) :
     Extends s {s with buffers := s.buffers.push ⟨size,storage,[]⟩} := by
@@ -171,7 +174,7 @@ theorem evalTrace_emitted (groups : Nat) (phases : List Phase) (mem : Memory) :
   · by_cases hp : phases = []
     · subst phases
       simp only [emitted, List.isEmpty_nil, Bool.not_true, Bool.and_false, Bool.false_eq_true,
-        if_false, evalTrace_nil, evalDispatch, evalGroup, List.foldl_nil]
+        ite_false, evalTrace_nil, evalDispatch, evalGroup, List.foldl_nil]
       induction List.range groups with
       | nil => rfl
       | cons x xs ih => exact ih
@@ -239,7 +242,7 @@ theorem localScan_run (op : ReduceOp) (mode : ScanMode) (tree : Trees) (src dst 
     rcases a with ⟨valid,bucket⟩
     dsimp only
     by_cases hv : valid > 0
-    · simp only [if_pos hv]
+    · simp only [ite_eq_left hv]
       rw [bind_run, emit_run_append]; rfl
     · simp [hv, pure, StateT.pure, StateT.run, Except.pure]
 
@@ -345,14 +348,14 @@ theorem good_push (p : Program) (mem : Memory) (b : Buffer) (row : Array Word)
       subst a
       have hnew : (mem.push row).getD p.buffers.length #[] = row := by
         rw [← hg.1]
-        simp [Array.getD_eq_getD_getElem?, Array.getElem?_push_size]
+        simp [Array.getD_eq_getD_getElem?]
       rw [hnew, hrow]
-      simp [buffer, List.getD_eq_getElem?_getD, List.getElem?_append_right]
+      simp [buffer, List.getD_eq_getElem?_getD]
 
 /-- Descriptors depend only on their immutable table and group id; buffer
 allocation and preceding execution cannot alter the selected chunk reference. -/
 @[simp] theorem descriptor_eval (cs : List Chunk) (f : Chunk → Nat) (g l : Nat) :
-    (descriptor cs f).eval g l = ((cs.toArray.map f)[g]?).getD 0 := rfl
+    (descriptor cs f).eval g l = ((cs.toArray.map f)[g]?).getD 0 := by rfl
 
 theorem descriptor_eval_member (cs : List Chunk) (f : Chunk → Nat) (g l : Nat)
     (hg : g < cs.length) : (descriptor cs f).eval g l = f cs[g] := by

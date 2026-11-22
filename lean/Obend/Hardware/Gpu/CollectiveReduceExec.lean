@@ -1,7 +1,17 @@
 module
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.PhaseSemantics
+import all Obend.Hardware.Gpu.CollectiveCorrect
+import all Obend.Hardware.Gpu.CollectiveTrace
+import all Obend.Hardware.Gpu.CollectiveHierarchy
+import all Obend.Hardware.Gpu.CollectiveCompose
+import all Obend.Hardware.Gpu.CollectiveBuildFacts
+import all Obend.Hardware.Gpu.CollectiveExecute
 public import Obend.Hardware.Gpu.CollectiveExecute
 public import Obend.Hardware.Gpu.CollectiveBuildFacts
-@[expose] public section
+public section
 
 /-! The pruned reduction hierarchy executes its ordered descriptor reductions.
 Finished result slots are framed while only unfinished descriptors recurse. -/

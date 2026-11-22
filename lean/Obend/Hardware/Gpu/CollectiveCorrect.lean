@@ -1,8 +1,15 @@
 module
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.PhaseSemantics
 import all Obend.Hardware.ArrayKernel
+import all Obend.Hardware.ArrayFold
+import all Obend.Hardware.ArrayHypergraph
+import all Obend.Hardware.OpenHypergraph
 public import Obend.Hardware.Gpu.CollectiveBlock
 public import Obend.Hardware.Gpu.PhaseSemantics
-@[expose] public section
+public section
 
 /-! The materialized collective phases implement the ordered tree equations.
 All conclusions concern ArrayKernel.evalPhase/evalGroup, not a second evaluator.
@@ -304,8 +311,7 @@ theorem paddedLoad_value (p : Program) (op : ReduceOp) (src dst valid depth g st
     · have hframe : valueAt (evalPhase (fillPhase op dst valid (2^depth-valid)) g loaded) dst i =
           valueAt loaded dst i := by
         apply evalPhase_value_untouched p _ loaded g dst i hgood (hbf hf)
-        simp only [Phase.writeAddresses, fillPhase, List.flatMap_cons, List.map_cons,
-          List.map_nil, Ix.eval, List.flatMap_nil, List.append_nil]
+        simp only [Phase.writeAddresses, fillPhase, List.map_cons, List.map_nil, Ix.eval]
         intro h
         obtain ⟨l, _, he⟩ := List.mem_flatMap.mp h
         simp only [List.mem_cons, List.not_mem_nil, or_false, Prod.mk.injEq, true_and] at he

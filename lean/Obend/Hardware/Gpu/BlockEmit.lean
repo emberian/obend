@@ -1,7 +1,8 @@
 module
+import all Obend.Hardware.Gpu.BlockLower
 public import Obend.Hardware.Gpu.BlockLower
 public import Obend.Hardware.Gpu
-@[expose] public section
+public section
 
 /-!
 # Workgroup source to WGSL
@@ -47,7 +48,7 @@ def ixText (tables : List (Array Nat)) (indexBase : Nat) : Ix → String
 per-workgroup allocations, never part of the host's device allocation. -/
 def bufferBases (p : Program) : List Nat := BlockLower.bufferBases p
 
-def spaceSize (p : Program) (s : Storage) : Nat :=
+@[expose] def spaceSize (p : Program) (s : Storage) : Nat :=
   (p.buffers.filter fun b => b.storage == s).foldl (fun n b => n + b.size) 0
 
 def accessText (p : Program) (indexBase a : Nat) (i : Ix) : String :=
@@ -85,7 +86,7 @@ def traffic (p : Program) (d : Dispatch) (space : Storage) (write : Bool) : Nat 
     else (ph.reads.filter fun r => ((p.buffers.drop r.array).headD ⟨0, .device, []⟩).storage == space).length)) 0)
 
 /-- The constant buffers' values in order: what the host binds as `c`. -/
-def constWords (p : Program) : List ArrayHypergraph.Word :=
+@[expose] def constWords (p : Program) : List ArrayHypergraph.Word :=
   (p.buffers.filterMap fun b => if b.storage == .constant then some b.values else none).flatten
 
 def emitPlan (name : String) (p : Program) : String :=

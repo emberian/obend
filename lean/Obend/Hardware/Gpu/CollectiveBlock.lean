@@ -1,7 +1,10 @@
 module
+import all Obend.Hardware.ArrayFold
+import all Obend.Hardware.ArrayHypergraph
+import all Obend.Hardware.Gpu.CollectiveTree
 public import Obend.Hardware.ArrayKernel
 public import Obend.Hardware.Gpu.CollectiveTree
-@[expose] public section
+public section
 
 /-! Work-efficient ordered trees and hierarchical reduce-then-scan in ArrayKernel.
 There is no scan shader template or sequential segment invocation. Every tree row
