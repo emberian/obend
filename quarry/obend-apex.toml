@@ -2241,6 +2241,20 @@ module = "Obend.OS.SmmuDmaConfinement"
 theorem = "smmu_verifier_loop_dma_safe"
 description = "End-to-end `seL4` Microkit 4-PD verifier loop interleaved with arbitrary adversarial peripheral DMA bursts (`smmu_verifier_loop_dma_safe`), `OBEND.SHE.SMMU_MANIFEST/v1` binding (`smmuManifestDigest_binds`), and `smmuChokepointJudge`."
 
+[[apex]]
+id = "polis-she-anti-vaz-floor-nonregression"
+subsystem = "Polis"
+module = "Obend.Polis.SecureHardwareEnv"
+theorem = "vaz_coercive_floor_downgrade_refused"
+description = "Anti-Vaz coercive authority refusal (`vaz_coercive_floor_downgrade_refused`) rejecting any safety/privacy floor drop regardless of `.vendorRootDirective` or `.agencyEmergencyOrder` and preserving monotone floor inclusion across `ValidSheTrace`."
+
+[[apex]]
+id = "polis-she-multi-turn-ceremony-and-turn-binding"
+subsystem = "Polis"
+module = "Obend.Polis.SecureHardwareEnv"
+theorem = "she_trace_end_to_end_safe_and_anti_vaz"
+description = "Unified multi-turn *Rainbows End* Sovereign Hardware Environment ceremony (`she_trace_end_to_end_safe_and_anti_vaz`, `she_trace_coupled_sel4_private_frame_safe`, `sheTurnEnvelope_binds`) coupling monotone sensor seals, proven `UDR`/`JBR` zkML, `seL4` copy-before-verify, `Simplex` QCs, `(t, n)` PQ custody, and `OBEND.SHE.TURN/v1` commitments."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

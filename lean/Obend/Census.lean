@@ -513,6 +513,7 @@ import Obend.Polis.JointCoReceipt
 import Obend.Polis.PqThresholdCustody
 import Obend.Polis.PrivatePredicate
 import Obend.Polis.SandboxDomainTags
+import Obend.Polis.SecureHardwareEnv
 import Obend.Polis.VerifiableCredentials
 import Obend.Polis.ZkBiscuit
 import Obend.Reasons
