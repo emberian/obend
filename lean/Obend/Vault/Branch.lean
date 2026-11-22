@@ -103,7 +103,7 @@ tip when it merges; the difference is only the configuration it is judged at.
 public import Obend.Vault.Store
 public import Obend.Vault.Rehydration
 public import Obend.Tactic.Tooth
-@[expose] public section
+public section
 
 namespace Obend.Vault.Branch
 
@@ -1070,7 +1070,7 @@ theorem byRefusal_none {book : LawBook} {s : VaultStore} {actor : String} {h : N
         | nil => rw [hx] at hp; cases hp
         | cons _ _ => rfl
       have hcond : (q != c && !ql.overLinkedBy.isEmpty) = true := by simp [hne, hne']
-      rw [if_pos hcond] at hb
+      rw [ite_eq_left hcond] at hb
       cases hj : judgeLinksIn (listedStore s ql.links) q ql.overLinkedBy (requestAt actor h) [c] with
       | some r => rw [hj] at hb; cases hb
       | none => exact byLinks_none hj c (List.mem_singleton_self _) p hp
@@ -1510,7 +1510,7 @@ theorem landed_consents {base : Config} {L R : Branch} {text : TextMerge} {m : M
 /-! ### The merge is a pushout over the base -/
 
 /-- The turns applied in order. -/
-def applyAll (s : VaultStore) (ts : List BTurn) : VaultStore := ts.foldl (fun s t => applyTurn s t.turn) s
+@[expose] def applyAll (s : VaultStore) (ts : List BTurn) : VaultStore := ts.foldl (fun s t => applyTurn s t.turn) s
 
 def writesAll (ts : List BTurn) : List String := ts.flatMap BTurn.writes
 
@@ -2073,7 +2073,7 @@ section IConfluence
 open Obend.Spec.Law (fieldOf fieldLabel firstScalarField firstField LawRef)
 
 /-- The entry map `setNat` applies to a record's fields. -/
-def setEntry (f : String) (n : Nat) : String × Data → String × Data :=
+@[expose] def setEntry (f : String) (n : Nat) : String × Data → String × Data :=
   fun (k, x) => if k == f then (k, .natural n) else (k, x)
 
 theorem setNat_record (fs : List (String × Data)) (f : String) (n : Nat) :

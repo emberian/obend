@@ -8,7 +8,7 @@ settled and value forms in both directions.
 
 `Obend.Equiv.Cost` proves that it is a cost simulation within a factor of 8 in each direction. -/
 public import Obend.Equiv.Clairvoyant
-@[expose] public section
+public section
 namespace Obend.Equiv
 open Obend.Core.Term
 set_option autoImplicit false
@@ -397,7 +397,7 @@ theorem Sim.ready_iff {b : Bool} {t t' : Term} (hs : Sim t t') : Ready b t ↔ R
 /-- Sands' evaluation improvement (`EvalImproves t t'`): every clairvoyant evaluation
 `CV t v k` of `t` is matched by an evaluation `CV t' v k'` of `t'` to the same value `v`
 with `k' ≤ k`. -/
-def EvalImproves (t t' : Term) : Prop :=
+@[expose] def EvalImproves (t t' : Term) : Prop :=
   ∀ v k, CV t v k → ∃ k', CV t' v k' ∧ k' ≤ k
 
 theorem EvalImproves.refl (t : Term) : EvalImproves t t :=
@@ -413,7 +413,7 @@ theorem EvalImproves.trans {t1 t2 t3 : Term}
 /-- Contextual Sands improvement (`SandsImproves t t'`): in every substitution `ρ` and
 context `C`, every clairvoyant derivation of `C[t[ρ]]` at cost `k` is matched by a
 derivation of `C[t'[ρ]]` at cost `k' ≤ k`, preserving literal results. -/
-def SandsImproves (t t' : Term) : Prop :=
+@[expose] def SandsImproves (t t' : Term) : Prop :=
   ∀ (ρ : Nat → Term) (C v : Term) (k : Nat), CV (instantiate C (t.substitute ρ)) v k →
     ∃ v' k', CV (instantiate C (t'.substitute ρ)) v' k' ∧ k' ≤ k ∧ (Literal v → v' = v)
 
@@ -433,7 +433,7 @@ theorem SandsImproves.trans {t1 t2 t3 : Term}
 /-- Exact additive evaluation improvement (`StrictEvalImproves d t t'`): every derivation
 of the optimized term `t'` at cost `k` corresponds to a derivation of the unoptimized
 term `t` at cost `k + d` (so replacing `t` by `t'` saves `d` ticks). -/
-def StrictEvalImproves (d : Nat) (t t' : Term) : Prop :=
+@[expose] def StrictEvalImproves (d : Nat) (t t' : Term) : Prop :=
   ∀ v k, CV t' v k → CV t v (k + d)
 
 theorem StrictEvalImproves.refl (t : Term) : StrictEvalImproves 0 t t :=

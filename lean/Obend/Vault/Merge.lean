@@ -38,9 +38,10 @@ the base they share:
   the store as it is, its receipt naming the candidate dropped (`resolveIn`).
 -/
 public import Obend.Vault.Branch
+import all Obend.Vault.Branch
 public import Std.Data.HashMap
 public import Std.Data.HashSet
-@[expose] public section
+public section
 
 namespace Obend.Vault.Merge
 
@@ -432,7 +433,7 @@ theorem mergeFront_keeps (base l r : List (String × String))
       (fun k => match frontCell base l r k with | .merged _ => true | .conflict _ _ _ => false) = true := by
     rw [List.all_eq_true]; intro k _; rw [frontCell_disjoint (hd k)]
   refine ⟨(Obend.Doc.Patch.dedupStringKeys (l.map (·.1) ++ r.map (·.1))).filterMap
-      (fun k => (frontValue base l r k).map fun v => (k, v)), by simp only [mergeFront, hall, if_true], ?_⟩
+      (fun k => (frontValue base l r k).map fun v => (k, v)), by simp only [mergeFront, hall, ite_true], ?_⟩
   intro k
   have hv : frontValue base l r k = (if l.lookup k = base.lookup k then r.lookup k else l.lookup k) := by
     unfold frontValue; rw [frontCell_disjoint (hd k)]
@@ -448,11 +449,11 @@ theorem mergeFront_keeps (base l r : List (String × String))
       rw [lookup_none_of_not_mem hn.1, lookup_none_of_not_mem hn.2]; simp
   have := hlk _ rfl
   refine ⟨fun h => ?_, fun h => ?_, fun h1 h2 => ?_⟩
-  · rw [this, if_neg h]
+  · rw [this, ite_eq_right h]
   · rcases hd k with h' | h'
-    · rw [this, if_pos h']
+    · rw [this, ite_eq_left h']
     · exact absurd h' h
-  · rw [this, if_pos h1, h2]
+  · rw [this, ite_eq_left h1, h2]
 
 /-- **A frontmatter merged field by field, a field both changed going to the side that saw the other's
 line and moved on**: as `mergeFront`, except that a field changed on both sides to different lines is

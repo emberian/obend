@@ -21,7 +21,7 @@ model takes `ConfigBits` as they hold them) and the frame-data and clock buffers
 -/
 public import Obend.Hardware.HDL
 public import Std.Data.HashMap
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Fabulous
 
@@ -45,10 +45,10 @@ inductive SmPrim
   deriving DecidableEq, Repr, Inhabited
 
 /-- Number of select bits of a primitive. -/
-def SmPrim.selBits : SmPrim → Nat
+@[expose] def SmPrim.selBits : SmPrim → Nat
   | .mux21 .. => 1 | .mux41 .. => 2 | .mux81 .. => 3 | .mux161 .. => 4 | .assign _ => 0
 
-def SmPrim.ins : SmPrim → List SmSrc
+@[expose] def SmPrim.ins : SmPrim → List SmSrc
   | .mux21 i _ | .mux41 i _ | .mux81 i _ | .mux161 i _ => i
   | .assign s => [s]
 
@@ -72,12 +72,12 @@ structure SwitchMatrix where
 def SmPrim.sel (p : SmPrim) (cfg : Nat → Bool) : Nat :=
   ((List.range p.selBits).map fun i => if cfg (p.base + i) then 2 ^ i else 0).sum
 
-def SmSrc.eval (inp : String → Bool) : SmSrc → Bool
+@[expose] def SmSrc.eval (inp : String → Bool) : SmSrc → Bool
   | .port n => inp n
   | .const b => b
 
 /-- A primitive's output: the selected input (`cus_muxN1`: `A[S]`), or the assigned signal. -/
-def SmPrim.eval (p : SmPrim) (cfg : Nat → Bool) (inp : String → Bool) : Bool :=
+@[expose] def SmPrim.eval (p : SmPrim) (cfg : Nat → Bool) (inp : String → Bool) : Bool :=
   ((p.ins[p.sel cfg]?).map (·.eval inp)).getD false
 
 /-! ## The switch matrix as an `RtlModule` -/
@@ -134,13 +134,13 @@ structure TileModel where
   deriving DecidableEq, Repr, Inhabited
 
 /-- `ConfigBits[i]` of a tile whose frame bits are `b`. -/
-def TileModel.bit (tm : TileModel) (b : Nat → Bool) (i : Nat) : Bool := b (tm.pos.getD i 0)
+@[expose] def TileModel.bit (tm : TileModel) (b : Nat → Bool) (i : Nat) : Bool := b (tm.pos.getD i 0)
 
 /-- The switch matrix's configuration. -/
-def TileModel.smCfg (tm : TileModel) (b : Nat → Bool) : Nat → Bool := fun i => tm.bit b (tm.smOff + i)
+@[expose] def TileModel.smCfg (tm : TileModel) (b : Nat → Bool) : Nat → Bool := fun i => tm.bit b (tm.smOff + i)
 
 /-- A cell's 19 configuration bits, from `co`. -/
-def TileModel.cellCfg (tm : TileModel) (b : Nat → Bool) (co : Nat) : Nat → Bool := fun j => tm.bit b (co + j)
+@[expose] def TileModel.cellCfg (tm : TileModel) (b : Nat → Bool) (co : Nat) : Nat → Bool := fun j => tm.bit b (co + j)
 
 
 /-! ## Reading the switch matrix from its Verilog -/
@@ -225,8 +225,8 @@ def smLean (defName : String) (sm : SwitchMatrix) : String :=
 
 Every signal is a 0/1 word; `m21 s a0 a1` is `cus_mux21` (`S ? A1 : A0`). -/
 
-def m21 (s a0 a1 : RtlExpr) : RtlExpr := .mux s a1 a0
-def bitOf (i k : Nat) : RtlExpr := .resize (.slice k k) (.inputPort i)
+@[expose] def m21 (s a0 a1 : RtlExpr) : RtlExpr := .mux s a1 a0
+@[expose] def bitOf (i k : Nat) : RtlExpr := .resize (.slice k k) (.inputPort i)
 def andE (a b : RtlExpr) : RtlExpr := .alu .bitAnd a b
 def orE (a b : RtlExpr) : RtlExpr := .alu .bitOr a b
 
@@ -234,7 +234,7 @@ def orE (a b : RtlExpr) : RtlExpr := .alu .bitOr a b
 `FF` 16, `I0mux` 17, `SET_NORESET` 18). `O = c_out_mux ? LUT_flop : LUT_out` with
 `LUT_out = LUT_values[{I3, I2, I1, I0mux}]` (`cus_mux161`), `I0mux = c_I0mux ? Ci : I0`;
 `Co = Ci·I1 + Ci·I2 + I1·I2`; on the edge, with `EN`, `LUT_flop <= SR ? c_reset_value : LUT_out`. -/
-def lut4cModule : RtlModule :=
+@[expose] def lut4cModule : RtlModule :=
   let cb (k : Nat) := bitOf 4 k
   -- wires: 0 = I0mux, 1 = LUT_out
   let sel : List RtlExpr := [.wireRef 0, bitOf 0 1, bitOf 0 2, bitOf 0 3]
@@ -331,6 +331,20 @@ def pipAgrees (p : SmPrim) (posOf : Nat → Nat) (off : Nat) (src : String) (pat
     pat.length == p.selBits && p.selBits > 0 &&
     (List.range p.selBits).all (fun c => (pat.lookup (posOf (off + p.base + c))).isSome) &&
     ((p.ins[patSel pat posOf off p.base p.selBits]?).map (·.name)) == some src
+
+/-- A single 4:1 mux routes all four ports. With the matrix at tile offset 7, frame positions
+119 and 120 carry the low and high select bits. The checker accepts exactly the selected name. -/
+theorem pipAgrees_inhabited (a b c d : String) :
+    ∃ p : SmPrim, p.selBits = 2 ∧ ∀ (lo hi : Bool) (src : String),
+      pipAgrees p (· + 100) 7 src [(119, lo), (120, hi)] = true ↔
+        (if hi then (if lo then d else c) else (if lo then b else a)) = src := by
+  refine ⟨.mux41 [.port a, .port b, .port c, .port d] 12, rfl, ?_⟩
+  intro lo hi src
+  cases lo <;> cases hi
+  · exact (beq_iff_eq : (a == src) = true ↔ a = src)
+  · exact (beq_iff_eq : (c == src) = true ↔ c = src)
+  · exact (beq_iff_eq : (b == src) = true ↔ b = src)
+  · exact (beq_iff_eq : (d == src) = true ↔ d = src)
 
 theorem lookup_of_mem_holds {pat : List (Nat × Bool)} {f : Nat → Bool} (h : ∀ e ∈ pat, f e.1 = e.2)
     {q : Nat} {v : Bool} (hl : pat.lookup q = some v) : f q = v := by

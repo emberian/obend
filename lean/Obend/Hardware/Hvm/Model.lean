@@ -6,7 +6,7 @@ The model of HVM2 (HigherOrderCO, crate `hvm` 2.0.22, `paper/HVM2.typst`) that t
 `Obend.Hardware.Hvm` targets, and the emitter that prints it as `hvm run` reads it. Where the model
 departs from HVM2 is said in `Obend.Hardware.Hvm`'s header.
 -/
-@[expose] public section
+public section
 namespace Obend.Hardware.Hvm
 set_option autoImplicit false
 /-! ## 1. HVM2's net language -/
@@ -36,7 +36,7 @@ def HOp.text : HOp → String
 /-- The native U24 operation of `Numb::operate` (`src/hvm.rs`), the operator-tagged operand on the
 left: `u32` wrapping arithmetic truncated to 24 bits. A zero divisor follows the C runtime on arm64
 (`/` gives `0`, `%` the dividend); the Rust runtime panics there. -/
-def HOp.u24 : HOp → Nat → Nat → Nat
+@[expose] def HOp.u24 : HOp → Nat → Nat → Nat
   | .add, a, b => (a + b) % u24Mod
   | .sub, a, b => (a + u24Mod - b % u24Mod) % u24Mod
   | .fpSub, a, b => (b + u24Mod - a % u24Mod) % u24Mod
@@ -65,7 +65,7 @@ inductive Numb where
   deriving DecidableEq, Repr, Inhabited
 
 /-- `Numb::operate` restricted to U24 and the operators. -/
-def Numb.operate : Numb → Numb → Numb
+@[expose] def Numb.operate : Numb → Numb → Numb
   | .sym _, .sym _ => .u24 0
   | .sym o, .u24 v => .part o v
   | .u24 v, .sym o => .part o v
@@ -77,7 +77,7 @@ def Numb.operate : Numb → Numb → Numb
   | .u24 b, .part o a => .u24 (o.u24 a b)
 
 /-- The 24-bit payload `SWI` reads (`get_u24`). -/
-def Numb.payload : Numb → Nat
+@[expose] def Numb.payload : Numb → Nat
   | .u24 v => v
   | .sym o => o.tag
   | .part _ v => v
@@ -111,21 +111,21 @@ structure HDef where
   deriving DecidableEq, Repr
 
 /-- The variables of a tree, with repetition. -/
-def HTree.vars : HTree → List Nat
+@[expose] def HTree.vars : HTree → List Nat
   | .var n => [n]
   | .era | .ref _ | .num _ => []
   | .con a b | .dup a b | .opr a b | .swi a b => a.vars ++ b.vars
 
-def redexVars (r : Redex) : List Nat := r.1.vars ++ r.2.vars
+@[expose] def redexVars (r : Redex) : List Nat := r.1.vars ++ r.2.vars
 
-def bagVars (bag : List Redex) : List Nat := (bag.map redexVars).flatten
+@[expose] def bagVars (bag : List Redex) : List Nat := (bag.map redexVars).flatten
 
-def Cfg.vars (c : Cfg) : List Nat := c.root.vars ++ bagVars c.bag
+abbrev Cfg.vars (c : Cfg) : List Nat := c.root.vars ++ bagVars c.bag
 
 def HDef.vars (d : HDef) : List Nat := d.root.vars ++ bagVars d.bag
 
 /-- Substitution of trees for variables (`none`: the variable stays). -/
-def HTree.subst (S : Nat → Option HTree) : HTree → HTree
+@[expose] def HTree.subst (S : Nat → Option HTree) : HTree → HTree
   | .var n => (S n).getD (.var n)
   | .era => .era
   | .ref f => .ref f
@@ -135,12 +135,12 @@ def HTree.subst (S : Nat → Option HTree) : HTree → HTree
   | .opr a b => .opr (a.subst S) (b.subst S)
   | .swi a b => .swi (a.subst S) (b.subst S)
 
-def Redex.subst (S : Nat → Option HTree) (r : Redex) : Redex := (r.1.subst S, r.2.subst S)
+abbrev Redex.subst (S : Nat → Option HTree) (r : Redex) : Redex := (r.1.subst S, r.2.subst S)
 
 /-- The substitution of one variable. -/
-def one (x : Nat) (t : HTree) : Nat → Option HTree := fun m => if m = x then some t else none
+@[expose] def one (x : Nat) (t : HTree) : Nat → Option HTree := fun m => if m = x then some t else none
 
-def HTree.rename (f : Nat → Nat) : HTree → HTree
+@[expose] def HTree.rename (f : Nat → Nat) : HTree → HTree
   | .var n => .var (f n)
   | .era => .era
   | .ref g => .ref g
@@ -150,7 +150,7 @@ def HTree.rename (f : Nat → Nat) : HTree → HTree
   | .opr a b => .opr (a.rename f) (b.rename f)
   | .swi a b => .swi (a.rename f) (b.rename f)
 
-def Redex.rename (f : Nat → Nat) (r : Redex) : Redex := (r.1.rename f, r.2.rename f)
+abbrev Redex.rename (f : Nat → Nat) (r : Redex) : Redex := (r.1.rename f, r.2.rename f)
 
 /-- A definition is `safe` when it holds no `DUP` node (`def.safe` in `src/hvm.rs`). -/
 def HTree.hasDup : HTree → Bool
@@ -165,21 +165,21 @@ inductive BinKind where
   | con | dup | opr | swi
   deriving DecidableEq, Repr
 
-def HTree.bin? : HTree → Option (BinKind × HTree × HTree)
+@[expose] def HTree.bin? : HTree → Option (BinKind × HTree × HTree)
   | .con a b => some (.con, a, b)
   | .dup a b => some (.dup, a, b)
   | .opr a b => some (.opr, a, b)
   | .swi a b => some (.swi, a, b)
   | _ => none
 
-def mkBin : BinKind → HTree → HTree → HTree
+@[expose] def mkBin : BinKind → HTree → HTree → HTree
   | .con => .con | .dup => .dup | .opr => .opr | .swi => .swi
 
 /-- The local rules: those that touch only the two nodes of the redex, with the nullary node on the
 left (`Step.swap` gives the other orientation). VOID, ERAS (a number meeting `CON` or `DUP` is
 copied), ANNI, OPER and SWIT, as in `interact_*` of `src/hvm.rs`; `none` for the redexes the
 non-local rules (LINK, CALL, COMM, the `REF` copy) or no rule handle. -/
-def localRule : HTree → HTree → Option (List Redex)
+@[expose] def localRule : HTree → HTree → Option (List Redex)
   -- VOID
   | .era, .era | .era, .num _ | .era, .ref _ | .num _, .era | .num _, .num _ | .num _, .ref _
   | .ref _, .era | .ref _, .num _ | .ref _, .ref _ => some []

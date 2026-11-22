@@ -3,7 +3,7 @@ module
 Re-runs actual closed Boolean oracle claims; rejects arbitrary named axioms.
 This marks compiler trust and does not certify general source refinement. -/
 public import Obend.AssertAxioms
-@[expose] public section
+public section
 
 /- Lean v4.35 removed `Lean.ofReduceBool` and `Lean.ofReduceNat` (and `Lean.reduceBool`) from
 `Init`. Until v4.30 this command accepted those two by name, sound only because the prelude

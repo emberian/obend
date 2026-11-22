@@ -29,8 +29,9 @@ says what its acceptance establishes.
 public import Obend.Ledger.Vault
 public import Obend.Ledger.Json
 public import Obend.Analysis.Coverage
+import all Obend.Analysis.Coverage
 public import Obend.Receipt
-@[expose] public section
+public section
 
 namespace Obend.Ledger
 

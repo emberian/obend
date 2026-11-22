@@ -26,7 +26,7 @@ module
      `lower_complete_ltyped_bool`, `lower_iff_ltyped_nat`, `lower_iff_ltyped_bool`).
 -/
 public import Obend.Lower.Fragment
-@[expose] public section
+public section
 namespace Obend.Lower
 open Obend.Core.Term
 open Obend.Core.Ty
@@ -439,7 +439,7 @@ decreasing_by
     | (have := LExpr.sizeOf_arm_lt hx; omega)
 
 /-- Extend a substitution `σ` with `a` at index `0`. -/
-def consSubst (a : LExpr) (σ : Nat → LExpr) : Nat → LExpr
+@[expose] def consSubst (a : LExpr) (σ : Nat → LExpr) : Nat → LExpr
   | 0 => a
   | n + 1 => σ n
 
@@ -456,7 +456,7 @@ theorem subst_liftSubst_inst (body a : LExpr) (σ : Nat → LExpr) :
 
 /-- Every `.split` in `e` eliminates a non-empty list of structure fields (`!names.isEmpty`),
 ruling out `.split [] _ .erased` (`erasedElim`). -/
-def nonEmptySplits : LExpr → Bool
+@[expose] def nonEmptySplits : LExpr → Bool
   | .bvar _ | .erased | .lit _ | .boolLit _ => true
   | .const _ b | .lam _ b | .natSucc b | .proj _ b => nonEmptySplits b
   | .app a b | .letE _ a b | .natBin _ a b => nonEmptySplits a && nonEmptySplits b
@@ -656,7 +656,7 @@ theorem redVariant_cases {R : Ty} (σ : Nat → LExpr) :
           some (label, names, minor) ∧
         splitValues fs names = some values ∧
         Red R (minor.spine values)
-  | [], [], _, _, _, _, _, _, hvar => False.elim (by simpa only [armsRow_nil, RedVariant, RedBundle] using hvar)
+  | [], [], _, _, _, _, _, _, hvar => by simp only [armsRow_nil, RedVariant, RedBundle] at hvar
   | [], _ :: _, _, _, h, _, _, _, _ | _ :: _, [], _, _, h, _, _, _, _ => by simp at h
   | (armLabel, names, M) :: arms, Ts :: sig, label, fs, hl, hlen, hnd, harms, hvar => by
     simp only [armsRow_cons, RedVariant, RedBundle] at hvar
@@ -890,7 +890,7 @@ theorem lower_iff_ltyped_bool {e : LExpr} {b : Bool}
 /-! ## 6. Verified Bidirectional Type Synthesis & Checking for `LTyped` (`inferL`, `checkL`) -/
 
 /-- Decidable `List.Nodup` check for `List String`. -/
-def nodupStrings : List String → Bool
+@[expose] def nodupStrings : List String → Bool
   | [] => true
   | n :: ns => !ns.contains n && nodupStrings ns
 
@@ -902,7 +902,7 @@ theorem nodupStrings_sound : ∀ {ns : List String}, nodupStrings ns = true → 
     exact List.nodup_cons.mpr ⟨h.1, nodupStrings_sound h.2⟩
 
 /-- Peel `k` reusable unrestricted arrows `fn A B` from a type `TF`. -/
-def peelArrows : Nat → Ty → Option (List Ty × Ty)
+@[expose] def peelArrows : Nat → Ty → Option (List Ty × Ty)
   | 0, R => some ([], R)
   | k + 1, .arrow .reusable .unrestricted A B => do
     let (Ts, R) ← peelArrows k B
@@ -930,13 +930,13 @@ theorem peelArrows_sound : ∀ (k : Nat) (TF : Ty) (Ts : List Ty) (R : Ty),
     simp [peelArrows] at h
 
 /-- Sufficient lookup fuel for any closed field row. -/
-def rowFuel : Ty → Nat
+@[expose] def rowFuel : Ty → Nat
   | .field _ _ tail => rowFuel tail + 1
   | _ => 1
 
 mutual
 /-- Verified bidirectional type inference for `LExpr`, using `expected?` to resolve `.inject` sum types. -/
-def inferL (Γ : List Ty) (expected? : Option Ty) : LExpr → Option Ty
+@[expose] def inferL (Γ : List Ty) (expected? : Option Ty) : LExpr → Option Ty
   | .bvar i => Γ[i]?
   | .erased => some .emptyRow
   | .const _ b => inferL Γ expected? b
@@ -1021,14 +1021,14 @@ def inferL (Γ : List Ty) (expected? : Option Ty) : LExpr → Option Ty
       some T
     else none
 
-def inferFields (Γ : List Ty) : List (String × LExpr) → Option (List Ty)
+@[expose] def inferFields (Γ : List Ty) : List (String × LExpr) → Option (List Ty)
   | [] => some []
   | (_, e) :: rest =>
     match inferL Γ none e, inferFields Γ rest with
     | some T, some Ts => some (T :: Ts)
     | _, _ => none
 
-def inferArms (Γ : List Ty) (R : Ty) : List (String × List String × LExpr) → Option (List (List Ty))
+@[expose] def inferArms (Γ : List Ty) (R : Ty) : List (String × List String × LExpr) → Option (List (List Ty))
   | [] => some []
   | (_, names, M) :: rest =>
     match inferL Γ none M with
@@ -1045,7 +1045,7 @@ def inferArms (Γ : List Ty) (R : Ty) : List (String × List String × LExpr) �
 end
 
 /-- Decidable typechecker for `LTyped Γ e T`. -/
-def checkL (Γ : List Ty) (e : LExpr) (T : Ty) : Bool :=
+@[expose] def checkL (Γ : List Ty) (e : LExpr) (T : Ty) : Bool :=
   inferL Γ (some T) e == some T
 
 mutual
