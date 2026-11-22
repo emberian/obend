@@ -19,7 +19,7 @@ Sources consulted:
 * https://github.com/Plonky3/Plonky3/blob/main/goldilocks/src/goldilocks.rs
 * https://cacr.uwaterloo.ca/hac/about/chap14.pdf
 -/
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.Limbs
 
 /-- Little-endian pair of actual 32-bit words; the WGSL carrier is `vec2<u32>`. -/
@@ -28,7 +28,7 @@ structure Word where
   hi : BitVec 32
   deriving BEq, DecidableEq, Repr
 
-def Word.val (a : Word) : Nat := a.lo.toNat + 4294967296 * a.hi.toNat
+@[expose] def Word.val (a : Word) : Nat := a.lo.toNat + 4294967296 * a.hi.toNat
 
 theorem Word.val_lt (a : Word) : a.val < 2^64 := by
   have hl := a.lo.isLt
@@ -126,11 +126,11 @@ private theorem digit_mul_le {a b : Nat} (ha : a < 65536) (hb : b < 65536) :
   rw [hl, hh]
   exact mul32Nat_sound _ _
 
-def add (a b : Word) : Word :=
+@[expose] def add (a b : Word) : Word :=
   let l := a.lo + b.lo
   ⟨l, a.hi + b.hi + (if l.ult a.lo then 1#32 else 0#32)⟩
 
-def sub (a b : Word) : Word :=
+@[expose] def sub (a b : Word) : Word :=
   ⟨a.lo - b.lo, a.hi - b.hi - (if a.lo.ult b.lo then 1#32 else 0#32)⟩
 
 def lt (a b : Word) : Bool := a.hi.ult b.hi || (a.hi == b.hi && a.lo.ult b.lo)
@@ -168,7 +168,7 @@ theorem sub_val (a b : Word) : (sub a b).val =
   split <;> simp only [BitVec.toNat_ofNat] <;> omega
 
 /-- Truncated 64-bit multiplication using one exact u32 product and two low products. -/
-def mul (a b : Word) : Word :=
+@[expose] def mul (a b : Word) : Word :=
   let p := mul32 a.lo b.lo
   ⟨p.lo, p.hi + a.lo * b.hi + a.hi * b.lo⟩
 
@@ -208,11 +208,11 @@ structure Wide where
   hi : Word
   deriving BEq, DecidableEq, Repr
 
-def Wide.val (x : Wide) : Nat := x.lo.val + 18446744073709551616 * x.hi.val
+@[expose] def Wide.val (x : Wide) : Nat := x.lo.val + 18446744073709551616 * x.hi.val
 
 /-- Four exact u32 products. Carries remain independent u32 values until their
 addition into the high word; no accumulator silently needs a 33rd bit. -/
-def assemble (p00 p01 p10 p11 : Word) : Wide :=
+@[expose] def assemble (p00 p01 p10 p11 : Word) : Wide :=
   let middle := add (add ⟨p00.hi, 0#32⟩ ⟨p01.lo, 0#32⟩) ⟨p10.lo, 0#32⟩
   let h1 := add p11 ⟨p01.hi, 0#32⟩
   let h2 := add h1 ⟨p10.hi, 0#32⟩
@@ -297,7 +297,7 @@ theorem mul_zeroExtend (a b : BitVec 32) : mul ⟨a, 0#32⟩ ⟨b, 0#32⟩ = mul
 
 /-- The existing glMul graph's four generic word multiplications and assembly.
 Fixed mask/shift32 operations are represented by projection and zero-extension. -/
-def mulNetwork (a b : Word) : Wide :=
+@[expose] def mulNetwork (a b : Word) : Wide :=
   assemble (mul ⟨a.lo, 0#32⟩ ⟨b.lo, 0#32⟩)
     (mul ⟨a.lo, 0#32⟩ ⟨b.hi, 0#32⟩)
     (mul ⟨a.hi, 0#32⟩ ⟨b.lo, 0#32⟩)
@@ -309,7 +309,7 @@ theorem mulNetwork_eq_mulWide (a b : Word) : mulNetwork a b = mulWide a b := by
 theorem mulNetwork_sound (a b : Word) : (mulNetwork a b).val = a.val * b.val := by
   rw [mulNetwork_eq_mulWide, mulWide_sound]
 
-def Word.bits (a : Word) : BitVec 64 := a.hi ++ a.lo
+@[expose] def Word.bits (a : Word) : BitVec 64 := a.hi ++ a.lo
 
 theorem Word.bits_val (a : Word) : a.bits.toNat = a.val := by
   rw [Word.bits, BitVec.toNat_append, ← Nat.shiftLeft_add_eq_or_of_lt a.lo.isLt,
@@ -349,13 +349,13 @@ theorem sub_bits (a b : Word) : (sub a b).bits = a.bits - b.bits := by
   have hh := b.val_lt
   omega
 
-def shr (a b : Word) : Word :=
+@[expose] def shr (a b : Word) : Word :=
   if b.hi != 0#32 || !(b.lo.ult 64#32) then ⟨0#32, 0#32⟩
   else if b.lo == 0#32 then a
   else if !(b.lo.ult 32#32) then ⟨a.hi >>> (b.lo - 32#32), 0#32⟩
   else ⟨(a.lo >>> b.lo) ||| (a.hi <<< (32#32 - b.lo)), a.hi >>> b.lo⟩
 
-def shl (a b : Word) : Word :=
+@[expose] def shl (a b : Word) : Word :=
   if b.hi != 0#32 || !(b.lo.ult 64#32) then ⟨0#32, 0#32⟩
   else if b.lo == 0#32 then a
   else if !(b.lo.ult 32#32) then ⟨0#32, a.lo <<< (b.lo - 32#32)⟩
@@ -364,7 +364,7 @@ def shl (a b : Word) : Word :=
 /-- WGSL counterparts of the proved word primitives. u64 is a name for a
 little-endian pair; only `u32_mul_wide` uses the shader u64 extension. Shift counts ≥64 yield zero,
 including counts whose upper word is nonzero, as in BitVec semantics. -/
-def wgslPrelude : String := r#"
+@[expose] def wgslPrelude : String := r#"
 fn u32_mul_wide(a: u32, b: u32) -> vec2<u32> {
   // Bounded u32 operands: the backend emits native low/high u32 products.
   let product = u64(a) * u64(b);

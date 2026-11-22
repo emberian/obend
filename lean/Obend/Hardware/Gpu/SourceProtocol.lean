@@ -1,7 +1,8 @@
 module
+import all Obend.Hardware.Gpu.Workgroup
 public import Obend.Hardware.Gpu.Workgroup
 public import Obend.Hardware.Gpu.BlockLower
-@[expose] public section
+public section
 
 /-!
 The source protocol labels locations by all-buffer prefixes, while lowering uses separate physical
@@ -72,9 +73,9 @@ structure Access where
   write : Bool
 
 /-- Different storage classes get different keys. Nat arithmetic here cannot wrap. -/
-def locationKey (l : Loc) : Nat := 2 * l.idx + if l.space == .workgroup then 1 else 0
+@[expose] def locationKey (l : Loc) : Nat := 2 * l.idx + if l.space == .workgroup then 1 else 0
 
-def Compatible (a b : Access) : Prop := a.key = b.key → a.write = false ∧ b.write = false
+@[expose] def Compatible (a b : Access) : Prop := a.key = b.key → a.write = false ∧ b.write = false
 
 /-- A write cannot share a phase/location with any previous access; a read cannot share one
 with a previous write. Both sets are updated in place by the executable checker. -/
@@ -82,6 +83,11 @@ def separatedAux (seen writes : Std.HashSet (Nat × Nat)) : List Access → Bool
   | [] => true
   | a :: rest => !(writes.contains a.key) && (!a.write || !(seen.contains a.key)) &&
       separatedAux (seen.insert a.key) (if a.write then writes.insert a.key else writes) rest
+
+example :
+    ∃ xs : List Access, xs.length = 2 ∧ separatedAux ∅ ∅ xs = true := by
+  refine ⟨[⟨0, (0, 0), false⟩, ⟨1, (0, 2), true⟩], rfl, ?_⟩
+  simp [separatedAux, Std.HashSet.contains_empty, Std.HashSet.contains_insert]
 
 private theorem separatedAux_sound (xs : List Access) (seen writes : Std.HashSet (Nat × Nat))
     (h : separatedAux seen writes xs = true) :
@@ -150,14 +156,27 @@ private theorem pairwise_compatible_mem (xs : List Access) (h : xs.Pairwise Comp
 
 /-- Read G4 nodes through the certified Array implementation. This does not construct any of G4's
 quadratic relations and does not evaluate arithmetic values. -/
-def accesses (P : Shape) (c : Workgroup.PhaseLayout) : List Access :=
+@[expose] def accesses (P : Shape) (c : Workgroup.PhaseLayout) : List Access :=
   let ns := Workgroup.nodesFast P
   (List.range ns.size).filterMap fun a =>
     let n := ns[a]?.getD default
     n.ev.loc?.map fun l => ⟨a, (c.phase a, locationKey l), n.ev.isWrite⟩
 
-def separatedFast (P : Shape) (c : Workgroup.PhaseLayout) : Bool :=
+@[expose] def separatedFast (P : Shape) (c : Workgroup.PhaseLayout) : Bool :=
   separatedAux ∅ ∅ (accesses P c)
+
+example :
+    ∃ (P : Shape) (c : Workgroup.PhaseLayout),
+      P.threads.length = 2 ∧ separatedFast P c = true := by
+  refine ⟨Workgroup.trace 2 [fun t => [.write ⟨.storage, t⟩ 1 false]],
+          Workgroup.layout 2 [fun t => [.write ⟨.storage, t⟩ 1 false]],
+          rfl, ?_⟩
+  have hAcc :
+      accesses (Workgroup.trace 2 [fun t => [.write ⟨.storage, t⟩ 1 false]])
+        (Workgroup.layout 2 [fun t => [.write ⟨.storage, t⟩ 1 false]]) =
+        [⟨0, (0, 0), true⟩, ⟨3, (0, 2), true⟩] := rfl
+  rw [separatedFast, hAcc]
+  simp [separatedAux, Std.HashSet.contains_empty, Std.HashSet.contains_insert]
 
 private theorem access_mem (P : Shape) (c : Workgroup.PhaseLayout) (a : Nat) (l : Loc)
     (ha : a < P.nodes.length) (hl : (P.nodes.getD a default).ev.loc? = some l) :
@@ -203,7 +222,7 @@ theorem separatedFast_sound (P : Shape) (c : Workgroup.PhaseLayout)
 
 /-- Mandatory protocol admission for the emitter. Checks the actual physical-lane assignment and
 both barrier instances, with no arithmetic evaluation and no Vulkan relation enumeration. -/
-def checkProgram (p : Program) (width : Nat := 64) : Bool :=
+@[expose] def checkProgram (p : Program) (width : Nat := 64) : Bool :=
   p.dispatches.all fun d => (List.range d.groups).all fun group =>
     let protocol := Workgroup.sourceProtocolTrace p d group width
     let layout := Workgroup.sourceProtocolLayout p d group width

@@ -22,7 +22,7 @@ is `Obend.Hardware.Gpu`, run on the devices by `hardware/gpu/verify_gpu.sh`.
    `systolic_tpu_eq_dsp58_cascade_eq_kulisch_dot`, three folds over `Int` lists being the same fold.
 -/
 public import Obend.Hardware.HDL
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Accelerators
 open Obend.Hardware.HDL
@@ -36,7 +36,7 @@ theorem int_mul_nonneg (a b : Int) (ha : 0 ≤ a) (hb : 0 ≤ b) : 0 ≤ a * b :
   | ofNat m =>
     cases b with
     | ofNat n =>
-      exact Int.ofNat_nonneg (m * n)
+      exact Int.natCast_nonneg (m * n)
     | negSucc _ => omega
   | negSucc _ => omega
 
@@ -44,9 +44,9 @@ theorem int_mul_nonneg (a b : Int) (ha : 0 ≤ a) (hb : 0 ≤ b) : 0 ≤ a * b :
 theorem int_sq_nonneg (a : Int) : 0 ≤ a * a := by
   cases a with
   | ofNat n =>
-    exact Int.ofNat_nonneg (n * n)
+    exact Int.natCast_nonneg (n * n)
   | negSucc n =>
-    exact Int.ofNat_nonneg (Nat.succ n * Nat.succ n)
+    exact Int.natCast_nonneg (Nat.succ n * Nat.succ n)
 
 /-- Monotonicity of integer multiplication by a non-negative left factor `c ≥ 0`. -/
 theorem int_mul_le_mul_of_nonneg_left (a b c : Int) (hab : a ≤ b) (hc : 0 ≤ c) :
@@ -68,7 +68,7 @@ theorem int_mul_le_mul_of_nonneg_right (a b c : Int) (hab : a ≤ b) (hc : 0 ≤
 /-- Exact 15-element set of doubled `FP4 (E2M1)` numbers (`2 * (±2^{E-1} * (1 + M/2))` plus subnormals):
 $$S_{\text{E2M1}} = \{0, \pm 1, \pm 2, \pm 3, \pm 4, \pm 6, \pm 8, \pm 12\}.$$
 Every value in $S_{\text{E2M1}}$ is bit-exactly representable in 4-bit `E2M1` Tensor Cores! -/
-def isDoubledFp4E2M1 (r : Int) : Bool :=
+@[expose] def isDoubledFp4E2M1 (r : Int) : Bool :=
   r == 0 ||
   r == 1  || r == -1 ||
   r == 2  || r == -2 ||
@@ -146,30 +146,30 @@ theorem ozaki_base13_2limb_product_exact (a0 a1 b0 b1 : Int) :
 
 /-- Evaluate an arbitrary $K$-limb base-13 integer $\sum_{k=0}^{K-1} a_k \cdot 13^k$
 (little-endian limb list `a_0 :: a_1 :: ...`). -/
-def evalBase13Limbs : List Int → Int
+@[expose] def evalBase13Limbs : List Int → Int
   | [] => 0
   | a :: rest => a + 13 * evalBase13Limbs rest
 
 /-- Scale every limb of a $K$-limb base-13 representation by scalar `c : Int`. -/
-def scaleBase13Limbs (c : Int) : List Int → List Int
+@[expose] def scaleBase13Limbs (c : Int) : List Int → List Int
   | [] => []
   | a :: rest => (c * a) :: scaleBase13Limbs c rest
 
 /-- Limbwise addition of two multi-limb base-13 representations (without carry propagation,
 accumulating in wide Kulisch/FP32 limbs). -/
-def addBase13Limbs : List Int → List Int → List Int
+@[expose] def addBase13Limbs : List Int → List Int → List Int
   | [], bs => bs
   | as, [] => as
   | a :: as, b :: bs => (a + b) :: addBase13Limbs as bs
 
 /-- Cauchy convolution of two multi-limb base-13 representations (`arXiv:2608.06812` §III):
 computes all $K_A \times K_B$ `FP4 (E2M1)` Tensor-Core limb products and accumulates them by radix-13 degree. -/
-def mulBase13Limbs : List Int → List Int → List Int
+@[expose] def mulBase13Limbs : List Int → List Int → List Int
   | [], _ => []
   | a :: as, bs => addBase13Limbs (scaleBase13Limbs a bs) (0 :: mulBase13Limbs as bs)
 
 /-- Check that every limb in a $K$-limb representation is a valid doubled `FP4 (E2M1)` value in $S_{\text{E2M1}}$. -/
-def allLimbsDoubledFp4 (limbs : List Int) : Bool :=
+@[expose] def allLimbsDoubledFp4 (limbs : List Int) : Bool :=
   limbs.all isDoubledFp4E2M1
 
 /-- **Universal $K$-Limb Base-13 Limbwise Addition Exactness (`evalBase13Limbs_add_exact`)**:
@@ -235,7 +235,7 @@ structure MxfpBlock where
 
 /-- Wide fixed-point **Kulisch exact dot-product accumulator** (`arXiv:2607.13898` §II-B):
 computes $\sum_i x_i y_i$ without intermediate rounding or truncation. -/
-def kulischDot : List Int → List Int → Int
+@[expose] def kulischDot : List Int → List Int → Int
   | [], _ => 0
   | _, [] => 0
   | x :: xs, y :: ys => x * y + kulischDot xs ys
@@ -275,7 +275,7 @@ theorem kulisch_dot_append_exact
 /-- Limbwise Cauchy inner-product accumulator over two vectors of $K$-limb base-13 numbers:
 accumulates the Cauchy convolution `mulBase13Limbs x y` across all vector positions without
 collapsing limbs until final reduction. -/
-def accumOzakiBase13KLimbDot : List (List Int) → List (List Int) → List Int
+@[expose] def accumOzakiBase13KLimbDot : List (List Int) → List (List Int) → List Int
   | [], _ => []
   | _, [] => []
   | x :: xs, y :: ys => addBase13Limbs (mulBase13Limbs x y) (accumOzakiBase13KLimbDot xs ys)
@@ -283,7 +283,7 @@ def accumOzakiBase13KLimbDot : List (List Int) → List (List Int) → List Int
 /-- Multi-limb ($K$-limb) Ozaki Base-13 `FP4` Tensor-Core inner product (`arXiv:2608.06812` §III):
 evaluates the limbwise Cauchy dot-product accumulation `accumOzakiBase13KLimbDot xs ys` in a
 wide Kulisch accumulator. -/
-def evalOzakiBase13KLimbDot (xs ys : List (List Int)) : Int :=
+@[expose] def evalOzakiBase13KLimbDot (xs ys : List (List Int)) : Int :=
   evalBase13Limbs (accumOzakiBase13KLimbDot xs ys)
 
 /-- **Universal $K$-Limb Ozaki Base-13 Inner-Product Exactness (`ozaki_base13_klimb_dot_exact`)**:
@@ -313,10 +313,16 @@ heterogeneous GPU/TPU/FPGA operators (`arXiv:2510.16028`). -/
 structure FloatInterval where
   lo : Int
   hi : Int
-  deriving DecidableEq, Repr
+  deriving Repr
+
+instance : DecidableEq FloatInterval := fun a b =>
+  if h : a.lo = b.lo ∧ a.hi = b.hi then
+    isTrue (by cases a; cases b; simp_all)
+  else
+    isFalse (by intro heq; subst heq; exact h ⟨rfl, rfl⟩)
 
 /-- Membership of a scalar value `x` inside interval `iv` (`iv.lo ≤ x ∧ x ≤ iv.hi`). -/
-def FloatInterval.contains (iv : FloatInterval) (x : Int) : Prop :=
+@[expose] def FloatInterval.contains (iv : FloatInterval) (x : Int) : Prop :=
   iv.lo ≤ x ∧ x ≤ iv.hi
 
 /-- Interval addition with outward rounding slack `ulpSlack ≥ 0`. -/

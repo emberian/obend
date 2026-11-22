@@ -33,7 +33,7 @@ electronics** within `Obend.Hardware`:
 4. **Unified Datasheet-Fit & Circuit Calibration Certificate (`DatasheetFitCert`, `checkDatasheetFitSignoff`)**.
 -/
 public import Obend.Hardware.Datasheet
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Circuits
 open Obend.Hardware.Datasheet
@@ -100,7 +100,7 @@ def evalTtlPropDelayPs (baseTpPs fanout capPerFanoutFf : Nat) : Nat :=
 /-- Check that a `74LS00` gate's fanout load `fanout` obeys both the rated unit-load count
 (`fanout ≤ p.maxFanout`) and keeps the worst-case saturated $V_{OL}$ within the $400\,\text{mV}$
 TTL threshold. -/
-def checkTtlFanout (p : TtlTotemPoleParams) (fanout : Nat) : Bool :=
+@[expose] def checkTtlFanout (p : TtlTotemPoleParams) (fanout : Nat) : Bool :=
   decide (fanout ≤ p.maxFanout) &&
   decide (evalTtlNandMv p 2000 2000 fanout ≤ 400)
 
@@ -127,7 +127,7 @@ theorem ttl74ls00_nand_truth_and_swing_sound
     have hCond : (decide (2000 ≤ vAMv) && decide (2000 ≤ vBMv)) = true := by
       rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq]
       exact ⟨hA, hB⟩
-    rw [if_pos hCond]
+    rw [ite_eq_left hCond]
     omega
   · intro hA
     have hNotA : decide (2000 ≤ vAMv) = false := by
@@ -142,7 +142,7 @@ theorem ttl74ls00_nand_truth_and_swing_sound
     have hCond2 : (decide (vAMv ≤ 800) || decide (vBMv ≤ 800)) = true := by
       rw [hLowA]
       rfl
-    rw [if_neg hCond1, if_pos hCond2]
+    rw [ite_eq_right hCond1, ite_eq_left hCond2]
     omega
   · intro hB
     have hNotB : decide (2000 ≤ vBMv) = false := by
@@ -156,7 +156,7 @@ theorem ttl74ls00_nand_truth_and_swing_sound
       exact hB
     have hCond2 : (decide (vAMv ≤ 800) || decide (vBMv ≤ 800)) = true := by
       rw [hLowB, Bool.or_true]
-    rw [if_neg hCond1, if_pos hCond2]
+    rw [ite_eq_right hCond1, ite_eq_left hCond2]
     omega
 
 /-- Theorem (`fanout_overload_degrades_vol_refused`):
@@ -288,7 +288,7 @@ without saturating its inductor core:
 1. Valid PWM duty cycle `dutyPermille ≤ 1000`, positive $L$ and $f_{\text{sw}}$,
 2. Continuous Conduction Mode (`evalBuckRippleMa b ≤ 2 * b.iLoadMa`, so $I_{L,\text{valley}} \ge 0$),
 3. Magnetic core saturation safety (`evalBuckPeakInductorMa b ≤ b.iSatMaxMa`). -/
-def checkBuckCcmSafe (b : BuckSpec) : Bool :=
+@[expose] def checkBuckCcmSafe (b : BuckSpec) : Bool :=
   decide (b.dutyPermille ≤ 1000) &&
   decide (0 < b.inductanceUh) &&
   decide (0 < b.fswKhz) &&
@@ -368,7 +368,7 @@ structure DatasheetFitCert where
   deriving DecidableEq, Repr
 
 /-- Complete kernel checker for a `DatasheetFitCert`. -/
-def checkDatasheetFitSignoff (cert : DatasheetFitCert) : Bool :=
+@[expose] def checkDatasheetFitSignoff (cert : DatasheetFitCert) : Bool :=
   checkLogicInterface cert.driverSpec cert.receiverSpec cert.pullupBoostMv cert.minMarginMv &&
   checkTtlFanout cert.ttlParams cert.fanout &&
   checkModelCalibration cert.modelPreds cert.datasheetPoints cert.maxCalErrMv &&
@@ -376,7 +376,7 @@ def checkDatasheetFitSignoff (cert : DatasheetFitCert) : Bool :=
   checkBuckCcmSafe cert.buckStage
 
 /-- Golden calibrated `SN74LS00` $\to$ `CD74HCT00` + Pt100 INA + 5V Buck certificate. -/
-def goldenDatasheetFitCert : DatasheetFitCert where
+@[expose] def goldenDatasheetFitCert : DatasheetFitCert where
   suiteName       := "obend_74ls_hct_ina_calibrated"
   driverSpec      := sn74ls00Datasheet.logic
   receiverSpec    := cd74hct00Datasheet.logic
@@ -392,7 +392,7 @@ def goldenDatasheetFitCert : DatasheetFitCert where
 
 /-- Bad certificate attempting to drive `CD74HC00` directly from `SN74LS00` without a pull-up
 ($\text{NM}_H = -800\,\text{mV}$). -/
-def badDirect74HcFitCert : DatasheetFitCert :=
+@[expose] def badDirect74HcFitCert : DatasheetFitCert :=
   { goldenDatasheetFitCert with
     receiverSpec  := cd74hc00Datasheet.logic
     pullupBoostMv := 0 }
@@ -402,10 +402,10 @@ def badUncalibratedDriftFitCert : DatasheetFitCert :=
   { goldenDatasheetFitCert with
     modelPreds := uncalibratedDrifted74ls00Preds }
 
-/-- Theorem (`datasheet_fit_signoff_poles`):
+/-- Theorem (`datasheet_fit_signoff_contrast`):
 `checkDatasheetFitSignoff` accepts `goldenDatasheetFitCert` and refuses both `badDirect74HcFitCert`
 (direct `74LS` $\to$ `74HC` negative noise margin) and `badUncalibratedDriftFitCert`! -/
-theorem datasheet_fit_signoff_poles :
+theorem datasheet_fit_signoff_contrast :
     checkDatasheetFitSignoff goldenDatasheetFitCert = true ∧
     checkDatasheetFitSignoff badDirect74HcFitCert = false ∧
     checkDatasheetFitSignoff badUncalibratedDriftFitCert = false :=

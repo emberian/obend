@@ -12,7 +12,7 @@ https://www.cs.cmu.edu/~scandal/nesl.html
 https://eprints.gla.ac.uk/146596/1/146596.pdf
 -/
 public import Std
-@[expose] public section
+public section
 namespace Obend.Hardware.ArrayHypergraph
 set_option autoImplicit false
 abbrev Word := BitVec 64
@@ -20,10 +20,10 @@ abbrev Vec := List Word
 
 /-- Guard before the native Nat shift allocates an enormous intermediate. The raw
 BitVec operation is mathematically zero for an oversized count but can panic natively. -/
-def wordShl (x count : Word) : Word :=
+@[expose] def wordShl (x count : Word) : Word :=
   if count.toNat < 64 then x <<< count.toNat else 0#64
 
-def wordShr (x count : Word) : Word :=
+@[expose] def wordShr (x count : Word) : Word :=
   if count.toNat < 64 then x >>> count.toNat else 0#64
 
 @[simp] theorem wordShl_eq (x count : Word) : wordShl x count = x <<< count.toNat := by
@@ -41,13 +41,13 @@ inductive ReduceOp where
   | add | mul | band | bor
   deriving DecidableEq, Repr
 
-def ReduceOp.combine : ReduceOp → Word → Word → Word
+@[expose] def ReduceOp.combine : ReduceOp → Word → Word → Word
   | .add => (· + ·)
   | .mul => (· * ·)
   | .band => (· &&& ·)
   | .bor => (· ||| ·)
 
-def ReduceOp.identity : ReduceOp → Word
+@[expose] def ReduceOp.identity : ReduceOp → Word
   | .add | .bor => 0#64
   | .mul => 1#64
   | .band => BitVec.allOnes 64
@@ -80,7 +80,7 @@ inductive ScanMode where
   | inclusive | exclusive
   deriving DecidableEq, Repr
 
-def ScanMode.extra : ScanMode → Nat
+@[expose] def ScanMode.extra : ScanMode → Nat
   | .inclusive => 1
   | .exclusive => 0
 
@@ -92,12 +92,12 @@ inductive FoldShape where
   | segScan (lengths : List Nat) (mode : ScanMode)
   deriving DecidableEq, Repr
 
-def FoldShape.inputLen : FoldShape → Nat
+@[expose] def FoldShape.inputLen : FoldShape → Nat
   | .reduce n | .scan n _ => n
   | .segReduce ls | .segScan ls _ => ls.sum
 
 /-- A result is the fold of a contiguous input interval `(start, length)`. -/
-def segmentRanges (scan : Option ScanMode) : Nat → List Nat → List (Nat × Nat)
+@[expose] def segmentRanges (scan : Option ScanMode) : Nat → List Nat → List (Nat × Nat)
   | _, [] => []
   | start, n :: ns =>
     (match scan with
@@ -105,13 +105,13 @@ def segmentRanges (scan : Option ScanMode) : Nat → List Nat → List (Nat × N
      | some mode => (List.range n).map fun i => (start, i + mode.extra)) ++
     segmentRanges scan (start + n) ns
 
-def FoldShape.ranges : FoldShape → List (Nat × Nat)
+@[expose] def FoldShape.ranges : FoldShape → List (Nat × Nat)
   | .reduce n => [(0, n)]
   | .scan n mode => (List.range n).map fun i => (0, i + mode.extra)
   | .segReduce ns => segmentRanges none 0 ns
   | .segScan ns mode => segmentRanges (some mode) 0 ns
 
-def FoldShape.outLen (shape : FoldShape) : Nat := shape.ranges.length
+abbrev FoldShape.outLen (shape : FoldShape) : Nat := shape.ranges.length
 
 theorem segmentRanges_bound (mode : Option ScanMode) (ns : List Nat) (start : Nat)
     (r : Nat × Nat) (hr : r ∈ segmentRanges mode start ns) :
@@ -143,7 +143,7 @@ theorem FoldShape.ranges_bound (shape : FoldShape) (r : Nat × Nat) (hr : r ∈ 
   | segScan ns mode => simpa [FoldShape.inputLen] using (segmentRanges_bound (some mode) ns 0 r hr).2
 
 /-- Left fold in index order. The initial accumulator is explicit for chunk composition. -/
-def foldRange (op : ReduceOp) (read : Nat → Word) (start len : Nat) (init : Word) : Word :=
+@[expose] def foldRange (op : ReduceOp) (read : Nat → Word) (start len : Nat) (init : Word) : Word :=
   (List.range' start len).foldl (fun acc i => op.combine acc (read i)) init
 
 theorem foldRange_add (op : ReduceOp) (read : Nat → Word) (start a b : Nat) (init : Word) :
@@ -163,7 +163,7 @@ theorem foldRange_congr (op : ReduceOp) (read read' : Nat → Word) (start len :
   simpa [List.foldl_map, foldRange] using congrArg (List.foldl op.combine init) hm
 
 /-- Reference semantics, independent of the cached execution strategy. -/
-def evalFold (op : ReduceOp) (shape : FoldShape) (read : Nat → Word) : Vec :=
+@[expose] def evalFold (op : ReduceOp) (shape : FoldShape) (read : Nat → Word) : Vec :=
   shape.ranges.map fun r => foldRange op read r.1 r.2 op.identity
 
 /-- Reuse the previous prefix when the next interval extends it. Generated scan ranges
@@ -291,11 +291,11 @@ theorem segmentValues_flatten (op : ReduceOp) (mode : Option ScanMode) (read : N
       rw [segmentValues, List.flatten_cons, ih, scanRange_eq op m read start 0 n op.identity rfl]
       simp [segmentRanges, List.map_map, List.range_eq_range']
 
-def FoldShape.segments : FoldShape → List Nat
+@[expose] def FoldShape.segments : FoldShape → List Nat
   | .reduce n | .scan n _ => [n]
   | .segReduce ns | .segScan ns _ => ns
 
-def FoldShape.mode : FoldShape → Option ScanMode
+@[expose] def FoldShape.mode : FoldShape → Option ScanMode
   | .reduce _ | .segReduce _ => none
   | .scan _ m | .segScan _ m => some m
 

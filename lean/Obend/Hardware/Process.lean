@@ -24,14 +24,14 @@ CMOS), and application-level hardware pipelines (`ReviewMember.obend` and `Obend
 -/
 public import Obend.Core.Ty
 public import Obend.Ledger.Register
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Process
 set_option autoImplicit false
 
 /-! ## 1. Gate-Level BEL Technology Mapping (`LUT2`/`LUT6` + `CARRY8`) -/
 
-def evalLUT2 (init : BitVec 4) (i0 i1 : Bool) : Bool :=
+@[expose] def evalLUT2 (init : BitVec 4) (i0 i1 : Bool) : Bool :=
   let idx := (if i0 then 1 else 0) + (if i1 then 2 else 0)
   init.getLsbD idx
 
@@ -45,7 +45,7 @@ def evalLUT6 (init : BitVec 64) (i0 i1 i2 i3 i4 i5 : Bool) : Bool :=
     (if i5 then 32 else 0)
   init.getLsbD idx
 
-def LUT2_INIT_XOR : BitVec 4 := 0b0110#4
+abbrev LUT2_INIT_XOR : BitVec 4 := 0b0110#4
 def LUT2_INIT_AND : BitVec 4 := 0b1000#4
 
 theorem lut2_xor_sound (a b : Bool) :
@@ -56,14 +56,14 @@ theorem lut2_and_sound (a b : Bool) :
     evalLUT2 LUT2_INIT_AND a b = (a && b) := by
   cases a <;> cases b <;> rfl
 
-def evalCarryBel (a b ci : Bool) : Bool × Bool :=
+@[expose] def evalCarryBel (a b ci : Bool) : Bool × Bool :=
   let prop   := evalLUT2 LUT2_INIT_XOR a b
   let gen    := a && b
   let sumBit := xor prop ci
   let cout   := if prop then ci else gen
   (sumBit, cout)
 
-def fullAdderSpec (a b ci : Bool) : Bool × Bool :=
+@[expose] def fullAdderSpec (a b ci : Bool) : Bool × Bool :=
   let n := (if a then 1 else 0) + (if b then 1 else 0) + (if ci then 1 else 0)
   (decide (n % 2 = 1), decide (n ≥ 2))
 
@@ -133,7 +133,7 @@ structure ProcessCorner where
   tSkewPs      : Nat
   deriving DecidableEq, Repr
 
-def corner7nm_SS : ProcessCorner where
+@[expose] def corner7nm_SS : ProcessCorner where
   name         := "7nm-FinFET-SS-0.68V-125C"
   nodeNm       := 7
   voltageMv    := 680
@@ -148,7 +148,7 @@ def corner7nm_SS : ProcessCorner where
   tHoldPs      := 18
   tSkewPs      := 25
 
-def corner16nm_SS : ProcessCorner where
+@[expose] def corner16nm_SS : ProcessCorner where
   name         := "16nm-UltraScalePlus-SS-0.82V-100C"
   nodeNm       := 16
   voltageMv    := 820
@@ -186,16 +186,16 @@ structure TimingPath where
   tileHops    : Nat
   deriving DecidableEq, Repr
 
-def maxArrivalPs (c : ProcessCorner) (p : TimingPath) : Nat :=
+abbrev maxArrivalPs (c : ProcessCorner) (p : TimingPath) : Nat :=
   c.tCqMaxPs + p.logicLevels * c.tGateMaxPs + p.carryBits * c.tCarryMaxPs + p.tileHops * c.tWireHopPs
 
-def minArrivalPs (c : ProcessCorner) (p : TimingPath) : Nat :=
+abbrev minArrivalPs (c : ProcessCorner) (p : TimingPath) : Nat :=
   c.tCqMinPs + p.minLevels * c.tGateMinPs
 
-def requiredPeriodPs (c : ProcessCorner) (p : TimingPath) : Nat :=
+abbrev requiredPeriodPs (c : ProcessCorner) (p : TimingPath) : Nat :=
   maxArrivalPs c p + c.tSetupPs + c.tSkewPs
 
-def checkTimingSignoff (c : ProcessCorner) (clockPeriodPs : Nat) (p : TimingPath) : Bool :=
+abbrev checkTimingSignoff (c : ProcessCorner) (clockPeriodPs : Nat) (p : TimingPath) : Bool :=
   (requiredPeriodPs c p ≤ clockPeriodPs) &&
   (c.tHoldPs + c.tSkewPs ≤ minArrivalPs c p)
 
@@ -207,7 +207,7 @@ theorem timingSignoff_sound {c : ProcessCorner} {clockPeriodPs : Nat} {p : Timin
   rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at h
   exact h
 
-def obendStageCritPath : TimingPath where
+@[expose] def obendStageCritPath : TimingPath where
   name        := "obend_pipeline_stage_64b_alu"
   logicLevels := 2
   minLevels   := 1
@@ -217,13 +217,13 @@ def obendStageCritPath : TimingPath where
 theorem obend_multi_process_timing_signoff :
     checkTimingSignoff corner7nm_SS   2000 obendStageCritPath = true ∧
     checkTimingSignoff corner16nm_SS  2500 obendStageCritPath = true ∧
-    checkTimingSignoff corner130nm_SS 5000 obendStageCritPath = true :=
-  ⟨rfl, rfl, rfl⟩
+    checkTimingSignoff corner130nm_SS 5000 obendStageCritPath = true := by
+  exact ⟨rfl, rfl, rfl⟩
 
 /-! ## 3b. Process Corner Envelopes (`[FF, TT, SS]`) & Dual-Corner Timing Signoff -/
 
 /-- Fast-Fast (`FF`) 7nm FinFET corner bounding minimum contamination delays and hold checks. -/
-def corner7nm_FF : ProcessCorner where
+@[expose] def corner7nm_FF : ProcessCorner where
   name         := "7nm-FinFET-FF-0.82V-0C"
   nodeNm       := 7
   voltageMv    := 820
@@ -239,7 +239,7 @@ def corner7nm_FF : ProcessCorner where
   tSkewPs      := 25
 
 /-- Typical-Typical (`TT`) 7nm FinFET nominal corner lying strictly inside `[corner7nm_FF, corner7nm_SS]`. -/
-def corner7nm_TT : ProcessCorner where
+@[expose] def corner7nm_TT : ProcessCorner where
   name         := "7nm-FinFET-TT-0.75V-25C"
   nodeNm       := 7
   voltageMv    := 750
@@ -262,7 +262,7 @@ structure ProcessCornerEnvelope where
   deriving DecidableEq, Repr
 
 /-- Reference 7nm `[FF, TT, SS]` process corner envelope. -/
-def envelope7nm : ProcessCornerEnvelope where
+@[expose] def envelope7nm : ProcessCornerEnvelope where
   fastCorner := corner7nm_FF
   nomCorner  := corner7nm_TT
   slowCorner := corner7nm_SS
@@ -271,7 +271,7 @@ def envelope7nm : ProcessCornerEnvelope where
 1. Its maximum combinational and setup/skew parameters are bounded above by `cSlow` (`SS`), and
 2. Its minimum contamination delays are bounded below by `cFast` (`FF`) while its hold/skew
    requirements are bounded above by `cFast`. -/
-def CornerBetween (cFast c cSlow : ProcessCorner) : Prop :=
+@[expose] def CornerBetween (cFast c cSlow : ProcessCorner) : Prop :=
   c.tCqMaxPs ≤ cSlow.tCqMaxPs ∧
   c.tGateMaxPs ≤ cSlow.tGateMaxPs ∧
   c.tCarryMaxPs ≤ cSlow.tCarryMaxPs ∧
@@ -297,7 +297,7 @@ theorem envelope7nm_valid : envelope7nm.Valid := by
 /-- Dual-corner static timing signoff across a `ProcessCornerEnvelope`:
 * Verifies **setup timing closure** (`requiredPeriodPs env.slowCorner p ≤ clockPeriodPs`) at `env.slowCorner` (`SS`), and
 * Verifies **hold timing closure** (`env.fastCorner.tHoldPs + env.fastCorner.tSkewPs ≤ minArrivalPs env.fastCorner p`) at `env.fastCorner` (`FF`). -/
-def checkEnvelopeTimingSignoff
+@[expose] def checkEnvelopeTimingSignoff
     (env : ProcessCornerEnvelope) (clockPeriodPs : Nat) (p : TimingPath) : Bool :=
   decide (requiredPeriodPs env.slowCorner p ≤ clockPeriodPs) &&
   decide (env.fastCorner.tHoldPs + env.fastCorner.tSkewPs ≤ minArrivalPs env.fastCorner p)

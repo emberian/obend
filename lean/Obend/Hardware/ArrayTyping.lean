@@ -16,7 +16,7 @@ rules. Its erasure theorem derives `ArrayGraph.wf`; callers retain this proof ra
 `wf` again at every downstream stage. The checker is a trust boundary, not a theorem about a fixture.
 -/
 public import Obend.Hardware.Gpu
-@[expose] public section
+public section
 
 namespace Obend.Hardware.ArrayTyping
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.OpenHypergraph
@@ -26,22 +26,22 @@ inductive ElemType where
   | word
   | predicate
   | fixed (fractionBits : Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 abbrev Shape := List Nat
 
-def Shape.size (s : Shape) : Nat := s.prod
+abbrev Shape.size (s : Shape) : Nat := s.prod
 
 structure TensorType where
   shape : Shape
   elem : ElemType
   deriving DecidableEq, Repr
 
-def TensorType.size (t : TensorType) : Nat := t.shape.size
+abbrev TensorType.size (t : TensorType) : Nat := t.shape.size
 
-def defaultType : TensorType := ⟨[0], .word⟩
+@[expose] def defaultType : TensorType := ⟨[0], .word⟩
 
-def wireType (types : List TensorType) (w : Nat) : TensorType := types.getD w defaultType
+abbrev wireType (types : List TensorType) (w : Nat) : TensorType := types.getD w defaultType
 
 /-- A shape map selects source indices for the target tensor. -/
 abbrev ShapeMap (target source : Shape) := Fin target.size → Fin source.size
@@ -51,23 +51,23 @@ abbrev Tensor (shape : Shape) := Fin shape.size → Word
 def reindex {target source : Shape} (f : ShapeMap target source) (a : Tensor source) :
     Tensor target := a ∘ f
 
-theorem reindex_id (s : Shape) (a : Tensor s) : reindex id a = a := rfl
+theorem reindex_id (s : Shape) (a : Tensor s) : reindex id a = a := by rfl
 
 theorem reindex_comp {a b c : Shape} (f : ShapeMap a b) (g : ShapeMap b c) (v : Tensor c) :
-    reindex f (reindex g v) = reindex (g ∘ f) v := rfl
+    reindex f (reindex g v) = reindex (g ∘ f) v := by rfl
 
 /-- Numeric signatures follow the physical word arithmetic. A fixed-point product retains its
 full binary scale; there is no hidden rounding or rescaling operation. -/
-def numeric (t : ElemType) : Bool := match t with
+@[expose] def numeric (t : ElemType) : Bool := match t with
   | .predicate => false
   | _ => true
 
-def productType (a b : ElemType) : Option ElemType := match a, b with
+@[expose] def productType (a b : ElemType) : Option ElemType := match a, b with
   | .word, .word => some .word
   | .fixed q, .fixed r => some (.fixed (q + r))
   | _, _ => none
 
-def elemSignature (op : ElemOp) (args : List ElemType) (result : ElemType) : Bool :=
+@[expose] def elemSignature (op : ElemOp) (args : List ElemType) (result : ElemType) : Bool :=
   match op, args with
   | .scalar (.const v), [] =>
       result != .predicate || v == 0 || v == 1
@@ -82,7 +82,7 @@ def elemSignature (op : ElemOp) (args : List ElemType) (result : ElemType) : Boo
   | _, _ => false
 
 /-- Shape and element rules, beyond the representation's length discipline. -/
-def signatureOk (types : List TensorType) (e : ArrayEdge) : Bool :=
+@[expose] def signatureOk (types : List TensorType) (e : ArrayEdge) : Bool :=
   let dst := wireType types e.dstWire
   let src := e.srcWires.map (wireType types)
   match e.op with
@@ -100,7 +100,7 @@ def signatureOk (types : List TensorType) (e : ArrayEdge) : Bool :=
 
 /-- The operation's structural rule. Kept separate from `edgeOk` so the derivation exposes every
 premise consumed by the erasure theorem. -/
-def operationRule (ls : List Nat) (e : ArrayEdge) : Prop :=
+@[expose] def operationRule (ls : List Nat) (e : ArrayEdge) : Prop :=
   match e.op with
   | .map _ p =>
       (∀ s ∈ e.srcWires, ls.getD s 0 = ls.getD e.dstWire 0) ∧
@@ -115,7 +115,7 @@ instance (ls : List Nat) (e : ArrayEdge) : Decidable (operationRule ls e) := by
   split <;> infer_instance
 
 /-- A local typing rule includes wire scope and the result's representation size. -/
-def EdgeTyping (types : List TensorType) (ls : List Nat) (e : ArrayEdge) : Prop :=
+@[expose] def EdgeTyping (types : List TensorType) (ls : List Nat) (e : ArrayEdge) : Prop :=
   e.dstWire < ls.length ∧
   (∀ s ∈ e.srcWires, s < ls.length) ∧
   e.op.outLen (e.srcWires.map (ls.getD · 0)) = ls.getD e.dstWire 0 ∧
@@ -129,12 +129,11 @@ theorem EdgeTyping.edgeOk {types : List TensorType} {ls : List Nat} {e : ArrayEd
   rcases h with ⟨hd, hs, hl, hop, _, _⟩
   simp only [Obend.Hardware.ArrayHypergraph.edgeOk, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq, List.all_eq_true]
   refine ⟨⟨⟨hd, hs⟩, hl⟩, ?_⟩
-  cases hOp : e.op <;> simp_all [operationRule, Bool.and_eq_true, List.all_eq_true,
-    Bool.not_eq_true', List.contains_iff_mem, beq_iff_eq]
+  cases hOp : e.op <;> simp_all [operationRule, Bool.and_eq_true, List.all_eq_true]
 
 /-- SSA scope is stronger than the legacy graph invariant: every read must have a producer
 or name an input, and inputs cannot be overwritten. -/
-def definedBeforeUse : List Nat → List ArrayEdge → Bool
+@[expose] def definedBeforeUse : List Nat → List ArrayEdge → Bool
   | _, [] => true
   | available, e :: es =>
       e.srcWires.all available.contains && !available.contains e.dstWire &&
@@ -142,7 +141,7 @@ def definedBeforeUse : List Nat → List ArrayEdge → Bool
 
 /-- Global typing: each wire has one shape and element type, destinations are unique, and a read
 cannot precede its producer. These are reusable derivation premises, not an assumption of `wf`. -/
-def GraphTyping (types : List TensorType) (g : ArrayGraph) : Prop :=
+@[expose] def GraphTyping (types : List TensorType) (g : ArrayGraph) : Prop :=
   types.map TensorType.size = g.lengths ∧
   (∀ w ∈ g.inputs, w < g.lengths.length) ∧
   (∀ w ∈ g.outputs, w < g.lengths.length) ∧
@@ -208,7 +207,7 @@ theorem checkTypedGraph_layout (types : List TensorType) (g : ArrayGraph) (t : T
   simpa [hg] using t.layout
 
 /-- Explicit word-vector annotation for frontends whose source type is a flat word array. -/
-def wordTypes (g : ArrayGraph) : List TensorType := g.lengths.map (fun n => ⟨[n], .word⟩)
+@[expose] def wordTypes (g : ArrayGraph) : List TensorType := g.lengths.map (fun n => ⟨[n], .word⟩)
 
 def TypedGraph.lower (g : TypedGraph) : Gpu.GpuProgram := Gpu.lowerArrayToGpu g.graph
 

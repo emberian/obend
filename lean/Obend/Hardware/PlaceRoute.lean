@@ -24,7 +24,7 @@ assemblers (`fasm2frames`) by requiring PnR tools to emit a `PnrCertificate` bou
 -/
 public import Obend.Hardware.Process
 public import Obend.Hardware.Synth
-@[expose] public section
+public section
 
 namespace Obend.Hardware.PlaceRoute
 open Obend.Hardware.Process Obend.Hardware.Synth
@@ -40,26 +40,30 @@ structure PlacedCell where
   tileY   : Nat
   belSlot : Nat
   lutInit : Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Physical location tuple `(tileX, tileY, belSlot)` of a placed cell. -/
-def cellLocation (c : PlacedCell) : Nat × Nat × Nat :=
+abbrev cellLocation (c : PlacedCell) : Nat × Nat × Nat :=
   (c.tileX, c.tileY, c.belSlot)
 
 /-- Check that two placed cells do not collide on the same physical `(tileX, tileY, belSlot)`
 whenever their logical `cellId`s are distinct. -/
-def checkPairNoCollision (c1 c2 : PlacedCell) : Bool :=
+abbrev checkPairNoCollision (c1 c2 : PlacedCell) : Bool :=
   (c1.cellId == c2.cellId) || (cellLocation c1 != cellLocation c2)
 
 /-- Check that `c` does not collide with any placed cell in `rest`. -/
-def checkCellAgainstList (c : PlacedCell) : List PlacedCell → Bool
+@[expose] def checkCellAgainstList (c : PlacedCell) : List PlacedCell → Bool
   | [] => true
   | c2 :: rest => checkPairNoCollision c c2 && checkCellAgainstList c rest
 
 /-- Kernel placement injectivity checker: verifies pairwise non-collision across all placed cells. -/
-def checkPlacementInjective : List PlacedCell → Bool
+@[expose] def checkPlacementInjective : List PlacedCell → Bool
   | [] => true
   | c :: rest => checkCellAgainstList c rest && checkPlacementInjective rest
+
+example :
+    ∃ cells : List PlacedCell, cells.length = 2 ∧ checkPlacementInjective cells = true := by
+  exact ⟨[⟨0, 0, 0, 0, 6⟩, ⟨1, 0, 1, 0, 6⟩], rfl, rfl⟩
 
 /-- Pairwise non-collision lemma (`placement_injective_no_collision`). -/
 theorem placement_injective_no_collision
@@ -138,7 +142,7 @@ structure PipHop where
   dstWire : Nat
   resOhm  : Nat
   capFf   : Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- A routed physical net connecting `srcWire` to `dstWire` through a sequence of `PipHop`s. -/
 structure RoutedNet where
@@ -146,15 +150,15 @@ structure RoutedNet where
   srcWire : Nat
   dstWire : Nat
   hops    : List PipHop
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Verify that a sequence of `PipHop`s forms a contiguous directed path from `curWire` to `targetWire`. -/
-def checkHopsContiguous (curWire targetWire : Nat) : List PipHop → Bool
+@[expose] def checkHopsContiguous (curWire targetWire : Nat) : List PipHop → Bool
   | [] => curWire == targetWire
   | h :: rest => (h.srcWire == curWire) && checkHopsContiguous h.dstWire targetWire rest
 
 /-- Verify that a `RoutedNet` is non-empty and forms a contiguous directed PIP path from `srcWire` to `dstWire`. -/
-def checkNetConnectivity (net : RoutedNet) : Bool :=
+abbrev checkNetConnectivity (net : RoutedNet) : Bool :=
   (!net.hops.isEmpty) && checkHopsContiguous net.srcWire net.dstWire net.hops
 
 /-- Final wire reached by a list of `PipHop`s starting from `curWire`. -/
@@ -179,24 +183,28 @@ theorem contiguous_net_reaches_sink
     exact ih h.dstWire hContig.2
 
 /-- Collect all wire node IDs touched by a `RoutedNet`. -/
-def netWires (net : RoutedNet) : List Nat :=
+abbrev netWires (net : RoutedNet) : List Nat :=
   net.srcWire :: net.hops.map (·.dstWire)
 
 /-- Check that two wire lists share no common wire node (`disjointWireLists`). -/
-def disjointWireLists (w1 w2 : List Nat) : Bool :=
+abbrev disjointWireLists (w1 w2 : List Nat) : Bool :=
   w1.all (fun u => !w2.contains u)
 
 /-- Check that `net` shares no wire nodes with any net in `rest`. -/
-def checkNetDisjointFromList (net : RoutedNet) : List RoutedNet → Bool
+@[expose] def checkNetDisjointFromList (net : RoutedNet) : List RoutedNet → Bool
   | [] => true
   | n2 :: rest =>
     disjointWireLists (netWires net) (netWires n2) &&
     checkNetDisjointFromList net rest
 
 /-- Kernel routing disjointness checker: verifies that no two routed nets short-circuit on a shared wire. -/
-def checkRoutingDisjoint : List RoutedNet → Bool
+@[expose] def checkRoutingDisjoint : List RoutedNet → Bool
   | [] => true
   | net :: rest => checkNetDisjointFromList net rest && checkRoutingDisjoint rest
+
+example :
+    ∃ nets : List RoutedNet, nets.length = 2 ∧ checkRoutingDisjoint nets = true := by
+  exact ⟨[⟨0, 10, 11, [⟨10, 11, 40, 3⟩]⟩, ⟨1, 20, 21, [⟨20, 21, 40, 3⟩]⟩], rfl, rfl⟩
 
 /-- Pairwise disjointness lemma (`routing_disjoint_no_short`). -/
 theorem routing_disjoint_no_short
@@ -272,19 +280,19 @@ theorem checkRoutingDisjoint_sound
 /-! ## 3. Elmore RC Interconnect Delay & Timing Signoff (`computeElmoreDelayPs`) -/
 
 /-- Total downstream capacitance $\sum C_i$ (in $\text{fF}$) of a PIP hop chain plus load `sinkCapFf`. -/
-def pipDownstreamCapFf (sinkCapFf : Nat) : List PipHop → Nat
+@[expose] def pipDownstreamCapFf (sinkCapFf : Nat) : List PipHop → Nat
   | [] => sinkCapFf
   | h :: rest => h.capFf + pipDownstreamCapFf sinkCapFf rest
 
 /-- Distributed Elmore RC delay $\sum_{e} R_e \cdot C_{\text{downstream}}(e)$ (in $\text{fF}\cdot\Omega = \text{fs}$). -/
-def computeElmoreDelayFs (sinkCapFf : Nat) : List PipHop → Nat
+@[expose] def computeElmoreDelayFs (sinkCapFf : Nat) : List PipHop → Nat
   | [] => 0
   | h :: rest =>
     let cDown := h.capFf + pipDownstreamCapFf sinkCapFf rest
     (h.resOhm * cDown) + computeElmoreDelayFs sinkCapFf rest
 
 /-- Convert Elmore delay from femtoseconds ($\text{fF}\cdot\Omega$) to picoseconds (ceiling division by 1000). -/
-def computeElmoreDelayPs (sinkCapFf : Nat) (hops : List PipHop) : Nat :=
+abbrev computeElmoreDelayPs (sinkCapFf : Nat) (hops : List PipHop) : Nat :=
   (computeElmoreDelayFs sinkCapFf hops + 999) / 1000
 
 /-- Theorem (`elmore_delay_monotone`):
@@ -296,7 +304,7 @@ theorem elmore_delay_monotone
   omega
 
 /-- Check that a routed net meets setup timing closure at `corner` within `clockPeriodPs`. -/
-def checkNetElmoreTiming
+abbrev checkNetElmoreTiming
     (corner : ProcessCorner) (clockPeriodPs sinkCapFf : Nat) (net : RoutedNet) : Bool :=
   let wireDelayPs := computeElmoreDelayPs sinkCapFf net.hops
   let totalArrivalPs := corner.tCqMaxPs + corner.tGateMaxPs + wireDelayPs + corner.tSetupPs + corner.tSkewPs
@@ -311,22 +319,22 @@ structure TileFrameConfig where
   belSlot : Nat
   lutInit : Nat
   pipMask : Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Raw configuration frame emitted by `fasm2frames` / bitstream generator. -/
 structure BitstreamFrame where
   frameAddr : Nat
   frameData : Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Encode a `TileFrameConfig` (with `tileX, tileY, belSlot < 256` and `lutInit, pipMask < 65536`)
 into a `BitstreamFrame`. -/
-def encodeBitstreamFrame (cfg : TileFrameConfig) : BitstreamFrame where
+abbrev encodeBitstreamFrame (cfg : TileFrameConfig) : BitstreamFrame where
   frameAddr := cfg.tileX * 65536 + cfg.tileY * 256 + cfg.belSlot
   frameData := cfg.lutInit * 65536 + cfg.pipMask
 
 /-- Decode a `BitstreamFrame` back into a `TileFrameConfig`. -/
-def decodeBitstreamFrame (f : BitstreamFrame) : TileFrameConfig where
+abbrev decodeBitstreamFrame (f : BitstreamFrame) : TileFrameConfig where
   tileX   := f.frameAddr / 65536
   tileY   := (f.frameAddr / 256) % 256
   belSlot := f.frameAddr % 256
@@ -334,12 +342,16 @@ def decodeBitstreamFrame (f : BitstreamFrame) : TileFrameConfig where
   pipMask := f.frameData % 65536
 
 /-- Check that a `TileFrameConfig`'s fields fit within their packed bit-field widths. -/
-def wfTileFrameConfig (cfg : TileFrameConfig) : Bool :=
+abbrev wfTileFrameConfig (cfg : TileFrameConfig) : Bool :=
   decide (cfg.tileX < 256) &&
   decide (cfg.tileY < 256) &&
   decide (cfg.belSlot < 256) &&
   decide (cfg.lutInit < 65536) &&
   decide (cfg.pipMask < 65536)
+
+example :
+    ∃ cfg : TileFrameConfig, wfTileFrameConfig cfg = true := by
+  exact ⟨⟨1, 2, 0, 6, 3⟩, rfl⟩
 
 /-- Theorem (`bitstream_decode_roundtrip_sound`):
 For any well-formed `cfg : TileFrameConfig` (`wfTileFrameConfig cfg = true`), encoding `cfg` into
@@ -351,7 +363,7 @@ theorem bitstream_decode_roundtrip_sound
   rcases cfg with ⟨tx, ty, bel, lut, pip⟩
   simp only [wfTileFrameConfig, Bool.and_eq_true, decide_eq_true_eq] at hWf
   rcases hWf with ⟨⟨⟨⟨hTx, hTy⟩, hBel⟩, hLut⟩, hPip⟩
-  simp only [encodeBitstreamFrame, decodeBitstreamFrame, TileFrameConfig.mk.injEq]
+  simp only [decodeBitstreamFrame, TileFrameConfig.mk.injEq]
   refine ⟨by omega, by omega, by omega, by omega, by omega⟩
 
 /-! ## 5. Netlist-Bound Place-and-Route Certificate & Kernel Verifier (`checkPnrCertificate`) -/
@@ -364,7 +376,7 @@ structure PnrCertificate where
   expectedConfigs : List TileFrameConfig
   bitstreamFrames : List BitstreamFrame
   sinkCapFf       : Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Complete netlist-bound kernel PnR & bitstream certificate checker:
 1. `cert.designName == net.moduleName` and `cert.placedCells.map (·.cellId) == List.range net.cells.length`
@@ -374,7 +386,7 @@ structure PnrCertificate where
 4. No two nets short-circuit on a shared wire (`checkRoutingDisjoint`),
 5. Every routed net meets Elmore RC setup timing (`checkNetElmoreTiming`),
 6. Every bitstream frame decodes to `expectedConfigs`. -/
-def checkPnrCertificate
+@[expose] def checkPnrCertificate
     (net : BelNetlist) (corner : ProcessCorner) (clockPeriodPs : Nat) (cert : PnrCertificate) : Bool :=
   (cert.designName == net.moduleName) &&
   (cert.placedCells.map (·.cellId) == List.range net.cells.length) &&
@@ -433,7 +445,6 @@ theorem checkPnrCertificate_sound
     exact checkRoutingDisjoint_sound cert.routedNets hDisj i j hi hj hNe u hu
   · intro r hr
     have hc := hConn r hr
-    simp only [checkNetConnectivity, Bool.and_eq_true] at hc
     exact ⟨contiguous_net_reaches_sink r.srcWire r.dstWire r.hops hc.2, hTiming r hr⟩
 
 /-- Extract the LUT SRAM mask (`< 65536`) associated with a `BelKind` (`0` for fixed-function BELs). -/
@@ -474,7 +485,7 @@ def buildCanonicalPnrCert (net : BelNetlist) (sinkCapFf : Nat := 5) : PnrCertifi
   , sinkCapFf       := sinkCapFf }
 
 /-- Target 2-BEL adder slice netlist corresponding to `validAdderPnrCert`. -/
-def validAdderBelNetlist : BelNetlist where
+abbrev validAdderBelNetlist : BelNetlist where
   moduleName  := "obend_routed_adder2"
   inputNames  := ["a0", "b0", "a1", "b1"]
   cells       :=
@@ -483,7 +494,7 @@ def validAdderBelNetlist : BelNetlist where
   outputNames := ["sum0", "sum1"]
 
 /-- Concrete verified PnR certificate for `validAdderBelNetlist` on `corner7nm_SS` at 500 MHz (`2000 ps`). -/
-def validAdderPnrCert : PnrCertificate where
+@[expose] def validAdderPnrCert : PnrCertificate where
   designName := "obend_routed_adder2"
   placedCells :=
     [ { cellId := 0, tileX := 0, tileY := 0, belSlot := 0, lutInit := 0x6 }
@@ -503,7 +514,7 @@ def validAdderPnrCert : PnrCertificate where
   sinkCapFf := 5
 
 /-- Corrupted PnR certificate with a BEL placement collision (`cell 0` and `cell 1` both at `(0,0,0)`). -/
-def collidingBelPnrCert : PnrCertificate :=
+abbrev collidingBelPnrCert : PnrCertificate :=
   { validAdderPnrCert with
     placedCells :=
       [ { cellId := 0, tileX := 0, tileY := 0, belSlot := 0, lutInit := 0x6 }
@@ -520,6 +531,11 @@ def shortedWirePnrCert : PnrCertificate :=
         , hops := [ { srcWire := 20, dstWire := 11, resOhm := 40, capFf := 3 } ] } ] }
 
 example :
+    ∃ (net : BelNetlist) (corner : ProcessCorner) (clockPeriodPs : Nat) (cert : PnrCertificate),
+      checkPnrCertificate net corner clockPeriodPs cert = true := by
+  exact ⟨validAdderBelNetlist, corner7nm_SS, 2000, validAdderPnrCert, rfl⟩
+
+example :
     checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 validAdderPnrCert = true ∧
     checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 collidingBelPnrCert = false ∧
     checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 shortedWirePnrCert = false :=
@@ -531,27 +547,27 @@ example :
 inductive SteinerTree where
   | sink (wireId : Nat) (loadCapFf : Nat)
   | branch (wireId : Nat) (segResOhm segCapFf : Nat) (left right : SteinerTree)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Exact total downstream lump capacitance $C_{\text{down}}(u)$ (in $\text{fF}$) of a `SteinerTree`. -/
-def downstreamCapFf : SteinerTree → Nat
+@[expose] def downstreamCapFf : SteinerTree → Nat
   | .sink _ loadCapFf => loadCapFf
   | .branch _ _ segCapFf left right =>
     segCapFf + downstreamCapFf left + downstreamCapFf right
 
 /-- Exact worst-case root-to-sink Elmore RC delay (in $\text{fF}\cdot\Omega = \text{fs}$) of a `SteinerTree`. -/
-def maxSteinerElmoreDelayFsOhm : SteinerTree → Nat
+@[expose] def maxSteinerElmoreDelayFsOhm : SteinerTree → Nat
   | .sink _ _ => 0
   | .branch _ segResOhm segCapFf left right =>
     let cDown := segCapFf + downstreamCapFf left + downstreamCapFf right
     segResOhm * cDown + max (maxSteinerElmoreDelayFsOhm left) (maxSteinerElmoreDelayFsOhm right)
 
 /-- Convert worst-case Steiner Elmore delay from femtoseconds ($\text{fF}\cdot\Omega$) to picoseconds. -/
-def maxSteinerElmoreDelayPs (t : SteinerTree) : Nat :=
+abbrev maxSteinerElmoreDelayPs (t : SteinerTree) : Nat :=
   (maxSteinerElmoreDelayFsOhm t + 999) / 1000
 
 /-- Check whether a multi-sink `SteinerTree` meets setup timing closure at `corner` within `clockPeriodPs`. -/
-def checkSteinerTimingClosure (corner : ProcessCorner) (clockPeriodPs : Nat) (t : SteinerTree) : Bool :=
+@[expose] def checkSteinerTimingClosure (corner : ProcessCorner) (clockPeriodPs : Nat) (t : SteinerTree) : Bool :=
   let wireDelayPs := maxSteinerElmoreDelayPs t
   decide (corner.tCqMaxPs + corner.tGateMaxPs + wireDelayPs + corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs)
 
@@ -609,19 +625,19 @@ theorem maxSteinerElmoreDelay_nonneg (t : SteinerTree) :
     omega
 
 /-- Insert a repeater buffer with input gate capacitance `bufInputCapFf` at the right fanout branch. -/
-def decoupleRightBranchWithBuffer (bufWireId bufInputCapFf : Nat) : SteinerTree → SteinerTree
+abbrev decoupleRightBranchWithBuffer (bufWireId bufInputCapFf : Nat) : SteinerTree → SteinerTree
   | .sink w c => .sink w c
   | .branch w r c left _right =>
     .branch w r c left (.sink bufWireId bufInputCapFf)
 
 /-- Unbuffered 2-branch Steiner clock/data fanout tree. -/
-def unbufferedFanoutTree : SteinerTree :=
+abbrev unbufferedFanoutTree : SteinerTree :=
   .branch 0 2000 50
     (.sink 1 100)
     (.branch 2 1500 100 (.sink 3 400) (.sink 4 400))
 
 /-- Buffered 2-branch Steiner fanout tree. -/
-def bufferedFanoutTree : SteinerTree :=
+abbrev bufferedFanoutTree : SteinerTree :=
   decoupleRightBranchWithBuffer 2 25 unbufferedFanoutTree
 
 /-- **Theorem (`steiner_fanout_buffer_insertion_reduces_elmore_delay`)**:
@@ -640,7 +656,7 @@ theorem steiner_fanout_buffer_insertion_reduces_elmore_delay :
         maxSteinerElmoreDelayFsOhm (.branch w r c left right)) := by
   refine ⟨by decide, by decide, by decide, by decide, ?_⟩
   intro w r c bufW bufCap left right hRPos hBufLt
-  simp only [decoupleRightBranchWithBuffer, downstreamCapFf, maxSteinerElmoreDelayFsOhm]
+  simp only [downstreamCapFf, maxSteinerElmoreDelayFsOhm]
   have hCapStrict :
       c + downstreamCapFf left + bufCap < c + downstreamCapFf left + downstreamCapFf right := by
     omega

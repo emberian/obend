@@ -1,59 +1,31 @@
 module
 /-
-# Obend.Hardware.ArrayHypergraph — open hypergraphs whose wires carry arrays
+# Array-valued open hypergraphs
 
-The scalar `StrictOpenHypergraph` of `Obend.Hardware.OpenHypergraph` has one 64-bit word per wire and
-one operation per hyperedge. On a GPU that is one thread per hyperedge, a gate and not a computation.
-Here a wire carries a vector of words and a hyperedge is one array operation: an elementwise program
-(every element a thread), a gather along a `FiniteFunction` (Wilson–Zanasi's data-parallel permutation
-datum, `arXiv:2305.01041`), a concatenation, or a constant array.
+Each wire carries a vector of 64-bit words. A primitive map applies one scalar or bitwise
+instruction per element. Fusing producers extends this to a register program whose inputs are
+the source wires at that element. Gathers use the finite functions of Wilson–Zanasi
+(arXiv:2305.01041). Edges can also concatenate, supply constants, or reduce and scan a wire.
 
-An elementwise program (`ElemProg`) is a list of instructions `dst := op args` over names that are wires:
-its local environment starts at the elements of the edge's source wires and the value is the name `out`.
-A graph as built is *primitive*, one instruction per map edge (`ArrayEdge.primitive`); fusion (section
-6) is what makes longer programs.
+Following the frontier algorithm in Wilson–Zanasi’s `open-hypergraphs` (`strict/graph.rs`,
+`kahn`), a layer contains the edges whose earlier dependencies have all been visited.
+Read/write and write/write hazards determine those dependencies. Independent steps commute,
+so synchronous layers give the original combinational evaluation (`layerGraph_sound`).
+`ofScalar_layered_sound` relates these frontiers to the scalar graph’s greedy layering.
 
-## Layering (section 4)
-
-`layerEdges` is the frontier algorithm of Wilson–Zanasi's `open-hypergraphs` crate (`strict/graph.rs`,
-`kahn`): round by round, the operations whose predecessors have all been visited form the next layer. A
-predecessor here is an earlier edge with a hazard (it writes a wire this one reads, reads a wire this one
-writes, or writes the same wire); on a graph in SSA form that is their operation adjacency. Each stage is
-pairwise independent (`checkStageIndependent`), the stages flatten to a permutation of the edges, and the
-synchronous stage-by-stage evaluation equals the single-pass one (`layerGraph_sound`); the permutation
-is sound because independent edges commute (`stepEdge_comm`). The scalar module's `layerHyperEdges` is
-the older greedy layering (an edge joins the most recent stage if independent, else opens one) and stays
-there as its own; `ofScalar_layered_sound` bridges the two through the combinational evaluation.
-
-## Fusion (section 6)
-
-`fuseGraph` is Halide's `compute_inline` and TVM's elementwise fusion over this language: every map edge
-recomputes the elementwise producers of its sources instead of reading their wires (its program is the
-producers' instructions, deduplicated, followed by its own, its sources the producers' sources), and a
-map edge nobody but a map edge reads, and no output names, is dropped. `fuseGraph_sound`: for a
-well-formed graph (`ArrayGraph.wf`: every edge passes `edgeOk`, destinations are written once, no edge
-writes a wire an earlier or the same edge reads, map edges are primitive) the fused graph has the same
-outputs, and its edges pass `edgeOk`. Chains of elementwise edges therefore lower to one kernel per
-element computing a chain, and the layering sees only the producers that are read by a gather, a
-concatenation or an output.
-
-Expected values on the evaluator with wires stored (`evalGraphArr`, `evalGraphArr_eq`): the closure-based
-model, compiled, re-evaluates an edge on every read and is exponential in dependency depth; and a local
-environment of closures for a program is quadratic in its length, so `evalProgExec` runs it on a hash map.
-
-Elementwise operations are the scalar `HypergraphOp`s plus the bit operations a Goldilocks field
-multiply needs (`Obend.Apps.ZkNtt.glMul`): unsigned comparison, and, or, logical shifts. All arithmetic
-is modulo `2^64`, as `BitVec 64` and WGSL `i64` are.
+As in Halide’s `compute_inline`, fusion inlines map producers and deduplicates their
+instructions. A producer is dropped when only maps read it and no output names it.
+`fuseGraph_sound` proves output preservation and edge validity under `ArrayGraph.wf`.
 -/
+import all Obend.Hardware.OpenHypergraph
 public import Obend.Hardware.OpenHypergraph
 public import Std.Data.HashMap
 public import Obend.Hardware.ArrayFold
-@[expose] public section
+public section
 
 namespace Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.OpenHypergraph
 set_option autoImplicit false
-
 
 theorem beq_symm_nat (a b : Nat) : (a == b) = (b == a) := by
   cases h : a == b
@@ -75,19 +47,13 @@ theorem getD_range_map {α : Type} (n : Nat) (f : Nat → α) (z : α) (e : Nat)
   simp [List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_range he]
 
 /-! ## 1. Operations -/
-
-/-- One element's operation: a scalar `HypergraphOp`, or a bit operation. Operands are elements of the
-source wires at the same index; a missing operand is `0`, as in `evalHypergraphOpBv`. -/
+/-- Scalar and bitwise operations read the same index of each source, defaulting missing operands to zero. -/
 inductive ElemOp where
   | scalar (op : HypergraphOp)
-  | ult
-  | band
-  | bor
-  | shr
-  | shl
+  | ult | band | bor | shr | shl
   deriving DecidableEq, Repr
 
-def evalElemOp (op : ElemOp) (args : List Word) : Word :=
+@[expose] def evalElemOp (op : ElemOp) (args : List Word) : Word :=
   let a0 := args.getD 0 0#64
   let a1 := args.getD 1 0#64
   match op with
@@ -105,27 +71,25 @@ structure Instr where
   dst  : Nat
   deriving DecidableEq, Repr
 
-/-- An elementwise program: its instructions in order over a local environment of named words that
-starts at the source wires' elements (every other name `0`); the value is the name `out`. -/
+/-- Instructions run in order, starting with the source elements and zero elsewhere; `out` selects the result. -/
 structure ElemProg where
   code : List Instr
   out  : Nat
   deriving DecidableEq, Repr
 
 /-- The one-instruction program `dst := op srcs`. -/
-def ElemProg.single (op : ElemOp) (srcs : List Nat) (dst : Nat) : ElemProg := ⟨[⟨op, srcs, dst⟩], dst⟩
+abbrev ElemProg.single (op : ElemOp) (srcs : List Nat) (dst : Nat) : ElemProg := ⟨[⟨op, srcs, dst⟩], dst⟩
 
-def stepInstr (loc : Nat → Word) (i : Instr) : Nat → Word :=
+@[expose] def stepInstr (loc : Nat → Word) (i : Instr) : Nat → Word :=
   let v := evalElemOp i.op (i.args.map loc)
   fun w => if w == i.dst then v else loc w
 
-def runCode (loc : Nat → Word) (code : List Instr) : Nat → Word := code.foldl stepInstr loc
-
-def evalProg (p : ElemProg) (loc : Nat → Word) : Word := runCode loc p.code p.out
+abbrev runCode (loc : Nat → Word) (code : List Instr) : Nat → Word := code.foldl stepInstr loc
+abbrev evalProg (p : ElemProg) (loc : Nat → Word) : Word := runCode loc p.code p.out
 
 theorem evalProg_single (op : ElemOp) (srcs : List Nat) (dst : Nat) (loc : Nat → Word) :
     evalProg (ElemProg.single op srcs dst) loc = evalElemOp op (srcs.map loc) := by
-  simp [evalProg, ElemProg.single, runCode, stepInstr]
+  simp [evalProg, runCode, stepInstr]
 
 /-- One hyperedge's operation on whole wires. -/
 inductive ArrayOp where
@@ -150,10 +114,8 @@ def ArrayOp.segScan (op : ReduceOp) (lengths : List Nat) (mode : ScanMode) : Arr
   .fold op (.segScan lengths mode)
 
 /-- The sources of an edge are named: a program reads them by wire. The first pair of a name wins. -/
-def srcLookup (srcs : List (Nat × Vec)) (w : Nat) : Vec :=
-  match srcs.find? (·.1 == w) with
-  | some p => p.2
-  | none => []
+abbrev srcLookup (srcs : List (Nat × Vec)) (w : Nat) : Vec :=
+  match srcs.find? (·.1 == w) with | some p => p.2 | none => []
 
 theorem srcLookup_map (f : Nat → Vec) (ws : List Nat) (u : Nat) (hu : u ∈ ws) :
     srcLookup (ws.map fun w => (w, f w)) u = f u := by
@@ -165,13 +127,10 @@ theorem srcLookup_map (f : Nat → Vec) (ws : List Nat) (u : Nat) (hu : u ∈ ws
     · subst h; simp
     · have hb : (w == u) = false := beq_eq_false_iff_ne.mpr h
       simp only [hb]
-      have hu' : u ∈ ws := by
-        rcases List.mem_cons.mp hu with h' | h'
-        · exact absurd h'.symm h
-        · exact h'
+      have hu' := (List.mem_cons.mp hu).resolve_left (Ne.symm h)
       simpa [srcLookup] using ih hu'
 
-def evalArrayOp (op : ArrayOp) (srcs : List (Nat × Vec)) : Vec :=
+@[expose] def evalArrayOp (op : ArrayOp) (srcs : List (Nat × Vec)) : Vec :=
   let args := srcs.map (·.2)
   match op with
   | .map n p   => (List.range n).map fun e => evalProg p fun w => (srcLookup srcs w).getD e 0#64
@@ -181,7 +140,7 @@ def evalArrayOp (op : ArrayOp) (srcs : List (Nat × Vec)) : Vec :=
   | .fold op shape => evalFold op shape (fun i => (args.getD 0 []).getD i 0#64)
 
 /-- The length an operation's result has, from the operation alone or its sources' lengths. -/
-def ArrayOp.outLen (op : ArrayOp) (srcLens : List Nat) : Nat :=
+@[expose] def ArrayOp.outLen (op : ArrayOp) (srcLens : List Nat) : Nat :=
   match op with
   | .map n _  => n
   | .gather f => f.source
@@ -206,7 +165,6 @@ theorem evalArrayOp_length (op : ArrayOp) (srcs : List (Nat × Vec)) (hf : ∀ f
   | fold op shape => simp [evalArrayOp, ArrayOp.outLen, evalFold, FoldShape.outLen]
 
 /-! ## 2. Graphs -/
-
 structure ArrayEdge where
   opIdx    : Nat
   op       : ArrayOp
@@ -214,8 +172,7 @@ structure ArrayEdge where
   dstWire  : Nat
   deriving DecidableEq, Repr
 
-/-- `lengths w` is the declared length of wire `w`; `inputs` and `outputs` the boundary wires; `edges`
-in a topological order. -/
+/-- Wire lengths, input and output boundaries, and edges in topological order. -/
 structure ArrayGraph where
   lengths : List Nat
   inputs  : List Nat
@@ -228,9 +185,8 @@ def ArrayEdge.isMap (e : ArrayEdge) : Bool :=
   | .map _ _ => true
   | _ => false
 
-/-- A map edge whose program is the one instruction over its own sources into its own destination; every
-other edge counts as primitive. -/
-def ArrayEdge.primitive (e : ArrayEdge) : Bool :=
+/-- A primitive map reads its own sources and writes its own destination in one instruction. -/
+@[expose] def ArrayEdge.primitive (e : ArrayEdge) : Bool :=
   match e.op with
   | .map _ p =>
     match p.code with
@@ -238,11 +194,8 @@ def ArrayEdge.primitive (e : ArrayEdge) : Bool :=
     | _ => false
   | _ => true
 
-/-- One edge's static check: wires exist, the declared result length is the destination's, a map's
-sources share the destination's length and its program never writes a source nor reads an unwritten
-name as its value, a gather's table is well-formed and targets its one source's length, a concatenation
-has two sources, a constant none. -/
-def edgeOk (ls : List Nat) (e : ArrayEdge) : Bool :=
+/-- Check wire scope, result length, and the arity, shape and register constraints of the operation. -/
+@[expose] def edgeOk (ls : List Nat) (e : ArrayEdge) : Bool :=
   let len (w : Nat) := ls.getD w 0
   e.dstWire < ls.length && e.srcWires.all (· < ls.length) &&
   (e.op.outLen (e.srcWires.map len) == len e.dstWire) &&
@@ -256,13 +209,12 @@ def edgeOk (ls : List Nat) (e : ArrayEdge) : Bool :=
    | .fold _ shape => e.srcWires.length == 1 && shape.inputLen == len (e.srcWires.getD 0 0))
 
 /-- No edge writes a wire that it or an earlier edge reads. -/
-def noWriteAfterRead : List ArrayEdge → Bool
+@[expose] def noWriteAfterRead : List ArrayEdge → Bool
   | [] => true
   | e :: rest => (e :: rest).all (fun d => !(e.srcWires.contains d.dstWire)) && noWriteAfterRead rest
 
-/-- Static well-formedness: the boundary wires exist, every edge passes `edgeOk`, every destination is
-written once and after every read of it, every map edge is primitive. -/
-def ArrayGraph.wf (g : ArrayGraph) : Bool :=
+/-- Boundary scope, local edge validity, distinct destinations, no writes after reads, and primitive maps. -/
+@[expose] def ArrayGraph.wf (g : ArrayGraph) : Bool :=
   let nw := g.lengths.length
   g.inputs.all (· < nw) && g.outputs.all (· < nw) &&
   g.edges.all (edgeOk g.lengths) &&
@@ -293,21 +245,16 @@ theorem wf_primitive (g : ArrayGraph) (h : g.wf = true) : ∀ d ∈ g.edges, d.p
   exact h.2
 
 /-! ## 3. Semantics -/
+abbrev edgeSrcs (env : Nat → Vec) (e : ArrayEdge) : List (Nat × Vec) := e.srcWires.map fun w => (w, env w)
+abbrev edgeValue (env : Nat → Vec) (e : ArrayEdge) : Vec := evalArrayOp e.op (edgeSrcs env e)
 
-def edgeSrcs (env : Nat → Vec) (e : ArrayEdge) : List (Nat × Vec) := e.srcWires.map fun w => (w, env w)
-
-def edgeValue (env : Nat → Vec) (e : ArrayEdge) : Vec := evalArrayOp e.op (edgeSrcs env e)
-
-def stepEdge (env : Nat → Vec) (e : ArrayEdge) : Nat → Vec :=
+@[expose] def stepEdge (env : Nat → Vec) (e : ArrayEdge) : Nat → Vec :=
   let v := edgeValue env e
   fun w => if w == e.dstWire then v else env w
 
 /-- Single-pass combinational evaluation. -/
-def evalComb (env : Nat → Vec) (es : List ArrayEdge) : Nat → Vec :=
-  es.foldl stepEdge env
-
-def evalGraph (g : ArrayGraph) (env : Nat → Vec) : List Vec :=
-  g.outputs.map (evalComb env g.edges)
+abbrev evalComb (env : Nat → Vec) (es : List ArrayEdge) : Nat → Vec := es.foldl stepEdge env
+abbrev evalGraph (g : ArrayGraph) (env : Nat → Vec) : List Vec := g.outputs.map (evalComb env g.edges)
 
 /-- Updating a wire no source names leaves an edge's sources as they were. -/
 theorem edgeSrcs_update (env : Nat → Vec) (dst : Nat) (v : Vec) (e : ArrayEdge)
@@ -335,32 +282,28 @@ theorem edgeValue_congr (env env' : Nat → Vec) (e : ArrayEdge) (h : ∀ s ∈ 
   exact List.map_congr_left fun s hs => by rw [h s hs]
 
 /-- Synchronous step: sources read from the stage-entry snapshot. -/
-def stepEdgeSync (entry cur : Nat → Vec) (e : ArrayEdge) : Nat → Vec :=
+@[expose] def stepEdgeSync (entry cur : Nat → Vec) (e : ArrayEdge) : Nat → Vec :=
   let v := edgeValue entry e
   fun w => if w == e.dstWire then v else cur w
 
-def evalStageAux (entry cur : Nat → Vec) : List ArrayEdge → Nat → Vec
+@[expose] def evalStageAux (entry cur : Nat → Vec) : List ArrayEdge → Nat → Vec
   | [] => cur
   | e :: rest => evalStageAux entry (stepEdgeSync entry cur e) rest
 
-def evalStageSync (env : Nat → Vec) (stage : List ArrayEdge) : Nat → Vec :=
-  evalStageAux env env stage
+abbrev evalStageSync (env : Nat → Vec) (stage : List ArrayEdge) : Nat → Vec := evalStageAux env env stage
+def evalStage (env : Nat → Vec) (stage : List ArrayEdge) : Nat → Vec := stage.foldl stepEdge env
 
-def evalStage (env : Nat → Vec) (stage : List ArrayEdge) : Nat → Vec :=
-  stage.foldl stepEdge env
-
-def evalLayeredSync (env : Nat → Vec) (stages : List (List ArrayEdge)) : Nat → Vec :=
+abbrev evalLayeredSync (env : Nat → Vec) (stages : List (List ArrayEdge)) : Nat → Vec :=
   stages.foldl evalStageSync env
 
 def evalLayered (env : Nat → Vec) (stages : List (List ArrayEdge)) : Nat → Vec :=
   stages.foldl evalStage env
 
-/-! ### Running it: the wires as arrays, the local environment as a hash map
+/-! ### Executable evaluator
 
-`evalComb` closes over the environment; compiled, every read of a wire re-evaluates its edge, which is
-exponential in dependency depth. `evalCombArr` stores the wires as arrays of words, and `evalProgExec`
-runs a program's local environment on a hash map; `evalGraphArr_eq` says it is `evalGraph` read through
-the arrays, and `obend-emit-gpu` computes expected values with it. -/
+The closure model recomputes an edge on each read, taking exponential time in dependency depth.
+The emitter stores wire values in arrays and program registers in a hash map. `evalGraphArr_eq`
+relates its expected outputs to the closure model. -/
 
 abbrev AVec := Array Word
 
@@ -435,13 +378,10 @@ theorem evalArrayOpExec_toList (op : ArrayOp) (srcs : List (Nat × AVec)) :
     congr 1
     funext w
     exact localEnv_getD srcs e w
-  | gather f =>
-    simp only [evalArrayOpExec, evalArrayOp, Array.toList_map, hargs, getD_map_toList, getD_toList]
-  | concat =>
-    simp only [evalArrayOpExec, evalArrayOp, Array.toList_append, hargs, getD_map_toList]
+  | gather f => simp only [evalArrayOpExec, evalArrayOp, Array.toList_map, hargs, getD_map_toList, getD_toList]
+  | concat => simp only [evalArrayOpExec, evalArrayOp, Array.toList_append, hargs, getD_map_toList]
   | const vs => simp [evalArrayOpExec, evalArrayOp]
-  | fold op shape =>
-    simp only [evalArrayOpExec, evalArrayOp, evalFoldExec_toList, hargs, getD_map_toList, getD_toList]
+  | fold op shape => simp only [evalArrayOpExec, evalArrayOp, evalFoldExec_toList, hargs, getD_map_toList, getD_toList]
 
 def stepEdgeArr (a : Array AVec) (e : ArrayEdge) : Array AVec :=
   a.setIfInBounds e.dstWire (evalArrayOpExec e.op (e.srcWires.map fun w => (w, a.getD w #[])))
@@ -490,7 +430,6 @@ theorem evalGraphArr_eq (g : ArrayGraph) (a : Array AVec) (hsize : a.size = g.le
   exact evalCombArr_getD a g.edges (fun e he => by rw [hsize]; exact h e he) w
 
 /-! ## 4. Layering by frontiers -/
-
 /-- `e` and `s` can share a stage: they write different wires and neither reads the other's. -/
 def indep (e s : ArrayEdge) : Bool :=
   (e.dstWire != s.dstWire) && !(s.srcWires.contains e.dstWire) && !(e.srcWires.contains s.dstWire)
@@ -499,15 +438,13 @@ theorem indep_symm (e s : ArrayEdge) : indep e s = indep s e := by
   simp only [indep, bne, beq_symm_nat e.dstWire s.dstWire]
   cases s.srcWires.contains e.dstWire <;> cases e.srcWires.contains s.dstWire <;> simp
 
-def edgeIndependentOfStage (e : ArrayEdge) (stage : List ArrayEdge) : Bool :=
-  stage.all (indep e)
+def edgeIndependentOfStage (e : ArrayEdge) (stage : List ArrayEdge) : Bool := stage.all (indep e)
 
 def checkStageIndependent : List ArrayEdge → Bool
   | [] => true
   | e :: rest => edgeIndependentOfStage e rest && checkStageIndependent rest
 
-/-- The frontier of `es` after the edges `before`: the edges of `es` independent of every edge before
-them (in `before` or earlier in `es`), and the rest, each in order. -/
+/-- Stable partition of `es` into edges independent of all preceding edges and the remainder. -/
 def frontier : List ArrayEdge → List ArrayEdge → List ArrayEdge × List ArrayEdge
   | _, [] => ([], [])
   | before, e :: es =>
@@ -582,8 +519,7 @@ theorem stepEdge_comm (env : Nat → Vec) (e x : ArrayEdge) (h : indep x e = tru
   simp only [stepEdge] at hve hvx ⊢
   rw [hve, hvx]
   by_cases hwx : w = x.dstWire
-  · subst hwx
-    simp [hne]
+  · subst hwx; simp [hne]
   · simp [beq_eq_false_iff_ne.mpr hwx]
 
 theorem evalComb_cons_comm (env : Nat → Vec) (e : ArrayEdge) (xs ys : List ArrayEdge)
@@ -653,8 +589,7 @@ theorem layerEdges_ind (P : List ArrayEdge → Prop) (h0 : P [])
 
 def layerGraph (g : ArrayGraph) : List (List ArrayEdge) := layerEdges g.edges
 
-theorem evalStageAux_shift_entry
-    (entry cur : Nat → Vec) (dst : Nat) (v : Vec) (stage : List ArrayEdge)
+theorem evalStageAux_shift_entry (entry cur : Nat → Vec) (dst : Nat) (v : Vec) (stage : List ArrayEdge)
     (hNoRaw : stage.all (fun s => !(s.srcWires.contains dst)) = true) :
     evalStageAux (fun w => if w == dst then v else entry w) cur stage =
       evalStageAux entry cur stage := by
@@ -666,8 +601,7 @@ theorem evalStageAux_shift_entry
     rw [edgeValue_update entry dst v s hNoRaw.1]
     exact ih _ hNoRaw.2
 
-theorem edgeIndependentOfStage_implies_no_raw
-    (e : ArrayEdge) (rest : List ArrayEdge)
+theorem edgeIndependentOfStage_implies_no_raw (e : ArrayEdge) (rest : List ArrayEdge)
     (hInd : edgeIndependentOfStage e rest = true) :
     rest.all (fun s => !(s.srcWires.contains e.dstWire)) = true := by
   unfold edgeIndependentOfStage at hInd
@@ -677,8 +611,7 @@ theorem edgeIndependentOfStage_implies_no_raw
     simp only [List.all_cons, Bool.and_eq_true, indep] at hInd ⊢
     exact ⟨hInd.1.1.2, ih hInd.2⟩
 
-theorem evalStageSync_eq_evalStage
-    (env : Nat → Vec) (stage : List ArrayEdge)
+theorem evalStageSync_eq_evalStage (env : Nat → Vec) (stage : List ArrayEdge)
     (hInd : checkStageIndependent stage = true) :
     evalStageSync env stage = evalStage env stage := by
   induction stage generalizing env with
@@ -695,8 +628,7 @@ theorem evalStageSync_eq_evalStage
     rw [← hShift]
     exact ih (stepEdge env e) hInd.2
 
-theorem evalLayeredSync_eq_evalLayered
-    (env : Nat → Vec) (stages : List (List ArrayEdge))
+theorem evalLayeredSync_eq_evalLayered (env : Nat → Vec) (stages : List (List ArrayEdge))
     (hAll : stages.all checkStageIndependent = true) :
     evalLayeredSync env stages = evalLayered env stages := by
   induction stages generalizing env with
@@ -747,7 +679,6 @@ theorem layerEdges_evalLayered (env : Nat → Vec) (edges : List ArrayEdge) :
     rw [ih, evalStage, List.foldl_cons, evalComb, ← List.foldl_append]
     simp only [evalComb] at hfr
     rw [← hfr]
-    rfl
 
 theorem evalLayered_eq_evalComb_flatten (env : Nat → Vec) (stages : List (List ArrayEdge)) :
     evalLayered env stages = evalComb env stages.flatten := by
@@ -757,8 +688,7 @@ theorem evalLayered_eq_evalComb_flatten (env : Nat → Vec) (stages : List (List
     simp only [evalLayered, List.foldl_cons, List.flatten_cons, evalComb, List.foldl_append]
     exact ih (evalStage env stage)
 
-/-- **`layerGraph_sound`**: every stage of the layering is independent, the layering flattens to a
-permutation of the edges, and the synchronous stage-by-stage evaluation is the single-pass one. -/
+/-- Independent stages permute the original edges and preserve their single-pass evaluation. -/
 theorem layerGraph_sound (g : ArrayGraph) (env : Nat → Vec) :
     (layerGraph g).all checkStageIndependent = true ∧
     (layerGraph g).flatten.Perm g.edges ∧
@@ -784,25 +714,21 @@ theorem checkStageIndependent_nodup (es : List ArrayEdge) (h : checkStageIndepen
     exact this.1.1 hEq.symm
 
 /-! ## 5. The scalar graphs as the one-element instance -/
+abbrev liftEdge (e : HyperEdge) : ArrayEdge :=
+  ⟨e.opIdx, .map 1 (.single (.scalar e.op) e.srcWires e.dstWire), e.srcWires, e.dstWire⟩
 
-def liftEdge (e : HyperEdge) : ArrayEdge :=
-  { opIdx := e.opIdx, op := .map 1 (ElemProg.single (.scalar e.op) e.srcWires e.dstWire)
-  , srcWires := e.srcWires, dstWire := e.dstWire }
-
-/-- A scalar graph as an array graph: every wire of length one, every hyperedge the elementwise map of
-its operation. -/
-def ofScalar (g : StrictOpenHypergraph) : ArrayGraph :=
+/-- Lift scalar wires to singletons and scalar operations to one-element maps. -/
+@[expose] def ofScalar (g : StrictOpenHypergraph) : ArrayGraph :=
   { lengths := List.replicate g.nodeTypes.length 1
-  , inputs  := g.boundaryIn.table
-  , outputs := g.boundaryOut.table
+  , inputs := g.boundaryIn.table, outputs := g.boundaryOut.table
   , edges   := (extractHyperEdges g).map liftEdge }
 
 /-- A scalar environment as singleton wires. -/
-def singletonEnv (env : Nat → Word) : Nat → Vec := fun w => [env w]
+abbrev singletonEnv (env : Nat → Word) : Nat → Vec := fun w => [env w]
 
 theorem edgeValue_lift (env : Nat → Word) (e : HyperEdge) :
     edgeValue (singletonEnv env) (liftEdge e) = [evalHypergraphOpBv e.op (e.srcWires.map env)] := by
-  simp only [edgeValue, edgeSrcs, liftEdge, evalArrayOp, List.range_succ, List.range_zero, List.map_cons,
+  simp only [edgeValue, edgeSrcs, evalArrayOp, List.range_succ, List.range_zero, List.map_cons,
     List.map_nil, List.nil_append, evalProg_single, evalElemOp]
   congr 2
   apply List.map_congr_left
@@ -814,7 +740,6 @@ theorem stepEdge_lift (env : Nat → Word) (e : HyperEdge) :
     stepEdge (singletonEnv env) (liftEdge e) = singletonEnv (stepHyperEdgeSyncBv env env e) := by
   funext w
   simp only [stepEdge, stepHyperEdgeSyncBv, singletonEnv, edgeValue_lift]
-  simp only [liftEdge]
   by_cases h : w = e.dstWire <;> simp [h]
 
 theorem stepEdgeSync_lift (entry cur : Nat → Word) (e : HyperEdge) :
@@ -822,7 +747,6 @@ theorem stepEdgeSync_lift (entry cur : Nat → Word) (e : HyperEdge) :
       singletonEnv (stepHyperEdgeSyncBv entry cur e) := by
   funext w
   simp only [stepEdgeSync, stepHyperEdgeSyncBv, singletonEnv, edgeValue_lift]
-  simp only [liftEdge]
   by_cases h : w = e.dstWire <;> simp [h]
 
 theorem evalStageAux_lift (entry cur : Nat → Word) (stage : List HyperEdge) :
@@ -863,11 +787,7 @@ theorem evalLayeredSync_lift (env : Nat → Word) (stages : List (List HyperEdge
     rw [h]
     exact ih _
 
-/-- **`ofScalar_layered_sound`**: on the one-element instance, the array evaluation of a scalar graph's
-layering is the scalar 64-bit evaluation of the scalar module's own layering, wire by wire. Both sides
-are the combinational evaluation: ours by `layerGraph_sound`, the scalar one lifted stage by stage
-(its stages are independent and flatten to the edges, `layerHyperEdges_all_stages_independent`,
-`layerHyperEdges_flatten`). -/
+/-- The array frontier schedule and the scalar greedy schedule agree on every lifted wire. -/
 theorem ofScalar_layered_sound (g : StrictOpenHypergraph) (env : Nat → Word) :
     evalLayeredSync (singletonEnv env) (layerGraph (ofScalar g)) =
       singletonEnv (evalLayeredStagesSyncBv env (layerHypergraph g)) := by
@@ -885,7 +805,6 @@ theorem ofScalar_layered_sound (g : StrictOpenHypergraph) (env : Nat → Word) :
   rw [← List.map_flatten, layerHyperEdges_flatten]
 
 /-! ## 6. Fusion of elementwise chains -/
-
 /-- What a map edge has become: the wires its program reads, its program's instructions. -/
 structure Def where
   wire : Nat
@@ -898,8 +817,7 @@ def dedupeCode (seen : List Nat) : List Instr → List Instr
   | [] => []
   | i :: rest => if seen.contains i.dst then dedupeCode seen rest else i :: dedupeCode (i.dst :: seen) rest
 
-/-- Fuse one edge against the producers so far: a map edge inlines every source a map edge wrote (the
-producer's sources become its sources, the producer's instructions precede its own); other edges pass. -/
+/-- Inline each map producer’s sources and code into the consumer. Other edge kinds pass through. -/
 def fuseEdge (defs : List Def) (e : ArrayEdge) : ArrayEdge × List Def :=
   match e.op with
   | .map n p =>
@@ -924,7 +842,6 @@ def fuseGraph (g : ArrayGraph) : ArrayGraph :=
   { g with edges := fused.filter (live g.outputs fused) }
 
 /-! ### Programs that read what was written -/
-
 /-- Every instruction reads names that are defined: a source, or an earlier destination. -/
 def closedFrom (defined : List Nat) : List Instr → Bool
   | [] => true
@@ -1038,8 +955,7 @@ def AgreesOn (loc : Nat → Word) (env : Nat → Vec) (el : Nat) (S : List Nat) 
 def ConsistentInstr (env : Nat → Vec) (el : Nat) (i : Instr) : Prop :=
   (env i.dst).getD el 0#64 = evalElemOp i.op (i.args.map fun a => (env a).getD el 0#64)
 
-/-- Running closed code whose instructions the wires satisfy keeps the local values true, and makes
-every destination true. -/
+/-- Closed, consistent code preserves agreement on its inputs and establishes it on its destinations. -/
 theorem runCode_agrees (env : Nat → Vec) (el : Nat) (code : List Instr) (loc : Nat → Word) (S : List Nat)
     (hA : AgreesOn loc env el S) (hC : closedFrom S code = true) (hI : ∀ i ∈ code, ConsistentInstr env el i) :
     ∀ w, w ∈ S ∨ w ∈ code.map (·.dst) → runCode loc code w = (env w).getD el 0#64 := by
@@ -1073,9 +989,7 @@ theorem runCode_agrees (env : Nat → Vec) (el : Nat) (code : List Instr) (loc :
     · exact Or.inr h
 
 /-! ### The invariant of fusion -/
-
-/-- A producer's record is right, for the lengths `ls`, the whole edge list `all` and the processed
-prefix `pre`. -/
+/-- Invariants of a producer recorded while fusing the prefix `pre` of `all`. -/
 structure DefOk (ls : List Nat) (all pre : List ArrayEdge) (df : Def) : Prop where
   closed  : closedFrom df.srcs df.code = true
   outDst  : df.wire ∈ df.code.map (·.dst)
@@ -1095,8 +1009,7 @@ structure FuseInv (ls : List Nat) (all pre : List ArrayEdge) (defs : List Def) (
   defsOk : ∀ df ∈ defs, DefOk ls all pre df
   found  : ∀ d ∈ pre, d.isMap = true → ∃ df ∈ defs, df.wire = d.dstWire
 
-/-- The hypotheses on the whole list: well-formed, destinations written once, no write after a read of
-the wire, map edges primitive. -/
+/-- Local validity, primitive maps, unique destinations, and read/write ordering for the whole graph. -/
 structure Hyps (ls : List Nat) (all : List ArrayEdge) : Prop where
   ok    : ∀ d ∈ all, edgeOk ls d = true
   prim  : ∀ d ∈ all, d.primitive = true
@@ -1187,8 +1100,6 @@ theorem fuseEdge_value (ls : List Nat) (all pre : List ArrayEdge) (defs : List D
     apply List.map_congr_left
     intro el hel
     have hel' : el < n := List.mem_range.mp hel
-    -- the found producers
-    simp only [ElemProg.single]
     generalize hfound : e.srcWires.filterMap (fun s => defs.find? (·.wire == s)) = found
     generalize hroots : ((e.srcWires.filter fun s => (defs.find? (·.wire == s)).isNone) ++ found.flatMap (·.srcs)).eraseDups = roots
     generalize hC : dedupeCode [] (found.flatMap (·.code)) = C
@@ -1247,10 +1158,7 @@ theorem fuseEdge_value (ls : List Nat) (all pre : List ArrayEdge) (defs : List D
       rcases dst_mem_dedupe [] _ s hmem with h | h
       · simp at h
       · rw [← hC]; exact h
-  | gather f => simp [fuseEdge, hop]
-  | concat => simp [fuseEdge, hop]
-  | const vs => simp [fuseEdge, hop]
-  | fold op shape => simp [fuseEdge, hop]
+  | _ => simp [fuseEdge, hop]
 
 theorem fuseEdge_dst (defs : List Def) (e : ArrayEdge) : (fuseEdge defs e).1.dstWire = e.dstWire := by
   cases h : e.op <;> simp [fuseEdge, h]
@@ -1258,8 +1166,7 @@ theorem fuseEdge_dst (defs : List Def) (e : ArrayEdge) : (fuseEdge defs e).1.dst
 theorem fuseEdge_isMap (defs : List Def) (e : ArrayEdge) : (fuseEdge defs e).1.isMap = e.isMap := by
   cases h : e.op <;> simp [fuseEdge, h, ArrayEdge.isMap]
 
-/-- Stepping an environment that every processed map edge is a fixpoint of, by an edge that writes no
-wire they read, keeps them fixpoints. -/
+/-- An edge writing a fresh destination preserves consistency of every previously processed map. -/
 theorem consistent_step (pre : List ArrayEdge) (env : Nat → Vec) (e : ArrayEdge) (hC : Consistent pre env)
     (hDst : ∀ d ∈ pre, d.dstWire ≠ e.dstWire) (hRead : ∀ d ∈ pre, d.srcWires.contains e.dstWire = false)
     (hSelf : e.srcWires.contains e.dstWire = false) :
@@ -1321,7 +1228,6 @@ theorem fuseEdges_main (ls : List Nat) (all : List ArrayEdge) (hH : Hyps ls all)
       simp only [hop, ArrayOp.outLen, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at hLen hOp
       obtain ⟨⟨hSame, _⟩, _⟩ := hOp
       have hmap : e.isMap = true := by simp [ArrayEdge.isMap, hop]
-      -- the fused edge's pieces
       simp only [fuseEdges, fuseEdge, hop, ElemProg.single]
       generalize hfound : e.srcWires.filterMap (fun s => defs.find? (·.wire == s)) = found
       generalize hroots : ((e.srcWires.filter fun s => (defs.find? (·.wire == s)).isNone) ++ found.flatMap (·.srcs)).eraseDups = roots
@@ -1340,7 +1246,6 @@ theorem fuseEdges_main (ls : List Nat) (all : List ArrayEdge) (hH : Hyps ls all)
         rw [← hC]
         apply closedFrom_dedupe _ [] _ _ (by simp)
         exact closedFrom_flatMap roots found fun df hdf => ⟨(hfoundOk df hdf).1.closed, hrootsSub df hdf⟩
-      -- membership of roots
       have hrootsMem : ∀ r ∈ roots, (r ∈ e.srcWires ∧ defs.find? (·.wire == r) = none) ∨ ∃ df ∈ found, r ∈ df.srcs := by
         intro r hr
         rw [← hroots, List.mem_eraseDups, List.mem_append] at hr
@@ -1425,15 +1330,10 @@ theorem fuseEdges_main (ls : List Nat) (all : List ArrayEdge) (hH : Hyps ls all)
             rcases dst_mem_dedupe [] _ s hmem with h | h
             · simp at h
             · rw [← hC]; exact h
-      -- the new producer record
       have hNewDef : DefOk ls all (pre ++ [e]) ⟨e.dstWire, roots, C ++ [⟨op, e.srcWires, e.dstWire⟩]⟩ :=
-        { closed := hClosed
-        , outDst := by simp
-        , instrs := hInstrs
-        , lenCode := hCodeLen
-        , lenSrcs := hrootsLen
-        , srcsLt := hrootsLt
-        , roots := hrootsNoMap }
+        { closed := hClosed, outDst := by simp
+        , instrs := hInstrs, lenCode := hCodeLen, lenSrcs := hrootsLen
+        , srcsLt := hrootsLt, roots := hrootsNoMap }
       have hInv' : FuseInv ls all (pre ++ [e]) (⟨e.dstWire, roots, C ++ [⟨op, e.srcWires, e.dstWire⟩]⟩ :: defs) (stepEdge env e) :=
         { cons := hCons'
         , defsOk := fun df hdf => by
@@ -1448,7 +1348,6 @@ theorem fuseEdges_main (ls : List Nat) (all : List ArrayEdge) (hH : Hyps ls all)
               subst h
               exact ⟨_, List.mem_cons_self, rfl⟩ }
       obtain ⟨ihEval, ihOk⟩ := ih (pre ++ [e]) _ (stepEdge env e) hAll' hInv'
-      -- the fused edge is well-formed
       have hOkFused : edgeOk ls { e with op := .map n ⟨C ++ [⟨op, e.srcWires, e.dstWire⟩], e.dstWire⟩, srcWires := roots } = true := by
         simp only [edgeOk, Bool.and_eq_true, beq_iff_eq, List.all_eq_true, ArrayOp.outLen, decide_eq_true_eq,
           Bool.not_eq_true']
@@ -1468,55 +1367,7 @@ theorem fuseEdges_main (ls : List Nat) (all : List ArrayEdge) (hH : Hyps ls all)
         · subst h
           exact ⟨hOkFused, fun _ => hrootsNoMap⟩
         · exact ihOk e' h
-    | gather f =>
-      simp only [fuseEdges, fuseEdge, hop]
-      have hInv' : FuseInv ls all (pre ++ [e]) defs (stepEdge env e) :=
-        { cons := hCons'
-        , defsOk := fun df hdf => DefOk.mono ls all pre e df (hInv.defsOk df hdf)
-        , found := fun d hd hdm => by
-            rcases List.mem_append.mp hd with h | h
-            · exact hInv.found d h hdm
-            · simp only [List.mem_singleton] at h; subst h; simp [ArrayEdge.isMap, hop] at hdm }
-      obtain ⟨ihEval, ihOk⟩ := ih (pre ++ [e]) defs (stepEdge env e) hAll' hInv'
-      refine ⟨?_, ?_⟩
-      · simp only [evalComb, List.foldl_cons] at ihEval ⊢; exact ihEval
-      · intro e' he'
-        rcases List.mem_cons.mp he' with h | h
-        · subst h; exact ⟨hOk, fun hm => by simp [ArrayEdge.isMap, hop] at hm⟩
-        · exact ihOk e' h
-    | concat =>
-      simp only [fuseEdges, fuseEdge, hop]
-      have hInv' : FuseInv ls all (pre ++ [e]) defs (stepEdge env e) :=
-        { cons := hCons'
-        , defsOk := fun df hdf => DefOk.mono ls all pre e df (hInv.defsOk df hdf)
-        , found := fun d hd hdm => by
-            rcases List.mem_append.mp hd with h | h
-            · exact hInv.found d h hdm
-            · simp only [List.mem_singleton] at h; subst h; simp [ArrayEdge.isMap, hop] at hdm }
-      obtain ⟨ihEval, ihOk⟩ := ih (pre ++ [e]) defs (stepEdge env e) hAll' hInv'
-      refine ⟨?_, ?_⟩
-      · simp only [evalComb, List.foldl_cons] at ihEval ⊢; exact ihEval
-      · intro e' he'
-        rcases List.mem_cons.mp he' with h | h
-        · subst h; exact ⟨hOk, fun hm => by simp [ArrayEdge.isMap, hop] at hm⟩
-        · exact ihOk e' h
-    | fold op shape =>
-      simp only [fuseEdges, fuseEdge, hop]
-      have hInv' : FuseInv ls all (pre ++ [e]) defs (stepEdge env e) :=
-        { cons := hCons'
-        , defsOk := fun df hdf => DefOk.mono ls all pre e df (hInv.defsOk df hdf)
-        , found := fun d hd hdm => by
-            rcases List.mem_append.mp hd with h | h
-            · exact hInv.found d h hdm
-            · simp only [List.mem_singleton] at h; subst h; simp [ArrayEdge.isMap, hop] at hdm }
-      obtain ⟨ihEval, ihOk⟩ := ih (pre ++ [e]) defs (stepEdge env e) hAll' hInv'
-      refine ⟨?_, ?_⟩
-      · simp only [evalComb, List.foldl_cons] at ihEval ⊢; exact ihEval
-      · intro e' he'
-        rcases List.mem_cons.mp he' with h | h
-        · subst h; exact ⟨hOk, fun hm => by simp [ArrayEdge.isMap, hop] at hm⟩
-        · exact ihOk e' h
-    | const vs =>
+    | _ =>
       simp only [fuseEdges, fuseEdge, hop]
       have hInv' : FuseInv ls all (pre ++ [e]) defs (stepEdge env e) :=
         { cons := hCons'
@@ -1534,7 +1385,6 @@ theorem fuseEdges_main (ls : List Nat) (all : List ArrayEdge) (hH : Hyps ls all)
         · exact ihOk e' h
 
 /-! ### Dropping what nobody reads -/
-
 /-- Two environments differing only at a wire no edge reads evaluate alike away from it. -/
 theorem evalComb_unread (x : Nat) (es : List ArrayEdge) (hNo : ∀ d ∈ es, d.srcWires.contains x = false) :
     ∀ (env env' : Nat → Vec), (∀ u, u ≠ x → env' u = env u) →
@@ -1586,17 +1436,14 @@ theorem evalComb_filter (keep : ArrayEdge → Bool) (safe : List Nat) (es : List
       exact (evalComb_unread p.dstWire rest (fun d hd => hno d (List.mem_cons_of_mem _ hd)) env (stepEdge env p)
         (fun v hv => by simp [stepEdge, hv]) u hne).symm
 
-/-- **`fuseGraph_sound`**: on a well-formed graph the fused graph has the same outputs, and its edges
-pass `edgeOk`. -/
+/-- Fusion preserves the outputs of a well-formed graph and yields locally valid edges. -/
 theorem fuseGraph_sound (g : ArrayGraph) (hWf : g.wf = true) (env : Nat → Vec) :
     evalGraph (fuseGraph g) env = evalGraph g env ∧
     ∀ e ∈ (fuseGraph g).edges, edgeOk g.lengths e = true := by
+  obtain ⟨hOrder, hSelf⟩ := noWriteAfterRead_pairwise g.edges (wf_noWriteAfterRead g hWf)
   have hH : Hyps g.lengths g.edges :=
-    { ok := wf_edgeOk g hWf
-    , prim := wf_primitive g hWf
-    , nodup := wf_nodup g hWf
-    , nwar := (noWriteAfterRead_pairwise g.edges (wf_noWriteAfterRead g hWf)).1
-    , self := (noWriteAfterRead_pairwise g.edges (wf_noWriteAfterRead g hWf)).2 }
+    { ok := wf_edgeOk g hWf, prim := wf_primitive g hWf, nodup := wf_nodup g hWf
+    , nwar := hOrder, self := hSelf }
   have hInv0 : FuseInv g.lengths g.edges [] [] env :=
     { cons := fun d hd => by simp at hd
     , defsOk := fun df hdf => by simp at hdf
@@ -1642,7 +1489,7 @@ theorem fuseGraph_sound (g : ArrayGraph) (hWf : g.wf = true) (env : Nat → Vec)
     | false => rfl
     | true => exact absurd hqd (hdOk hdm p.dstWire (List.contains_iff_mem.mp hc) q hq hqm)
 
-theorem fuseGraph_lengths (g : ArrayGraph) : (fuseGraph g).lengths = g.lengths := rfl
-theorem fuseGraph_outputs (g : ArrayGraph) : (fuseGraph g).outputs = g.outputs := rfl
+theorem fuseGraph_lengths (g : ArrayGraph) : (fuseGraph g).lengths = g.lengths := by rfl
+theorem fuseGraph_outputs (g : ArrayGraph) : (fuseGraph g).outputs = g.outputs := by rfl
 
 end Obend.Hardware.ArrayHypergraph

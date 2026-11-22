@@ -23,7 +23,7 @@ operations to physical FPGA/eFPGA primitives and retimed pipeline stages:
 -/
 public import Obend.Hardware.Process
 public import Obend.Hardware.HDL
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Synth
 open Obend.Hardware.Process Obend.Hardware.HDL
@@ -118,7 +118,7 @@ guaranteed to equal `f (g x₀) (h y₀)`! -/
 theorem retime2Stage_sound {α β γ δ ε : Type}
     (g : δ → α) (h : ε → β) (f : α → β → γ)
     (st₀ : Retime2State α β γ) (x₀ x₁ : δ) (y₀ y₁ : ε) :
-    (stepRetime2 g h f (stepRetime2 g h f st₀ x₀ y₀) x₁ y₁).rout = f (g x₀) (h y₀) :=
+    (stepRetime2 g h f (stepRetime2 g h f st₀ x₀ y₀) x₁ y₁).rout = f (g x₀) (h y₀) := by
   rfl
 
 /-- Un-retimed critical path combining two 64-bit ALU stages in a single clock cycle
@@ -153,20 +153,20 @@ inductive CarryMode where
   | sub     -- `a + ~b + 1` (`cin = 1`, fed `inv_b` from upstream `LUT1 0x1`)
   | ultCmp  -- Unsigned borrow-out comparator (`1#64` iff `a + ~b + 1 < 2^64`, i.e., `a <ᵤ b`)
   | sltCmp  -- Signed borrow-out comparator (`1#64` iff MSB-flipped `a + ~b + 1 < 2^64`, i.e., `a <ₛ b`)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Operating mode of a hard DSP multiplier slice (`DSP48E2` / `DSP58`). -/
 inductive DspMulMode where
   | mul64   -- 64-bit integer product `(a * b)[63:0]`
   | qmul32  -- Signed Q32 fixed-point product `((sext128 a * sext128 b) >>> 32)[63:0]`
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Direction/fill discipline of a fixed-offset shift wire permutation stage in a barrel shifter. -/
 inductive ShiftDir where
   | shl   -- Left shift by fixed distance `dist`, zero-filling low `dist` bits
   | lshr  -- Logical right shift by fixed distance `dist`, zero-filling high `dist` bits
   | ashr  -- Arithmetic right shift by fixed distance `dist`, sign-filling high `dist` bits
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Physical FPGA Basic Element of Logic (BEL) primitive kinds targeted by technology mapping. -/
 inductive BelKind where
@@ -185,14 +185,14 @@ inductive BelKind where
   | dspMul       (mode : DspMulMode := .mul64)  -- Hard DSP multiplier slice (`DSP48E2` / `DSP58`)
   | ff           (regIdx : Nat) (resetKind : ResetKind) -- Synchronous flip-flop BEL (`FDRE` / `FDPE`)
   | route        (op : RtlWidthOp)              -- Width slice/ext/trunc wire routing
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- A technology-mapped Basic Element of Logic (`BelCell`) in the post-synthesis FPGA netlist. -/
 structure BelCell where
   dstName : String
   kind    : BelKind
   inputs  : List String
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Complete technology-mapped BEL netlist synthesized from an `RtlModule`. -/
 structure BelNetlist where
@@ -200,7 +200,7 @@ structure BelNetlist where
   inputNames  : List String
   cells       : List BelCell
   outputNames : List String
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Compute the binary truth-table address $\sum_k b_k 2^k$ of a list of boolean LUT inputs. -/
 def lutInputIndex : List Bool → Nat
@@ -233,22 +233,22 @@ theorem evalLut_buf (a : Bool) : evalLut 0x2 [a] = a := by
   cases a <;> decide
 
 /-- Canonical collision-free root net name for internal RTL wire `idx` (contains no `'/'`). -/
-def wireNetName (idx : Nat) : String :=
+@[expose] def wireNetName (idx : Nat) : String :=
   String.ofList ('w' :: List.replicate idx '_' ++ ['='])
 
 /-- Canonical collision-free root net name for register D-input `idx` (contains no `'/'`). -/
-def regDinNetName (idx : Nat) : String :=
+@[expose] def regDinNetName (idx : Nat) : String :=
   String.ofList ('d' :: List.replicate idx '_' ++ ['='])
 
 /-- Canonical collision-free root net name for module output `idx` (contains no `'/'`). -/
-def outNetName (idx : Nat) : String :=
+@[expose] def outNetName (idx : Nat) : String :=
   String.ofList ('o' :: List.replicate idx '_' ++ ['='])
 
 /-- Emit one stage of a 6-stage logarithmic barrel shifter (`dist = 2^bitIdx`):
 1. `shiftRoute dir dist` (pure wire permutation + constant-0 / MSB sign fill),
 2. `bitBroadcast bitIdx` (fanout bit `bitIdx` of shift amount `bName` to all 64 mux select pins),
 3. `lut3 0xCA` (64-lane 2:1 multiplexer selecting shifted vs unshifted word). -/
-def barrelStageBels
+@[expose] def barrelStageBels
     (dir : ShiftDir) (bitIdx dist : Nat)
     (shNet selNet inNet outNet bName : String) : List BelCell :=
   [ { dstName := shNet,  kind := .shiftRoute dir dist, inputs := [inNet] }
@@ -257,7 +257,7 @@ def barrelStageBels
 
 /-- Emit a full 6-stage 64-bit logarithmic barrel shifter (`distances = 1, 2, 4, 8, 16, 32`)
 from `aName` and `bName` into `dstName`. -/
-def synthesizeBarrelShiftBels (dir : ShiftDir) (dstName aName bName : String) : List BelCell :=
+@[expose] def synthesizeBarrelShiftBels (dir : ShiftDir) (dstName aName bName : String) : List BelCell :=
   barrelStageBels dir 0 1  (dstName ++ "/h0") (dstName ++ "/k0") aName              (dstName ++ "/0") bName ++
   barrelStageBels dir 1 2  (dstName ++ "/h1") (dstName ++ "/k1") (dstName ++ "/0")  (dstName ++ "/1") bName ++
   barrelStageBels dir 2 4  (dstName ++ "/h2") (dstName ++ "/k2") (dstName ++ "/1")  (dstName ++ "/2") bName ++
@@ -268,7 +268,7 @@ def synthesizeBarrelShiftBels (dir : ShiftDir) (dstName aName bName : String) : 
 /-- Emit the operator-local BEL cells combining already-synthesized operand nets `aName` and `bName`
 into `dstName`. Factored out of `synthesizeExprToBels` so `synthesizeExprToBels` has a flat
 single-clause equation on `.alu`. -/
-def synthesizeAluHeadBels (op : RtlAluOp) (dstName aName bName : String) : List BelCell :=
+@[expose] def synthesizeAluHeadBels (op : RtlAluOp) (dstName aName bName : String) : List BelCell :=
   match op with
   | .bitAnd =>
     [{ dstName := dstName, kind := .lut2 0x8, inputs := [aName, bName] }]
@@ -320,7 +320,7 @@ FPGA `BelCell` primitives:
 * `.mux` $\mapsto$ `BelKind.orReduce` + `BelKind.lut3 0xCA`,
 * `.bitNot` $\mapsto$ `BelKind.lut1 0x1`,
 * `.resize` $\mapsto$ `BelKind.route` (slice, extension or truncation is wiring). -/
-def synthesizeExprToBels (dstName : String) : RtlExpr → List BelCell
+@[expose] def synthesizeExprToBels (dstName : String) : RtlExpr → List BelCell
   | .const v       => [{ dstName := dstName, kind := .constBel v, inputs := [] }]
   | .inputPort idx => [{ dstName := dstName, kind := .portIn idx, inputs := [s!"in_{idx}"] }]
   | .wireRef idx   => [{ dstName := dstName, kind := .wireTap idx, inputs := [wireNetName idx] }]
@@ -353,7 +353,7 @@ def synthesizeExprToBels (dstName : String) : RtlExpr → List BelCell
 /-- Synthesize an entire synchronous `RtlModule` into a technology-mapped `BelNetlist`, mapping all
 internal wires, register next-state trees, and output trees via `synthesizeExprToBels`, and mapping
 each sequential `RegSpec` to a dedicated `BelKind.ff` flip-flop BEL. -/
-def synthesizeModuleToBels (m : RtlModule) : BelNetlist :=
+@[expose] def synthesizeModuleToBels (m : RtlModule) : BelNetlist :=
   let wireBels := m.wires.flatMap (fun w => synthesizeExprToBels (wireNetName w.wireIdx) w.expr)
   let regCombBels := m.regs.zipIdx.flatMap (fun (r, k) => synthesizeExprToBels (regDinNetName k) r.nextExpr)
   let outBels := m.outputs.zipIdx.flatMap (fun (o, k) => synthesizeExprToBels (outNetName k) o.expr)
@@ -366,17 +366,17 @@ def synthesizeModuleToBels (m : RtlModule) : BelNetlist :=
   , outputNames := m.outputs.map (·.name) }
 
 /-- Check whether a `BelCell` is a sequential flip-flop (`BelKind.ff`). -/
-def isFfBel (c : BelCell) : Bool :=
+@[expose] def isFfBel (c : BelCell) : Bool :=
   match c.kind with
   | .ff _ _ => true
   | _       => false
 
 /-- Count the number of sequential flip-flop (`BelKind.ff`) cells in a `BelNetlist`. -/
-def countFfBels (nl : BelNetlist) : Nat :=
+@[expose] def countFfBels (nl : BelNetlist) : Nat :=
   (nl.cells.filter isFfBel).length
 
 /-- Check whether a `BelCell` has a valid input pin arity for its `BelKind`. -/
-def checkBelCellValid (c : BelCell) : Bool :=
+@[expose] def checkBelCellValid (c : BelCell) : Bool :=
   match c.kind with
   | .constBel _     => c.inputs.length == 0
   | .portIn _       => c.inputs.length == 1
@@ -395,11 +395,11 @@ def checkBelCellValid (c : BelCell) : Bool :=
   | .route _        => c.inputs.length == 1
 
 /-- Check that every cell in a `BelNetlist` satisfies `checkBelCellValid`. -/
-def checkBelNetlistValid (nl : BelNetlist) : Bool :=
+@[expose] def checkBelNetlistValid (nl : BelNetlist) : Bool :=
   nl.cells.all checkBelCellValid
 
 theorem synthesizeBarrelShiftBels_no_ff (dir : ShiftDir) (dst a b : String) :
-    (synthesizeBarrelShiftBels dir dst a b).filter isFfBel = [] :=
+    (synthesizeBarrelShiftBels dir dst a b).filter isFfBel = [] := by
   rfl
 
 theorem synthesizeExprToBels_no_ff (dstName : String) (e : RtlExpr) :
@@ -437,7 +437,7 @@ theorem map_reg_ff_filter (regs : List (RegSpec × Nat)) :
     simp [List.map_cons, List.filter_cons, isFfBel, ih]
 
 theorem synthesizeBarrelShiftBels_valid (dir : ShiftDir) (dst a b : String) :
-    (synthesizeBarrelShiftBels dir dst a b).all checkBelCellValid = true :=
+    (synthesizeBarrelShiftBels dir dst a b).all checkBelCellValid = true := by
   rfl
 
 theorem synthesizeExprToBels_valid (dstName : String) (e : RtlExpr) :
@@ -892,7 +892,7 @@ theorem evalCombBelCellsFrom_preserve
     have hStep : evalCombBelCellsFrom inputs regState env (c :: rest) k =
         evalCombBelCellsFrom inputs regState
           (if isFfBel c then env else fun k' => if k' == c.dstName then evalBelCell inputs regState env c else env k')
-          rest k := rfl
+          rest k := by rfl
     rw [hStep, ih _ hRest]
     cases isFfBel c <;> simp [hNe]
 
@@ -1582,7 +1582,7 @@ theorem evalBelNetlistOutputs_synthesizeModuleToBels
       evalModuleOutputs m inputs regState := by
   have hOut := (evalCombBelCells_synthesizeModuleToBels m inputs regState hWf).1
   unfold evalBelNetlistOutputs evalModuleOutputs
-  have hNames : (synthesizeModuleToBels m).outputNames = m.outputs.map (·.name) := rfl
+  have hNames : (synthesizeModuleToBels m).outputNames = m.outputs.map (·.name) := by rfl
   rw [hNames]
   exact map_zipIdx_outputs_eq m.outputs 0
     (fun k => evalCombBelCells inputs regState (synthesizeModuleToBels m).cells (outNetName k))
@@ -1678,14 +1678,14 @@ theorem stepBelNetlistRegs_synthesizeModuleToBels
               | .syncReset initVal => if rst then initVal else din
             fun i => if i == regIdx then v else nextSt i
           | _ => nextSt)
-        regState := rfl
+        regState := by rfl
   rw [hStep]
   have hCells : (synthesizeModuleToBels m).cells =
       m.wires.flatMap (fun w => synthesizeExprToBels (wireNetName w.wireIdx) w.expr) ++
       m.regs.zipIdx.flatMap (fun (r, k) => synthesizeExprToBels (regDinNetName k) r.nextExpr) ++
       m.outputs.zipIdx.flatMap (fun (o, k) => synthesizeExprToBels (outNetName k) o.expr) ++
       m.regs.zipIdx.map (fun (r, k) =>
-        ({ dstName := r.name, kind := .ff r.regIdx r.resetKind, inputs := [regDinNetName k] } : BelCell)) := rfl
+        ({ dstName := r.name, kind := .ff r.regIdx r.resetKind, inputs := [regDinNetName k] } : BelCell)) := by rfl
   rw [hCells, List.foldl_append, List.foldl_append, List.foldl_append]
   rw [foldl_nonFf_noop rst env _ (flatMap_synthesizeExprToBels_no_ff (fun w : WireAssign => wireNetName w.wireIdx) (·.expr) m.wires),
       foldl_nonFf_noop rst env _ (flatMap_synthesizeExprToBels_no_ff (fun rk : RegSpec × Nat => regDinNetName rk.2) (fun rk => rk.1.nextExpr) m.regs.zipIdx),
@@ -1775,6 +1775,19 @@ def goldenRetimedMacRtl : RtlModule where
     , { regIdx := 2, name := "outReg", domain := .coreClk, resetKind := .resetFree, isSynchronizer := false, nextExpr := .wireRef 1 } ]
   outputs    :=
     [ { name := "mac_out", expr := .regRead 2 } ]
+
+/-- Every well-formed module passes the signoff gate: validity of the synthesized netlist is universal
+(`synthesizeModuleToBels_valid_and_ff_count`), so the gate accepts exactly the modules `checkRtlModule` accepts. -/
+theorem checkSynthesizedRtlSignoff_complete (m : RtlModule) (hWf : checkRtlModule m = true) :
+    checkSynthesizedRtlSignoff m = true := by
+  simp only [checkSynthesizedRtlSignoff, hWf, (synthesizeModuleToBels_valid_and_ff_count m).1, Bool.and_self]
+
+/-- `checkSynthesizedRtlSignoff` is inhabited by a sequential module: the retimed two-stage MAC
+(two wires, three registers) passes it. -/
+example :
+    ∃ m : RtlModule, 0 < m.regs.length ∧ 0 < m.wires.length ∧ checkSynthesizedRtlSignoff m = true := by
+  exact ⟨goldenRetimedMacRtl, by decide, by decide,
+    checkSynthesizedRtlSignoff_complete goldenRetimedMacRtl (by decide +kernel)⟩
 
 end Obend.Hardware.Synth
 end
