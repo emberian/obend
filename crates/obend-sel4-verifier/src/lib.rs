@@ -29,9 +29,11 @@ use core::{cell::UnsafeCell, marker::PhantomData, mem::MaybeUninit};
 
 mod chokepoint;
 mod deos;
+mod iommu;
 mod outbox;
 pub use chokepoint::*;
 pub use deos::*;
+pub use iommu::*;
 pub use outbox::*;
 
 pub type Digest = [u8; 32];
