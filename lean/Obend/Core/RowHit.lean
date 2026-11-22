@@ -1,6 +1,8 @@
 module
 public import Obend.Core.TypeGraph
-@[expose] public section
+import all Obend.Core.AliasExposure
+import all Obend.Core.RecursiveRows
+public section
 namespace Obend.Core.RowSearch
 set_option autoImplicit false
 
@@ -37,7 +39,7 @@ theorem hit_unique {α β : Type} {step : α → Step α β} {x : α} {p q : β}
       obtain ⟨same, distance⟩ := ih nested'
       exact ⟨same, congrArg (fun k => k + 1) distance⟩
 
-def find {α β : Type} [DecidableEq α] (step : α → Step α β)
+@[expose] def find {α β : Type} [DecidableEq α] (step : α → Step α β)
     (remaining : List α) (x : α) : Option β :=
   match step x with
   | .stop => none
@@ -198,7 +200,7 @@ export Obend.Core.RowSearch (Step Hit SkipPath find find_sound find_iff_hit find
 end Search
 set_option autoImplicit false
 
-def step (a : Assumptions) (label : String) (first : Bool) (row : Ty) :
+@[expose] def step (a : Assumptions) (label : String) (first : Bool) (row : Ty) :
     Search.Step Ty (Ty × Ty) :=
   match expose a row with
   | .constructor observation =>
@@ -209,7 +211,7 @@ def step (a : Assumptions) (label : String) (first : Bool) (row : Ty) :
     | _, _ => .stop
   | _ => .stop
 
-def emission : RR.StreamStep → Option (Ty × Ty)
+@[expose] def emission : RR.StreamStep → Option (Ty × Ty)
   | .end _ => none
   | .emit member tail => some (member, tail)
 

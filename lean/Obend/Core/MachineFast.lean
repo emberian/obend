@@ -22,7 +22,8 @@ pre-state is retained on the success path; the stack depth is carried as a
 counter; the four push sites read the size before pushing. -/
 public import Obend.Core.Machine
 public import Obend.Tactic.Cases
-@[expose] public section
+import all Obend.Core.Machine
+public section
 namespace Obend.Core.MachineFast
 open Obend.Core.Term Obend.Core.Machine
 set_option autoImplicit false
@@ -30,7 +31,7 @@ set_option autoImplicit false
 /-! ## Allocation and the transition -/
 
 /-- `allocateFields` with each field's address read before its push. -/
-def allocateFieldsFast (heap : Array Cell) (environment : Environment)
+@[expose] def allocateFieldsFast (heap : Array Cell) (environment : Environment)
     (fields : List (String × Term)) : Array Cell × List (String × Address) :=
   let pair := fields.foldl (fun (prior : Array Cell × List (String × Address)) field =>
     let address := prior.1.size
@@ -199,7 +200,7 @@ def runFrom (limits : Limits) : Nat → State → Nat → Outcome
         runFrom limits ticks (stepRawFast state) sizes.2
       else .suspended .capacity state
 
-def runBoundedFast (limits : Limits) (ticks : Nat) (state : State) : Outcome :=
+@[expose] def runBoundedFast (limits : Limits) (ticks : Nat) (state : State) : Outcome :=
   runFrom limits ticks state state.stack.length
 
 theorem runFrom_eq_runBounded (limits : Limits) :

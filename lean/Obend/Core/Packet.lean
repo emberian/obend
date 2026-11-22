@@ -11,18 +11,18 @@ refusal. Checking, the receipt and the native entry point are `Obend.Elab.Gate`'
 -/public import Obend.Core.Ty
 public import Obend.Core.Term
 public import Obend.Core.Check
-@[expose] public section
+public section
 namespace Obend.Core.Packet
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check
 set_option autoImplicit false
 
 open Lean (Json toJson)
 
-def requireSome {α : Type} (message : String) : Option α → Except String α
+@[expose] def requireSome {α : Type} (message : String) : Option α → Except String α
   | some value => .ok value
   | none => .error message
 
-def jsonNat (value : Json) : Except String Nat :=
+@[expose] def jsonNat (value : Json) : Except String Nat :=
   match value.getNat? with
   | .ok result => .ok result
   | .error _ => do
@@ -102,7 +102,7 @@ def decodeTypeTable (value : Json) : Except String (Array (Ty × Nat)) := do
   entries.foldlM (fun table entry => do
     pure (table.push (← decodeTypeWith table typeNestingCapacity entry))) #[]
 
-def decodePrimitive (value : Json) : Except String Primitive := do
+@[expose] def decodePrimitive (value : Json) : Except String Primitive := do
   match ← value.getStr? with
   | "add" => pure .add | "multiply" => pure .multiply
   | "equal" => pure .equal | "conjunction" => pure .conjunction
@@ -116,7 +116,7 @@ def decodePrimitive (value : Json) : Except String Primitive := do
 
 /-- Decodes exactly the existing world lowerer's runtime core wire; no second
 source translator or alternate fixture term is introduced by the type checker. -/
-def decodeTerm : Nat → Json → Except String Term
+@[expose] def decodeTerm : Nat → Json → Except String Term
   | 0, _ => .error "term nesting capacity"
   | fuel + 1, value => do
     let sub := fun key => do decodeTerm fuel (← value.getObjVal? key)
@@ -173,7 +173,7 @@ structure PacketParts where
   fuel : Nat
 
 /-- The term nesting capacity of a packet's term (`decodeTerm`'s fuel). -/
-def termNestingCapacity : Nat := 4096
+@[expose] def termNestingCapacity : Nat := 4096
 
 def decodePacketParts (value : Json) (table : Array (Ty × Nat)) : Except String PacketParts := do
   let annotations ← (← (← value.getObjVal? "annotations").getArr?).toList.mapM fun entry => do
@@ -199,7 +199,7 @@ def decodePacketParts (value : Json) (table : Array (Ty × Nat)) : Except String
       ⟨bounds,shareable,[], []⟩,context,fuel⟩
 
 /-- Schema, type table, term, then the rest (`decodePacketParts`), in that order. -/
-def decodePacket (value : Json) : Except String DecodedPacket := do
+@[expose] def decodePacket (value : Json) : Except String DecodedPacket := do
   if (← value.getObjValAs? String "schema") != "dregg.objective-bend.typed-core.v3" then
     throw "Objective typed core edition required"
   let table ← decodeTypeTable (← value.getObjVal? "types")
@@ -234,7 +234,7 @@ def typeJson : Ty → Json
       ("plan",typeJson plan),("response",typeJson response),("result",typeJson result)]
 
 /-- Every quantity in a type made `unrestricted` (arrow parameters at any depth). -/
-def unrestrictedTy : Ty → Ty
+@[expose] def unrestrictedTy : Ty → Ty
   | .arrow reuse _ domain codomain => .arrow reuse .unrestricted (unrestrictedTy domain) (unrestrictedTy codomain)
   | .field name member tail => .field name (unrestrictedTy member) (unrestrictedTy tail)
   | .specification metadata extension => .specification (unrestrictedTy metadata) (unrestrictedTy extension)
@@ -247,11 +247,11 @@ def unrestrictedTy : Ty → Ty
 /-- The kind of rule a refused packet broke. -/
 inductive RefusalKind where
   | budget | ownership | typing
-  deriving Repr, DecidableEq
+  deriving Repr, @[expose] DecidableEq
 
 /-- The same packet with every quantity relaxed to `unrestricted`: lambda
 parameters, every arrow in the declared types and bounds, and the context. -/
-def relaxQuantities (packet : DecodedPacket) : DecodedPacket :=
+@[expose] def relaxQuantities (packet : DecodedPacket) : DecodedPacket :=
   let relaxAnnotation := fun (annotation : LambdaAnnotation) =>
     ({ domain := unrestrictedTy annotation.domain, codomain := unrestrictedTy annotation.codomain,
        parameter := .unrestricted, reuse := annotation.reuse } : LambdaAnnotation)

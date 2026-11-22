@@ -2,7 +2,9 @@ module
 /- The coalgebraic part of row congruence. Scanner normalization is isolated
 from coinduction: no traversal of an unbounded emitted stream is needed. -/
 public import Obend.Core.RowHit
-@[expose] public section
+import all Obend.Core.RecursiveRows
+import all Obend.Core.RowHit
+public section
 namespace Obend.Core.TypeGraph
 open Obend.Core.Ty Obend.Core.Check
 set_option autoImplicit false
@@ -12,7 +14,7 @@ abbrev StreamEquivalent (a : Assumptions) (r s : Ty) (name : String)
   FP.Bisimilar (graph a) (.stream r name first) (.stream s name first)
 
 /-- The useful end law (kept separate to avoid any dependence on end payloads). -/
-def HideEndLaw (a : Assumptions) : Prop :=
+@[expose] def HideEndLaw (a : Assumptions) : Prop :=
   ∀ r name ending, RR.streamStep a r name true = .end ending →
     FP.Bisimilar (graph a) (.stream r name false) (.stream r name true)
 

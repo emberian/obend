@@ -1,12 +1,14 @@
 module
 public import Obend.Core.TypeGraphResource
 public import Obend.Core.TypeGraphAlias
-@[expose] public section
+import all Obend.Core.AliasExposure
+import all Obend.Core.TypeGraph
+public section
 namespace Obend.Core.AliasExposure
 open Obend.Core.Ty Obend.Core.Check
 set_option autoImplicit false
 
-def headIsComputation : Head → Bool
+@[expose] def headIsComputation : Head → Bool
   | .constructor observation => observation.tag == .computation
   | _ => false
 
@@ -56,7 +58,7 @@ inductive HeadShape where
   | streamEnd | streamEmit
   deriving DecidableEq, Repr
 
-def labelHead : Label → HeadShape
+@[expose] def labelHead : Label → HeadShape
   | .nominal index => .nominal index
   | .unproductive representative => .unproductive representative
   | .ordinary tag _ => .ordinary tag

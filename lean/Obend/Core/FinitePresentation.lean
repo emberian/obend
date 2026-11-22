@@ -2,7 +2,7 @@ module
 /- A finite closed support presents a global deterministic graph exactly.
 Indexing requires a membership proof; no missing node acquires a fallback. -/
 public import Obend.Core.FiniteBisimulation
-@[expose] public section
+public section
 namespace Obend.Core.FinitePresentation
 set_option autoImplicit false
 open Obend.Core.FiniteBisimulation (Children children_mono children_refl children_symm children_comp)
@@ -14,10 +14,10 @@ structure Graph (α Label : Type) where
   label : α → Label
   successors : α → List α
 
-def Bisimulation {α Label : Type} (g : Graph α Label) (R : α → α → Prop) : Prop :=
+@[expose] def Bisimulation {α Label : Type} (g : Graph α Label) (R : α → α → Prop) : Prop :=
   ∀ x y, R x y → g.label x = g.label y ∧ Children R (g.successors x) (g.successors y)
 
-def Bisimilar {α Label : Type} (g : Graph α Label) (x y : α) : Prop :=
+@[expose] def Bisimilar {α Label : Type} (g : Graph α Label) (x y : α) : Prop :=
   ∃ R, Bisimulation g R ∧ R x y
 
 theorem bisimilar_refl {α Label : Type} (g : Graph α Label) (x : α) : Bisimilar g x x := by
@@ -69,10 +69,10 @@ structure ClosedSupport {α Label : Type} (g : Graph α Label) where
 namespace ClosedSupport
 variable {α Label : Type} [DecidableEq α] {g : Graph α Label}
 
-def index (P : ClosedSupport g) (x : α) (member : x ∈ P.nodes) : Fin P.nodes.length :=
+@[expose] def index (P : ClosedSupport g) (x : α) (member : x ∈ P.nodes) : Fin P.nodes.length :=
   ⟨P.nodes.idxOf x,List.idxOf_lt_length_of_mem member⟩
 
-def decode (P : ClosedSupport g) (i : Fin P.nodes.length) : α := P.nodes[i.val]
+@[expose] def decode (P : ClosedSupport g) (i : Fin P.nodes.length) : α := P.nodes[i.val]
 
 theorem decode_mem (P : ClosedSupport g) (i : Fin P.nodes.length) : P.decode i ∈ P.nodes :=
   List.getElem_mem i.isLt
@@ -84,7 +84,7 @@ theorem decode_mem (P : ClosedSupport g) (i : Fin P.nodes.length) : P.decode i �
   exact List.findIdx_getElem (xs := P.nodes) (p := fun a => a == x)
     (w := by simpa only [List.idxOf] using List.idxOf_lt_length_of_mem member)
 
-def finiteGraph (P : ClosedSupport g) : FB.Graph Label P.nodes.length where
+@[expose] def finiteGraph (P : ClosedSupport g) : FB.Graph Label P.nodes.length where
   label := fun i => g.label (P.decode i)
   successors := fun i => (g.successors (P.decode i)).attach.map
     (fun child => P.index child.val (P.closed _ (P.decode_mem i) child.val child.property))
@@ -125,7 +125,7 @@ theorem finite_iff (P : ClosedSupport g) (i j : Fin P.nodes.length) :
     refine ⟨labels,(children_map_iff P.decode R _ _).mp ?_⟩
     simpa only [P.decode_successors] using children
 
-def agreement [DecidableEq Label] (P : ClosedSupport g) (x y : α)
+@[expose] def agreement [DecidableEq Label] (P : ClosedSupport g) (x y : α)
     (hx : x ∈ P.nodes) (hy : y ∈ P.nodes) : Bool :=
   FB.visitedSame P.finiteGraph (P.index x hx) (P.index y hy)
 

@@ -4,7 +4,11 @@ This module carries actual source derivations and captured quantity premises.
 It does not turn static use counts into a native custody/liveness theorem. -/
 public import Obend.Core.Check
 public import Obend.Core.Invariant
-@[expose] public section
+import all Obend.Core.Check
+import all Obend.Core.Invariant
+import all Obend.Core.Ty
+import all Obend.Core.Term
+public section
 namespace Obend.Core.MachineTyping
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine
 set_option autoImplicit false
@@ -13,7 +17,7 @@ abbrev AddressTypes := List Ty
 
 /-- Allocation extends this immutable assignment; updating a cell cannot
 reassign the type of an existing thunk identity. -/
-def TypeExtension (before after : AddressTypes) : Prop :=
+@[expose] def TypeExtension (before after : AddressTypes) : Prop :=
   ∀ (address : Address) (type : Ty), before[address]? = some type → after[address]? = some type
 
 theorem type_extension_refl (types : AddressTypes) : TypeExtension types types := by

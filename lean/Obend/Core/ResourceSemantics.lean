@@ -4,16 +4,18 @@ The mirror construction compares actual local safety labels with an all-good
 copy of the same graph. This module is independent of RecursiveRows. -/
 public import Obend.Core.AliasExposure
 public import Obend.Core.FinitePresentation
-@[expose] public section
+import all Obend.Core.AliasExposure
+import all Obend.Core.Ty
+public section
 namespace Obend.Core.FiniteSafety
 open Obend.Core.FiniteBisimulation (Children children_mono)
 open Obend.Core.FinitePresentation (Graph Bisimulation Bisimilar ClosedSupport)
 set_option autoImplicit false
 
-def Closed {α : Type} (g : Graph α Bool) (P : α → Prop) : Prop :=
+@[expose] def Closed {α : Type} (g : Graph α Bool) (P : α → Prop) : Prop :=
   ∀ x, P x → g.label x = true ∧ ∀ child ∈ g.successors x, P child
 
-def Safe {α : Type} (g : Graph α Bool) (x : α) : Prop :=
+@[expose] def Safe {α : Type} (g : Graph α Bool) (x : α) : Prop :=
   ∃ P, Closed g P ∧ P x
 
 theorem safe_closed {α : Type} (g : Graph α Bool) : Closed g (Safe g) := by
@@ -41,7 +43,7 @@ theorem children_same_map {α β : Type} (R : β → β → Prop) (f h : α → 
   | nil => simp [Children]
   | cons x xs ih => simp [Children,ih]
 
-def mirror {α : Type} (g : Graph α Bool) : Graph (α × Bool) Bool where
+@[expose] def mirror {α : Type} (g : Graph α Bool) : Graph (α × Bool) Bool where
   label := fun node => if node.2 then true else g.label node.1
   successors := fun node => (g.successors node.1).map (fun child => (child,node.2))
 
@@ -68,14 +70,14 @@ theorem mirror_iff {α : Type} (g : Graph α Bool) (x : α) :
     intro child member
     exact ⟨rfl,children child member⟩
 
-def mirrorNodes {α : Type} (nodes : List α) : List (α × Bool) :=
+@[expose] def mirrorNodes {α : Type} (nodes : List α) : List (α × Bool) :=
   nodes.flatMap (fun x => [(x,false),(x,true)])
 
 theorem mem_mirrorNodes {α : Type} (nodes : List α) (x : α) (mode : Bool) :
     (x,mode) ∈ mirrorNodes nodes ↔ x ∈ nodes := by
   cases mode <;> simp [mirrorNodes,List.mem_flatMap]
 
-def mirrorSupport {α : Type} {g : Graph α Bool} (P : ClosedSupport g) : ClosedSupport (mirror g) where
+@[expose] def mirrorSupport {α : Type} {g : Graph α Bool} (P : ClosedSupport g) : ClosedSupport (mirror g) where
   nodes := mirrorNodes P.nodes
   closed := by
     intro node member child found
@@ -93,7 +95,7 @@ theorem mem_mirrorSupport {α : Type} {g : Graph α Bool} (P : ClosedSupport g) 
 
 /-- The implementation is the existing finite visited-pair worklist. Both
 copies share each original successor graph, so siblings share visited pairs. -/
-def decision {α : Type} [DecidableEq α] {g : Graph α Bool}
+@[expose] def decision {α : Type} [DecidableEq α] {g : Graph α Bool}
     (P : ClosedSupport g) (x : α) (member : x ∈ P.nodes) : Bool :=
   (mirrorSupport P).agreement (x,false) (x,true)
     ((mem_mirrorSupport _ _ _).mpr member) ((mem_mirrorSupport _ _ _).mpr member)
@@ -123,7 +125,7 @@ namespace Obend.Core.ResourceSemantics
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
 set_option autoImplicit false
 
-def head (assumptions : Assumptions) (t : Ty) : Bool × List Ty :=
+@[expose] def head (assumptions : Assumptions) (t : Ty) : Bool × List Ty :=
   match expose assumptions t with
   | .nominal index => (assumptions.shareableVariables.contains index,[])
   | .unproductive _ => (true,[])
@@ -134,7 +136,7 @@ def head (assumptions : Assumptions) (t : Ty) : Bool × List Ty :=
     | .custody _ | .computation => (false,[])
     | .field _ | .specification | .prototype | .variant => (true,observation.children)
 
-def graph (assumptions : Assumptions) : Obend.Core.FinitePresentation.Graph Ty Bool where
+@[expose] def graph (assumptions : Assumptions) : Obend.Core.FinitePresentation.Graph Ty Bool where
   label := fun t => (head assumptions t).1
   successors := fun t => (head assumptions t).2
 
@@ -150,7 +152,7 @@ theorem dependencies_support {assumptions : Assumptions} {left right t : Ty}
     cases tag : observation.tag <;> simp [head,exposed,tag] at inside
     all_goals exact closed child inside
 
-def presentation (assumptions : Assumptions) (t : Ty) :
+@[expose] def presentation (assumptions : Assumptions) (t : Ty) :
     Obend.Core.FinitePresentation.ClosedSupport (graph assumptions) where
   nodes := support assumptions t t
   closed := by
@@ -166,7 +168,7 @@ theorem root_mem_presentation (assumptions : Assumptions) (t : Ty) :
 
 /-- Replacement candidate for RecursiveRows.shareable, with a universal
 greatest-safe-predicate characterization and no user-supplied fuel. -/
-def shareable (assumptions : Assumptions) (t : Ty) : Bool :=
+@[expose] def shareable (assumptions : Assumptions) (t : Ty) : Bool :=
   Obend.Core.FiniteSafety.decision (presentation assumptions t) t (root_mem_presentation _ _)
 
 theorem shareable_iff (assumptions : Assumptions) (t : Ty) :
