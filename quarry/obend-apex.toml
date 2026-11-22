@@ -2199,6 +2199,20 @@ module = "Obend.Hardware.HvmConfluence"
 theorem = "ic_strong_confluence_and_unique_nf"
 description = "Full Lafont interaction-combinator strong diamond, multi-step Church-Rosser confluence, unique normal forms up to alpha-renaming, and `ReductionMachine.Arena.Step` simulation over well-formed nets."
 
+[[apex]]
+id = "symboliczk-proven-udr-jbr-soundness-floor"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.ProvenZkmlGate"
+theorem = "checkZkmlSuiteProvenFloor_sound"
+description = "Unconditional `UDR` and `JBR` vs. withdrawn `CBR` milli-bit soundness accounting (`udr_strictly_below_withdrawn_cbr`, `grind_bits_additive_and_regime_free`, `extDegree_moves_logup_only`) enforcing `>= 100`-bit proven zkML suite admission."
+
+[[apex]]
+id = "symboliczk-streaming-gdn-chunk-ivc-session"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.ProvenZkmlGate"
+theorem = "verifyZkmlSessionTrace_sound"
+description = "Streaming Gated-DeltaNet recurrent chunk-carry IVC (`OBEND.SHE.ZKML_CHUNK/v1`, `zkmlChunkChain_binds_endToEnd`, `verifyZkmlChunkChainExec_iff_spec`) and multi-turn `provenZkmlJudge` session trace soundness."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

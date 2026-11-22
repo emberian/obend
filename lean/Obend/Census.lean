@@ -593,6 +593,7 @@ import Obend.SymbolicZk.CamUnifyArith
 import Obend.SymbolicZk.CompileToPiop
 import Obend.SymbolicZk.CompileToPiopCore
 import Obend.SymbolicZk.LinMem
+import Obend.SymbolicZk.ProvenZkmlGate
 import Obend.SymbolicZk.RankedFixpointArith
 import Obend.SymbolicZk.SemiringDatalog
 import Obend.SymbolicZk.SkolemChaseCore
