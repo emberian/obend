@@ -27,7 +27,7 @@ Theorem** ($H S = S Q \implies H^k S = S Q^k$), and **Irreducibility / Residual 
 -/
 public import Obend.Analysis.RealAnalysis
 public import Obend.Analysis.Groebner
-@[expose] public section
+public section
 
 namespace Obend.Analysis
 set_option autoImplicit false
@@ -55,48 +55,57 @@ theorem equitable_int_mul_four_swap (p q r s : Int) :
 structure GaussianInt where
   re : Int
   im : Int
-  deriving DecidableEq, Repr
+  deriving Repr
+
+abbrev instDecidableEqGaussianInt : DecidableEq GaussianInt := fun a b =>
+  match a, b with
+  | ⟨r1, i1⟩, ⟨r2, i2⟩ =>
+    if hr : r1 = r2 then
+      if hi : i1 = i2 then isTrue (by subst hr; subst hi; rfl)
+      else isFalse (fun h => hi (by cases h; rfl))
+    else isFalse (fun h => hr (by cases h; rfl))
+attribute [instance] instDecidableEqGaussianInt
 
 namespace GaussianInt
 
 /-- Additive identity $0 + 0i \in \mathbb{Z}[i]$. -/
-def zero : GaussianInt := ⟨0, 0⟩
+abbrev zero : GaussianInt := ⟨0, 0⟩
 
 /-- Multiplicative identity $1 + 0i \in \mathbb{Z}[i]$. -/
-def one : GaussianInt := ⟨1, 0⟩
+abbrev one : GaussianInt := ⟨1, 0⟩
 
 /-- Imaginary unit $i = 0 + 1i \in \mathbb{Z}[i]$. -/
-def iUnit : GaussianInt := ⟨0, 1⟩
+abbrev iUnit : GaussianInt := ⟨0, 1⟩
 
 /-- Embed an integer $n \in \mathbb{Z}$ as $n + 0i \in \mathbb{Z}[i]$. -/
-def ofInt (n : Int) : GaussianInt := ⟨n, 0⟩
+abbrev ofInt (n : Int) : GaussianInt := ⟨n, 0⟩
 
 /-- Gaussian integer addition. -/
-def add (z w : GaussianInt) : GaussianInt :=
+abbrev add (z w : GaussianInt) : GaussianInt :=
   ⟨z.re + w.re, z.im + w.im⟩
 
 /-- Gaussian integer subtraction. -/
-def sub (z w : GaussianInt) : GaussianInt :=
+abbrev sub (z w : GaussianInt) : GaussianInt :=
   ⟨z.re - w.re, z.im - w.im⟩
 
 /-- Gaussian integer negation. -/
-def neg (z : GaussianInt) : GaussianInt :=
+abbrev neg (z : GaussianInt) : GaussianInt :=
   ⟨-z.re, -z.im⟩
 
 /-- Scalar multiplication by $c \in \mathbb{Z}$. -/
-def scale (c : Int) (z : GaussianInt) : GaussianInt :=
+abbrev scale (c : Int) (z : GaussianInt) : GaussianInt :=
   ⟨c * z.re, c * z.im⟩
 
 /-- Complex conjugation $\overline{a + bi} = a - bi$. -/
-def conj (z : GaussianInt) : GaussianInt :=
+abbrev conj (z : GaussianInt) : GaussianInt :=
   ⟨z.re, -z.im⟩
 
 /-- Gaussian integer multiplication $(a + bi)(c + di) = (ac - bd) + (ad + bc)i$. -/
-def mul (z w : GaussianInt) : GaussianInt :=
+abbrev mul (z w : GaussianInt) : GaussianInt :=
   ⟨z.re * w.re - z.im * w.im, z.re * w.im + z.im * w.re⟩
 
 /-- Squared modulus (norm) $|a + bi|^2 = a^2 + b^2 \in \mathbb{Z}$. -/
-def normSq (z : GaussianInt) : Int :=
+abbrev normSq (z : GaussianInt) : Int :=
   z.re * z.re + z.im * z.im
 
 end GaussianInt
@@ -182,7 +191,7 @@ end GaussianRat
 /-! ## 2. Finite Vertex Summation Algebra & Integer-Scaled Matrices (`sumIntOver`, `IntMatrix`) -/
 
 /-- Sum an integer-valued function `f : Nat → Int` over a list of indices `xs` via structural recursion. -/
-def sumIntOver (f : Nat → Int) : List Nat → Int
+@[expose] def sumIntOver (f : Nat → Int) : List Nat → Int
   | [] => 0
   | x :: xs => f x + sumIntOver f xs
 
@@ -285,7 +294,7 @@ theorem doubleSum_swap (H : Nat → Nat → Int) :
     exact (sumIntOver_add (fun v => H u v) (fun v => sumIntOver (fun u' => H u' v) xs) ys).symm
 
 /-- Look up an integer at index `idx` in a list, defaulting to `0` out of bounds. -/
-def listGetInt (xs : List Int) (idx : Nat) : Int :=
+abbrev listGetInt (xs : List Int) (idx : Nat) : Int :=
   match xs[idx]? with
   | some v => v
   | none   => 0
@@ -300,12 +309,21 @@ def listGetNat (xs : List Nat) (idx : Nat) : Nat :=
 structure IntMatrix where
   dim  : Nat
   rows : List (List Int)
-  deriving DecidableEq, Repr
+  deriving Repr
+
+abbrev instDecidableEqIntMatrix : DecidableEq IntMatrix := fun a b =>
+  match a, b with
+  | ⟨d1, r1⟩, ⟨d2, r2⟩ =>
+    if hd : d1 = d2 then
+      if hr : r1 = r2 then isTrue (by subst hd; subst hr; rfl)
+      else isFalse (fun h => hr (by cases h; rfl))
+    else isFalse (fun h => hd (by cases h; rfl))
+attribute [instance] instDecidableEqIntMatrix
 
 namespace IntMatrix
 
 /-- Entry lookup $H_{u,v}$ (returns `0` out of bounds). -/
-def entry (m : IntMatrix) (u v : Nat) : Int :=
+abbrev entry (m : IntMatrix) (u v : Nat) : Int :=
   match m.rows[u]? with
   | some row => listGetInt row v
   | none     => 0
@@ -322,15 +340,15 @@ def isSymmetric (m : IntMatrix) : Bool :=
 end IntMatrix
 
 /-- Matrix multiplication entry $(A B)_{u, v} = \sum_{w \in \text{indices}} A_{u, w} \cdot B_{w, v}$. -/
-def matMulEntry (indices : List Nat) (A B : Nat → Nat → Int) (u v : Nat) : Int :=
+abbrev matMulEntry (indices : List Nat) (A B : Nat → Nat → Int) (u v : Nat) : Int :=
   sumIntOver (fun w => A u w * B w v) indices
 
 /-- Matrix addition entry $(A + B)_{u, v} = A_{u, v} + B_{u, v}$. -/
-def matAddEntry (A B : Nat → Nat → Int) (u v : Nat) : Int :=
+abbrev matAddEntry (A B : Nat → Nat → Int) (u v : Nat) : Int :=
   A u v + B u v
 
 /-- Concrete `IntMatrix` multiplication $(A \cdot B)$ of two `dim × dim` integer matrices. -/
-def IntMatrix.mul (A B : IntMatrix) : IntMatrix :=
+abbrev IntMatrix.mul (A B : IntMatrix) : IntMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
@@ -338,35 +356,35 @@ def IntMatrix.mul (A B : IntMatrix) : IntMatrix :=
         matMulEntry indices A.entry B.entry u v)) }
 
 /-- Concrete `IntMatrix` addition $(A + B)$. -/
-def IntMatrix.add (A B : IntMatrix) : IntMatrix :=
+abbrev IntMatrix.add (A B : IntMatrix) : IntMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => A.entry u v + B.entry u v)) }
 
 /-- Concrete `IntMatrix` subtraction $(A - B)$. -/
-def IntMatrix.sub (A B : IntMatrix) : IntMatrix :=
+abbrev IntMatrix.sub (A B : IntMatrix) : IntMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => A.entry u v - B.entry u v)) }
 
 /-- Concrete `IntMatrix` scalar multiplication $c \cdot A$. -/
-def IntMatrix.scale (c : Int) (A : IntMatrix) : IntMatrix :=
+abbrev IntMatrix.scale (c : Int) (A : IntMatrix) : IntMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => c * A.entry u v)) }
 
 /-- Scaled $n \times n$ identity matrix $s \cdot I_n$. -/
-def IntMatrix.scaledIdentity (dim : Nat) (s : Int) : IntMatrix :=
+abbrev IntMatrix.scaledIdentity (dim : Nat) (s : Int) : IntMatrix :=
   let indices := List.range dim
   { dim  := dim
   , rows := indices.map (fun u =>
       indices.map (fun v => if u == v then s else 0)) }
 
 /-- Zero $n \times n$ matrix $0_n$. -/
-def IntMatrix.zero (dim : Nat) : IntMatrix :=
+abbrev IntMatrix.zero (dim : Nat) : IntMatrix :=
   IntMatrix.scaledIdentity dim 0
 
 /-- Multiply an `IntMatrix` $A$ by a column vector `v : List Int`. -/
@@ -376,11 +394,11 @@ def IntMatrix.mulVec (A : IntMatrix) (v : List Int) : List Int :=
     sumIntOver (fun j => A.entry i j * listGetInt v j) indices)
 
 /-- Matrix trace $\operatorname{tr}(A) = \sum_{i=0}^{n-1} A_{i, i}$. -/
-def IntMatrix.trace (A : IntMatrix) : Int :=
+@[expose] def IntMatrix.trace (A : IntMatrix) : Int :=
   sumIntOver (fun i => A.entry i i) (List.range A.dim)
 
 /-- Sum a `GaussianInt`-valued function over a list of indices `modes`. -/
-def sumGaussianOver (f : Nat → GaussianInt) : List Nat → GaussianInt
+@[expose] def sumGaussianOver (f : Nat → GaussianInt) : List Nat → GaussianInt
   | [] => GaussianInt.zero
   | k :: ks => GaussianInt.add (f k) (sumGaussianOver f ks)
 
@@ -396,28 +414,37 @@ representation of $Cl_4$. -/
 structure GaussianMatrix where
   dim  : Nat
   rows : List (List GaussianInt)
-  deriving DecidableEq, Repr
+  deriving Repr
+
+abbrev instDecidableEqGaussianMatrix : DecidableEq GaussianMatrix := fun a b =>
+  match a, b with
+  | ⟨d1, r1⟩, ⟨d2, r2⟩ =>
+    if hd : d1 = d2 then
+      if hr : r1 = r2 then isTrue (by subst hd; subst hr; rfl)
+      else isFalse (fun h => hr (by cases h; rfl))
+    else isFalse (fun h => hd (by cases h; rfl))
+attribute [instance] instDecidableEqGaussianMatrix
 
 namespace GaussianMatrix
 
 /-- Look up a `GaussianInt` at index `v` in a row by structural recursion (`0 Classical.choice`). -/
-def listGetGaussian : List GaussianInt → Nat → GaussianInt
+@[expose] def listGetGaussian : List GaussianInt → Nat → GaussianInt
   | [], _ => GaussianInt.zero
   | x :: _, 0 => x
   | _ :: xs, v + 1 => listGetGaussian xs v
 
 /-- Look up row `u` in a list of `GaussianInt` rows by structural recursion (`0 Classical.choice`). -/
-def listGetGaussianRow : List (List GaussianInt) → Nat → List GaussianInt
+@[expose] def listGetGaussianRow : List (List GaussianInt) → Nat → List GaussianInt
   | [], _ => []
   | r :: _, 0 => r
   | _ :: rs, u + 1 => listGetGaussianRow rs u
 
 /-- Entry lookup $(u, v)$ in a `GaussianMatrix` (defaulting to `GaussianInt.zero`). -/
-def entry (m : GaussianMatrix) (u v : Nat) : GaussianInt :=
+abbrev entry (m : GaussianMatrix) (u v : Nat) : GaussianInt :=
   listGetGaussian (listGetGaussianRow m.rows u) v
 
 /-- Pure boolean equality on `GaussianInt` (`0 Classical.choice`). -/
-def gaussianIntBeq (z w : GaussianInt) : Bool :=
+abbrev gaussianIntBeq (z w : GaussianInt) : Bool :=
   decide (z.re = w.re) && decide (z.im = w.im)
 
 theorem gaussianInt_eq_of_beq {z w : GaussianInt} (h : gaussianIntBeq z w = true) : z = w := by
@@ -432,36 +459,32 @@ theorem gaussianInt_eq_of_beq {z w : GaussianInt} (h : gaussianIntBeq z w = true
       rw [hRe, hIm]
 
 /-- Pure boolean equality on `List GaussianInt` (`0 Classical.choice`). -/
-def listBeqGaussian : List GaussianInt → List GaussianInt → Bool
-  | [], [] => true
-  | x :: xs, y :: ys => gaussianIntBeq x y && listBeqGaussian xs ys
-  | _, _ => false
+abbrev listBeqGaussian (xs ys : List GaussianInt) : Bool :=
+  List.isEqv xs ys gaussianIntBeq
 
 theorem listBeqGaussian_eq : ∀ {xs ys : List GaussianInt}, listBeqGaussian xs ys = true → xs = ys
   | [], [], _ => rfl
-  | [], _ :: _, h => Bool.noConfusion h
-  | _ :: _, [], h => Bool.noConfusion h
+  | [], _ :: _, h => by simp [listBeqGaussian, List.isEqv] at h
+  | _ :: _, [], h => by simp [listBeqGaussian, List.isEqv] at h
   | _ :: _, _ :: _, h => by
     have hAnd := (Bool.and_eq_true _ _).mp h
     rw [gaussianInt_eq_of_beq hAnd.1, listBeqGaussian_eq hAnd.2]
 
 /-- Pure boolean equality on `List (List GaussianInt)` (`0 Classical.choice`). -/
-def listBeqGaussianRows : List (List GaussianInt) → List (List GaussianInt) → Bool
-  | [], [] => true
-  | r1 :: rs1, r2 :: rs2 => listBeqGaussian r1 r2 && listBeqGaussianRows rs1 rs2
-  | _, _ => false
+abbrev listBeqGaussianRows (rs1 rs2 : List (List GaussianInt)) : Bool :=
+  List.isEqv rs1 rs2 listBeqGaussian
 
 theorem listBeqGaussianRows_eq :
     ∀ {rs1 rs2 : List (List GaussianInt)}, listBeqGaussianRows rs1 rs2 = true → rs1 = rs2
   | [], [], _ => rfl
-  | [], _ :: _, h => Bool.noConfusion h
-  | _ :: _, [], h => Bool.noConfusion h
+  | [], _ :: _, h => by simp [listBeqGaussianRows, List.isEqv] at h
+  | _ :: _, [], h => by simp [listBeqGaussianRows, List.isEqv] at h
   | _ :: _, _ :: _, h => by
     have hAnd := (Bool.and_eq_true _ _).mp h
     rw [listBeqGaussian_eq hAnd.1, listBeqGaussianRows_eq hAnd.2]
 
 /-- Pure boolean equality on `GaussianMatrix` (`0 Classical.choice`). -/
-def beq (A B : GaussianMatrix) : Bool :=
+abbrev beq (A B : GaussianMatrix) : Bool :=
   decide (A.dim = B.dim) && listBeqGaussianRows A.rows B.rows
 
 theorem eq_of_beq {A B : GaussianMatrix} (h : GaussianMatrix.beq A B = true) : A = B := by
@@ -476,41 +499,41 @@ theorem eq_of_beq {A B : GaussianMatrix} (h : GaussianMatrix.beq A B = true) : A
       rw [hDim, hRows]
 
 /-- Identity matrix $I_n$ over $\mathbb{Z}[i]$. -/
-def identity (dim : Nat) : GaussianMatrix :=
+abbrev identity (dim : Nat) : GaussianMatrix :=
   let indices := List.range dim
   { dim  := dim
   , rows := indices.map (fun u =>
       indices.map (fun v => cond (u == v) GaussianInt.one GaussianInt.zero)) }
 
 /-- Zero matrix $0_n$ over $\mathbb{Z}[i]$. -/
-def zero (dim : Nat) : GaussianMatrix :=
+abbrev zero (dim : Nat) : GaussianMatrix :=
   let indices := List.range dim
   { dim  := dim
   , rows := indices.map (fun _ => indices.map (fun _ => GaussianInt.zero)) }
 
 /-- Matrix addition $A + B$ over $\mathbb{Z}[i]$. -/
-def add (A B : GaussianMatrix) : GaussianMatrix :=
+abbrev add (A B : GaussianMatrix) : GaussianMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => GaussianInt.add (A.entry u v) (B.entry u v))) }
 
 /-- Matrix subtraction $A - B$ over $\mathbb{Z}[i]$. -/
-def sub (A B : GaussianMatrix) : GaussianMatrix :=
+abbrev sub (A B : GaussianMatrix) : GaussianMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => GaussianInt.sub (A.entry u v) (B.entry u v))) }
 
 /-- Scalar multiplication $c \cdot A$ ($c \in \mathbb{Z}$) over $\mathbb{Z}[i]$. -/
-def scale (c : Int) (A : GaussianMatrix) : GaussianMatrix :=
+abbrev scale (c : Int) (A : GaussianMatrix) : GaussianMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => GaussianInt.scale c (A.entry u v))) }
 
 /-- Matrix multiplication $A \cdot B$ over $\mathbb{Z}[i]$. -/
-def mul (A B : GaussianMatrix) : GaussianMatrix :=
+abbrev mul (A B : GaussianMatrix) : GaussianMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
@@ -518,14 +541,14 @@ def mul (A B : GaussianMatrix) : GaussianMatrix :=
         sumGaussianOver (fun w => GaussianInt.mul (A.entry u w) (B.entry w v)) indices)) }
 
 /-- Conjugate transpose (Hermitian adjoint) $A^\dagger$ over $\mathbb{Z}[i]$. -/
-def conjTranspose (A : GaussianMatrix) : GaussianMatrix :=
+abbrev conjTranspose (A : GaussianMatrix) : GaussianMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => GaussianInt.conj (A.entry v u))) }
 
 /-- Matrix trace $\operatorname{Tr}(A) = \sum_{u=0}^{\text{dim}-1} A_{u, u} \in \mathbb{Z}[i]$. -/
-def trace (A : GaussianMatrix) : GaussianInt :=
+abbrev trace (A : GaussianMatrix) : GaussianInt :=
   sumGaussianOver (fun u => A.entry u u) (List.range A.dim)
 
 end GaussianMatrix
@@ -533,15 +556,15 @@ end GaussianMatrix
 /-! ## 3. Equitable Partitions, Row-Sum Profiles & 1-WL Color Refinement -/
 
 /-- Return the ordered list of vertices in `vertices` assigned to cell `j` under `part`. -/
-def cellMembers (vertices : List Nat) (part : Nat → Nat) (j : Nat) : List Nat :=
+abbrev cellMembers (vertices : List Nat) (part : Nat → Nat) (j : Nat) : List Nat :=
   vertices.filter (fun v => part v == j)
 
 /-- Cardinality $|C_j|$ of cell `j` within `vertices`. -/
-def cellSize (vertices : List Nat) (part : Nat → Nat) (j : Nat) : Nat :=
+abbrev cellSize (vertices : List Nat) (part : Nat → Nat) (j : Nat) : Nat :=
   (cellMembers vertices part j).length
 
 /-- Row sum $\sum_{v \in C_j} H_{u,v}$ of vertex `u` into target cell `cellJ`. -/
-def cellRowSum (H : Nat → Nat → Int) (cellJ : List Nat) (u : Nat) : Int :=
+abbrev cellRowSum (H : Nat → Nat → Int) (cellJ : List Nat) (u : Nat) : Int :=
   sumIntOver (fun v => H u v) cellJ
 
 /-- Computable **Row-Profile Equitability Checker** (`checkEquitablePartition`):
@@ -550,7 +573,7 @@ Verifies that:
 2. Every cell $C_j$ ($j < \text{numCells}$) is non-empty (`1 ≤ |C_j|`),
 3. For every vertex $u$ and every target cell $C_j$, the row sum $\sum_{v \in C_j} H_{u,v}$ equals the
    quotient matrix entry `quotientEntry (part u) j`. -/
-def checkEquitablePartition
+@[expose] def checkEquitablePartition
     (m : IntMatrix)
     (numCells : Nat)
     (part : Nat → Nat)
@@ -630,7 +653,7 @@ theorem equitable_handshake_identity
 
 /-- Computable checker for the symmetrizability identity $|C_i| \cdot Q_{i,j} = |C_j| \cdot Q_{j,i}$
 across all cell pairs $0 \le i, j < \text{numCells}$. -/
-def checkHandshakeIdentity
+abbrev checkHandshakeIdentity
     (dim numCells : Nat)
     (part : Nat → Nat)
     (quotientEntry : Nat → Nat → Int) : Bool :=
@@ -704,19 +727,19 @@ theorem checkEquitablePartition_sound
 /-! ## 5. Fundamental Intertwining Theorem ($H S = S Q$, $H^k S = S Q^k$, and $p(H) S = S p(Q)$) -/
 
 /-- Lift a quotient cell vector `w : Nat → Int` to a cell-constant vertex vector $(S w)_u = w_{\text{part}(u)}$. -/
-def liftQuotientVec (part : Nat → Nat) (w : Nat → Int) (u : Nat) : Int :=
+@[expose] def liftQuotientVec (part : Nat → Nat) (w : Nat → Int) (u : Nat) : Int :=
   w (part u)
 
 /-- Alias for `liftQuotientVec`. -/
 abbrev liftVec := liftQuotientVec
 
 /-- Standard unpartitioned matrix-vector multiplication $(H v)_u = \sum_{x \in \text{indices}} H_{u,x} \cdot v_x$. -/
-def matVec (indices : List Nat) (H : Nat → Nat → Int) (v : Nat → Int) (u : Nat) : Int :=
+abbrev matVec (indices : List Nat) (H : Nat → Nat → Int) (v : Nat → Int) (u : Nat) : Int :=
   sumIntOver (fun x => H u x * v x) indices
 
 /-- Apply the $r \times r$ quotient matrix $Q$ to a quotient vector $w$ at cell $i$:
 $$(Q w)_i = \sum_{j \in \text{cellIndices}} Q_{i, j} \cdot w_j.$$ -/
-def quotientMatVec
+@[expose] def quotientMatVec
     (Q : Nat → Nat → Int)
     (cellIndices : List Nat)
     (w : Nat → Int)
@@ -725,7 +748,7 @@ def quotientMatVec
 
 /-- Apply the $n \times n$ operator $H$ decomposed across the partition cells `cellOf j` ($j \in \text{cellIndices}$):
 $$(H v)_u = \sum_{j \in \text{cellIndices}} \sum_{x \in C_j} H_{u, x} \cdot v_x.$$ -/
-def partitionedMatVec
+@[expose] def partitionedMatVec
     (H : Nat → Nat → Int)
     (cellIndices : List Nat)
     (cellOf : Nat → List Nat)
@@ -889,7 +912,6 @@ theorem cellSum_liftQuotientVec
     dsimp only [liftQuotientVec]
     rw [hCell x hx]
   rw [hCongr, sumIntOver_mul_right (fun x => H u x) (w j) cellJ]
-  rfl
 
 /-- **Theorem (`equitable_intertwining_step`)**:
 **Fundamental One-Step Intertwining Identity ($H S = S Q$)**:
@@ -972,7 +994,7 @@ theorem matVec_congr
   rw [hEq x hx]
 
 /-- Iterate a linear operator on vectors `k` times: $A^0 v = v$, $A^{k+1} v = A (A^k v)$. -/
-def iterateVecOp (op : (Nat → Int) → (Nat → Int)) : Nat → (Nat → Int) → (Nat → Int)
+@[expose] def iterateVecOp (op : (Nat → Int) → (Nat → Int)) : Nat → (Nat → Int) → (Nat → Int)
   | 0, v => v
   | k + 1, v => op (iterateVecOp op k v)
 
@@ -1164,7 +1186,7 @@ theorem equitable_intertwining_poly_unpartitioned
 
 /-- Row-sum residual $R(u, j) = \left(\sum_{v \in C_j} H_{u,v}\right) - Q_{\text{part}(u), j}$ measuring
 the deviation of vertex $u$ from the equitable quotient entry $Q_{\text{part}(u), j}$. -/
-def evalVertexCellResidual
+abbrev evalVertexCellResidual
     (m : IntMatrix)
     (part : Nat → Nat)
     (quotientEntry : Nat → Nat → Int)
@@ -1177,7 +1199,7 @@ def evalVertexCellResidual
 $$\|R_{\text{eq}}(H, Q)\|_2^2 = \sum_{u=0}^{n-1} \sum_{j=0}^{r-1} \left(\sum_{v \in C_j} H_{u,v} - Q_{\text{part}(u), j}\right)^2.$$
 Equals `0` if and only if $H$ satisfies the exact row-sum equitability condition with quotient $Q$;
 when $> 0$, it certifies an irreducible symmetry-breaking residual floor. -/
-def evalEquitableResidualNormSq
+abbrev evalEquitableResidualNormSq
     (m : IntMatrix)
     (numCells : Nat)
     (part : Nat → Nat)
@@ -1209,7 +1231,7 @@ theorem equitableResidualNormSq_nonneg
 
 /-- Adjacency matrix of the 3-vertex path graph $P_3$ ($0 - 1 - 2$):
 $$H_{P_3} = \begin{pmatrix} 0 & 1 & 0 \\ 1 & 0 & 1 \\ 0 & 1 & 0 \end{pmatrix}.$$ -/
-def path3Matrix : IntMatrix where
+abbrev path3Matrix : IntMatrix where
   dim  := 3
   rows := [[0, 1, 0], [1, 0, 1], [0, 1, 0]]
 
@@ -1308,29 +1330,29 @@ theorem equitable_partition_and_residual_floor_sound
 
 /-- Extract the $d \times d$ spinor block at block row `p` and block column `q` from `A : IntMatrix`:
 $$\operatorname{extractCellBlock}(A, d, p, q)_{\alpha, \beta} = A_{p \cdot d + \alpha,\; q \cdot d + \beta}.$$ -/
-def extractCellBlock (A : IntMatrix) (d p q : Nat) : IntMatrix :=
+abbrev extractCellBlock (A : IntMatrix) (d p q : Nat) : IntMatrix :=
   let subIdx := List.range d
   { dim  := d
   , rows := subIdx.map (fun alpha =>
       subIdx.map (fun beta => A.entry (p * d + alpha) (q * d + beta))) }
 
 /-- Cell index assigned to $d \times d$ spinor block `p` by vertex partition `part`. -/
-def blockCellOf (part : Nat → Nat) (d p : Nat) : Nat :=
+abbrev blockCellOf (part : Nat → Nat) (d p : Nat) : Nat :=
   part (p * d)
 
 /-- List of block indices in `blocks` belonging to cell `j`. -/
-def blockCellMembers (blocks : List Nat) (part : Nat → Nat) (d j : Nat) : List Nat :=
+abbrev blockCellMembers (blocks : List Nat) (part : Nat → Nat) (d j : Nat) : List Nat :=
   blocks.filter (fun q => blockCellOf part d q == j)
 
 /-- Entry $(\alpha, \beta)$ of the $d \times d$ block row sum of block `p` into target block cell `blockCellJ`:
 $$\left(\sum_{q \in \text{blockCellJ}} A_{[p, q]}\right)_{\alpha, \beta} = \sum_{q \in \text{blockCellJ}} A_{p \cdot d + \alpha,\; q \cdot d + \beta}.$$ -/
-def blockCellRowSumEntry
+abbrev blockCellRowSumEntry
     (A : IntMatrix) (d : Nat) (blockCellJ : List Nat) (p alpha beta : Nat) : Int :=
   sumIntOver (fun q => A.entry (p * d + alpha) (q * d + beta)) blockCellJ
 
 /-- $d \times d$ matrix block row sum $\sum_{q \in \text{blockCellJ}} \operatorname{extractCellBlock}(A, d, p, q)$
 of block `p` into target block cell `blockCellJ`. -/
-def blockCellRowSum (A : IntMatrix) (d : Nat) (blockCellJ : List Nat) (p : Nat) : IntMatrix :=
+abbrev blockCellRowSum (A : IntMatrix) (d : Nat) (blockCellJ : List Nat) (p : Nat) : IntMatrix :=
   let subIdx := List.range d
   { dim  := d
   , rows := subIdx.map (fun alpha =>
@@ -1345,7 +1367,7 @@ satisfies:
 4. For every block $p < \text{numBlocks}$ and target cell $j < r$, the $d \times d$ block row sum
    `blockCellRowSum A d (blockCellMembers blocks part d j) p` equals the $d \times d$ quotient block
    `Q (blockCellOf part d p) j`. -/
-def checkBlockEquitablePartition
+@[expose] def checkBlockEquitablePartition
     (A : IntMatrix)
     (r d : Nat)
     (part : Nat → Nat)
@@ -1490,7 +1512,6 @@ theorem blockCellSum_liftBlockQuotientVec
   apply sumIntOver_congr
   intro beta _
   rw [sumIntOver_mul_right (fun q => A.entry (p * d + alpha) (q * d + beta)) (W j beta) blockCellJ]
-  rfl
 
 /-- **Theorem (`block_equitable_intertwining_step`)**:
 **Fundamental One-Step Block-Equitable Intertwining Identity ($A P_{\text{block}} = P_{\text{block}} B_{\text{block}}$)**:
@@ -1870,7 +1891,7 @@ def wlVertexSignature (A : IntMatrix) (n : Nat) (c : Nat → Nat) (v : Nat) : Na
 
 @[simp] theorem wlVertexSignature_eq_wl1VertexProfile
     (A : IntMatrix) (n : Nat) (c : Nat → Nat) (v : Nat) :
-    wlVertexSignature A n c v = wl1VertexProfile A n c v := rfl
+    wlVertexSignature A n c v = wl1VertexProfile A n c v := by rfl
 
 /-- Look up the 0-based index of signature `s` in `table` by structural recursion. -/
 def sigIndex (s : Nat × List Int) : List (Nat × List Int) → Nat
@@ -2243,7 +2264,7 @@ theorem wlStabilize_fixedPoint_iff_equitable
 /-- Compute the unscaled Lagrange–Sylvester numerator matrix
 $$\tilde{E}_k(Q) = \prod_{j \in \{0, \dots, r-1\} \setminus \{k\}} (Q - \lambda_j I)$$
 directly from `Q : IntMatrix` and its eigenvalue spectrum `eigs : List Int`. -/
-def computeLagrangeNumerator (Q : IntMatrix) (eigs : List Int) (k : Nat) : IntMatrix :=
+abbrev computeLagrangeNumerator (Q : IntMatrix) (eigs : List Int) (k : Nat) : IntMatrix :=
   let indices := List.range eigs.length
   indices.foldl (fun acc j =>
     if j == k then acc
@@ -2255,7 +2276,7 @@ def computeLagrangeNumerator (Q : IntMatrix) (eigs : List Int) (k : Nat) : IntMa
 /-- Compute the Lagrange–Sylvester scalar denominator
 $$d_k = \prod_{j \in \{0, \dots, r-1\} \setminus \{k\}} (\lambda_k - \lambda_j)$$
 directly from the eigenvalue spectrum `eigs : List Int`. -/
-def computeLagrangeDenominator (eigs : List Int) (k : Nat) : Int :=
+abbrev computeLagrangeDenominator (eigs : List Int) (k : Nat) : Int :=
   let lamK := listGetInt eigs k
   let indices := List.range eigs.length
   indices.foldl (fun acc j =>
@@ -2267,11 +2288,11 @@ def computeLagrangeDenominator (eigs : List Int) (k : Nat) : Int :=
 Given an $r \times r$ quotient matrix `Q : IntMatrix`, spectrum `eigs : List Int`, and eigenvalue
 index `k`, computes the exact numerator matrix $\tilde{E}_k(Q) = \prod_{j \neq k} (Q - \lambda_j I)$
 and scalar denominator $d_k = \prod_{j \neq k} (\lambda_k - \lambda_j)$ directly from `Q` and `eigs`. -/
-def computeLagrangeProjector (Q : IntMatrix) (eigs : List Int) (k : Nat) : IntMatrix × Int :=
+@[expose] def computeLagrangeProjector (Q : IntMatrix) (eigs : List Int) (k : Nat) : IntMatrix × Int :=
   (computeLagrangeNumerator Q eigs k, computeLagrangeDenominator eigs k)
 
 /-- General $2 \times 2$ integer matrix $\begin{pmatrix} a & b \\ c & d \end{pmatrix}$. -/
-def mat2x2 (a b c d : Int) : IntMatrix where
+abbrev mat2x2 (a b c d : Int) : IntMatrix where
   dim  := 2
   rows := [[a, b], [c, d]]
 
@@ -2289,7 +2310,7 @@ theorem mat2x2_scale (s a b c d : Int) :
     (mat2x2 a b c d).scale s = mat2x2 (s * a) (s * b) (s * c) (s * d) := rfl
 
 theorem mat2x2_trace (a b c d : Int) :
-    (mat2x2 a b c d).trace = a + (d + 0) := rfl
+    (mat2x2 a b c d).trace = a + (d + 0) := by rfl
 
 theorem mat2x2_mul (a1 b1 c1 d1 a2 b2 c2 d2 : Int) :
     (mat2x2 a1 b1 c1 d1).mul (mat2x2 a2 b2 c2 d2) =
@@ -2308,10 +2329,10 @@ def mat3x3 (a00 a01 a02 a10 a11 a12 a20 a21 a22 : Int) : IntMatrix where
     , [a20, a21, a22] ]
 
 theorem mat3x3_scaledIdentity (s : Int) :
-    IntMatrix.scaledIdentity 3 s = mat3x3 s 0 0 0 s 0 0 0 s := rfl
+    IntMatrix.scaledIdentity 3 s = mat3x3 s 0 0 0 s 0 0 0 s := by rfl
 
 theorem mat3x3_zero :
-    IntMatrix.zero 3 = mat3x3 0 0 0 0 0 0 0 0 0 := rfl
+    IntMatrix.zero 3 = mat3x3 0 0 0 0 0 0 0 0 0 := by rfl
 
 theorem mat3x3_add (a00 a01 a02 a10 a11 a12 a20 a21 a22
     b00 b01 b02 b10 b11 b12 b20 b21 b22 : Int) :
@@ -2319,13 +2340,13 @@ theorem mat3x3_add (a00 a01 a02 a10 a11 a12 a20 a21 a22
       (mat3x3 b00 b01 b02 b10 b11 b12 b20 b21 b22) =
       mat3x3 (a00 + b00) (a01 + b01) (a02 + b02)
              (a10 + b10) (a11 + b11) (a12 + b12)
-             (a20 + b20) (a21 + b21) (a22 + b22) := rfl
+             (a20 + b20) (a21 + b21) (a22 + b22) := by rfl
 
 theorem mat3x3_scale (s a00 a01 a02 a10 a11 a12 a20 a21 a22 : Int) :
     (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).scale s =
       mat3x3 (s * a00) (s * a01) (s * a02)
              (s * a10) (s * a11) (s * a12)
-             (s * a20) (s * a21) (s * a22) := rfl
+             (s * a20) (s * a21) (s * a22) := by rfl
 
 theorem mat3x3_mul (a00 a01 a02 a10 a11 a12 a20 a21 a22
     b00 b01 b02 b10 b11 b12 b20 b21 b22 : Int) :
@@ -2340,35 +2361,35 @@ theorem mat3x3_mul (a00 a01 a02 a10 a11 a12 a20 a21 a22
         (a10 * b02 + (a11 * b12 + (a12 * b22 + 0)))
         (a20 * b00 + (a21 * b10 + (a22 * b20 + 0)))
         (a20 * b01 + (a21 * b11 + (a22 * b21 + 0)))
-        (a20 * b02 + (a21 * b12 + (a22 * b22 + 0))) := rfl
+        (a20 * b02 + (a21 * b12 + (a22 * b22 + 0))) := by rfl
 
 theorem computeLagrangeProjector_pair_0 (Q : IntMatrix) (lam0 lam1 : Int) :
     computeLagrangeProjector Q [lam0, lam1] 0 =
       ((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-lam1))),
-       1 * (lam0 - lam1)) := rfl
+       1 * (lam0 - lam1)) := by rfl
 
 theorem computeLagrangeProjector_pair_1 (Q : IntMatrix) (lam0 lam1 : Int) :
     computeLagrangeProjector Q [lam0, lam1] 1 =
       ((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-lam0))),
-       1 * (lam1 - lam0)) := rfl
+       1 * (lam1 - lam0)) := by rfl
 
 theorem computeLagrangeProjector_triple_0 (Q : IntMatrix) (mu0 mu1 mu2 : Int) :
     computeLagrangeProjector Q [mu0, mu1, mu2] 0 =
       (((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-mu1)))).mul
         (Q.add (IntMatrix.scaledIdentity Q.dim (-mu2))),
-       (1 * (mu0 - mu1)) * (mu0 - mu2)) := rfl
+       (1 * (mu0 - mu1)) * (mu0 - mu2)) := by rfl
 
 theorem computeLagrangeProjector_triple_1 (Q : IntMatrix) (mu0 mu1 mu2 : Int) :
     computeLagrangeProjector Q [mu0, mu1, mu2] 1 =
       (((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-mu0)))).mul
         (Q.add (IntMatrix.scaledIdentity Q.dim (-mu2))),
-       (1 * (mu1 - mu0)) * (mu1 - mu2)) := rfl
+       (1 * (mu1 - mu0)) * (mu1 - mu2)) := by rfl
 
 theorem computeLagrangeProjector_triple_2 (Q : IntMatrix) (mu0 mu1 mu2 : Int) :
     computeLagrangeProjector Q [mu0, mu1, mu2] 2 =
       (((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-mu0)))).mul
         (Q.add (IntMatrix.scaledIdentity Q.dim (-mu1))),
-       (1 * (mu2 - mu0)) * (mu2 - mu1)) := rfl
+       (1 * (mu2 - mu0)) * (mu2 - mu1)) := by rfl
 
 /-- `IntMatrix` representation of the $3 \times 3$ bosonic Fock-space quotient `twoBosonQuotient`
 (eigenvalues $[2, 0, -2]$). -/
@@ -2449,13 +2470,12 @@ theorem computeLagrangeProjector_2x2_and_3x3_universal
     bosP0.mul bosP0 = bosP0.scale (computeLagrangeDenominator [2, 0, -2] 0) ∧
     bosP1.mul bosP1 = bosP1.scale (computeLagrangeDenominator [2, 0, -2] 1) ∧
     bosP2.mul bosP2 = bosP2.scale (computeLagrangeDenominator [2, 0, -2] 2) := by
-  have hDim2 : (mat2x2 a b c d).dim = 2 := rfl
   have hDim3 : (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).dim = 3 := rfl
   simp only [computeLagrangeProjector_pair_0, computeLagrangeProjector_pair_1,
     computeLagrangeProjector_triple_0, computeLagrangeProjector_triple_1, computeLagrangeProjector_triple_2,
-    hDim2, hDim3,
-    mat2x2_scaledIdentity, mat2x2_zero, mat2x2_add, mat2x2_scale, mat2x2_mul,
-    mat3x3_scaledIdentity, mat3x3_zero, mat3x3_add, mat3x3_scale, mat3x3_mul]
+    hDim3,
+    mat2x2_scaledIdentity, mat2x2_add, mat2x2_scale, mat2x2_mul,
+    mat3x3_scaledIdentity, mat3x3_add, mat3x3_scale, mat3x3_mul]
   refine ⟨by grind, by grind, ?_, ?_, ?_, by grind, by grind, by grind, ?_, ?_, ?_, ?_⟩
   · simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
     exact ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩

@@ -15,7 +15,7 @@ Zero-Mathlib algebraic spine for Obend's dual-track post-quantum PIOP and PCS st
 -/
 public import Obend.Apps.ZkNtt.Goldilocks
 
-@[expose] public section
+public section
 namespace Obend.Crypto
 
 open Obend.Apps.ZkNtt
@@ -113,13 +113,14 @@ end LawfulCommRing
 
 /-! ## 2. LawfulCommRing Instance for `Int` (Lattice / Ajtai / KKT Carrier) -/
 
-instance : CommRingOps Int where
+abbrev instCommRingOpsInt : CommRingOps Int where
   zero := 0
   one := 1
   add := (· + ·)
   mul := (· * ·)
   neg := (- ·)
   sub := (· - ·)
+attribute [instance] instCommRingOpsInt
 
 instance : LawfulCommRing Int where
   add_assoc a b c := Int.add_assoc a b c
@@ -141,7 +142,14 @@ instance : LawfulCommRing Int where
 structure Goldilocks where
   val : Nat
   isLt : val < goldilocksPrime
-  deriving DecidableEq, Repr
+  deriving Repr
+
+abbrev instDecidableEqGoldilocks : DecidableEq Goldilocks := fun a b =>
+  if h : a.val = b.val then
+    isTrue (by cases a; cases b; simp only at h; subst h; rfl)
+  else
+    isFalse (fun heq => h (congrArg Goldilocks.val heq))
+attribute [instance] instDecidableEqGoldilocks
 
 namespace Goldilocks
 
@@ -153,11 +161,11 @@ theorem val_lt_two_pow_64 (a : Goldilocks) : a.val < 2 ^ 64 := by
   exact Nat.lt_trans a.isLt hp
 
 /-- Project any natural number modulo $p$ into canonical `Goldilocks`. -/
-def ofNat (n : Nat) : Goldilocks :=
+@[expose] def ofNat (n : Nat) : Goldilocks :=
   ⟨n % goldilocksPrime, Nat.mod_lt n (by decide)⟩
 
-def zero : Goldilocks := ⟨0, by decide⟩
-def one : Goldilocks := ⟨1, by decide⟩
+@[expose] def zero : Goldilocks := ⟨0, by decide⟩
+@[expose] def one : Goldilocks := ⟨1, by decide⟩
 
 theorem canon_eq_val (a : Goldilocks) : goldilocksCanon64 a.val = a.val := by
   unfold goldilocksCanon64
@@ -165,7 +173,7 @@ theorem canon_eq_val (a : Goldilocks) : goldilocksCanon64 a.val = a.val := by
   split <;> omega
 
 /-- Hardware-exact Goldilocks addition via `goldilocksAddSpec`. -/
-def add (a b : Goldilocks) : Goldilocks :=
+@[expose] def add (a b : Goldilocks) : Goldilocks :=
   ⟨goldilocksAddSpec a.val b.val,
    (goldilocksAddSpec_spec (val_lt_two_pow_64 a) (val_lt_two_pow_64 b)).1⟩
 
@@ -174,7 +182,7 @@ theorem add_val (a b : Goldilocks) :
   (goldilocksAddSpec_spec (val_lt_two_pow_64 a) (val_lt_two_pow_64 b)).2
 
 /-- Hardware-exact Goldilocks subtraction via `goldilocksSubSpec`. -/
-def sub (a b : Goldilocks) : Goldilocks :=
+@[expose] def sub (a b : Goldilocks) : Goldilocks :=
   ⟨goldilocksSubSpec a.val b.val,
    (goldilocksSubSpec_spec (val_lt_two_pow_64 a) (val_lt_two_pow_64 b)).1⟩
 
@@ -186,7 +194,7 @@ theorem sub_val (a b : Goldilocks) :
   simpa only [canon_eq_val] using h
 
 /-- Canonical Goldilocks negation. -/
-def neg (a : Goldilocks) : Goldilocks :=
+@[expose] def neg (a : Goldilocks) : Goldilocks :=
   sub zero a
 
 theorem neg_val (a : Goldilocks) :
@@ -195,7 +203,7 @@ theorem neg_val (a : Goldilocks) :
   simpa [zero] using sub_val zero a
 
 /-- Hardware-exact Goldilocks multiplication via 128-to-64 `goldilocksReduce128Spec`. -/
-def mul (a b : Goldilocks) : Goldilocks :=
+@[expose] def mul (a b : Goldilocks) : Goldilocks :=
   let prod := a.val * b.val
   let lo := prod % (2 ^ 64)
   let hi := prod / (2 ^ 64)
@@ -214,13 +222,14 @@ theorem mul_val (a b : Goldilocks) :
     Nat.div_lt_of_lt_mul (Nat.mul_lt_mul'' (val_lt_two_pow_64 a) (val_lt_two_pow_64 b))
   rw [(goldilocksReduce128Spec_sound hLo hHi).2, Nat.mod_add_div]
 
-instance : CommRingOps Goldilocks where
+abbrev instCommRingOpsGoldilocks : CommRingOps Goldilocks where
   zero := zero
   one := one
   add := add
   mul := mul
   neg := neg
   sub := sub
+attribute [instance] instCommRingOpsGoldilocks
 
 instance : LawfulCommRing Goldilocks where
   add_assoc a b c := by
@@ -285,45 +294,53 @@ end Goldilocks
 structure GoldilocksExt2 where
   c0 : Goldilocks
   c1 : Goldilocks
-  deriving DecidableEq, Repr
+  deriving Repr
+
+abbrev instDecidableEqGoldilocksExt2 : DecidableEq GoldilocksExt2 := fun a b =>
+  match instDecidableEqGoldilocks a.c0 b.c0, instDecidableEqGoldilocks a.c1 b.c1 with
+  | isTrue h0, isTrue h1 => isTrue (by cases a; cases b; simp only at h0 h1; subst h0 h1; rfl)
+  | isFalse h0, _ => isFalse (fun heq => h0 (congrArg GoldilocksExt2.c0 heq))
+  | _, isFalse h1 => isFalse (fun heq => h1 (congrArg GoldilocksExt2.c1 heq))
+attribute [instance] instDecidableEqGoldilocksExt2
 
 namespace GoldilocksExt2
 
 /-- Non-residue $w = 7$ defining $u^2 = 7$ in $\mathbb{F}_p$. -/
-def nonResidue : Goldilocks := ⟨7, by decide⟩
+abbrev nonResidue : Goldilocks := ⟨7, by decide⟩
 
 theorem ext {x y : GoldilocksExt2} (h0 : x.c0 = y.c0) (h1 : x.c1 = y.c1) : x = y := by
   cases x; cases y; simp only at h0 h1; subst h0 h1; rfl
 
 /-- Canonical embedding $\mathbb{F}_p \hookrightarrow \mathbb{F}_{p^2}$. -/
-def ofBase (a : Goldilocks) : GoldilocksExt2 := ⟨a, CommRingOps.zero⟩
+abbrev ofBase (a : Goldilocks) : GoldilocksExt2 := ⟨a, CommRingOps.zero⟩
 
-def zero : GoldilocksExt2 := ⟨CommRingOps.zero, CommRingOps.zero⟩
-def one : GoldilocksExt2 := ⟨CommRingOps.one, CommRingOps.zero⟩
-def uBasis : GoldilocksExt2 := ⟨CommRingOps.zero, CommRingOps.one⟩
+abbrev zero : GoldilocksExt2 := ⟨CommRingOps.zero, CommRingOps.zero⟩
+abbrev one : GoldilocksExt2 := ⟨CommRingOps.one, CommRingOps.zero⟩
+abbrev uBasis : GoldilocksExt2 := ⟨CommRingOps.zero, CommRingOps.one⟩
 
-def add (x y : GoldilocksExt2) : GoldilocksExt2 :=
+abbrev add (x y : GoldilocksExt2) : GoldilocksExt2 :=
   ⟨CommRingOps.add x.c0 y.c0, CommRingOps.add x.c1 y.c1⟩
 
-def neg (x : GoldilocksExt2) : GoldilocksExt2 :=
+abbrev neg (x : GoldilocksExt2) : GoldilocksExt2 :=
   ⟨CommRingOps.neg x.c0, CommRingOps.neg x.c1⟩
 
-def sub (x y : GoldilocksExt2) : GoldilocksExt2 :=
+abbrev sub (x y : GoldilocksExt2) : GoldilocksExt2 :=
   ⟨CommRingOps.sub x.c0 y.c0, CommRingOps.sub x.c1 y.c1⟩
 
 /-- $(a_0 + a_1 u)(b_0 + b_1 u) = (a_0 b_0 + 7 a_1 b_1) + (a_0 b_1 + a_1 b_0) u$. -/
-def mul (x y : GoldilocksExt2) : GoldilocksExt2 :=
+abbrev mul (x y : GoldilocksExt2) : GoldilocksExt2 :=
   ⟨CommRingOps.add (CommRingOps.mul x.c0 y.c0)
       (CommRingOps.mul nonResidue (CommRingOps.mul x.c1 y.c1)),
    CommRingOps.add (CommRingOps.mul x.c0 y.c1) (CommRingOps.mul x.c1 y.c0)⟩
 
-instance : CommRingOps GoldilocksExt2 where
+abbrev instCommRingOpsGoldilocksExt2 : CommRingOps GoldilocksExt2 where
   zero := zero
   one := one
   add := add
   mul := mul
   neg := neg
   sub := sub
+attribute [instance] instCommRingOpsGoldilocksExt2
 
 instance : LawfulCommRing GoldilocksExt2 where
   add_assoc x y z :=
@@ -485,20 +502,20 @@ end GoldilocksExt2
 /-! ## 5. Multilinear Lagrange Basis, Table Evaluation & Partial-Point Folding -/
 
 /-- Univariate multilinear Lagrange factor $(1 - r)$ for `false`, $r$ for `true`. -/
-def eqBit {R : Type} [CommRingOps R] (r : R) (b : Bool) : R :=
+abbrev eqBit {R : Type} [CommRingOps R] (r : R) (b : Bool) : R :=
   match b with
   | false => CommRingOps.sub CommRingOps.one r
   | true  => r
 
 /-- Multilinear equality polynomial $\widetilde{\text{eq}}(\mathbf{r}, \mathbf{b}) =
     \prod_{i=0}^{v-1} ((1 - r_i)(1 - b_i) + r_i b_i)$. -/
-def eqPoly {R : Type} [CommRingOps R] : List R → List Bool → R
+@[expose] def eqPoly {R : Type} [CommRingOps R] : List R → List Bool → R
   | [], [] => CommRingOps.one
   | r :: rs, b :: bs => CommRingOps.mul (eqBit r b) (eqPoly rs bs)
   | _, _ => CommRingOps.zero
 
 /-- Boolean element embedding (`false ↦ 0`, `true ↦ 1`). -/
-def bitElem {R : Type} [CommRingOps R] (b : Bool) : R :=
+abbrev bitElem {R : Type} [CommRingOps R] (b : Bool) : R :=
   if b then CommRingOps.one else CommRingOps.zero
 
 theorem eqBit_diag {R : Type} [LawfulCommRing R] (b : Bool) :
@@ -533,7 +550,7 @@ theorem eqPoly_kronecker {R : Type} [LawfulCommRing R] :
       simp [hne]
 
 /-- Little-endian hypercube enumeration of $\{0,1\}^v$: adjacent pairs differ in coordinate $0$. -/
-def hypercube : Nat → List (List Bool)
+@[expose] def hypercube : Nat → List (List Bool)
   | 0 => [[]]
   | v + 1 => (hypercube v).flatMap fun bs => [false :: bs, true :: bs]
 
@@ -549,20 +566,20 @@ theorem hypercube_length : ∀ v : Nat, (hypercube v).length = 2 ^ v
     rw [hypercube, haux, hypercube_length v, Nat.pow_succ, Nat.mul_comm]
 
 /-- Inner product of two lists in `R` (padded with `0` if lengths differ). -/
-def innerProd {R : Type} [CommRingOps R] : List R → List R → R
+@[expose] def innerProd {R : Type} [CommRingOps R] : List R → List R → R
   | [], _ => CommRingOps.zero
   | _, [] => CommRingOps.zero
   | x :: xs, y :: ys => CommRingOps.add (CommRingOps.mul x y) (innerProd xs ys)
 
 /-- Multilinear extension evaluation $\tilde{f}(\mathbf{r}) = \sum_{\mathbf{b} \in \{0,1\}^v}
     \text{tbl}[\mathbf{b}] \cdot \widetilde{\text{eq}}(\mathbf{r}, \mathbf{b})$. -/
-def mleEval {R : Type} [CommRingOps R] (tbl : List R) (rs : List R) : R :=
+abbrev mleEval {R : Type} [CommRingOps R] (tbl : List R) (rs : List R) : R :=
   innerProd tbl ((hypercube rs.length).map (eqPoly rs))
 
 /-- Partial-point folding of the first variable at `r₀`:
     replaces each adjacent `(lo, hi)` butterfly pair with `lo + r₀ * (hi - lo)`
     (exact inner loop of RDNA2 wavefront and FPGA BRAM sumcheck). -/
-def foldFirstVar {R : Type} [CommRingOps R] : List R → R → List R
+@[expose] def foldFirstVar {R : Type} [CommRingOps R] : List R → R → List R
   | lo :: hi :: rest, r₀ =>
     CommRingOps.add lo (CommRingOps.mul r₀ (CommRingOps.sub hi lo)) :: foldFirstVar rest r₀
   | [lo], r₀ =>
@@ -622,7 +639,7 @@ theorem mleEval_foldFirstVar {R : Type} [LawfulCommRing R]
   rw [flatMap_eqPoly_cons, innerProd_foldFirstVar_aux]
 
 /-- Sum of `tbl` over the $v$-dimensional boolean hypercube $\{0,1\}^v$. -/
-def hypercubeSum {R : Type} [CommRingOps R] (v : Nat) (tbl : List R) : R :=
+@[expose] def hypercubeSum {R : Type} [CommRingOps R] (v : Nat) (tbl : List R) : R :=
   innerProd tbl ((hypercube v).map fun _ => CommRingOps.one)
 
 theorem hypercubeSum_zero {R : Type} [LawfulCommRing R] (tbl : List R) :

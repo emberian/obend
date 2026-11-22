@@ -14,19 +14,19 @@ the two layers share one carrier for the hash's failure rather than two that agr
 
 Init only: the channel library and the C differential link this module's compiled object.
 -/
-@[expose] public section
+public section
 
 namespace Obend.Digest.HashBytes
 
 set_option autoImplicit false
 
 /-- The low `w` bytes of `n`, big-endian. -/
-def be : Nat → Nat → List UInt8
+@[expose] def be : Nat → Nat → List UInt8
   | 0, _ => []
   | w + 1, n => be w (n / 256) ++ [UInt8.ofNat (n % 256)]
 
 /-- Big-endian bytes read back as a natural. -/
-def ofBE (bytes : List UInt8) : Nat :=
+@[expose] def ofBE (bytes : List UInt8) : Nat :=
   bytes.foldl (fun acc b => acc * 256 + b.toNat) 0
 
 @[simp] theorem length_be (w n : Nat) : (be w n).length = w := by
@@ -92,10 +92,10 @@ abbrev Hash := List UInt8 → List UInt8
 /-- A collision of `H` at the integer reading of its output. Over all byte strings
 and a fixed-width `H` this is true by pigeonhole (`Theory.CollisionFloor`), so a
 binding theorem ends in `CollisionAmong` over the inputs it actually hashed. -/
-def Collision (H : Hash) : Prop := ∃ a b : List UInt8, a ≠ b ∧ ofBE (H a) = ofBE (H b)
+@[expose] def Collision (H : Hash) : Prop := ∃ a b : List UInt8, a ≠ b ∧ ofBE (H a) = ofBE (H b)
 
 /-- A collision of `H` between two inputs that both satisfy `S`. -/
-def CollisionAmong (H : Hash) (S : List UInt8 → Prop) : Prop :=
+@[expose] def CollisionAmong (H : Hash) (S : List UInt8 → Prop) : Prop :=
   ∃ a b : List UInt8, S a ∧ S b ∧ a ≠ b ∧ ofBE (H a) = ofBE (H b)
 
 theorem CollisionAmong.mono {H : Hash} {S T : List UInt8 → Prop} (sub : ∀ x, S x → T x)

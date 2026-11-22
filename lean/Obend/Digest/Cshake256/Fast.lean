@@ -34,7 +34,8 @@ implement `UInt64`/`ByteArray` primitives as their Lean definitions say.
 -/
 
 public import Obend.Digest.Cshake256.Spec
-@[expose] public section
+import all Obend.Digest.Cshake256.Spec
+public section
 
 namespace Obend.Digest.Cshake256.Fast
 open Obend.Digest.Cshake256
@@ -64,7 +65,7 @@ theorem rotl_toBitVec (x : UInt64) (r : Nat) :
 /-- Rotate left by a constant: `rotlK x k (64 - k)`.  Callers pass both shift
 amounts as `UInt64` literals, so the compiled round is shifts and ORs on
 constants, with no branch and no run-time `Nat` arithmetic. -/
-@[inline] def rotlK (x : UInt64) (k j : UInt64) : UInt64 := (x <<< k) ||| (x >>> j)
+@[inline] abbrev rotlK (x : UInt64) (k j : UInt64) : UInt64 := (x <<< k) ||| (x >>> j)
 
 theorem rotlK_toBitVec (x : UInt64) (k j : Nat) (hk : 0 < k) (hk64 : k < 64) (hj : k + j = 64) :
     (rotlK x (UInt64.ofNat k) (UInt64.ofNat j)).toBitVec = x.toBitVec.rotateLeft k := by
@@ -84,11 +85,11 @@ theorem bv_rotateLeft_zero (x : BitVec 64) : x.rotateLeft 0 = x := by
   exact hr.symm
 
 /-- Byte `j` of `b`, or zero past the end. -/
-@[inline] def byteOr0 (b : ByteArray) (j : Nat) : UInt8 :=
+@[inline] abbrev byteOr0 (b : ByteArray) (j : Nat) : UInt8 :=
   if h : j < b.size then b[j]'h else 0
 
 /-- Byte `j` of `b` as a word, or zero past the end. -/
-@[inline] def byteAt (b : ByteArray) (j : Nat) : UInt64 := (byteOr0 b j).toUInt64
+@[inline] abbrev byteAt (b : ByteArray) (j : Nat) : UInt64 := (byteOr0 b j).toUInt64
 
 
 /-! ### Rotations by each constant offset -/
@@ -177,10 +178,10 @@ def KState.toState (s : KState) : State :=
   #[s.a0.toBitVec, s.a1.toBitVec, s.a2.toBitVec, s.a3.toBitVec, s.a4.toBitVec, s.a5.toBitVec, s.a6.toBitVec, s.a7.toBitVec, s.a8.toBitVec, s.a9.toBitVec, s.a10.toBitVec, s.a11.toBitVec, s.a12.toBitVec, s.a13.toBitVec, s.a14.toBitVec, s.a15.toBitVec, s.a16.toBitVec, s.a17.toBitVec, s.a18.toBitVec, s.a19.toBitVec, s.a20.toBitVec, s.a21.toBitVec, s.a22.toBitVec, s.a23.toBitVec, s.a24.toBitVec]
 
 /-- The all-zero state. -/
-def zeroS : KState := ⟨0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0⟩
+abbrev zeroS : KState := ⟨0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0⟩
 
 /-- Theta on words, in `thetaCached`'s shape: five column parities, five deltas. -/
-@[inline] def thetaS (s : KState) : KState :=
+@[inline] abbrev thetaS (s : KState) : KState :=
   let c0 := (0 : UInt64) ^^^ s.a0 ^^^ s.a5 ^^^ s.a10 ^^^ s.a15 ^^^ s.a20
   let c1 := (0 : UInt64) ^^^ s.a1 ^^^ s.a6 ^^^ s.a11 ^^^ s.a16 ^^^ s.a21
   let c2 := (0 : UInt64) ^^^ s.a2 ^^^ s.a7 ^^^ s.a12 ^^^ s.a17 ^^^ s.a22
@@ -194,11 +195,11 @@ def zeroS : KState := ⟨0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
   ⟨s.a0 ^^^ d0, s.a1 ^^^ d1, s.a2 ^^^ d2, s.a3 ^^^ d3, s.a4 ^^^ d4, s.a5 ^^^ d0, s.a6 ^^^ d1, s.a7 ^^^ d2, s.a8 ^^^ d3, s.a9 ^^^ d4, s.a10 ^^^ d0, s.a11 ^^^ d1, s.a12 ^^^ d2, s.a13 ^^^ d3, s.a14 ^^^ d4, s.a15 ^^^ d0, s.a16 ^^^ d1, s.a17 ^^^ d2, s.a18 ^^^ d3, s.a19 ^^^ d4, s.a20 ^^^ d0, s.a21 ^^^ d1, s.a22 ^^^ d2, s.a23 ^^^ d3, s.a24 ^^^ d4⟩
 
 /-- Fused rho and pi: target lane `t` takes the rotated source lane. -/
-@[inline] def rhoPiS (s : KState) : KState :=
+@[inline] abbrev rhoPiS (s : KState) : KState :=
   ⟨s.a0, rotlK s.a6 44 20, rotlK s.a12 43 21, rotlK s.a18 21 43, rotlK s.a24 14 50, rotlK s.a3 28 36, rotlK s.a9 20 44, rotlK s.a10 3 61, rotlK s.a16 45 19, rotlK s.a22 61 3, rotlK s.a1 1 63, rotlK s.a7 6 58, rotlK s.a13 25 39, rotlK s.a19 8 56, rotlK s.a20 18 46, rotlK s.a4 27 37, rotlK s.a5 36 28, rotlK s.a11 10 54, rotlK s.a17 15 49, rotlK s.a23 56 8, rotlK s.a2 62 2, rotlK s.a8 55 9, rotlK s.a14 39 25, rotlK s.a15 41 23, rotlK s.a21 2 62⟩
 
 /-- Chi on words. -/
-@[inline] def chiS (s : KState) : KState :=
+@[inline] abbrev chiS (s : KState) : KState :=
   ⟨s.a0 ^^^ ((~~~s.a1) &&& s.a2),
    s.a1 ^^^ ((~~~s.a2) &&& s.a3),
    s.a2 ^^^ ((~~~s.a3) &&& s.a4),
@@ -226,15 +227,15 @@ def zeroS : KState := ⟨0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
    s.a24 ^^^ ((~~~s.a20) &&& s.a21)⟩
 
 /-- Iota: the round constant enters lane `(0,0)`. -/
-@[inline] def iotaS (s : KState) (c : UInt64) : KState :=
+@[inline] abbrev iotaS (s : KState) (c : UInt64) : KState :=
   { s with a0 := s.a0 ^^^ c }
 
 /-- Little-endian lane read at byte offset `p`; bytes past the end read 0. -/
-@[inline] def laneAt (b : ByteArray) (p : Nat) : UInt64 :=
+@[inline] abbrev laneAt (b : ByteArray) (p : Nat) : UInt64 :=
   (0 : UInt64) ^^^ (byteAt b (p + 0) <<< 0) ^^^ (byteAt b (p + 1) <<< 8) ^^^ (byteAt b (p + 2) <<< 16) ^^^ (byteAt b (p + 3) <<< 24) ^^^ (byteAt b (p + 4) <<< 32) ^^^ (byteAt b (p + 5) <<< 40) ^^^ (byteAt b (p + 6) <<< 48) ^^^ (byteAt b (p + 7) <<< 56)
 
 /-- XOR one rate block of `b`, starting at byte `off`, into the seventeen rate lanes. -/
-@[inline] def xorBlockS (s : KState) (b : ByteArray) (off : Nat) : KState :=
+@[inline] abbrev xorBlockS (s : KState) (b : ByteArray) (off : Nat) : KState :=
   ⟨s.a0 ^^^ laneAt b (off + 0), s.a1 ^^^ laneAt b (off + 8), s.a2 ^^^ laneAt b (off + 16), s.a3 ^^^ laneAt b (off + 24), s.a4 ^^^ laneAt b (off + 32), s.a5 ^^^ laneAt b (off + 40), s.a6 ^^^ laneAt b (off + 48), s.a7 ^^^ laneAt b (off + 56), s.a8 ^^^ laneAt b (off + 64), s.a9 ^^^ laneAt b (off + 72), s.a10 ^^^ laneAt b (off + 80), s.a11 ^^^ laneAt b (off + 88), s.a12 ^^^ laneAt b (off + 96), s.a13 ^^^ laneAt b (off + 104), s.a14 ^^^ laneAt b (off + 112), s.a15 ^^^ laneAt b (off + 120), s.a16 ^^^ laneAt b (off + 128), s.a17, s.a18, s.a19, s.a20, s.a21, s.a22, s.a23, s.a24⟩
 
 
@@ -248,143 +249,143 @@ def rpValue (st : State) (source : Nat) : Lane :=
 
 /-! ### Per-lane access lemmas (all definitional) -/
 
-theorem toState_size (s : KState) : s.toState.size = 25 := rfl
+theorem toState_size (s : KState) : s.toState.size = 25 := by rfl
 
 theorem toState_getElem_0 (s : KState) (h : 0 < s.toState.size) :
-    s.toState[0] = s.a0.toBitVec := rfl
+    s.toState[0] = s.a0.toBitVec := by rfl
 theorem toState_getElem_1 (s : KState) (h : 1 < s.toState.size) :
-    s.toState[1] = s.a1.toBitVec := rfl
+    s.toState[1] = s.a1.toBitVec := by rfl
 theorem toState_getElem_2 (s : KState) (h : 2 < s.toState.size) :
-    s.toState[2] = s.a2.toBitVec := rfl
+    s.toState[2] = s.a2.toBitVec := by rfl
 theorem toState_getElem_3 (s : KState) (h : 3 < s.toState.size) :
-    s.toState[3] = s.a3.toBitVec := rfl
+    s.toState[3] = s.a3.toBitVec := by rfl
 theorem toState_getElem_4 (s : KState) (h : 4 < s.toState.size) :
-    s.toState[4] = s.a4.toBitVec := rfl
+    s.toState[4] = s.a4.toBitVec := by rfl
 theorem toState_getElem_5 (s : KState) (h : 5 < s.toState.size) :
-    s.toState[5] = s.a5.toBitVec := rfl
+    s.toState[5] = s.a5.toBitVec := by rfl
 theorem toState_getElem_6 (s : KState) (h : 6 < s.toState.size) :
-    s.toState[6] = s.a6.toBitVec := rfl
+    s.toState[6] = s.a6.toBitVec := by rfl
 theorem toState_getElem_7 (s : KState) (h : 7 < s.toState.size) :
-    s.toState[7] = s.a7.toBitVec := rfl
+    s.toState[7] = s.a7.toBitVec := by rfl
 theorem toState_getElem_8 (s : KState) (h : 8 < s.toState.size) :
-    s.toState[8] = s.a8.toBitVec := rfl
+    s.toState[8] = s.a8.toBitVec := by rfl
 theorem toState_getElem_9 (s : KState) (h : 9 < s.toState.size) :
-    s.toState[9] = s.a9.toBitVec := rfl
+    s.toState[9] = s.a9.toBitVec := by rfl
 theorem toState_getElem_10 (s : KState) (h : 10 < s.toState.size) :
-    s.toState[10] = s.a10.toBitVec := rfl
+    s.toState[10] = s.a10.toBitVec := by rfl
 theorem toState_getElem_11 (s : KState) (h : 11 < s.toState.size) :
-    s.toState[11] = s.a11.toBitVec := rfl
+    s.toState[11] = s.a11.toBitVec := by rfl
 theorem toState_getElem_12 (s : KState) (h : 12 < s.toState.size) :
-    s.toState[12] = s.a12.toBitVec := rfl
+    s.toState[12] = s.a12.toBitVec := by rfl
 theorem toState_getElem_13 (s : KState) (h : 13 < s.toState.size) :
-    s.toState[13] = s.a13.toBitVec := rfl
+    s.toState[13] = s.a13.toBitVec := by rfl
 theorem toState_getElem_14 (s : KState) (h : 14 < s.toState.size) :
-    s.toState[14] = s.a14.toBitVec := rfl
+    s.toState[14] = s.a14.toBitVec := by rfl
 theorem toState_getElem_15 (s : KState) (h : 15 < s.toState.size) :
-    s.toState[15] = s.a15.toBitVec := rfl
+    s.toState[15] = s.a15.toBitVec := by rfl
 theorem toState_getElem_16 (s : KState) (h : 16 < s.toState.size) :
-    s.toState[16] = s.a16.toBitVec := rfl
+    s.toState[16] = s.a16.toBitVec := by rfl
 theorem toState_getElem_17 (s : KState) (h : 17 < s.toState.size) :
-    s.toState[17] = s.a17.toBitVec := rfl
+    s.toState[17] = s.a17.toBitVec := by rfl
 theorem toState_getElem_18 (s : KState) (h : 18 < s.toState.size) :
-    s.toState[18] = s.a18.toBitVec := rfl
+    s.toState[18] = s.a18.toBitVec := by rfl
 theorem toState_getElem_19 (s : KState) (h : 19 < s.toState.size) :
-    s.toState[19] = s.a19.toBitVec := rfl
+    s.toState[19] = s.a19.toBitVec := by rfl
 theorem toState_getElem_20 (s : KState) (h : 20 < s.toState.size) :
-    s.toState[20] = s.a20.toBitVec := rfl
+    s.toState[20] = s.a20.toBitVec := by rfl
 theorem toState_getElem_21 (s : KState) (h : 21 < s.toState.size) :
-    s.toState[21] = s.a21.toBitVec := rfl
+    s.toState[21] = s.a21.toBitVec := by rfl
 theorem toState_getElem_22 (s : KState) (h : 22 < s.toState.size) :
-    s.toState[22] = s.a22.toBitVec := rfl
+    s.toState[22] = s.a22.toBitVec := by rfl
 theorem toState_getElem_23 (s : KState) (h : 23 < s.toState.size) :
-    s.toState[23] = s.a23.toBitVec := rfl
+    s.toState[23] = s.a23.toBitVec := by rfl
 theorem toState_getElem_24 (s : KState) (h : 24 < s.toState.size) :
-    s.toState[24] = s.a24.toBitVec := rfl
-theorem toState_getD_0 (s : KState) : s.toState.getD 0 zeroLane = s.a0.toBitVec := rfl
-theorem toState_getD_1 (s : KState) : s.toState.getD 1 zeroLane = s.a1.toBitVec := rfl
-theorem toState_getD_2 (s : KState) : s.toState.getD 2 zeroLane = s.a2.toBitVec := rfl
-theorem toState_getD_3 (s : KState) : s.toState.getD 3 zeroLane = s.a3.toBitVec := rfl
-theorem toState_getD_4 (s : KState) : s.toState.getD 4 zeroLane = s.a4.toBitVec := rfl
-theorem toState_getD_5 (s : KState) : s.toState.getD 5 zeroLane = s.a5.toBitVec := rfl
-theorem toState_getD_6 (s : KState) : s.toState.getD 6 zeroLane = s.a6.toBitVec := rfl
-theorem toState_getD_7 (s : KState) : s.toState.getD 7 zeroLane = s.a7.toBitVec := rfl
-theorem toState_getD_8 (s : KState) : s.toState.getD 8 zeroLane = s.a8.toBitVec := rfl
-theorem toState_getD_9 (s : KState) : s.toState.getD 9 zeroLane = s.a9.toBitVec := rfl
-theorem toState_getD_10 (s : KState) : s.toState.getD 10 zeroLane = s.a10.toBitVec := rfl
-theorem toState_getD_11 (s : KState) : s.toState.getD 11 zeroLane = s.a11.toBitVec := rfl
-theorem toState_getD_12 (s : KState) : s.toState.getD 12 zeroLane = s.a12.toBitVec := rfl
-theorem toState_getD_13 (s : KState) : s.toState.getD 13 zeroLane = s.a13.toBitVec := rfl
-theorem toState_getD_14 (s : KState) : s.toState.getD 14 zeroLane = s.a14.toBitVec := rfl
-theorem toState_getD_15 (s : KState) : s.toState.getD 15 zeroLane = s.a15.toBitVec := rfl
-theorem toState_getD_16 (s : KState) : s.toState.getD 16 zeroLane = s.a16.toBitVec := rfl
-theorem toState_getD_17 (s : KState) : s.toState.getD 17 zeroLane = s.a17.toBitVec := rfl
-theorem toState_getD_18 (s : KState) : s.toState.getD 18 zeroLane = s.a18.toBitVec := rfl
-theorem toState_getD_19 (s : KState) : s.toState.getD 19 zeroLane = s.a19.toBitVec := rfl
-theorem toState_getD_20 (s : KState) : s.toState.getD 20 zeroLane = s.a20.toBitVec := rfl
-theorem toState_getD_21 (s : KState) : s.toState.getD 21 zeroLane = s.a21.toBitVec := rfl
-theorem toState_getD_22 (s : KState) : s.toState.getD 22 zeroLane = s.a22.toBitVec := rfl
-theorem toState_getD_23 (s : KState) : s.toState.getD 23 zeroLane = s.a23.toBitVec := rfl
-theorem toState_getD_24 (s : KState) : s.toState.getD 24 zeroLane = s.a24.toBitVec := rfl
-theorem lane_toState_0_0 (s : KState) : lane s.toState 0 0 = s.a0.toBitVec := rfl
-theorem lane_toState_1_0 (s : KState) : lane s.toState 1 0 = s.a1.toBitVec := rfl
-theorem lane_toState_2_0 (s : KState) : lane s.toState 2 0 = s.a2.toBitVec := rfl
-theorem lane_toState_3_0 (s : KState) : lane s.toState 3 0 = s.a3.toBitVec := rfl
-theorem lane_toState_4_0 (s : KState) : lane s.toState 4 0 = s.a4.toBitVec := rfl
-theorem lane_toState_5_0 (s : KState) : lane s.toState 5 0 = s.a0.toBitVec := rfl
-theorem lane_toState_6_0 (s : KState) : lane s.toState 6 0 = s.a1.toBitVec := rfl
-theorem lane_toState_0_1 (s : KState) : lane s.toState 0 1 = s.a5.toBitVec := rfl
-theorem lane_toState_1_1 (s : KState) : lane s.toState 1 1 = s.a6.toBitVec := rfl
-theorem lane_toState_2_1 (s : KState) : lane s.toState 2 1 = s.a7.toBitVec := rfl
-theorem lane_toState_3_1 (s : KState) : lane s.toState 3 1 = s.a8.toBitVec := rfl
-theorem lane_toState_4_1 (s : KState) : lane s.toState 4 1 = s.a9.toBitVec := rfl
-theorem lane_toState_5_1 (s : KState) : lane s.toState 5 1 = s.a5.toBitVec := rfl
-theorem lane_toState_6_1 (s : KState) : lane s.toState 6 1 = s.a6.toBitVec := rfl
-theorem lane_toState_0_2 (s : KState) : lane s.toState 0 2 = s.a10.toBitVec := rfl
-theorem lane_toState_1_2 (s : KState) : lane s.toState 1 2 = s.a11.toBitVec := rfl
-theorem lane_toState_2_2 (s : KState) : lane s.toState 2 2 = s.a12.toBitVec := rfl
-theorem lane_toState_3_2 (s : KState) : lane s.toState 3 2 = s.a13.toBitVec := rfl
-theorem lane_toState_4_2 (s : KState) : lane s.toState 4 2 = s.a14.toBitVec := rfl
-theorem lane_toState_5_2 (s : KState) : lane s.toState 5 2 = s.a10.toBitVec := rfl
-theorem lane_toState_6_2 (s : KState) : lane s.toState 6 2 = s.a11.toBitVec := rfl
-theorem lane_toState_0_3 (s : KState) : lane s.toState 0 3 = s.a15.toBitVec := rfl
-theorem lane_toState_1_3 (s : KState) : lane s.toState 1 3 = s.a16.toBitVec := rfl
-theorem lane_toState_2_3 (s : KState) : lane s.toState 2 3 = s.a17.toBitVec := rfl
-theorem lane_toState_3_3 (s : KState) : lane s.toState 3 3 = s.a18.toBitVec := rfl
-theorem lane_toState_4_3 (s : KState) : lane s.toState 4 3 = s.a19.toBitVec := rfl
-theorem lane_toState_5_3 (s : KState) : lane s.toState 5 3 = s.a15.toBitVec := rfl
-theorem lane_toState_6_3 (s : KState) : lane s.toState 6 3 = s.a16.toBitVec := rfl
-theorem lane_toState_0_4 (s : KState) : lane s.toState 0 4 = s.a20.toBitVec := rfl
-theorem lane_toState_1_4 (s : KState) : lane s.toState 1 4 = s.a21.toBitVec := rfl
-theorem lane_toState_2_4 (s : KState) : lane s.toState 2 4 = s.a22.toBitVec := rfl
-theorem lane_toState_3_4 (s : KState) : lane s.toState 3 4 = s.a23.toBitVec := rfl
-theorem lane_toState_4_4 (s : KState) : lane s.toState 4 4 = s.a24.toBitVec := rfl
-theorem lane_toState_5_4 (s : KState) : lane s.toState 5 4 = s.a20.toBitVec := rfl
-theorem lane_toState_6_4 (s : KState) : lane s.toState 6 4 = s.a21.toBitVec := rfl
-theorem rotationOffset_0_0 : rotationOffset 0 0 = 0 := rfl
-theorem rotationOffset_1_0 : rotationOffset 1 0 = 1 := rfl
-theorem rotationOffset_2_0 : rotationOffset 2 0 = 62 := rfl
-theorem rotationOffset_3_0 : rotationOffset 3 0 = 28 := rfl
-theorem rotationOffset_4_0 : rotationOffset 4 0 = 27 := rfl
-theorem rotationOffset_0_1 : rotationOffset 0 1 = 36 := rfl
-theorem rotationOffset_1_1 : rotationOffset 1 1 = 44 := rfl
-theorem rotationOffset_2_1 : rotationOffset 2 1 = 6 := rfl
-theorem rotationOffset_3_1 : rotationOffset 3 1 = 55 := rfl
-theorem rotationOffset_4_1 : rotationOffset 4 1 = 20 := rfl
-theorem rotationOffset_0_2 : rotationOffset 0 2 = 3 := rfl
-theorem rotationOffset_1_2 : rotationOffset 1 2 = 10 := rfl
-theorem rotationOffset_2_2 : rotationOffset 2 2 = 43 := rfl
-theorem rotationOffset_3_2 : rotationOffset 3 2 = 25 := rfl
-theorem rotationOffset_4_2 : rotationOffset 4 2 = 39 := rfl
-theorem rotationOffset_0_3 : rotationOffset 0 3 = 41 := rfl
-theorem rotationOffset_1_3 : rotationOffset 1 3 = 45 := rfl
-theorem rotationOffset_2_3 : rotationOffset 2 3 = 15 := rfl
-theorem rotationOffset_3_3 : rotationOffset 3 3 = 21 := rfl
-theorem rotationOffset_4_3 : rotationOffset 4 3 = 8 := rfl
-theorem rotationOffset_0_4 : rotationOffset 0 4 = 18 := rfl
-theorem rotationOffset_1_4 : rotationOffset 1 4 = 2 := rfl
-theorem rotationOffset_2_4 : rotationOffset 2 4 = 61 := rfl
-theorem rotationOffset_3_4 : rotationOffset 3 4 = 56 := rfl
-theorem rotationOffset_4_4 : rotationOffset 4 4 = 14 := rfl
+    s.toState[24] = s.a24.toBitVec := by rfl
+theorem toState_getD_0 (s : KState) : s.toState.getD 0 zeroLane = s.a0.toBitVec := by rfl
+theorem toState_getD_1 (s : KState) : s.toState.getD 1 zeroLane = s.a1.toBitVec := by rfl
+theorem toState_getD_2 (s : KState) : s.toState.getD 2 zeroLane = s.a2.toBitVec := by rfl
+theorem toState_getD_3 (s : KState) : s.toState.getD 3 zeroLane = s.a3.toBitVec := by rfl
+theorem toState_getD_4 (s : KState) : s.toState.getD 4 zeroLane = s.a4.toBitVec := by rfl
+theorem toState_getD_5 (s : KState) : s.toState.getD 5 zeroLane = s.a5.toBitVec := by rfl
+theorem toState_getD_6 (s : KState) : s.toState.getD 6 zeroLane = s.a6.toBitVec := by rfl
+theorem toState_getD_7 (s : KState) : s.toState.getD 7 zeroLane = s.a7.toBitVec := by rfl
+theorem toState_getD_8 (s : KState) : s.toState.getD 8 zeroLane = s.a8.toBitVec := by rfl
+theorem toState_getD_9 (s : KState) : s.toState.getD 9 zeroLane = s.a9.toBitVec := by rfl
+theorem toState_getD_10 (s : KState) : s.toState.getD 10 zeroLane = s.a10.toBitVec := by rfl
+theorem toState_getD_11 (s : KState) : s.toState.getD 11 zeroLane = s.a11.toBitVec := by rfl
+theorem toState_getD_12 (s : KState) : s.toState.getD 12 zeroLane = s.a12.toBitVec := by rfl
+theorem toState_getD_13 (s : KState) : s.toState.getD 13 zeroLane = s.a13.toBitVec := by rfl
+theorem toState_getD_14 (s : KState) : s.toState.getD 14 zeroLane = s.a14.toBitVec := by rfl
+theorem toState_getD_15 (s : KState) : s.toState.getD 15 zeroLane = s.a15.toBitVec := by rfl
+theorem toState_getD_16 (s : KState) : s.toState.getD 16 zeroLane = s.a16.toBitVec := by rfl
+theorem toState_getD_17 (s : KState) : s.toState.getD 17 zeroLane = s.a17.toBitVec := by rfl
+theorem toState_getD_18 (s : KState) : s.toState.getD 18 zeroLane = s.a18.toBitVec := by rfl
+theorem toState_getD_19 (s : KState) : s.toState.getD 19 zeroLane = s.a19.toBitVec := by rfl
+theorem toState_getD_20 (s : KState) : s.toState.getD 20 zeroLane = s.a20.toBitVec := by rfl
+theorem toState_getD_21 (s : KState) : s.toState.getD 21 zeroLane = s.a21.toBitVec := by rfl
+theorem toState_getD_22 (s : KState) : s.toState.getD 22 zeroLane = s.a22.toBitVec := by rfl
+theorem toState_getD_23 (s : KState) : s.toState.getD 23 zeroLane = s.a23.toBitVec := by rfl
+theorem toState_getD_24 (s : KState) : s.toState.getD 24 zeroLane = s.a24.toBitVec := by rfl
+theorem lane_toState_0_0 (s : KState) : lane s.toState 0 0 = s.a0.toBitVec := by rfl
+theorem lane_toState_1_0 (s : KState) : lane s.toState 1 0 = s.a1.toBitVec := by rfl
+theorem lane_toState_2_0 (s : KState) : lane s.toState 2 0 = s.a2.toBitVec := by rfl
+theorem lane_toState_3_0 (s : KState) : lane s.toState 3 0 = s.a3.toBitVec := by rfl
+theorem lane_toState_4_0 (s : KState) : lane s.toState 4 0 = s.a4.toBitVec := by rfl
+theorem lane_toState_5_0 (s : KState) : lane s.toState 5 0 = s.a0.toBitVec := by rfl
+theorem lane_toState_6_0 (s : KState) : lane s.toState 6 0 = s.a1.toBitVec := by rfl
+theorem lane_toState_0_1 (s : KState) : lane s.toState 0 1 = s.a5.toBitVec := by rfl
+theorem lane_toState_1_1 (s : KState) : lane s.toState 1 1 = s.a6.toBitVec := by rfl
+theorem lane_toState_2_1 (s : KState) : lane s.toState 2 1 = s.a7.toBitVec := by rfl
+theorem lane_toState_3_1 (s : KState) : lane s.toState 3 1 = s.a8.toBitVec := by rfl
+theorem lane_toState_4_1 (s : KState) : lane s.toState 4 1 = s.a9.toBitVec := by rfl
+theorem lane_toState_5_1 (s : KState) : lane s.toState 5 1 = s.a5.toBitVec := by rfl
+theorem lane_toState_6_1 (s : KState) : lane s.toState 6 1 = s.a6.toBitVec := by rfl
+theorem lane_toState_0_2 (s : KState) : lane s.toState 0 2 = s.a10.toBitVec := by rfl
+theorem lane_toState_1_2 (s : KState) : lane s.toState 1 2 = s.a11.toBitVec := by rfl
+theorem lane_toState_2_2 (s : KState) : lane s.toState 2 2 = s.a12.toBitVec := by rfl
+theorem lane_toState_3_2 (s : KState) : lane s.toState 3 2 = s.a13.toBitVec := by rfl
+theorem lane_toState_4_2 (s : KState) : lane s.toState 4 2 = s.a14.toBitVec := by rfl
+theorem lane_toState_5_2 (s : KState) : lane s.toState 5 2 = s.a10.toBitVec := by rfl
+theorem lane_toState_6_2 (s : KState) : lane s.toState 6 2 = s.a11.toBitVec := by rfl
+theorem lane_toState_0_3 (s : KState) : lane s.toState 0 3 = s.a15.toBitVec := by rfl
+theorem lane_toState_1_3 (s : KState) : lane s.toState 1 3 = s.a16.toBitVec := by rfl
+theorem lane_toState_2_3 (s : KState) : lane s.toState 2 3 = s.a17.toBitVec := by rfl
+theorem lane_toState_3_3 (s : KState) : lane s.toState 3 3 = s.a18.toBitVec := by rfl
+theorem lane_toState_4_3 (s : KState) : lane s.toState 4 3 = s.a19.toBitVec := by rfl
+theorem lane_toState_5_3 (s : KState) : lane s.toState 5 3 = s.a15.toBitVec := by rfl
+theorem lane_toState_6_3 (s : KState) : lane s.toState 6 3 = s.a16.toBitVec := by rfl
+theorem lane_toState_0_4 (s : KState) : lane s.toState 0 4 = s.a20.toBitVec := by rfl
+theorem lane_toState_1_4 (s : KState) : lane s.toState 1 4 = s.a21.toBitVec := by rfl
+theorem lane_toState_2_4 (s : KState) : lane s.toState 2 4 = s.a22.toBitVec := by rfl
+theorem lane_toState_3_4 (s : KState) : lane s.toState 3 4 = s.a23.toBitVec := by rfl
+theorem lane_toState_4_4 (s : KState) : lane s.toState 4 4 = s.a24.toBitVec := by rfl
+theorem lane_toState_5_4 (s : KState) : lane s.toState 5 4 = s.a20.toBitVec := by rfl
+theorem lane_toState_6_4 (s : KState) : lane s.toState 6 4 = s.a21.toBitVec := by rfl
+theorem rotationOffset_0_0 : rotationOffset 0 0 = 0 := by rfl
+theorem rotationOffset_1_0 : rotationOffset 1 0 = 1 := by rfl
+theorem rotationOffset_2_0 : rotationOffset 2 0 = 62 := by rfl
+theorem rotationOffset_3_0 : rotationOffset 3 0 = 28 := by rfl
+theorem rotationOffset_4_0 : rotationOffset 4 0 = 27 := by rfl
+theorem rotationOffset_0_1 : rotationOffset 0 1 = 36 := by rfl
+theorem rotationOffset_1_1 : rotationOffset 1 1 = 44 := by rfl
+theorem rotationOffset_2_1 : rotationOffset 2 1 = 6 := by rfl
+theorem rotationOffset_3_1 : rotationOffset 3 1 = 55 := by rfl
+theorem rotationOffset_4_1 : rotationOffset 4 1 = 20 := by rfl
+theorem rotationOffset_0_2 : rotationOffset 0 2 = 3 := by rfl
+theorem rotationOffset_1_2 : rotationOffset 1 2 = 10 := by rfl
+theorem rotationOffset_2_2 : rotationOffset 2 2 = 43 := by rfl
+theorem rotationOffset_3_2 : rotationOffset 3 2 = 25 := by rfl
+theorem rotationOffset_4_2 : rotationOffset 4 2 = 39 := by rfl
+theorem rotationOffset_0_3 : rotationOffset 0 3 = 41 := by rfl
+theorem rotationOffset_1_3 : rotationOffset 1 3 = 45 := by rfl
+theorem rotationOffset_2_3 : rotationOffset 2 3 = 15 := by rfl
+theorem rotationOffset_3_3 : rotationOffset 3 3 = 21 := by rfl
+theorem rotationOffset_4_3 : rotationOffset 4 3 = 8 := by rfl
+theorem rotationOffset_0_4 : rotationOffset 0 4 = 18 := by rfl
+theorem rotationOffset_1_4 : rotationOffset 1 4 = 2 := by rfl
+theorem rotationOffset_2_4 : rotationOffset 2 4 = 61 := by rfl
+theorem rotationOffset_3_4 : rotationOffset 3 4 = 56 := by rfl
+theorem rotationOffset_4_4 : rotationOffset 4 4 = 14 := by rfl
 /-- The rho/pi source of each target lane (the inverse of `rpTarget`). -/
 def rpSource : Nat → Nat
   | 0 => 0
@@ -414,31 +415,31 @@ def rpSource : Nat → Nat
   | 24 => 21
   | _ => 0
 
-theorem rpSource_0 : rpSource 0 = 0 := rfl
-theorem rpSource_1 : rpSource 1 = 6 := rfl
-theorem rpSource_2 : rpSource 2 = 12 := rfl
-theorem rpSource_3 : rpSource 3 = 18 := rfl
-theorem rpSource_4 : rpSource 4 = 24 := rfl
-theorem rpSource_5 : rpSource 5 = 3 := rfl
-theorem rpSource_6 : rpSource 6 = 9 := rfl
-theorem rpSource_7 : rpSource 7 = 10 := rfl
-theorem rpSource_8 : rpSource 8 = 16 := rfl
-theorem rpSource_9 : rpSource 9 = 22 := rfl
-theorem rpSource_10 : rpSource 10 = 1 := rfl
-theorem rpSource_11 : rpSource 11 = 7 := rfl
-theorem rpSource_12 : rpSource 12 = 13 := rfl
-theorem rpSource_13 : rpSource 13 = 19 := rfl
-theorem rpSource_14 : rpSource 14 = 20 := rfl
-theorem rpSource_15 : rpSource 15 = 4 := rfl
-theorem rpSource_16 : rpSource 16 = 5 := rfl
-theorem rpSource_17 : rpSource 17 = 11 := rfl
-theorem rpSource_18 : rpSource 18 = 17 := rfl
-theorem rpSource_19 : rpSource 19 = 23 := rfl
-theorem rpSource_20 : rpSource 20 = 2 := rfl
-theorem rpSource_21 : rpSource 21 = 8 := rfl
-theorem rpSource_22 : rpSource 22 = 14 := rfl
-theorem rpSource_23 : rpSource 23 = 15 := rfl
-theorem rpSource_24 : rpSource 24 = 21 := rfl
+theorem rpSource_0 : rpSource 0 = 0 := by rfl
+theorem rpSource_1 : rpSource 1 = 6 := by rfl
+theorem rpSource_2 : rpSource 2 = 12 := by rfl
+theorem rpSource_3 : rpSource 3 = 18 := by rfl
+theorem rpSource_4 : rpSource 4 = 24 := by rfl
+theorem rpSource_5 : rpSource 5 = 3 := by rfl
+theorem rpSource_6 : rpSource 6 = 9 := by rfl
+theorem rpSource_7 : rpSource 7 = 10 := by rfl
+theorem rpSource_8 : rpSource 8 = 16 := by rfl
+theorem rpSource_9 : rpSource 9 = 22 := by rfl
+theorem rpSource_10 : rpSource 10 = 1 := by rfl
+theorem rpSource_11 : rpSource 11 = 7 := by rfl
+theorem rpSource_12 : rpSource 12 = 13 := by rfl
+theorem rpSource_13 : rpSource 13 = 19 := by rfl
+theorem rpSource_14 : rpSource 14 = 20 := by rfl
+theorem rpSource_15 : rpSource 15 = 4 := by rfl
+theorem rpSource_16 : rpSource 16 = 5 := by rfl
+theorem rpSource_17 : rpSource 17 = 11 := by rfl
+theorem rpSource_18 : rpSource 18 = 17 := by rfl
+theorem rpSource_19 : rpSource 19 = 23 := by rfl
+theorem rpSource_20 : rpSource 20 = 2 := by rfl
+theorem rpSource_21 : rpSource 21 = 8 := by rfl
+theorem rpSource_22 : rpSource 22 = 14 := by rfl
+theorem rpSource_23 : rpSource 23 = 15 := by rfl
+theorem rpSource_24 : rpSource 24 = 21 := by rfl
 
 /-- The last rho/pi write to each target comes from `rpSource`. -/
 theorem rhoPi_find (t : Nat) (ht : t < 25) :
@@ -450,9 +451,9 @@ theorem rhoPi_find (t : Nat) (ht : t < 25) :
 
 theorem xorColumn_five (st : State) (x : Nat) :
     xorColumn st x = zeroLane ^^^ lane st x 0 ^^^ lane st x 1 ^^^ lane st x 2 ^^^
-      lane st x 3 ^^^ lane st x 4 := rfl
+      lane st x 3 ^^^ lane st x 4 := by rfl
 
-theorem u64_zero_toBitVec : (0 : UInt64).toBitVec = zeroLane := rfl
+theorem u64_zero_toBitVec : (0 : UInt64).toBitVec = zeroLane := by rfl
 
 /-- Lanewise equality against the twenty-five-lane literal. -/
 theorem toState_ext (s : KState) (st : State) (hsize : st.size = 25)
@@ -553,9 +554,9 @@ theorem foldl_setIfInBounds_getElem? {α : Type} (g : Nat → Nat) (f : Nat → 
 
 theorem rhoPi_eq_fold (st : State) :
     rhoPi st = (List.range 25).foldl
-      (fun o s => o.setIfInBounds (rpTarget s) (rpValue st s)) zeroState := rfl
+      (fun o s => o.setIfInBounds (rpTarget s) (rpValue st s)) zeroState := by rfl
 
-theorem zeroState_size : zeroState.size = 25 := rfl
+theorem zeroState_size : zeroState.size = 25 := by rfl
 
 theorem rhoPi_getElem? (st : State) (t : Nat) (ht : t < 25) :
     (rhoPi st)[t]? = some (rpValue st (rpSource t)) := by
@@ -594,7 +595,7 @@ theorem iotaS_toState (s : KState) (c : UInt64) :
     rfl
 
 /-- One word round. -/
-@[inline] def roundS (s : KState) (c : UInt64) : KState :=
+@[inline] abbrev roundS (s : KState) (c : UInt64) : KState :=
   iotaS (chiS (rhoPiS (thetaS s))) c
 
 theorem roundS_toState (s : KState) (c : UInt64) :
@@ -603,10 +604,10 @@ theorem roundS_toState (s : KState) (c : UInt64) :
     theta_eq_thetaCached]
 
 /-- The round constants as machine words. -/
-def roundConstantsS : List UInt64 := roundConstants.map UInt64.ofBitVec
+abbrev roundConstantsS : List UInt64 := roundConstants.map UInt64.ofBitVec
 
 /-- Keccak-f[1600] on the word state: the spec's twenty-four rounds, in order. -/
-def keccakS (s : KState) : KState := roundConstantsS.foldl roundS s
+@[expose] def keccakS (s : KState) : KState := roundConstantsS.foldl roundS s
 
 /-- **The permutation refinement**: the word permutation is the spec's
 Keccak-f[1600] on the lane representation, for every state. -/
@@ -626,7 +627,7 @@ theorem keccakF_fast_eq (s : KState) : (keccakS s).toState = keccakF1600 s.toSta
 
 theorem laneAt_eq_fold (b : ByteArray) (p : Nat) :
     laneAt b p = (List.range 8).foldl
-      (fun acc t => acc ^^^ (byteAt b (p + t) <<< UInt64.ofNat (8 * t))) 0 := rfl
+      (fun acc t => acc ^^^ (byteAt b (p + t) <<< UInt64.ofNat (8 * t))) 0 := by rfl
 
 theorem toUInt64_eq_ofNat (v : UInt8) : v.toUInt64 = UInt64.ofNat v.toNat := by
   apply UInt64.toNat_inj.mp
@@ -696,7 +697,7 @@ theorem xorBlockS_toState (s : KState) (b : ByteArray) (off : Nat) :
       ite_false]
 
 /-- Absorb `count` full rate blocks of `b`, starting at byte `off`. -/
-def absorbLoop (b : ByteArray) : Nat → Nat → KState → KState
+@[expose] def absorbLoop (b : ByteArray) : Nat → Nat → KState → KState
   | 0, _, s => s
   | count + 1, off, s => absorbLoop b count (off + 136) (keccakS (xorBlockS s b off))
 
@@ -709,12 +710,12 @@ theorem absorb_fast_eq (b : ByteArray) (count off : Nat) (s : KState) :
       rw [absorbLoop, absorbFrom, ih, keccakF_fast_eq, xorBlockS_toState, List.drop_drop]
       simp only [rateBytes, Nat.add_comm]
 
-theorem zeroS_toState : zeroS.toState = zeroState := rfl
+theorem zeroS_toState : zeroS.toState = zeroState := by rfl
 
 /-! ### Byte-array builders, proved against their list readings -/
 
 /-- Append every byte of a list. -/
-def pushList (b : ByteArray) (l : List UInt8) : ByteArray := l.foldl ByteArray.push b
+@[expose] def pushList (b : ByteArray) (l : List UInt8) : ByteArray := l.foldl ByteArray.push b
 
 theorem push_data (b : ByteArray) (x : UInt8) :
     (b.push x).data.toList = b.data.toList ++ [x] := by
@@ -730,7 +731,7 @@ theorem pushList_data (b : ByteArray) (l : List UInt8) :
       rw [ih, push_data, List.append_assoc, List.singleton_append]
 
 /-- Append `n` zero bytes. -/
-def pushZeros (b : ByteArray) : Nat → ByteArray
+@[expose] def pushZeros (b : ByteArray) : Nat → ByteArray
   | 0 => b
   | n + 1 => pushZeros (b.push 0) n
 
@@ -746,7 +747,7 @@ theorem size_eq_length (b : ByteArray) : b.size = b.data.toList.length := by
   rfl
 
 /-- `padForRate` on a byte array. -/
-def padBA (b : ByteArray) (suffix : UInt8) : ByteArray :=
+@[expose] def padBA (b : ByteArray) (suffix : UInt8) : ByteArray :=
   let count := rateBytes - b.size % rateBytes
   if count = 1 then b.push (suffix ^^^ (128 : UInt8))
   else (pushZeros (b.push suffix) (count - 2)).push 128
@@ -761,7 +762,7 @@ theorem padBA_data (b : ByteArray) (suffix : UInt8) :
   · simp only [hc, ↓reduceIte, push_data, pushZeros_data]
 
 /-- The padded sponge over a byte array, before squeezing. -/
-def spongeS (b : ByteArray) (suffix : UInt8) : KState :=
+@[expose] def spongeS (b : ByteArray) (suffix : UInt8) : KState :=
   let padded := padBA b suffix
   absorbLoop padded (padded.size / rateBytes) 0 zeroS
 
@@ -773,7 +774,7 @@ theorem spongeS_toState (b : ByteArray) (suffix : UInt8) :
 /-! ### Squeezing the first 256 bits -/
 
 /-- Lane `j` of the rate, `j < 4`. -/
-def outLane (s : KState) : Nat → UInt64
+@[expose] def outLane (s : KState) : Nat → UInt64
   | 0 => s.a0
   | 1 => s.a1
   | 2 => s.a2
@@ -781,7 +782,7 @@ def outLane (s : KState) : Nat → UInt64
   | _ => 0
 
 /-- The first thirty-two output bytes, read straight from the words. -/
-def squeezeS (s : KState) : List UInt8 :=
+@[expose] def squeezeS (s : KState) : List UInt8 :=
   (List.range outputBytes).map fun k => (outLane s (k / 8) >>> UInt64.ofNat (8 * (k % 8))).toUInt8
 
 theorem shr_byte (x : UInt64) (t : Nat) (ht : t < 8) :
@@ -817,7 +818,7 @@ theorem squeeze_fast_eq (s : KState) : squeezeS s = squeeze32 s.toState := by
 def absorbPaddedFast (padded : List UInt8) : State :=
   (absorbLoop (pushList ByteArray.empty padded) (padded.length / rateBytes) 0 zeroS).toState
 
-theorem empty_data : ByteArray.empty.data.toList = [] := rfl
+theorem empty_data : ByteArray.empty.data.toList = [] := by rfl
 
 theorem absorbPadded_fast_eq (padded : List UInt8) :
     absorbPaddedFast padded = absorbPadded padded := by
@@ -826,7 +827,7 @@ theorem absorbPadded_fast_eq (padded : List UInt8) :
     zeroS_toState]
 
 /-- The 32-byte squeeze of the padded sponge of a byte array. -/
-def spongeBytes (b : ByteArray) (suffix : UInt8) : List UInt8 :=
+@[expose] def spongeBytes (b : ByteArray) (suffix : UInt8) : List UInt8 :=
   squeezeS (spongeS b suffix)
 
 theorem sponge_fast_eq (b : ByteArray) (suffix : UInt8) :
@@ -836,7 +837,7 @@ theorem sponge_fast_eq (b : ByteArray) (suffix : UInt8) :
 /-- cSHAKE256 (empty function name, 256-bit output) on the fast path: the
 input list is copied once into a byte array; framing, padding, absorption and
 squeezing never return to lists. -/
-def cshake256Fast (customization input : List UInt8) : List UInt8 :=
+@[expose] def cshake256Fast (customization input : List UInt8) : List UInt8 :=
   if customization = [] then spongeBytes (pushList ByteArray.empty input) 0x1f
   else spongeBytes (pushList (pushList ByteArray.empty (customizationPrefix customization)) input)
     0x04

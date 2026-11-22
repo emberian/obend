@@ -25,7 +25,7 @@ the census is a lookup per constant, not a walk.
 -/
 
 public import Lean
-@[expose] public section
+public section
 
 namespace Obend.AssertAxioms
 

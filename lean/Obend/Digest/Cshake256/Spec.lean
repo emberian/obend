@@ -30,7 +30,7 @@ byte.  The total Lean function extends framing outside that standard domain by
 truncating the width byte with `UInt8.ofNat`; ordinary finite protocol frames
 are far inside the standard bound.
 -/
-@[expose] public section
+public section
 
 
 namespace Obend.Digest.Cshake256
@@ -41,7 +41,7 @@ set_option autoImplicit false
 
 /-- The base-256 digits of `value`, least significant first, with `fuel` bounding the recursion
 (structural, so `decide` evaluates it). `fuel ≥ value` always suffices: each step divides by 256. -/
-def natBytesLEAux : Nat → Nat → List UInt8
+@[expose] def natBytesLEAux : Nat → Nat → List UInt8
   | 0, _ => []
   | fuel + 1, value => if value = 0 then [] else UInt8.ofNat (value % 256) :: natBytesLEAux fuel (value / 256)
 
@@ -49,27 +49,27 @@ def natBytesLEAux : Nat → Nat → List UInt8
 read as bytes (`natBytesLE_eq_digits`, in `Compiler.Sp800185Cshake256`, where Mathlib is in scope):
 the executable core stays on `Init`, so every runtime closure that hashes (the channel library a
 member's phone loads) carries no Mathlib initializers. -/
-def natBytesLE (value : Nat) : List UInt8 := natBytesLEAux value value
+@[expose] def natBytesLE (value : Nat) : List UInt8 := natBytesLEAux value value
 
 /-- Minimal nonempty big-endian base-256 representation. -/
-def natBytesBE (value : Nat) : List UInt8 :=
+@[expose] def natBytesBE (value : Nat) : List UInt8 :=
   let little := natBytesLE value
   let nonempty := if little = [] then [0] else little
   nonempty.reverse
 
 /-- SP 800-185 `left_encode`, totalized beyond the standard's 255-byte-width
 domain by `UInt8.ofNat`. -/
-def leftEncode (value : Nat) : List UInt8 :=
+@[expose] def leftEncode (value : Nat) : List UInt8 :=
   let bytes := natBytesBE value
   UInt8.ofNat bytes.length :: bytes
 
 /-- SP 800-185 `encode_string`: encode the bit length, then the bytes. -/
-def encodeString (bytes : List UInt8) : List UInt8 :=
+@[expose] def encodeString (bytes : List UInt8) : List UInt8 :=
   leftEncode (8 * bytes.length) ++ bytes
 
 /-- SP 800-185 `bytepad`.  The `width = 0` branch totalizes the helper; the
 cSHAKE256 specialization below always selects width 136. -/
-def bytepad (bytes : List UInt8) (width : Nat) : List UInt8 :=
+@[expose] def bytepad (bytes : List UInt8) (width : Nat) : List UInt8 :=
   if width = 0 then [] else
     let prefixed := leftEncode width ++ bytes
     let zeroCount := (width - prefixed.length % width) % width
@@ -153,7 +153,7 @@ def chi (state : State) : State :=
     lane state x y ^^^ ((~~~lane state (x + 1) y) &&& lane state (x + 2) y)
 
 /-- FIPS 202 round constants. -/
-def roundConstants : List Lane := [
+@[expose] def roundConstants : List Lane := [
   BitVec.ofNat 64 0x0000000000000001,
   BitVec.ofNat 64 0x0000000000008082,
   BitVec.ofNat 64 0x800000000000808a,
@@ -190,9 +190,9 @@ def keccakF1600 (state : State) : State :=
 
 /-! ## The 1088-bit-rate sponge and cSHAKE256 -/
 
-def rateBytes : Nat := 136
+@[expose] def rateBytes : Nat := 136
 def rateLanes : Nat := 17
-def outputBytes : Nat := 32
+@[expose] def outputBytes : Nat := 32
 
 def laneFromBlock (block : List UInt8) (laneIndex : Nat) : Lane :=
   (List.range 8).foldl (fun acc offset =>
@@ -207,7 +207,7 @@ def xorRateBlock (state : State) (block : List UInt8) : State :=
     else state.getD index.val zeroLane
 
 /-- Multi-rate padding for a byte-aligned delimited suffix. -/
-def padForRate (bytes : List UInt8) (suffix : UInt8) : List UInt8 :=
+@[expose] def padForRate (bytes : List UInt8) (suffix : UInt8) : List UInt8 :=
   let count := rateBytes - bytes.length % rateBytes
   if count = 1 then
     bytes ++ [suffix ^^^ (128 : UInt8)]
@@ -264,16 +264,16 @@ def stateByte (state : State) (index : Nat) : UInt8 :=
     ((state.getD (index / 8) zeroLane).toNat / 2 ^ (8 * (index % 8)) % 256)
 
 /-- The first 256 output bits, in Keccak's little-endian lane convention. -/
-def squeeze32 (state : State) : List UInt8 :=
+abbrev squeeze32 (state : State) : List UInt8 :=
   (List.range outputBytes).map (stateByte state)
 
 /-- The SP 800-185 prefix for empty function-name and caller customization. -/
-def customizationPrefix (customization : List UInt8) : List UInt8 :=
+@[expose] def customizationPrefix (customization : List UInt8) : List UInt8 :=
   bytepad (encodeString [] ++ encodeString customization) rateBytes
 
 /-- cSHAKE256 with empty function-name and a 256-bit output.  SP 800-185
 requires the empty-customization case to be exactly SHAKE256. -/
-def cshake256Bytes (customization input : List UInt8) : List UInt8 :=
+@[expose] def cshake256Bytes (customization input : List UInt8) : List UInt8 :=
   let shakeCompatible := customization = []
   let framed := if shakeCompatible then input else customizationPrefix customization ++ input
   let suffix : UInt8 := if shakeCompatible then 0x1f else 0x04
@@ -295,7 +295,7 @@ theorem cshake256Bytes_eq_indexed (customization input : List UInt8) :
 
 @[simp] theorem cshake256Bytes_length (customization input : List UInt8) :
     (cshake256Bytes customization input).length = 32 := by
-  simp [cshake256Bytes]
+  simp [cshake256Bytes, outputBytes]
 
 end Obend.Digest.Cshake256
 

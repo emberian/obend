@@ -30,7 +30,7 @@ public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.BidirectionalCompleteness
 import all Obend.Core.Check
 
-@[expose] public section
+public section
 namespace Obend.Elab.Coerce
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Bidirectional
 open Obend.Core.Proofs.BidirectionalCompleteness
@@ -83,7 +83,7 @@ structure Emitted where
   quantity : Quantity
 
 /-- Its type. -/
-def Emitted.type (e : Emitted) (source target : Ty) : Ty := .arrow .reusable e.quantity source target
+@[expose] def Emitted.type (e : Emitted) (source target : Ty) : Ty := .arrow .reusable e.quantity source target
 
 /-- The same coercion with an `affine` parameter declared `linear`: it is applied to an expression
 that uses a `linear` hypothesis, so its parameter must be `linear` too. The kernel then demands
@@ -250,22 +250,22 @@ theorem emit_identity_checks {a : Assumptions} {source target : Ty} (valid : a.v
 /-! ### Width and representative record coercions check, by proof -/
 
 /-- The record of projections a width coercion emits, and its annotations. -/
-def widthTerm (fields : List (String × Ty)) : Term :=
+@[expose] def widthTerm (fields : List (String × Ty)) : Term :=
   .lam (.record (fields.map fun (name, _) => (name, .get (.bound 0) name)))
 
-def widthQuantity (fields : List (String × Ty)) : Quantity :=
+@[expose] def widthQuantity (fields : List (String × Ty)) : Quantity :=
   if fields.length ≤ 1 then .affine else .unrestricted
 
-def widthTree (source target : Ty) (fields : List (String × Ty)) : AnnotationTree :=
+@[expose] def widthTree (source target : Ty) (fields : List (String × Ty)) : AnnotationTree :=
   .node (some ⟨source, target, widthQuantity fields, .reusable⟩)
     [.node (some (hint .emptyRow target)) (fields.map fun _ => .node none [.node none []])]
 
-def rowOf : List (String × Ty) → Ty
+@[expose] def rowOf : List (String × Ty) → Ty
   | [] => .emptyRow
   | (name, member) :: rest => .field name member (rowOf rest)
 
 /-- Each kept member is found in the source at an agreeing, non-activity type. -/
-def KeptAgree (a : Assumptions) (source : Ty) (fields : List (String × Ty)) : Prop :=
+@[expose] def KeptAgree (a : Assumptions) (source : Ty) (fields : List (String × Ty)) : Prop :=
   ∀ name member, (name, member) ∈ fields → member.isComputation = false ∧
     ∃ found, lookupV a.bounds [] source name = some found ∧ sameType a found member = true
 

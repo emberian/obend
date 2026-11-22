@@ -12,27 +12,27 @@ of these counts alone. A grant over `checkWork` is a structural admissibility li
 scales with what the checker reads, not a CPU or memory bound. -/
 public import Obend.Core.Check
 
-@[expose] public section
+public section
 namespace Obend.Elab.Work
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check
 set_option autoImplicit false
 
 /-- The number of constructors in a type. -/
-def tyNodes : Ty → Nat
+@[expose] def tyNodes : Ty → Nat
   | .arrow _ _ a b | .field _ a b | .specification a b | .prototype a b => tyNodes a + tyNodes b + 1
   | .variant a => tyNodes a + 1
   | .computation a b c => tyNodes a + tyNodes b + tyNodes c + 1
   | _ => 1
 
 /-- What reading the annotation at a position costs: nothing when there is none. -/
-def annotationWork (annotations : Annotations) (path : List Nat) : Nat :=
+@[expose] def annotationWork (annotations : Annotations) (path : List Nat) : Nat :=
   match annotations path with
   | some annotation => tyNodes annotation.domain + tyNodes annotation.codomain
   | none => 0
 
 mutual
 /-- One per node, plus the annotation read there, at the checker's own source positions. -/
-def termWork (annotations : Annotations) (path : List Nat) : Term → Nat
+@[expose] def termWork (annotations : Annotations) (path : List Nat) : Term → Nat
   | .hole _ _ | .bound _ | .nat _ | .boolean _ | .label _ => 1 + annotationWork annotations path
   | .lam t | .reflect t | .metadata t | .project t | .inject _ t | .perform t | .done t | .get t _ =>
     1 + annotationWork annotations path + termWork annotations (path ++ [0]) t
@@ -49,18 +49,18 @@ def termWork (annotations : Annotations) (path : List Nat) : Term → Nat
   | .split t names f =>
     1 + names.length + annotationWork annotations path + termWork annotations (path ++ [0]) t +
       termWork annotations (path ++ [1]) f
-def fieldsWork (annotations : Annotations) (path : List Nat) (index : Nat) : List (String × Term) → Nat
+@[expose] def fieldsWork (annotations : Annotations) (path : List Nat) (index : Nat) : List (String × Term) → Nat
   | [] => 0
   | (_, t) :: rest => termWork annotations (path ++ [index]) t + fieldsWork annotations path (index + 1) rest
 end
 
 /-- The checker's work on an annotated term. -/
-def checkWork (source : AnnotatedTerm) : Nat := termWork source.annotations [] source.term
+@[expose] def checkWork (source : AnnotatedTerm) : Nat := termWork source.annotations [] source.term
 
 mutual
 /-- Structural nesting: the measure the retired `Slot.Core4.termDepth` and the front end's
 retired `typeFuel` were. Kept only to state what they missed (`Slot.Core4.wide_record_work`). -/
-def nestingDepth : Term → Nat
+@[expose] def nestingDepth : Term → Nat
   | .hole _ _ | .bound _ | .nat _ | .boolean _ | .label _ => 1
   | .lam t | .reflect t | .metadata t | .project t | .inject _ t | .perform t | .done t | .get t _ => nestingDepth t + 1
   | .app a b | .mix a b | .fix a b | .specification a b | .prototype a b | .binary _ a b =>
@@ -70,7 +70,7 @@ def nestingDepth : Term → Nat
   | .record fields => fieldsDepth fields + 1
   | .case t arms => max (nestingDepth t) (fieldsDepth arms) + 1
   | .split t _ f => max (nestingDepth t) (nestingDepth f) + 1
-def fieldsDepth : List (String × Term) → Nat
+@[expose] def fieldsDepth : List (String × Term) → Nat
   | [] => 0
   | (_, t) :: rest => max (nestingDepth t + 1) (fieldsDepth rest)
 end

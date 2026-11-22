@@ -19,7 +19,7 @@ Implements `WS 25` (`NEXT-MATHEMATICA.md` §3):
      soundness of `Interval.add` enclosure and `meanValueEnclosure` over `DualInterval`.
 -/
 public import Obend.Analysis.RealAnalysis
-@[expose] public section
+public section
 
 namespace Obend.Analysis
 open Obend.Core.Data (Data)
@@ -28,7 +28,7 @@ set_option autoImplicit false
 /-! ## 1. Total Point Evaluation (`evalPointPure`) & Agreement with `evalPoint` -/
 
 /-- Total point evaluator for `RealExpr` at a rational assignment `rho : String → CanonicalRat`. -/
-def evalPointPure (rho : String → CanonicalRat) : RealExpr → CanonicalRat
+@[expose] def evalPointPure (rho : String → CanonicalRat) : RealExpr → CanonicalRat
   | .const c => c
   | .var name => rho name
   | .add l r => evalPointPure rho l + evalPointPure rho r
@@ -64,33 +64,33 @@ structure DualRat where
 namespace DualRat
 
 /-- Constant dual number $(c, 0)$. -/
-def const (c : CanonicalRat) : DualRat :=
+abbrev const (c : CanonicalRat) : DualRat :=
   ⟨c, 0⟩
 
 /-- Active variable $(x, 1)$ when `name == diffVar`, or passive $(x, 0)$ otherwise. -/
-def var (x : CanonicalRat) (isActive : Bool) : DualRat :=
+abbrev var (x : CanonicalRat) (isActive : Bool) : DualRat :=
   ⟨x, if isActive then 1 else 0⟩
 
 /-- Dual addition: $(v_1 + v_2, d_1 + d_2)$. -/
-def add (a b : DualRat) : DualRat :=
+abbrev add (a b : DualRat) : DualRat :=
   ⟨a.val + b.val, a.der + b.der⟩
 
 /-- Dual subtraction: $(v_1 - v_2, d_1 - d_2)$. -/
-def sub (a b : DualRat) : DualRat :=
+abbrev sub (a b : DualRat) : DualRat :=
   ⟨a.val - b.val, a.der - b.der⟩
 
 /-- Dual multiplication (Leibniz product rule): $(v_1 v_2, d_1 v_2 + v_1 d_2)$. -/
-def mul (a b : DualRat) : DualRat :=
+abbrev mul (a b : DualRat) : DualRat :=
   ⟨a.val * b.val, a.der * b.val + a.val * b.der⟩
 
 /-- Dual squaring: $(v^2, d \cdot v + v \cdot d)$. -/
-def sqr (a : DualRat) : DualRat :=
+abbrev sqr (a : DualRat) : DualRat :=
   ⟨a.val * a.val, a.der * a.val + a.val * a.der⟩
 
 end DualRat
 
 /-- Evaluate a `RealExpr` in forward-mode automatic differentiation with respect to `diffVar`. -/
-def evalDualRat (rho : String → CanonicalRat) (diffVar : String) : RealExpr → DualRat
+@[expose] def evalDualRat (rho : String → CanonicalRat) (diffVar : String) : RealExpr → DualRat
   | .const c => DualRat.const c
   | .var name => DualRat.var (rho name) (name == diffVar)
   | .add l r => DualRat.add (evalDualRat rho diffVar l) (evalDualRat rho diffVar r)
@@ -134,7 +134,7 @@ theorem evalDual_fst_eq_eval (rho : String → CanonicalRat) (diffVar : String) 
 /-! ## 3. Symbolic Differentiation & Reverse-Mode Adjoint Pullback (`symbolicDeriv`, `reverseGradVar`) -/
 
 /-- Symbolic partial derivative $\frac{\partial e}{\partial \text{diffVar}}$ over `RealExpr`. -/
-def symbolicDeriv (diffVar : String) : RealExpr → RealExpr
+@[expose] def symbolicDeriv (diffVar : String) : RealExpr → RealExpr
   | .const _ => .const 0
   | .var name => if name == diffVar then .const 1 else .const 0
   | .add l r => .add (symbolicDeriv diffVar l) (symbolicDeriv diffVar r)
@@ -144,7 +144,7 @@ def symbolicDeriv (diffVar : String) : RealExpr → RealExpr
 
 /-- Reverse-mode AD adjoint sensitivity for `diffVar` (`reverseGradVar`):
 recursively accumulates the partial derivative with respect to `diffVar` over `RealExpr`. -/
-def reverseGradVar (rho : String → CanonicalRat) (diffVar : String) : RealExpr → CanonicalRat
+@[expose] def reverseGradVar (rho : String → CanonicalRat) (diffVar : String) : RealExpr → CanonicalRat
   | .const _ => 0
   | .var name => if name == diffVar then 1 else 0
   | .add l r => reverseGradVar rho diffVar l + reverseGradVar rho diffVar r
@@ -161,7 +161,7 @@ propagates an output cotangent seed `bar` ($\bar{y}$) from root to variable leav
 On `.sqr a`, evaluates the primal value `va = evalPointPure rho a` once and propagates the combined
 cotangent `bar * va + va * bar` in a single recursive pullback call on `a`, eliminating the $2^n$
 exponential blowup on nested squares. -/
-def gradReverse (rho : String → CanonicalRat) (bar : CanonicalRat) : RealExpr → List (String × CanonicalRat)
+@[expose] def gradReverse (rho : String → CanonicalRat) (bar : CanonicalRat) : RealExpr → List (String × CanonicalRat)
   | .const _ => []
   | .var name => [(name, bar)]
   | .add l r => gradReverse rho bar l ++ gradReverse rho bar r
@@ -253,30 +253,30 @@ structure DualInterval where
 
 namespace DualInterval
 
-def const (c : CanonicalRat) : DualInterval :=
+abbrev const (c : CanonicalRat) : DualInterval :=
   ⟨Interval.ofPoint c, Interval.ofPoint 0⟩
 
-def var (box : Interval) (isActive : Bool) : DualInterval :=
+abbrev var (box : Interval) (isActive : Bool) : DualInterval :=
   ⟨box, if isActive then Interval.ofPoint 1 else Interval.ofPoint 0⟩
 
-def add (a b : DualInterval) : DualInterval :=
+abbrev add (a b : DualInterval) : DualInterval :=
   ⟨Interval.add a.val b.val, Interval.add a.der b.der⟩
 
-def sub (a b : DualInterval) : DualInterval :=
+abbrev sub (a b : DualInterval) : DualInterval :=
   ⟨Interval.sub a.val b.val, Interval.sub a.der b.der⟩
 
-def mul (a b : DualInterval) : DualInterval :=
+abbrev mul (a b : DualInterval) : DualInterval :=
   ⟨Interval.mul a.val b.val,
    Interval.add (Interval.mul a.der b.val) (Interval.mul a.val b.der)⟩
 
-def sqr (a : DualInterval) : DualInterval :=
+abbrev sqr (a : DualInterval) : DualInterval :=
   let two : Interval := Interval.ofPoint 2
   ⟨Interval.sqr a.val, Interval.mul two (Interval.mul a.val a.der)⟩
 
 end DualInterval
 
 /-- Evaluate a `RealExpr` over an interval environment in forward-mode interval AD (`DualInterval`). -/
-def evalDualInterval (env : List (String × Interval)) (diffVar : String) : RealExpr → Option DualInterval
+@[expose] def evalDualInterval (env : List (String × Interval)) (diffVar : String) : RealExpr → Option DualInterval
   | .const c => some (DualInterval.const c)
   | .var name => do
     let box ← (env.find? (·.1 == name)).map (·.2)
@@ -454,7 +454,7 @@ def accumulateGrad : List (Nat × CanonicalRat) → Nat → CanonicalRat
     (if idx == v then c else 0) + accumulateGrad rest v
 
 /-- Accumulate cotangent contributions for variable name `v : String` from a list of `(varName, cotangent)` pairs. -/
-def accumulateGradStr : List (String × CanonicalRat) → String → CanonicalRat
+@[expose] def accumulateGradStr : List (String × CanonicalRat) → String → CanonicalRat
   | [], _ => 0
   | (name, c) :: rest, v =>
     (if name == v then c else 0) + accumulateGradStr rest v
@@ -484,7 +484,7 @@ def mergeGradListStr (entries : List (String × CanonicalRat)) : List (String ×
 /-- Accumulated reverse-mode AD pass (`gradReverseAccumulated`):
 runs single-pass `gradReverse` and merges all cotangent contributions per variable so the output size
 is bounded by the number of distinct variables. -/
-def gradReverseAccumulated (rho : String → CanonicalRat) (bar : CanonicalRat) (e : RealExpr) :
+@[expose] def gradReverseAccumulated (rho : String → CanonicalRat) (bar : CanonicalRat) (e : RealExpr) :
     List (String × CanonicalRat) :=
   mergeGradListStr (gradReverse rho bar e)
 

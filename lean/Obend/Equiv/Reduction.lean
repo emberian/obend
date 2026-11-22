@@ -4,7 +4,7 @@ substitution, the identity substitution is the identity, one β step commutes wi
 `Step` is closed under substitution, and `Step` is deterministic. -/
 public import Obend.Core.Term
 public import Obend.Core.TermTraverse
-@[expose] public section
+public section
 namespace Obend.Equiv
 open Obend.Core.Term
 open Obend.Core.Traverse
@@ -43,7 +43,7 @@ theorem substitute_bound (t : Term) : t.substitute Term.bound = t := by
   rw [this]; exact Tree.substitute_id _
 
 /-- The substitution `instantiate` performs. -/
-def single (argument : Term) : Nat → Term
+@[expose] def single (argument : Term) : Nat → Term
   | 0 => argument
   | n + 1 => .bound n
 
@@ -86,7 +86,7 @@ theorem primitiveResult_substitute {p : Primitive} {l r res : Term} (σ : Nat �
   unfold primitiveResult at h
   split at h <;> cases h <;> simp only [Term.substitute] <;> rfl
 
-def mapFields (g : Term → Term) (fields : List (String × Term)) : List (String × Term) :=
+@[expose] def mapFields (g : Term → Term) (fields : List (String × Term)) : List (String × Term) :=
   fields.map fun field => (field.1, g field.2)
 
 theorem find_mapFields {fields : List (String × Term)} {name : String} {body : Term}

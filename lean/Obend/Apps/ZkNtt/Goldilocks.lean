@@ -7,16 +7,16 @@ Pure arithmetic shared by the ZK application, its RTL and portable u32 GPU
 refinement. Keeping it independent of the elaborator and hardware judge lets
 arithmetic consumers build without loading those unrelated subsystems.
 -/
-@[expose] public section
+public section
 namespace Obend.Apps.ZkNtt
 
 /-! ## 2. Goldilocks Prime ($p = 2^{64} - 2^{32} + 1$) 128-to-64 Reduction Soundness -/
 
 /-- The Goldilocks prime $p = 2^{64} - 2^{32} + 1 = 18446744069414584321$. -/
-def goldilocksPrime : Nat := 18446744069414584321
+@[expose] def goldilocksPrime : Nat := 18446744069414584321
 
 /-- The Goldilocks reduction constant $\epsilon = 2^{32} - 1 = 4294967295$. -/
-def goldilocksEpsilon : Nat := 4294967295
+@[expose] def goldilocksEpsilon : Nat := 4294967295
 
 /-- Fundamental Goldilocks identity: $2^{64} = p + \epsilon$ and $2^{64} \bmod p = \epsilon$. -/
 theorem goldilocks_base_congruence :
@@ -39,7 +39,7 @@ theorem goldilocks_reduce96_mod_sound (lo hiLo32 : Nat) :
 
 /-- Canonicalize any 64-bit natural number `x < 2^64` into `[0, p - 1]` (matching `canon64` in
     `GoldilocksField.obend` and `gl_canon` in `zk_ntt_coproc.sv`). -/
-def goldilocksCanon64 (x : Nat) : Nat :=
+@[expose] def goldilocksCanon64 (x : Nat) : Nat :=
   if goldilocksPrime ≤ x then x - goldilocksPrime else x
 
 theorem goldilocksCanon64_spec {x : Nat} (hx : x < 2 ^ 64) :
@@ -56,7 +56,7 @@ theorem goldilocksCanon64_spec {x : Nat} (hx : x < 2 ^ 64) :
     exact ⟨hlt, (Nat.mod_eq_of_lt hlt).symm⟩
 
 /-- Canonical 64-bit Goldilocks modular addition (matching `gl_add` in `zk_ntt_coproc.sv`). -/
-def goldilocksAddSpec (a b : Nat) : Nat :=
+@[expose] def goldilocksAddSpec (a b : Nat) : Nat :=
   let ca := goldilocksCanon64 a
   let cb := goldilocksCanon64 b
   if goldilocksPrime ≤ ca + cb then ca + cb - goldilocksPrime else ca + cb
@@ -95,7 +95,7 @@ theorem goldilocksAddSpec_spec {a b : Nat} (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) :
 
 /-- Canonical 64-bit Goldilocks modular subtraction (matching `fieldSub` in `GoldilocksField.obend`
     and `gl_sub` in `zk_ntt_coproc.sv`). -/
-def goldilocksSubSpec (a b : Nat) : Nat :=
+@[expose] def goldilocksSubSpec (a b : Nat) : Nat :=
   let ca := goldilocksCanon64 a
   let cb := goldilocksCanon64 b
   if cb ≤ ca then ca - cb else (goldilocksPrime - cb) + ca
@@ -128,7 +128,7 @@ theorem goldilocksSubSpec_spec {a b : Nat} (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) :
     * `hiHi = (hi >>> 32) & 0xFFFFFFFF = hi / 2^32` (for `hi < 2^64`)
     * `mid = (hiLo << 32) - hiLo = hiLo * 2^32 - hiLo`
     * `result = gl_sub(gl_add(lo, mid), hiHi)` -/
-def goldilocksReduce128Spec (lo hi : Nat) : Nat :=
+@[expose] def goldilocksReduce128Spec (lo hi : Nat) : Nat :=
   let hiLo := hi % 4294967296
   let hiHi := hi / 4294967296
   let mid := hiLo * 4294967296 - hiLo
@@ -182,10 +182,10 @@ theorem goldilocksReduce128Spec_sound {lo hi : Nat}
 /-! ## 2b. Multiplication and the transcript at the `Nat` level (the model the golden runs) -/
 
 /-- `x mod p`. -/
-def glN (x : Nat) : Nat := x % goldilocksPrime
+@[expose] def glN (x : Nat) : Nat := x % goldilocksPrime
 
 /-- `(a * b) mod p`: the specification `glMul`'s limb network implements. -/
-def goldilocksMulSpec (a b : Nat) : Nat := glN (glN a * glN b)
+@[expose] def goldilocksMulSpec (a b : Nat) : Nat := glN (glN a * glN b)
 
 
 end Obend.Apps.ZkNtt
