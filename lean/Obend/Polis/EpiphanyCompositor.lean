@@ -1140,7 +1140,23 @@ theorem epiphanyScanoutJudge_refutes_nonconstant :
     epiphanyScanoutJudge.refutes .sealMismatch = true ∧
     epiphanyScanoutJudge.refutes .certWitnessMismatch = false := ⟨rfl, rfl, rfl, rfl, rfl⟩
 theorem validEpiphanySessionTrace_inhabited :
-    ∃ st₀ turns stEnd, 0 < turns.length ∧ ValidEpiphanySessionTrace canonicalDisplayPolicy st₀ turns stEnd :=
-  ⟨⟨[(7, 41)]⟩, [⟨10, canonicalFrameQuery, canonicalScanoutCert⟩], ⟨[(7, 42)]⟩, by decide, .cons (by decide) (.nil _)⟩
+    ∃ st₀ turns stEnd, 0 < turns.length ∧ ValidEpiphanySessionTrace canonicalDisplayPolicy st₀ turns stEnd := by
+  have hChk : checkEpiphanyScanout 10 canonicalFrameQuery canonicalScanoutCert = .ok :=
+    epiphanyScanoutJudge_inhabited_ok.2.1
+  have hStep : stepEpiphanySession canonicalDisplayPolicy ⟨[(7, 41)], []⟩
+      ⟨10, canonicalFrameQuery, canonicalScanoutCert⟩ =
+      some ⟨[(7, 42)], [(7, 42, canonicalFrameQuery.claimedSeal)]⟩ := by
+    unfold stepEpiphanySession
+    have hG : (canonicalFrameQuery.policy == canonicalDisplayPolicy &&
+        canonicalFrameQuery.prevMonoSeq? ==
+          (⟨[(7, 41)], []⟩ : SensorSealerState).lookupSeq canonicalFrameQuery.rawFrame.sensorId) = true := by decide
+    have hS : stepSensorSealer ⟨[(7, 41)], []⟩ canonicalFrameQuery.rawFrame =
+        .ok (⟨[(7, 42)], [(7, 42, canonicalFrameQuery.claimedSeal)]⟩,
+          canonicalFrameQuery.deliveredFrame, canonicalFrameQuery.claimedSeal) := by
+      unfold stepSensorSealer commitValidSensorFrame
+      simp [SensorSealerState.lookupSeq, List.lookup, canonicalFrameQuery, canonicalRawSensorFrame, putSensorSeq]
+      decide
+    rw [hG, hChk, hS]; rfl
+  exact ⟨_, [_], _, Nat.zero_lt_succ 0, .cons hStep (.nil _)⟩
 end Obend.Polis.EpiphanyCompositor
 end
