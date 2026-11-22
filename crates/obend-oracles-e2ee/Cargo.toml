@@ -1,0 +1,11 @@
+[package]
+name = "obend-oracles-e2ee"
+version = "0.1.0"
+edition = "2021"
+description = "Hardened multi-vendor TEE & GPU attestation gate (CAP-24..26), registry-pinned TLSNotary/calltree & E2EE channel binding (V3/V4), and exact integer FHSDD001/FHQPB001 KKT oracle verifier"
+license = "Apache-2.0"
+
+[dependencies]
+# Zero external dependencies: pure-Rust FIPS 180-4 SHA-256 / HMAC / HKDF,
+# ASN.1 DER RFC 5280 & TCG DICE parser, SPDM 1.1 parser, strict JSON walker,
+# and checked exact i128 SDD/KKT arithmetic (0 floats).
