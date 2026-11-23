@@ -137,7 +137,23 @@ private theorem stage_step {τ : Type} (s : PanState τ) (p : String) (b : Word)
   refine ⟨m, he, fun i => ?_, hf⟩
   rw [hr, funext reads, law]
 
-set_option maxHeartbeats 1500000 in
+private theorem seq3_eval {τ : Type} {st₁ st₂ st₃ rest : PStmt} {s t : PanState τ} {m₁ m₂ m₃ : Word → Word} {res : PanResult}
+    (h₁ : evaluate st₁ s = (.normal, { s with memory := m₁ }))
+    (h₂ : evaluate st₂ { s with memory := m₁ } = (.normal, { s with memory := m₂ }))
+    (h₃ : evaluate st₃ { s with memory := m₂ } = (.normal, { s with memory := m₃ }))
+    (h₄ : evaluate rest { s with memory := m₃ } = (res, t)) :
+    evaluate (.seq st₁ (.seq st₂ (.seq st₃ rest))) s = (res, t) := by
+  rw [evaluate_seq, h₁]
+  change evaluate (.seq st₂ (.seq st₃ rest)) { s with memory := m₁ } = (res, t)
+  rw [evaluate_seq, h₂]
+  change evaluate (.seq st₃ rest) { s with memory := m₂ } = (res, t)
+  rw [evaluate_seq, h₃]
+  exact h₄
+
+private theorem chiIota_eq_round (src : Cshake256.State) (rc : Word) :
+    chiIota (Cshake256.rhoPi (Cshake256.theta src)) rc = Cshake256.round src rc := by
+  unfold chiIota Cshake256.round; rfl
+
 private theorem rounds_correct {τ : Type} (cs : List Word) (s : PanState τ) (p : String)
     (b : Word) (hp : s.locals p = some (.word b)) (hm : Mapped s b)
     (src : Cshake256.State) (reads : ∀ i : Fin 25, s.memory (address b i) = lanes src i) :
@@ -151,17 +167,11 @@ private theorem rounds_correct {τ : Type} (cs : List Word) (s : PanState τ) (p
     obtain ⟨m₁, h₁, r₁, f₁⟩ := stage_step s p b hp hm src (Cshake256.theta src) reads thetaStage (theta_agrees src)
     obtain ⟨m₂, h₂, r₂, f₂⟩ := stage_step {s with memory := m₁} p b hp hm (Cshake256.theta src) (Cshake256.rhoPi (Cshake256.theta src)) r₁ rhoPiStage
       (rhoPi_agrees _)
-    obtain ⟨m₃, h₃, r₃, f₃⟩ := stage_step {s with memory := m₂} p b hp hm (Cshake256.rhoPi (Cshake256.theta src)) (chiIota _ rc) r₂ (chiIotaStage rc)
-      (chiIota_agrees _ rc)
+    obtain ⟨m₃, h₃, r₃, f₃⟩ := stage_step {s with memory := m₂} p b hp hm (Cshake256.rhoPi (Cshake256.theta src)) (Cshake256.round src rc) r₂ (chiIotaStage rc)
+      (fun i => (chiIota_agrees _ rc i).trans (by rw [chiIota_eq_round]))
     obtain ⟨t, ht, rt, ft⟩ := ih {s with memory := m₃} hp hm (Cshake256.round src rc) r₃
-    simp only [List.foldl_cons]
-    refine ⟨t, ?_, rt, fun a ha => (ft a ha).trans ((f₃ a ha).trans ((f₂ a ha).trans (f₁ a ha)))⟩
-    rw [rounds, evaluate_seq, h₁]
-    change evaluate (.seq _ _) {s with memory := m₁} = _
-    rw [evaluate_seq, h₂]
-    change evaluate (.seq _ _) {s with memory := m₂} = _
-    rw [evaluate_seq, h₃]
-    exact ht
+    simp only [List.foldl_cons, rounds]
+    exact ⟨t, seq3_eval h₁ h₂ h₃ ht, rt, fun a ha => (ft a ha).trans ((f₃ a ha).trans ((f₂ a ha).trans (f₁ a ha)))⟩
 
 /-- All 24 rounds, for any mapped input buffer, preserving every other memory address. -/
 theorem pancakeKeccakF1600_correct {τ : Type} (s : PanState τ) (b : Word) (src : Cshake256.State)
