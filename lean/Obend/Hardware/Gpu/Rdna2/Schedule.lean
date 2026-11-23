@@ -413,13 +413,13 @@ private def storeConst7Words : Array UInt32 :=
 private def storeConst7Prog : Program :=
   (decodeProgFast storeConst7Words).toOption.getD #[]
 
-set_option maxRecDepth 200000 in
+set_option maxRecDepth 2000000 in
 private theorem decodeProgram_storeConst7 :
     decodeProgram storeConst7Words = .ok storeConst7Prog := by
   apply decodeProgram_eq_fast_ok
   unfold storeConst7Prog
   have hOk : (decodeProgFast storeConst7Words).isOk = true := by
-    set_option cbv.maxSteps 2000000 in cbv
+    set_option cbv.maxSteps 5000000 in cbv
   cases h : decodeProgFast storeConst7Words with
   | error e => rw [h] at hOk; cases hOk
   | ok p => rfl
@@ -661,9 +661,9 @@ private def sc7_i10 : Inst := mkCompactInst "S_ENDPGM" true false "ENC_SOPP" [] 
 private def sc7Compact : Program :=
   #[some sc7_i0, some sc7_i1, some sc7_i2, none, some sc7_i4, some sc7_i5, some sc7_i6, some sc7_i7, none, some sc7_i9, some sc7_i10]
 
-set_option maxRecDepth 200000 in
+set_option maxRecDepth 2000000 in
 private theorem storeConst7Prog_strip : storeConst7Prog.map (Option.map stripInst) = sc7Compact := by
-  set_option cbv.maxSteps 2000000 in cbv
+  set_option cbv.maxSteps 5000000 in cbv
 
 private theorem list_mapM_eq_some {α β : Type} (f : α → Option β) (g : α → β) (xs : List α)
     (h : ∀ x ∈ xs, f x = some (g x)) : xs.mapM f = some (xs.map g) := by
@@ -1054,11 +1054,7 @@ private theorem valuLanes_vmov_lit (s : SymWave) (dst srcCodeVal : Nat) (val : U
       · rw [List.mem_map] at hmem; obtain ⟨k, hk, rfl⟩ := hmem; rw [List.mem_range] at hk; unfold lanes; omega)
 
 set_option maxRecDepth 200000 in
-private theorem symWave_sc7_steps0to3 (f : Nat) (bv : UInt64 → Option Tm) (w0 : SymWave)
-    (hB0 : bv (descSetAddr >>> 2) = some (.lit 0))
-    (hB1 : bv ((descSetAddr >>> 2) + 1) = some (.lit 1))
-    (hB2 : bv ((descSetAddr >>> 2) + 2) = some (.lit 8))
-    (hB3 : bv ((descSetAddr >>> 2) + 3) = some (.lit 0x31000000))
+private theorem symWave_sc7_steps0to1 (f : Nat) (bv : UInt64 → Option Tm) (w0 : SymWave)
     (hw0_pc : w0.pc = 0) (hw0_halted : w0.halted = false) (hw0_err : w0.err = none)
     (hw0_exec : w0.exec = (Tm.lit 0xFFFFFFFF, Tm.lit 0xFFFFFFFF))
     (hw0_mem : w0.mem = ⟨{}, bv⟩)
@@ -1066,20 +1062,16 @@ private theorem symWave_sc7_steps0to3 (f : Nat) (bv : UInt64 → Option Tm) (w0 
     (hw0_ssize : w0.sgpr.size = sgprCount)
     (hw0_s2 : readSgpr w0 2 = Tm.lit descSetLo)
     (hw0_v0 : ∀ l < lanes, readVgpr w0 0 l = Tm.lit (UInt32.ofNat l)) :
-    ∃ w4 : SymWave,
-      srun sc7Compact (f + 10) w0 = srun sc7Compact (f + 6) w4 ∧
-      w4.pc = 5 ∧ w4.halted = false ∧ w4.err = none ∧
-      w4.exec = (.lit 1, .lit 0) ∧ w4.mem = ⟨{}, bv⟩ ∧
-      w4.vgpr.size = vgprCount * lanes ∧
-      readVgpr w4 0 0 = Tm.lit 0 ∧
-      readSgpr w4 0 = Tm.lit 0 ∧ readSgpr w4 1 = Tm.lit 1 ∧
-      readSgpr w4 2 = Tm.lit 8 ∧ readSgpr w4 3 = Tm.lit 0x31000000 := by
+    ∃ w2 : SymWave,
+      srun sc7Compact (f + 10) w0 = srun sc7Compact (f + 8) w2 ∧
+      w2.pc = 2 ∧ w2.halted = false ∧ w2.err = none ∧
+      w2.exec = (.lit 1, .lit 0) ∧ w2.mem = ⟨{}, bv⟩ ∧
+      w2.vgpr = w0.vgpr ∧ w2.sgpr.size = sgprCount ∧
+      readSgpr w2 2 = Tm.lit descSetLo ∧ readSgpr w2 3 = Tm.lit 0xFFFF8000 := by
   have hG0 : sc7Compact[0]? = some (some sc7_i0) := by simp [sc7Compact]
   have hG1 : sc7Compact[1]? = some (some sc7_i1) := by simp [sc7Compact]
-  have hG2 : sc7Compact[2]? = some (some sc7_i2) := by simp [sc7Compact]
-  have hG4 : sc7Compact[4]? = some (some sc7_i4) := by simp [sc7Compact]
-  have ⟨hMod0, hMod1, hMod2, hMod4, _, _, _, _, _, hSdwa0, _, hCmpx, hNotBuf, hSC0, hSC1⟩ := sc7_flags
-  have ⟨hAddr0, hAddr1, hAddr2, hAddr3, _, hp1, hp0, _⟩ := sc7_addrs
+  have ⟨hMod0, hMod1, _, _, _, _, _, _, _, hSdwa0, _, hCmpx, _, hSC0, hSC1⟩ := sc7_flags
+  have ⟨_, _, _, _, _, hp1, hp0, _⟩ := sc7_addrs
   let w1 : SymWave := { w0 with pc := 1, exec := (.lit 1, .lit 0) }
   have hStep0 : step sc7Compact w0 = w1 := by
     rw [step_at sc7Compact w0 sc7_i0 hw0_halted hw0_err (by rw [hw0_pc]; exact hG0), hw0_pc]
@@ -1144,10 +1136,43 @@ private theorem symWave_sc7_steps0to3 (f : Nat) (bv : UInt64 → Option Tm) (w0 
     readSgpr_writeSgpr_eq _ 3 _ (by decide) (by show 3 < w0.sgpr.size; rw [hw0_ssize]; decide)
   have hw2_ssize : w2.sgpr.size = sgprCount := (writeSgpr_size _ _ _).trans hw0_ssize
   have hw2_ctrl := writeSgpr_ctrl { w1 with pc := 2 } 3 (Tm.lit 0xFFFF8000)
-  have hH2 : w2.halted = false := hw2_ctrl.2.2.2.1.trans hw0_halted
-  have hE2 : w2.err = none := hw2_ctrl.2.2.2.2.1.trans hw0_err
-  have hP2 : w2.pc = 2 := hw2_ctrl.2.1
-  have hM2 : w2.mem = ⟨{}, bv⟩ := hw2_ctrl.2.2.1.trans hw0_mem
+  have hRun01 : srun sc7Compact (f + 10) w0 = srun sc7Compact (f + 8) w2 := by
+    rw [show f + 10 = (f + 9) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 9) w0 hw0_halted hw0_err (joinTarget_none_of sc7Compact w0 sc7_i0 (by rw [hw0_pc]; exact hG0) rfl), hStep0]
+    rw [show f + 9 = (f + 8) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 8) w1 hw0_halted hw0_err (joinTarget_none_of sc7Compact w1 sc7_i1 hG1 rfl), hStep1]
+  have _ := hw0_vsize
+  exact ⟨w2, hRun01, hw2_ctrl.2.1, hw2_ctrl.2.2.2.1.trans hw0_halted,
+    hw2_ctrl.2.2.2.2.1.trans hw0_err, hw2_ctrl.1, hw2_ctrl.2.2.1.trans hw0_mem,
+    hw2_ctrl.2.2.2.2.2.1, hw2_ssize, hw2_s2, hw2_s3⟩
+
+set_option maxRecDepth 200000 in
+private theorem symWave_sc7_steps0to3 (f : Nat) (bv : UInt64 → Option Tm) (w0 : SymWave)
+    (hB0 : bv (descSetAddr >>> 2) = some (.lit 0))
+    (hB1 : bv ((descSetAddr >>> 2) + 1) = some (.lit 1))
+    (hB2 : bv ((descSetAddr >>> 2) + 2) = some (.lit 8))
+    (hB3 : bv ((descSetAddr >>> 2) + 3) = some (.lit 0x31000000))
+    (hw0_pc : w0.pc = 0) (hw0_halted : w0.halted = false) (hw0_err : w0.err = none)
+    (hw0_exec : w0.exec = (Tm.lit 0xFFFFFFFF, Tm.lit 0xFFFFFFFF))
+    (hw0_mem : w0.mem = ⟨{}, bv⟩)
+    (hw0_vsize : w0.vgpr.size = vgprCount * lanes)
+    (hw0_ssize : w0.sgpr.size = sgprCount)
+    (hw0_s2 : readSgpr w0 2 = Tm.lit descSetLo)
+    (hw0_v0 : ∀ l < lanes, readVgpr w0 0 l = Tm.lit (UInt32.ofNat l)) :
+    ∃ w4 : SymWave,
+      srun sc7Compact (f + 10) w0 = srun sc7Compact (f + 6) w4 ∧
+      w4.pc = 5 ∧ w4.halted = false ∧ w4.err = none ∧
+      w4.exec = (.lit 1, .lit 0) ∧ w4.mem = ⟨{}, bv⟩ ∧
+      w4.vgpr.size = vgprCount * lanes ∧
+      readVgpr w4 0 0 = Tm.lit 0 ∧
+      readSgpr w4 0 = Tm.lit 0 ∧ readSgpr w4 1 = Tm.lit 1 ∧
+      readSgpr w4 2 = Tm.lit 8 ∧ readSgpr w4 3 = Tm.lit 0x31000000 := by
+  obtain ⟨w2, hRun01, hP2, hH2, hE2, hw2_ex, hM2, hw2_vg, hw2_ssize, hw2_s2, hw2_s3⟩ :=
+    symWave_sc7_steps0to1 f bv w0 hw0_pc hw0_halted hw0_err hw0_exec hw0_mem hw0_vsize hw0_ssize hw0_s2 hw0_v0
+  have hG2 : sc7Compact[2]? = some (some sc7_i2) := by simp [sc7Compact]
+  have hG4 : sc7Compact[4]? = some (some sc7_i4) := by simp [sc7Compact]
+  have ⟨_, _, hMod2, hMod4, _, _, _, _, _, _, _, _, hNotBuf, _, _⟩ := sc7_flags
+  have ⟨hAddr0, hAddr1, hAddr2, hAddr3, _, _, _, _⟩ := sc7_addrs
   let w3 : SymWave := writeSgprs { w2 with pc := 4 } [(0, .lit 0), (1, .lit 1), (2, .lit 8), (3, .lit 0x31000000)]
   have hStep2 : step sc7Compact w2 = w3 := by
     rw [step_at sc7Compact w2 sc7_i2 hH2 hE2 (by rw [hP2]; exact hG2), hP2]
@@ -1206,9 +1231,9 @@ private theorem symWave_sc7_steps0to3 (f : Nat) (bv : UInt64 → Option Tm) (w0 
     exact ⟨c3.2.1.trans (c2.2.1.trans (c1.2.1.trans c0.2.1)),
       c3.2.2.2.1.trans (c2.2.2.2.1.trans (c1.2.2.2.1.trans (c0.2.2.2.1.trans hH2))),
       c3.2.2.2.2.1.trans (c2.2.2.2.2.1.trans (c1.2.2.2.2.1.trans (c0.2.2.2.2.1.trans hE2))),
-      c3.1.trans (c2.1.trans (c1.1.trans (c0.1.trans hw2_ctrl.1))),
+      c3.1.trans (c2.1.trans (c1.1.trans (c0.1.trans hw2_ex))),
       c3.2.2.1.trans (c2.2.2.1.trans (c1.2.2.1.trans (c0.2.2.1.trans hM2))),
-      c3.2.2.2.2.2.1.trans (c2.2.2.2.2.2.1.trans (c1.2.2.2.2.2.1.trans (c0.2.2.2.2.2.1.trans hw2_ctrl.2.2.2.2.2.1)))⟩
+      c3.2.2.2.2.2.1.trans (c2.2.2.2.2.2.1.trans (c1.2.2.2.2.2.1.trans (c0.2.2.2.2.2.1.trans hw2_vg)))⟩
   let w4 : SymWave := { w3 with pc := 5 }
   have hStep3 : step sc7Compact w3 = w4 := by
     rw [step_at sc7Compact w3 sc7_i4 hw3_ctrl.2.1 hw3_ctrl.2.2.1 (by rw [hw3_ctrl.1]; exact hG4), hw3_ctrl.1]
@@ -1216,10 +1241,7 @@ private theorem symWave_sc7_steps0to3 (f : Nat) (bv : UInt64 → Option Tm) (w0 
     have hOp4 : instOp sc7_i4.name = .s_waitcnt := rfl
     simp only [hMod4, Bool.false_eq_true, ↓reduceIte, hOp4]; rfl
   have hRun03 : srun sc7Compact (f + 10) w0 = srun sc7Compact (f + 6) w4 := by
-    rw [show f + 10 = (f + 9) + 1 from rfl,
-        srun_step_eq sc7Compact (f + 9) w0 hw0_halted hw0_err (joinTarget_none_of sc7Compact w0 sc7_i0 (by rw [hw0_pc]; exact hG0) rfl), hStep0]
-    rw [show f + 9 = (f + 8) + 1 from rfl,
-        srun_step_eq sc7Compact (f + 8) w1 hw0_halted hw0_err (joinTarget_none_of sc7Compact w1 sc7_i1 hG1 rfl), hStep1]
+    rw [hRun01]
     rw [show f + 8 = (f + 7) + 1 from rfl,
         srun_step_eq sc7Compact (f + 7) w2 hH2 hE2 (joinTarget_none_of sc7Compact w2 sc7_i2 (by rw [hP2]; exact hG2) rfl), hStep2]
     rw [show f + 7 = (f + 6) + 1 from rfl,
@@ -1366,7 +1388,6 @@ private theorem symWave_storeConst7_base (consts : List Word) (ex : UInt64 → B
     rw [show f + 2 = (f + 1) + 1 from rfl,
         srun_step_eq sc7Compact (f + 1) w8 hw6_h hw6_e (joinTarget_none_of sc7Compact w8 sc7_i10 hG10 rfl), hStep8]
     exact srun_halted_eq sc7Compact f w9 rfl
-  dsimp only
   rw [hRun48]
   exact ⟨hw6_e, rfl, rfl⟩
 

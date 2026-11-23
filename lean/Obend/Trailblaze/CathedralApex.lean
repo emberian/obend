@@ -4403,7 +4403,33 @@ private theorem decodeRdnaAddInst :
     ClusterGov.decodeRdnaSliceInst [0x4a000300, 0xbf810000] = some (rdnaAddInst, 1) := by
   set_option cbv.maxSteps 1000000 in cbv
 
-set_option maxRecDepth 100000 in
+private theorem executeRdna2SliceReduction_of_decode (d : ClusterGov.Rdna2WavefrontDispatch)
+    (program : List (Option Obend.Hardware.Gpu.Rdna2.Inst))
+    (hd : ClusterGov.decodeRdnaSliceProgram d.shaderIsaWords.size d.shaderIsaWords.toList = some program) :
+    ClusterGov.executeRdna2SliceReduction d =
+      let final := Obend.Hardware.Gpu.Rdna2.run program.toArray (d.shaderIsaWords.size * 4 + 1)
+        (ClusterGov.rdna2DispatchInput d)
+      if final.halted && !final.err.isSome then
+        some (((List.range (ClusterGov.ozakiSliceSumExec d.workgroupSlices).size).map
+          (fun lane => Int.ofNat (Obend.Hardware.Gpu.Rdna2.readVgpr final 0 lane).toNat)).toArray)
+      else none := by
+  unfold ClusterGov.executeRdna2SliceReduction
+  rw [hd]
+
+set_option maxRecDepth 500000 in
+private theorem executeRdna2AddDispatch_eq :
+    ClusterGov.executeRdna2SliceReduction ClusterGov.rdna2AddDispatch =
+      some ClusterGov.rdna2AddDispatch.hwReducedOut := by
+  have hd : ClusterGov.decodeRdnaSliceProgram ClusterGov.rdna2AddDispatch.shaderIsaWords.size
+      ClusterGov.rdna2AddDispatch.shaderIsaWords.toList = some [some rdnaAddInst, some rdnaEndInst] := by
+    change ClusterGov.decodeRdnaSliceProgram 2 [0x4a000300, 0xbf810000] = _
+    simp only [ClusterGov.decodeRdnaSliceProgram, decodeRdnaAddInst, decodeRdnaEndInst,
+      Bind.bind, Option.bind, Pure.pure, List.drop, List.append_nil]
+    rfl
+  rw [executeRdna2SliceReduction_of_decode _ _ hd]
+  set_option cbv.maxSteps 1000000 in
+  cbv
+
 private theorem checkRdna2DispatchEnvelope_inhabited :
     ∃ d : ClusterGov.Rdna2WavefrontDispatch,
       2 ≤ d.workgroupSlices.size ∧
@@ -4411,17 +4437,8 @@ private theorem checkRdna2DispatchEnvelope_inhabited :
   refine ⟨ClusterGov.rdna2AddDispatch, by decide, ?_⟩
   simp only [ClusterGov.checkRdna2DispatchEnvelope, Bool.and_eq_true, decide_eq_true_eq,
     ← Array.all_toList]
-  refine ⟨⟨⟨⟨⟨by decide +kernel, by decide +kernel⟩, by decide +kernel⟩, by decide +kernel⟩,
-    by decide +kernel⟩, ⟨?_, by decide +kernel⟩⟩
-  have hd : ClusterGov.decodeRdnaSliceProgram ClusterGov.rdna2AddDispatch.shaderIsaWords.size
-      ClusterGov.rdna2AddDispatch.shaderIsaWords.toList = some [some rdnaAddInst, some rdnaEndInst] := by
-    change ClusterGov.decodeRdnaSliceProgram 2 [0x4a000300, 0xbf810000] = _
-    simp only [ClusterGov.decodeRdnaSliceProgram, decodeRdnaAddInst, decodeRdnaEndInst,
-      Bind.bind, Option.bind, Pure.pure, List.drop, List.append_nil]
-    rfl
-  rw [ClusterGov.executeRdna2SliceReduction, hd]
-  set_option cbv.maxSteps 1000000 in
-  cbv
+  exact ⟨⟨⟨⟨⟨by decide +kernel, by decide +kernel⟩, by decide +kernel⟩, by decide +kernel⟩,
+    by decide +kernel⟩, ⟨executeRdna2AddDispatch_eq, by decide +kernel⟩⟩
 
 end Obend.Trailblaze.CathedralApex
 
