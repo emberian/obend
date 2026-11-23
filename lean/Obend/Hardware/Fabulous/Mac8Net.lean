@@ -409,7 +409,6 @@ theorem mac8_proj (regs : Nat → BitVec 64) (R0 R1 R2 : BitVec 16)
    (show projOf mac8FlopMap regs 46 = (regs 1).getLsbD 15 from rfl).trans (by rw [hr1]; simp),
    (show projOf mac8FlopMap regs 47 = (regs 0).getLsbD 15 from rfl).trans (by rw [hr0]; simp)⟩
 
-set_option maxHeartbeats 0 in
 /-- One edge out of reset: the flops' next values are the module's next register bits, and the
 output pins show `mac_out`. -/
 theorem mac8_step_bv (I0 I1 : BitVec 8) (I2 R0 R1 R2 : BitVec 16) (rst : Bool) (p q v o : Nat → Bool)
@@ -806,7 +805,6 @@ theorem mac8_step_bv (I0 I1 : BitVec 8) (I2 R0 R1 R2 : BitVec 16) (rst : Bool) (
 
 #assert_compiled mac8_step_bv
 
-set_option maxHeartbeats 0 in
 /-- A reset edge, from any flop state: every flop's next value is its register's reset bit. -/
 theorem mac8_reset_bv (I0 I1 : BitVec 8) (I2 : BitVec 16) (p q v : Nat → Bool) (s : Nat → BitVec 64)
     (hp : p 0 = I0.getLsbD 0 ∧

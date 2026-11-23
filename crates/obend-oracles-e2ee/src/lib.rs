@@ -8,15 +8,32 @@
 //! missing AEAD AAD, and omitted `FHQPB001` matrix-pin).
 
 pub mod bigint;
+pub mod chacha20poly1305;
 pub mod curves;
 pub mod ed25519;
 pub mod kkt;
+pub mod mlkem768;
 pub mod rsa;
 pub mod sha256;
 pub mod sha512;
 pub mod she_ceremony;
 pub mod tee;
 pub mod tlsn_e2ee;
+
+pub use chacha20poly1305::{
+    chacha20_block, chacha20_xor, chacha20poly1305_open, chacha20poly1305_open_combined,
+    chacha20poly1305_seal, chacha20poly1305_seal_combined, poly1305_mac, AeadError, Poly1305,
+    CHACHA20_KEY_LEN, CHACHA20_NONCE_LEN, POLY1305_TAG_LEN,
+};
+pub use mlkem768::{
+    byte_decode_1, byte_decode_10, byte_decode_12, byte_decode_4, byte_encode_1, byte_encode_10,
+    byte_encode_12, byte_encode_4, compress_d, decompress_d, keccak_f1600, ml_kem_768_decaps,
+    ml_kem_768_decaps_internal, ml_kem_768_encaps, ml_kem_768_encaps_internal,
+    ml_kem_768_keygen_internal, multiply_ntts, ntt, ntt_inv, sample_ntt, sample_poly_cbd2,
+    sha3_256, sha3_512, shake256_into, validate_decaps_key, validate_encaps_key, KeccakSponge,
+    MlKemError, Poly, Shake128, Shake256, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN, ML_KEM_768_K,
+    ML_KEM_768_SS_LEN, ML_KEM_N, ML_KEM_Q,
+};
 
 pub use curves::{
     encode_ecdsa_der, parse_ecdsa_der, verify_ecdsa_raw, verify_signature, CryptoError,
@@ -74,5 +91,5 @@ pub use tlsn_e2ee::{
     E2eeSessionGuard, OracleError, PinnedNotaryEntry, PinnedNotaryRegistry, TlsnTranscriptEnvelope,
     VerificationLeg, VerifiedCallTree, VerifiedE2eeChannel, VerifiedHttpsTranscript,
     CHUTES_NONCE_HEX_LEN, E2EE_INFO_REQ, E2EE_INFO_RESP, E2EE_INFO_STREAM, MAX_JSON_BODY_BYTES,
-    MAX_JSON_PATH_DEPTH, ML_KEM_768_PUBKEY_LEN,
+    MAX_JSON_PATH_DEPTH, ML_KEM_768_CT_LEN, ML_KEM_768_PUBKEY_LEN,
 };

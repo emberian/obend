@@ -850,6 +850,291 @@ theorem cshake256Fast_eq (customization input : List UInt8) :
   · simp only [h, ite_false, sponge_fast_eq, pushList_data, empty_data, List.nil_append]
 
 
+/-! ### Zero-Copy Direct `ByteArray` Absorption & `cshake256ByteArrayFast` -/
+
+/-- Copy `k` bytes starting at `off` from borrowed `src` into `dst` without `List UInt8` conversion. -/
+def copySlice (src : @& ByteArray) : Nat → Nat → ByteArray → ByteArray
+  | _, 0, dst => dst
+  | off, k + 1, dst => copySlice src (off + 1) k (dst.push (byteOr0 src off))
+
+theorem emptyWithCapacity_data (cap : Nat) :
+    (ByteArray.emptyWithCapacity cap).data.toList = [] := by rfl
+
+theorem drop_take_succ (l : List UInt8) (off k : Nat) (h : off + (k + 1) ≤ l.length) :
+    (l.drop off).take (k + 1) = l.getD off 0 :: (l.drop (off + 1)).take k := by
+  have hoff : off < l.length := by omega
+  rw [List.drop_eq_getElem_cons hoff, List.getD_eq_getElem?_getD,
+    List.getElem?_eq_getElem hoff, Option.getD_some]
+  rfl
+
+theorem copySlice_data (src : ByteArray) (off k : Nat) (dst : ByteArray)
+    (h : off + k ≤ src.size) :
+    (copySlice src off k dst).data.toList =
+      dst.data.toList ++ (src.data.toList.drop off).take k := by
+  induction k generalizing off dst with
+  | zero => simp [copySlice]
+  | succ k ih =>
+    have hlen : off + (k + 1) ≤ src.data.toList.length := by rwa [← size_eq_length]
+    rw [copySlice, ih (off + 1) _ (by omega), push_data, List.append_assoc,
+      List.singleton_append, ← getD_data, ← drop_take_succ _ _ _ hlen]
+
+theorem absorbFrom_append_exact (k₁ k₂ : Nat) (st : State) (xs ys : List UInt8)
+    (hxs : xs.length = k₁ * rateBytes) :
+    absorbFrom (k₁ + k₂) st (xs ++ ys) = absorbFrom k₂ (absorbFrom k₁ st xs) ys := by
+  induction k₁ generalizing st xs with
+  | zero =>
+    have hnil : xs = [] := List.eq_nil_of_length_eq_zero (by simpa [rateBytes] using hxs)
+    subst hnil
+    simp [absorbFrom]
+  | succ k₁ ih =>
+    have hge : rateBytes ≤ xs.length := by rw [hxs]; simp [Nat.succ_mul]
+    rw [Nat.succ_add, absorbFrom, absorbFrom, List.take_append_of_le_length hge,
+      List.drop_append_of_le_length hge]
+    apply ih
+    rw [List.length_drop, hxs]
+    simp [Nat.succ_mul, rateBytes]
+
+theorem take_le_take : ∀ (m n : Nat) (xs : List UInt8), m ≤ n → (xs.take n).take m = xs.take m
+  | 0, _, _, _ => rfl
+  | _ + 1, 0, _, h => absurd h (Nat.not_succ_le_zero _)
+  | _ + 1, _ + 1, [], _ => rfl
+  | m + 1, n + 1, x :: xs, h =>
+    congrArg (x :: ·) (take_le_take m n xs (Nat.le_of_succ_le_succ h))
+
+theorem absorbFrom_take_blocks (k : Nat) (st : State) (xs : List UInt8)
+    (hle : k * rateBytes ≤ xs.length) :
+    absorbFrom k st (xs.take (k * rateBytes)) = absorbFrom k st xs := by
+  induction k generalizing st xs with
+  | zero => rfl
+  | succ k ih =>
+    have hge : rateBytes ≤ k.succ * rateBytes := by simp [Nat.succ_mul]
+    rw [absorbFrom, absorbFrom, take_le_take _ _ _ hge, List.drop_take]
+    have hsub : k.succ * rateBytes - rateBytes = k * rateBytes := by
+      simp [Nat.succ_mul, rateBytes]
+    rw [hsub]
+    apply ih
+    simp only [rateBytes] at hle ⊢
+    rw [List.length_drop]; omega
+
+theorem padForRate_split_blocks (xs : List UInt8) (suffix : UInt8) :
+    let full := xs.length / rateBytes
+    padForRate xs suffix =
+      xs.take (full * rateBytes) ++ padForRate (xs.drop (full * rateBytes)) suffix := by
+  dsimp only
+  have hrem_len : (xs.drop ((xs.length / rateBytes) * rateBytes)).length = xs.length % rateBytes := by
+    rw [List.length_drop]
+    have hdiv := Nat.div_add_mod xs.length rateBytes
+    rw [Nat.mul_comm] at hdiv
+    omega
+  have hrem_lt : xs.length % rateBytes < rateBytes := Nat.mod_lt _ (by decide)
+  have hmod_eq : (xs.drop ((xs.length / rateBytes) * rateBytes)).length % rateBytes =
+      xs.length % rateBytes := by
+    rw [hrem_len, Nat.mod_eq_of_lt hrem_lt]
+  unfold padForRate
+  rw [hmod_eq]
+  dsimp only
+  have hsplit : xs = xs.take ((xs.length / rateBytes) * rateBytes) ++
+      xs.drop ((xs.length / rateBytes) * rateBytes) :=
+    (List.take_append_drop _ _).symm
+  by_cases hc : rateBytes - xs.length % rateBytes = 1
+  · simp only [hc, ↓reduceIte]
+    have h1 := congrArg (fun l => l ++ [suffix ^^^ (128 : UInt8)]) hsplit
+    simpa only [List.append_assoc] using h1
+  · simp only [hc, ↓reduceIte]
+    have h1 := congrArg
+      (fun l => l ++ [suffix] ++ List.replicate (rateBytes - xs.length % rateBytes - 2) 0 ++ [128])
+      hsplit
+    simpa only [List.append_assoc] using h1
+
+theorem padForRate_short_length (xs : List UInt8) (suffix : UInt8) (h : xs.length < rateBytes) :
+    (padForRate xs suffix).length = rateBytes := by
+  unfold padForRate
+  unfold rateBytes at h ⊢
+  rw [Nat.mod_eq_of_lt h]
+  dsimp only
+  by_cases hc : 136 - xs.length = 1
+  · simp only [hc, ↓reduceIte, List.length_append, List.length_singleton]
+    omega
+  · simp only [hc, ↓reduceIte, List.length_append, List.length_singleton, List.length_replicate]
+    omega
+
+theorem padForRate_append_aligned (pfx xs : List UInt8) (suffix : UInt8)
+    (hpfx : pfx.length % rateBytes = 0) :
+    padForRate (pfx ++ xs) suffix = pfx ++ padForRate xs suffix := by
+  have hmod : (pfx ++ xs).length % rateBytes = xs.length % rateBytes := by
+    rw [List.length_append, Nat.add_mod, hpfx, Nat.zero_add, Nat.mod_mod]
+  unfold padForRate
+  rw [hmod]
+  dsimp only
+  by_cases hc : rateBytes - xs.length % rateBytes = 1
+  · simp only [hc, ↓reduceIte, List.append_assoc]
+  · simp only [hc, ↓reduceIte, List.append_assoc]
+
+/-- Streamed zero-copy absorption of borrowed `b : @& ByteArray`: reads all full 136-byte blocks
+    straight from `b` via `absorbLoop` without copying `b`, and materializes only the single
+    136-byte final padded block. -/
+def absorbByteArray (b : @& ByteArray) (suffix : UInt8) (s : KState) : KState :=
+  let full := b.size / rateBytes
+  let rem := b.size % rateBytes
+  let s1 := absorbLoop b full 0 s
+  let tail := padBA (copySlice b (full * rateBytes) rem (ByteArray.emptyWithCapacity rateBytes)) suffix
+  keccakS (xorBlockS s1 tail 0)
+
+theorem absorbByteArray_toState (b : ByteArray) (suffix : UInt8) (s : KState) :
+    (absorbByteArray b suffix s).toState =
+      absorbFrom ((padForRate b.data.toList suffix).length / rateBytes)
+        s.toState (padForRate b.data.toList suffix) := by
+  unfold absorbByteArray
+  dsimp only
+  let L := b.data.toList
+  have hbsize : b.size = L.length := size_eq_length b
+  let full := b.size / rateBytes
+  let rem := b.size % rateBytes
+  have hfull_eq : full = L.length / rateBytes := by simp [full, hbsize]
+  have hrem_eq : rem = L.length % rateBytes := by simp [rem, hbsize]
+  have hdivmod : full * rateBytes + rem = b.size := by
+    have h := Nat.div_add_mod b.size rateBytes
+    rw [Nat.mul_comm] at h
+    exact h
+  let tail := padBA (copySlice b (full * rateBytes) rem (ByteArray.emptyWithCapacity rateBytes)) suffix
+  have hdrop_len : (L.drop (full * rateBytes)).length = rem := by
+    rw [List.length_drop, ← hbsize]
+    omega
+  have htail_list : tail.data.toList = padForRate (L.drop (full * rateBytes)) suffix := by
+    simp only [tail, padBA_data, copySlice_data b (full * rateBytes) rem _ (by omega),
+      emptyWithCapacity_data, List.nil_append]
+    rw [List.take_of_length_le (by rw [hdrop_len]; exact Nat.le_refl _)]
+  have hrem_lt : (L.drop (full * rateBytes)).length < rateBytes := by
+    rw [hdrop_len, hrem_eq]
+    exact Nat.mod_lt _ (by decide)
+  have htail_len : tail.data.toList.length = rateBytes := by
+    rw [htail_list]
+    exact padForRate_short_length _ _ hrem_lt
+  have hpad_split : padForRate L suffix = L.take (full * rateBytes) ++ tail.data.toList := by
+    rw [htail_list, hfull_eq]
+    exact padForRate_split_blocks L suffix
+  have htake_len : (L.take (full * rateBytes)).length = full * rateBytes :=
+    List.length_take_of_le (by rw [← hbsize]; omega)
+  have hpad_blocks : (padForRate L suffix).length / rateBytes = full + 1 := by
+    rw [hpad_split, List.length_append, htake_len, htail_len]
+    have hpos : 0 < rateBytes := by decide
+    rw [show full * rateBytes + rateBytes = (full + 1) * rateBytes by simp [Nat.add_mul],
+      Nat.mul_div_cancel _ hpos]
+  change (keccakS (xorBlockS (absorbLoop b full 0 s) tail 0)).toState =
+    absorbFrom ((padForRate L suffix).length / rateBytes) s.toState (padForRate L suffix)
+  rw [hpad_blocks, hpad_split, absorbFrom_append_exact full 1 s.toState _ _ htake_len,
+    absorbFrom_take_blocks full s.toState L (by rw [← hbsize]; omega)]
+  have hs1 : (absorbLoop b full 0 s).toState = absorbFrom full s.toState L := by
+    simpa [L, List.drop_zero] using absorb_fast_eq b full 0 s
+  rw [keccakF_fast_eq, xorBlockS_toState, hs1]
+  simp only [absorbFrom, List.drop_zero, rateBytes]
+
+/-- Build SP 800-185 `customizationPrefix` directly from a borrowed `ByteArray` without `c.data.toList`. -/
+def customizationPrefixBA (c : @& ByteArray) : ByteArray :=
+  let hdr := leftEncode rateBytes ++ encodeString ([] : List UInt8) ++ leftEncode (8 * c.size)
+  let pfx := copySlice c 0 c.size (pushList (ByteArray.emptyWithCapacity (hdr.length + c.size + rateBytes)) hdr)
+  let zeroCount := (rateBytes - pfx.size % rateBytes) % rateBytes
+  pushZeros pfx zeroCount
+
+theorem customizationPrefixBA_data (c : ByteArray) :
+    (customizationPrefixBA c).data.toList = customizationPrefix c.data.toList := by
+  unfold customizationPrefixBA customizationPrefix bytepad
+  have h136 : ¬(rateBytes = 0) := by decide
+  simp only [h136, ↓reduceIte]
+  let hdr := leftEncode rateBytes ++ encodeString ([] : List UInt8) ++ leftEncode (8 * c.size)
+  let pfx := copySlice c 0 c.size (pushList (ByteArray.emptyWithCapacity (hdr.length + c.size + rateBytes)) hdr)
+  have hpfx : pfx.data.toList =
+      leftEncode rateBytes ++ (encodeString ([] : List UInt8) ++ encodeString c.data.toList) := by
+    dsimp only [pfx, hdr]
+    rw [copySlice_data c 0 c.size _ (by omega), pushList_data, emptyWithCapacity_data, List.nil_append,
+      List.drop_zero, size_eq_length, List.take_length]
+    unfold encodeString
+    simp only [List.append_assoc]
+  change (pushZeros pfx ((rateBytes - pfx.size % rateBytes) % rateBytes)).data.toList = _
+  rw [pushZeros_data, size_eq_length, hpfx]
+
+theorem customizationPrefix_len_mod (xs : List UInt8) :
+    (customizationPrefix xs).length % rateBytes = 0 := by
+  unfold customizationPrefix bytepad rateBytes
+  simp only [show ¬(136 = 0) by decide, ↓reduceIte, List.length_append, List.length_replicate]
+  omega
+
+/-- Push one 64-bit word as 8 little-endian bytes directly into `b : ByteArray`. -/
+@[inline] def pushLaneLE (b : ByteArray) (w : UInt64) : ByteArray :=
+  (((((((b.push (w >>> 0).toUInt8)
+    |>.push (w >>> 8).toUInt8)
+    |>.push (w >>> 16).toUInt8)
+    |>.push (w >>> 24).toUInt8)
+    |>.push (w >>> 32).toUInt8)
+    |>.push (w >>> 40).toUInt8)
+    |>.push (w >>> 48).toUInt8)
+    |>.push (w >>> 56).toUInt8
+
+/-- Squeeze the first 32 output bytes directly into a pre-sized `ByteArray` (`0` list allocations). -/
+def squeezeByteArray (s : KState) : ByteArray :=
+  pushLaneLE (pushLaneLE (pushLaneLE (pushLaneLE (ByteArray.emptyWithCapacity 32) s.a0) s.a1) s.a2) s.a3
+
+theorem pushLaneLE_data (b : ByteArray) (w : UInt64) :
+    (pushLaneLE b w).data.toList =
+      b.data.toList ++
+        [(w >>> 0).toUInt8, (w >>> 8).toUInt8, (w >>> 16).toUInt8, (w >>> 24).toUInt8,
+         (w >>> 32).toUInt8, (w >>> 40).toUInt8, (w >>> 48).toUInt8, (w >>> 56).toUInt8] := by
+  simp only [pushLaneLE, push_data, List.append_assoc, List.cons_append, List.nil_append]
+
+theorem squeezeByteArray_data (s : KState) :
+    (squeezeByteArray s).data.toList = squeezeS s := by
+  simp only [squeezeByteArray, pushLaneLE_data, emptyWithCapacity_data, List.nil_append]
+  rfl
+
+/-- **Zero-copy `ByteArray` cSHAKE256**: absorbs `customization` and `input` straight from borrowed
+    `ByteArray`s into `KState` and squeezes 32 bytes directly into `ByteArray` without allocating
+    any intermediate `List UInt8`s or copying `input`. -/
+@[expose] def cshake256ByteArrayFast (customization input : @& ByteArray) : ByteArray :=
+  if customization.size == 0 then
+    squeezeByteArray (absorbByteArray input 0x1f zeroS)
+  else
+    let pfx := customizationPrefixBA customization
+    let s0 := absorbLoop pfx (pfx.size / rateBytes) 0 zeroS
+    squeezeByteArray (absorbByteArray input 0x04 s0)
+
+theorem cshake256ByteArrayFast_eq (c m : ByteArray) :
+    (cshake256ByteArrayFast c m).data.toList = cshake256Bytes c.data.toList m.data.toList := by
+  unfold cshake256ByteArrayFast cshake256Bytes
+  by_cases hc : c.data.toList = []
+  · have hsize0 : (c.size == 0) = true := by
+      rw [beq_iff_eq, size_eq_length, hc]; rfl
+    simp only [hsize0, hc, ↓reduceIte, squeezeByteArray_data, squeeze_fast_eq,
+      absorbByteArray_toState, zeroS_toState, absorbPadded]
+  · have hsizeN : (c.size == 0) = false := by
+      rw [beq_eq_false_iff_ne, size_eq_length]
+      exact fun h0 => hc (List.eq_nil_of_length_eq_zero h0)
+    simp only [hsizeN, hc, Bool.false_eq_true, ↓reduceIte, squeezeByteArray_data, squeeze_fast_eq,
+      absorbByteArray_toState]
+    let pfx := customizationPrefixBA c
+    have hpfx_data : pfx.data.toList = customizationPrefix c.data.toList := customizationPrefixBA_data c
+    have hpfx_mod : (customizationPrefix c.data.toList).length % rateBytes = 0 :=
+      customizationPrefix_len_mod c.data.toList
+    have hpfx_blocks : (customizationPrefix c.data.toList).length =
+        (pfx.size / rateBytes) * rateBytes := by
+      rw [size_eq_length, hpfx_data]
+      have h := Nat.div_add_mod (customizationPrefix c.data.toList).length rateBytes
+      rw [hpfx_mod, Nat.add_zero, Nat.mul_comm] at h
+      exact h.symm
+    have hs0 : (absorbLoop pfx (pfx.size / rateBytes) 0 zeroS).toState =
+        absorbFrom (pfx.size / rateBytes) zeroState (customizationPrefix c.data.toList) := by
+      dsimp only [pfx]
+      rw [absorb_fast_eq, zeroS_toState, List.drop_zero, hpfx_data]
+    change squeeze32 (absorbFrom ((padForRate m.data.toList 4).length / rateBytes)
+        (absorbLoop pfx (pfx.size / rateBytes) 0 zeroS).toState (padForRate m.data.toList 4)) =
+      squeeze32 (absorbPadded (padForRate (customizationPrefix c.data.toList ++ m.data.toList) 4))
+    rw [hs0, padForRate_append_aligned _ _ _ hpfx_mod, absorbPadded]
+    have htot_div : ((customizationPrefix c.data.toList ++ padForRate m.data.toList 0x04).length) / rateBytes =
+        pfx.size / rateBytes + (padForRate m.data.toList 0x04).length / rateBytes := by
+      rw [List.length_append, hpfx_blocks]
+      have hpos : 0 < rateBytes := by decide
+      rw [Nat.mul_comm _ rateBytes, Nat.mul_add_div hpos]
+    rw [htot_div, absorbFrom_append_exact (pfx.size / rateBytes) _ zeroState _ _ hpfx_blocks]
+
 /-! ## Attachment -/
 
 /-- The compiled Host absorbs through the word permutation. -/

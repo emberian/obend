@@ -799,23 +799,71 @@ run_cmd do
     , ("Obend/Hardware/Judge.lean", [800000, 800000, 1600000])
     , ("Obend/Hardware/OpenHypergraph.lean", [1600000, 1600000])
     , ("Obend/Hardware/QuantumMatter.lean", [1600000]) ]
+  let stripLeanCode (s : String) : String := Id.run do
+    let arr := s.toList.toArray
+    let len := arr.size
+    let mut out : Array Char := Array.mkEmpty len
+    let mut i : Nat := 0
+    let mut blkDepth : Nat := 0
+    let mut inLine : Bool := false
+    let mut inStr : Bool := false
+    while i < len do
+      let c := arr[i]!
+      let cNext := if i + 1 < len then arr[i + 1]! else ' '
+      if inLine then
+        if c == '\n' then inLine := false; out := out.push '\n' else out := out.push ' '
+        i := i + 1
+      else if blkDepth > 0 then
+        if c == '/' && cNext == '-' then blkDepth := blkDepth + 1; out := (out.push ' ').push ' '; i := i + 2
+        else if c == '-' && cNext == '/' then blkDepth := blkDepth - 1; out := (out.push ' ').push ' '; i := i + 2
+        else out := out.push (if c == '\n' then '\n' else ' '); i := i + 1
+      else if inStr then
+        if c == '\\' then out := (out.push ' ').push ' '; i := i + 2
+        else if c == '"' then inStr := false; out := out.push ' '; i := i + 1
+        else out := out.push (if c == '\n' then '\n' else ' '); i := i + 1
+      else
+        if c == '-' && cNext == '-' then inLine := true; out := (out.push ' ').push ' '; i := i + 2
+        else if c == '/' && cNext == '-' then blkDepth := 1; out := (out.push ' ').push ' '; i := i + 2
+        else if c == '"' then inStr := true; out := out.push ' '; i := i + 1
+        else if c == '\'' && cNext == '\\' && i + 3 < len && arr[i + 3]! == '\'' then out := out.push ' '; i := i + 4
+        else if c == '\'' && i + 2 < len && arr[i + 2]! == '\'' then out := out.push ' '; i := i + 3
+        else out := out.push (if c == ';' then ' ' else c); i := i + 1
+    return String.ofList out.toList
   let mut heartbeatOffenders : Array String := #[]
   for file in sources do
     let module := (file.withExtension "").components.foldl Name.str .anonymous
     unless tier1 module do continue
     let text ← IO.FS.readFile file
     let mut allowed : List Nat := (heartbeatBaseline.lookup file.toString).getD []
-    for line in text.splitOn "\n" do
-      let l := line.trimAscii.toString
-      unless l.startsWith "set_option maxHeartbeats " do continue
-      let digits := String.ofList ((l.toList.drop "set_option maxHeartbeats ".length).takeWhile Char.isDigit)
-      let n := digits.toNat?.getD 0
-      -- a value at or under the default costs nothing; above it, the site must be in the baseline
-      if n ≤ 200000 then continue
-      if allowed.contains n then allowed := allowed.erase n
-      else heartbeatOffenders := heartbeatOffenders.push s!"{file}: maxHeartbeats {n}"
+    let parts := (stripLeanCode text).splitOn "set_option"
+    for idx in [1:parts.length] do
+      let prev := parts[idx - 1]!.toList
+      let prevBoundary := match prev.getLast? with
+        | none => true
+        | some ch => !(ch.isAlphanum || ch == '_' || ch == '\'')
+      unless prevBoundary do continue
+      let after := parts[idx]!.toList
+      let (ws1, rest1) := (after.takeWhile Char.isWhitespace, after.dropWhile Char.isWhitespace)
+      if ws1.isEmpty then continue
+      let kw := "maxHeartbeats".toList
+      unless kw.isPrefixOf rest1 do continue
+      let afterKw := rest1.drop kw.length
+      let argRest := afterKw.dropWhile Char.isWhitespace
+      let hasKwBoundary := match afterKw with
+        | [] => true
+        | ch :: _ => ch.isWhitespace || !ch.isAlphanum && ch != '_' && ch != '\''
+      unless hasKwBoundary do continue
+      let argChars := argRest.takeWhile (fun ch => !ch.isWhitespace)
+      let arg := String.ofList argChars
+      match (if !argChars.isEmpty && argChars.all Char.isDigit then arg.toNat? else none) with
+      | none => heartbeatOffenders := heartbeatOffenders.push s!"{file}: maxHeartbeats {if arg.isEmpty then "<missing>" else arg}"
+      | some 0 => heartbeatOffenders := heartbeatOffenders.push s!"{file}: maxHeartbeats 0 (unlimited)"
+      | some n =>
+        if n ≤ 200000 then continue
+        if allowed.contains n then allowed := allowed.erase n
+        else heartbeatOffenders := heartbeatOffenders.push s!"{file}: maxHeartbeats {n}"
   unless heartbeatOffenders.isEmpty do
-    throwError "census: tier 1 has `set_option maxHeartbeats` sites outside the 2026-11-04 baseline (a new site, a raised value, or a file not in the list): {heartbeatOffenders.toList}. Restructure the proof or move it to tier 2; the baseline only shrinks."
+    throwError "census: tier 1 has `set_option maxHeartbeats` sites outside the 2026-11-04 baseline (a new site, `0`/unparsed value, a raised value, or a file not in the list): {heartbeatOffenders.toList}. Restructure the proof or move it to tier 2; the baseline only shrinks."
 
 #assert_axioms_tree
 #census_environment ".lake/build/census/environment.txt"

@@ -53,7 +53,8 @@ open Obend.Trailblaze.Polis (SeL4MicrokitPartition IpcChannel checkMicrokitIsola
   refuseMicrokitIsolation Sel4CapDlNonInterfering checkMicrokitIsolation_implies_capDlNonInterfering)
 open Obend.Digest
 open Obend.Digest.Cshake256 (cshake256Bytes)
-open Obend.Digest.Cshake256.Native (bytesOfList bytesOfList_toList cshake256Kernel)
+open Obend.Digest.Cshake256.Native (bytesOfList bytesOfList_toList cshake256Kernel
+  cshake256Kernel_toList)
 
 set_option autoImplicit false
 
@@ -138,8 +139,8 @@ def deriveOutboxNullifier256 (gatekeeperPd : Nat) (nullifierId : Nat) : BitVec 2
 theorem effectCommitBytes_eq_spec (nullifierId : Nat) (cls : EffectClass) (payload : ByteArray) :
     (effectCommitBytes nullifierId cls payload).data.toList =
       cshake256Bytes outboxEffectDomain.data.toList (encodeEffectPreimage nullifierId cls payload) := by
-  unfold effectCommitBytes cshake256Kernel
-  rw [bytesOfList_toList, bytesOfList_toList, Cshake256.Fast.cshake256Fast_eq]
+  unfold effectCommitBytes
+  rw [cshake256Kernel_toList, bytesOfList_toList]
 
 /-- The commitment is a 256-bit number: it fits a block payload's 32 wire bytes with nothing cut. -/
 theorem effectCommitNat_lt (nullifierId : Nat) (cls : EffectClass) (payload : ByteArray) :

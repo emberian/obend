@@ -63,8 +63,8 @@ open Obend.Consensus.Simplex (NodeId)
 open Obend.Consensus.SimplexProtocol (Protocol Sent Entry Chain Msg FinCert Finalized Reach
   encodeEntries_injective)
 open Obend.Digest.Cshake256 (cshake256Bytes)
-open Obend.Digest.Cshake256.Fast (cshake256Fast_eq)
-open Obend.Digest.Cshake256.Native (bytesOfList bytesOfList_toList cshake256Kernel)
+open Obend.Digest.Cshake256.Native (bytesOfList bytesOfList_toList cshake256Kernel
+  cshake256Kernel_toList)
 
 set_option autoImplicit false
 
@@ -530,8 +530,8 @@ def chainDigest (c : Chain) : Digest :=
 theorem chainDigest_eq_spec (c : Chain) :
     (chainDigest c).data.toList =
       cshake256Bytes simplexChainDomain.data.toList (c.blocks.flatMap Entry.encode) := by
-  unfold chainDigest encodeFinalizedBlocks cshake256Kernel
-  rw [bytesOfList_toList, bytesOfList_toList, cshake256Fast_eq]
+  unfold chainDigest encodeFinalizedBlocks
+  rw [cshake256Kernel_toList, bytesOfList_toList]
 
 /-- **The chain digest binds the finalized blocks at their full width**: two chains whose blocks
     are canonical (8-byte views, 256-bit payloads) and whose digests agree carry the same blocks,
@@ -561,8 +561,8 @@ theorem foldCollapsedRoot_eq_spec (cDigest vaultRoot : Digest) :
     (foldCollapsedRoot cDigest vaultRoot).data.toList =
       cshake256Bytes collapseRootDomain.data.toList
         (cDigest.data.toList ++ vaultRoot.data.toList) := by
-  unfold foldCollapsedRoot cshake256Kernel
-  rw [bytesOfList_toList, bytesOfList_toList, cshake256Fast_eq]
+  unfold foldCollapsedRoot
+  rw [cshake256Kernel_toList, bytesOfList_toList]
 
 /-- Events promoting a `SimplexFinalityGate` against `(P : Protocol, sent : Sent)`. -/
 inductive SimplexPromotionEvent where
