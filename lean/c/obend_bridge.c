@@ -60,7 +60,7 @@ void obend_ensure_lean_thread(void) {
 }
 
 extern lean_object *obend_session_init_core(lean_object *cfg);
-extern void obend_session_free_core(lean_object *s);
+extern lean_object *obend_session_free_core(lean_object *s);
 extern lean_object *obend_eval_cell_core(lean_object *s, lean_object *cell_bytes);
 extern lean_object *obend_turn_propose_core(lean_object *s, lean_object *turn_bytes);
 extern lean_object *obend_turn_commit_core(lean_object *s, lean_object *tid_bytes);
@@ -71,10 +71,19 @@ extern lean_object *obend_view_affordances_core(lean_object *s, lean_object *que
 extern lean_object *obend_cell_pop_lean_core(lean_object *s, lean_object *cell_bytes);
 extern lean_object *obend_cell_weave_cert_core(lean_object *s, lean_object *cert_bytes);
 
-static inline lean_object *lean_mk_byte_array_from_buf(const uint8_t *buf, size_t len) {
+/* A fresh `ByteArray` holding a copy of the `len` bytes at `ptr`: one allocation (size and
+ * capacity `len`, `m_rc == 1`, owned by the caller) and one `memcpy`. `ptr` is read only when
+ * `len > 0`, so an empty slice may pass NULL or a dangling non-null pointer (Rust's `as_ptr` on
+ * `&[]`), and `memcpy` never sees a NULL source. Returns NULL and allocates nothing when `ptr` is
+ * NULL with `len > 0`, or when `len` exceeds the largest size a boxed `ByteArray.size` holds.
+ * Exported for `obend_ffi::sys` (`crates/obend-ffi/src/sys.rs`); attaches the calling thread to
+ * the Lean runtime first, since the allocation uses the thread's heap. */
+lean_object *obend_mk_byte_array_from_slice(const uint8_t *ptr, size_t len) {
+    if ((len > 0 && ptr == NULL) || len > LEAN_MAX_SMALL_NAT) return NULL;
+    ensure_lean_init();
     lean_object *ba = lean_alloc_sarray(1, len, len);
-    if (len > 0 && buf != NULL) {
-        memcpy(lean_sarray_cptr(ba), buf, len);
+    if (len > 0) {
+        memcpy(lean_sarray_cptr(ba), ptr, len);
     }
     return ba;
 }
@@ -97,20 +106,20 @@ static inline int session_sync_scratch(ObendSessionHandle *sess, lean_object *ba
 }
 
 ObendSessionHandle *obend_session_init(const uint8_t *config_ptr, size_t config_len) {
-    ensure_lean_initialized();
     ObendSessionHandle *handle = (ObendSessionHandle*)calloc(1, sizeof(ObendSessionHandle));
     if (!handle) return NULL;
     handle->scratch_cap = 4096;
     handle->scratch_buf = (uint8_t*)calloc(1, handle->scratch_cap);
     handle->err_cap = 1024;
     handle->err_buf = (uint8_t*)calloc(1, handle->err_cap);
-    if (!handle->scratch_buf || !handle->err_buf) {
+    lean_object *cfg = handle->scratch_buf && handle->err_buf
+        ? obend_mk_byte_array_from_slice(config_ptr, config_len) : NULL;
+    if (!cfg) {
         if (handle->scratch_buf) free(handle->scratch_buf);
         if (handle->err_buf) free(handle->err_buf);
         free(handle);
         return NULL;
     }
-    lean_object *cfg = lean_mk_byte_array_from_buf(config_ptr, config_len);
     handle->lean_state = obend_session_init_core(cfg);
     return handle;
 }
@@ -119,9 +128,7 @@ void obend_session_free(ObendSessionHandle *session_ptr) {
     if (!session_ptr) return;
     ensure_lean_initialized();
     if (session_ptr->lean_state) {
-        lean_inc(session_ptr->lean_state);
-        obend_session_free_core(session_ptr->lean_state);
-        lean_dec(session_ptr->lean_state);
+        lean_dec(obend_session_free_core(session_ptr->lean_state));
         session_ptr->lean_state = NULL;
     }
     if (session_ptr->scratch_buf) free(session_ptr->scratch_buf);
@@ -138,8 +145,8 @@ int32_t obend_eval_cell(
 ) {
     if (!session_ptr || !out_ptr || !out_len) return -1;
     if (cell_len > 0 && !cell_ptr) return -1;
-    ensure_lean_initialized();
-    lean_object *cell_ba = lean_mk_byte_array_from_buf(cell_ptr, cell_len);
+    lean_object *cell_ba = obend_mk_byte_array_from_slice(cell_ptr, cell_len);
+    if (!cell_ba) return -1;
     lean_object *res = obend_eval_cell_core(session_ptr->lean_state, cell_ba);
 
     lean_object *new_state = lean_ctor_get(res, 0);
@@ -170,8 +177,8 @@ int32_t obend_turn_propose(
 ) {
     if (!session_ptr || !out_ptr || !out_len) return -1;
     if (turn_len > 0 && !turn_ptr) return -1;
-    ensure_lean_initialized();
-    lean_object *turn_ba = lean_mk_byte_array_from_buf(turn_ptr, turn_len);
+    lean_object *turn_ba = obend_mk_byte_array_from_slice(turn_ptr, turn_len);
+    if (!turn_ba) return -1;
     lean_object *res = obend_turn_propose_core(session_ptr->lean_state, turn_ba);
 
     lean_object *new_state = lean_ctor_get(res, 0);
@@ -200,8 +207,8 @@ int32_t obend_turn_commit(
 ) {
     if (!session_ptr) return -1;
     if (turn_id_len > 0 && !turn_id_ptr) return -1;
-    ensure_lean_initialized();
-    lean_object *tid_ba = lean_mk_byte_array_from_buf(turn_id_ptr, turn_id_len);
+    lean_object *tid_ba = obend_mk_byte_array_from_slice(turn_id_ptr, turn_id_len);
+    if (!tid_ba) return -1;
     lean_object *res = obend_turn_commit_core(session_ptr->lean_state, tid_ba);
 
     lean_object *new_state = lean_ctor_get(res, 0);
@@ -223,8 +230,8 @@ int32_t obend_project_hardware(
 ) {
     if (!session_ptr || !out_ptr || !out_len) return -1;
     if (hw_len > 0 && !hw_ptr) return -1;
-    ensure_lean_initialized();
-    lean_object *hw_ba = lean_mk_byte_array_from_buf(hw_ptr, hw_len);
+    lean_object *hw_ba = obend_mk_byte_array_from_slice(hw_ptr, hw_len);
+    if (!hw_ba) return -1;
     lean_object *res = obend_project_hardware_core(session_ptr->lean_state, hw_ba);
 
     lean_object *new_state = lean_ctor_get(res, 0);
@@ -253,8 +260,8 @@ int32_t obend_verify_receipt(
 ) {
     if (!session_ptr) return -1;
     if (receipt_len > 0 && !receipt_ptr) return -1;
-    ensure_lean_initialized();
-    lean_object *rcpt_ba = lean_mk_byte_array_from_buf(receipt_ptr, receipt_len);
+    lean_object *rcpt_ba = obend_mk_byte_array_from_slice(receipt_ptr, receipt_len);
+    if (!rcpt_ba) return -1;
     lean_object *res = obend_verify_receipt_core(session_ptr->lean_state, rcpt_ba);
 
     lean_object *new_state = lean_ctor_get(res, 0);
@@ -308,8 +315,8 @@ int32_t obend_view_affordances(
 ) {
     if (!session_ptr || !out_ptr || !out_len) return -1;
     if (query_len > 0 && !query_ptr) return -1;
-    ensure_lean_initialized();
-    lean_object *query_ba = lean_mk_byte_array_from_buf(query_ptr, query_len);
+    lean_object *query_ba = obend_mk_byte_array_from_slice(query_ptr, query_len);
+    if (!query_ba) return -1;
     lean_object *res = obend_view_affordances_core(session_ptr->lean_state, query_ba);
 
     lean_object *new_state = lean_ctor_get(res, 0);
@@ -340,8 +347,8 @@ int32_t obend_cell_pop_lean(
 ) {
     if (!session_ptr || !out_ptr || !out_len) return -1;
     if (cell_len > 0 && !cell_ptr) return -1;
-    ensure_lean_initialized();
-    lean_object *cell_ba = lean_mk_byte_array_from_buf(cell_ptr, cell_len);
+    lean_object *cell_ba = obend_mk_byte_array_from_slice(cell_ptr, cell_len);
+    if (!cell_ba) return -1;
     lean_object *res = obend_cell_pop_lean_core(session_ptr->lean_state, cell_ba);
 
     lean_object *new_state = lean_ctor_get(res, 0);
@@ -372,8 +379,8 @@ int32_t obend_cell_weave_cert(
 ) {
     if (!session_ptr || !out_ptr || !out_len) return -1;
     if (cert_len > 0 && !cert_ptr) return -1;
-    ensure_lean_initialized();
-    lean_object *cert_ba = lean_mk_byte_array_from_buf(cert_ptr, cert_len);
+    lean_object *cert_ba = obend_mk_byte_array_from_slice(cert_ptr, cert_len);
+    if (!cert_ba) return -1;
     lean_object *res = obend_cell_weave_cert_core(session_ptr->lean_state, cert_ba);
 
     lean_object *new_state = lean_ctor_get(res, 0);

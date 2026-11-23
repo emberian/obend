@@ -448,6 +448,13 @@ theorem = "pancakeCshake256_correct"
 description = "The exported Pancake sponge on mapped raw function-name, customization and message slices returns the 32 bytes of the SP 800-185 specification."
 
 [[apex]]
+id = "lower-pancake-macaroon-verify"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.MacaroonVerifier"
+theorem = "pancakeMacaroonVerify_correct"
+description = "The Pancake verifier checks the cSHAKE256 tag chain and caveat policy, scrubs the 25-word workspace for in-range counts, and preserves every word outside it."
+
+[[apex]]
 id = "lower-pancake-sclk-refinement"
 subsystem = "Lower"
 module = "Obend.Lower.Pancake.RefinesClkPan"

@@ -90,8 +90,15 @@ extern "C" {
         req_ba: *mut std::ffi::c_void,
     ) -> *mut std::ffi::c_void;
 
+    // Legacy C ABI for callers constructing a ByteArray incrementally.
     pub fn obend_ffi_ba_empty(cap: usize) -> *mut std::ffi::c_void;
     pub fn obend_ffi_ba_push(ba: *mut std::ffi::c_void, b: u8) -> *mut std::ffi::c_void;
+
+    /// An owned, exclusive Lean `ByteArray` (`m_rc == 1`, size and capacity `len`) holding a copy
+    /// of `len` bytes at `ptr`, built by one allocation and one `memcpy` in
+    /// `lean/c/obend_bridge.c`. `ptr` is not read when `len == 0`, so the dangling pointer of an
+    /// empty slice is fine. Returns NULL for a nonempty null input or a length above `isize::MAX`.
+    pub fn obend_mk_byte_array_from_slice(ptr: *const u8, len: usize) -> *mut std::ffi::c_void;
     pub fn obend_ffi_res_into_state(res: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 }
 
@@ -166,16 +173,16 @@ unsafe fn invoke_lean_session_json(
     if session.is_null() {
         return Err(-1);
     }
-    obend_ensure_lean_thread();
     // `ObendSessionHandle` (`lean/c/obend_bridge.c:7`) stores `lean_object *lean_state` at offset 0.
     let state_slot = session as *mut *mut std::ffi::c_void;
     let old_state = *state_slot;
     if old_state.is_null() {
         return Err(-2);
     }
-    let mut req_ba = obend_ffi_ba_empty(req.len());
-    for &b in req {
-        req_ba = obend_ffi_ba_push(req_ba, b);
+    // One crossing for the whole request, whatever its length.
+    let req_ba = obend_mk_byte_array_from_slice(req.as_ptr(), req.len());
+    if req_ba.is_null() {
+        return Err(-1);
     }
     // `f` consumes owned `old_state` and `req_ba`, returning owned `SessionState × ByteArray × Int32`.
     *state_slot = std::ptr::null_mut();
@@ -217,6 +224,53 @@ pub unsafe fn call_workbook_scrub_cell_json(
     req: &[u8],
 ) -> Result<Vec<u8>, i32> {
     unsafe { invoke_lean_session_json(session, req, obend_workbook_scrub_cell_json) }
+}
+
+#[cfg(all(test, not(feature = "stub")))]
+mod tests {
+    use super::*;
+
+    extern "C" {
+        /// What `lean_dec` reaches for an object with `m_rc == 1` (`<lean/lean.h>`): frees it.
+        fn lean_dec_ref_cold(o: *mut std::ffi::c_void);
+    }
+
+    /// Cycles through all 256 byte values (131 is odd), from an offset that depends on `len`.
+    fn pattern(len: usize) -> Vec<u8> {
+        (0..len).map(|i| (i.wrapping_mul(131).wrapping_add(len) % 256) as u8).collect()
+    }
+
+    /// The object is a fresh exclusive `ByteArray` of exactly `bytes`; then release it.
+    unsafe fn expect_fresh(o: *mut std::ffi::c_void, bytes: &[u8]) {
+        assert!(!o.is_null());
+        let hdr = &*(o as *const LeanSArrayHeader);
+        assert_eq!(hdr.m_header.m_rc, 1);
+        assert_eq!(hdr.m_header.m_tag, 248, "LeanScalarArray");
+        assert_eq!(hdr.m_header.m_other, 1, "element size");
+        assert_eq!((hdr.m_size, hdr.m_capacity), (bytes.len(), bytes.len()));
+        assert_eq!(lean_sarray_to_vec(o), bytes);
+        lean_dec_ref_cold(o);
+    }
+
+    #[test]
+    fn bulk_byte_array_copies_each_payload_exactly() {
+        for len in [0, 1, 32, 64 * 1024] {
+            let mut source = pattern(len);
+            let expected = source.clone();
+            let array = unsafe { obend_mk_byte_array_from_slice(source.as_ptr(), len) };
+            source.fill(0);
+            drop(source);
+            unsafe { expect_fresh(array, &expected) };
+        }
+        let empty: &[u8] = &[];
+        unsafe {
+            expect_fresh(obend_mk_byte_array_from_slice(empty.as_ptr(), 0), &[]);
+            expect_fresh(obend_mk_byte_array_from_slice(std::ptr::null(), 0), &[]);
+            assert!(obend_mk_byte_array_from_slice(std::ptr::null(), 1).is_null());
+            assert!(obend_mk_byte_array_from_slice(empty.as_ptr(), usize::MAX).is_null());
+            assert!(obend_session_init(std::ptr::null(), 1).is_null());
+        }
+    }
 }
 
 #[cfg(feature = "stub")]

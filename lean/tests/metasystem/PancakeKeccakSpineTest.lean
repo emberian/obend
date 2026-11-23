@@ -134,6 +134,9 @@ private def csv (ws : Array Word) := String.intercalate "," (ws.toList.map (toSt
 
 def exportCorpus (dir : System.FilePath) : IO Unit := do
   IO.FS.createDirAll dir
+  let some keccak := emitPnkFun Keccak.kernel | throw (IO.userError "Keccak emission failed")
+  unless (← IO.FS.readBinFile "Obend/Lower/Pancake/keccakF1600.pnk") == keccak.toUTF8 do
+    throw (IO.userError "keccakF1600.pnk differs from the Lean emitter")
   let cases := [("zero", Keccak.kernel, zero, 0, 25), ("empty", Keccak.kernel, empty, 0, 25),
     ("abc", Keccak.kernel, abc, 0, 25), ("loop", probe, abc, 3, 25), ("timeout", probe, abc, 2, 25),
     ("unmapped", probe, abc, 3, 0),

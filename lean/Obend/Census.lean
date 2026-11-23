@@ -478,6 +478,7 @@ import Obend.Lower.Pancake.CondSClk
 import Obend.Lower.Pancake.EmitPnk
 import Obend.Lower.Pancake.LcnfEmit
 import Obend.Lower.Pancake.LcnfFun
+import Obend.Lower.Pancake.MacaroonVerifier
 import Obend.Lower.Pancake.LcnfSimHelpers
 import Obend.Lower.Pancake.PanSem
 import Obend.Lower.Pancake.PancakeCshake256
