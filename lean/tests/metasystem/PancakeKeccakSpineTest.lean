@@ -34,6 +34,8 @@ private theorem iota_first (w : Word) :
 #tooth WordBuffer.lowerStage_correct by mutation WordBuffer.lowerStage := fun _ _ => .skip
 #tooth lowerLcnfFun_correct by mutation lowerLcnfFun := fun name _ _ =>
   some (⟨name, [], .ret (.const 0), false⟩, 0)
+#tooth lowerAndEmitLcnfFun_sound by mutation lowerAndEmitLcnfFun := fun name _ _ =>
+  some (⟨name, [], .ret (.const 0), false⟩, "{)", 0)
 #tooth emitPnkProg_balanced by mutation emitPnkProg := fun _ => some "{)"
 
 private def inputState (words : Array Word) (clk count : Nat) : PanState Unit :=
@@ -49,6 +51,8 @@ example (words : Array Word) : WordBuffer.Mapped (inputState words 0 25) 256 := 
 
 example : ((lowerLcnfFun "second" [4, 9] (.return (.bvar 1))).map Prod.snd) = some 9 := by decide
 example : (lowerLcnfFun "missing" [4] (.return (.bvar 1))).isNone := by decide
+#guard (lowerAndEmitLcnfFun "second" [4, 9] (.return (.bvar 1))).isSome
+#guard (lowerAndEmitLcnfFun "return" [4] (.return (.bvar 0))).isNone
 
 #guard (emitPnkFun ⟨"return", [], .skip, false⟩).isNone
 #guard (emitPnkFun ⟨"bad", [("x", .One), ("x", .One)], .skip, false⟩).isNone

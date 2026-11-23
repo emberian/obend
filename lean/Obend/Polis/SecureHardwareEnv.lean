@@ -1261,5 +1261,13 @@ theorem validSheTrace_multiTurn_inhabited (extraBudget : Nat) :
   have hs₁ : applySheTurn st₀ (.revokeOrAttenuateMandate rev₁) = .ok st₁ := (applySheTurn_ok_iff_inductiveStep _ _ _).mpr (.attenuateMandate st₀ rev₁ (padBytes32_size _) (by dsimp [st₀, rev₁, canonicalGenesisSheState]; omega) (by dsimp [st₀, rev₁, canonicalGenesisSheState]; omega) (by simp [st₀, rev₁, canonicalGenesisSheState]))
   have hs₂ : applySheTurn st₁ (.revokeOrAttenuateMandate rev₂) = .ok st₂ := (applySheTurn_ok_iff_inductiveStep _ _ _).mpr (.attenuateMandate st₁ rev₂ (padBytes32_size _) (by dsimp [st₁, rev₂]; omega) (by dsimp [st₁, rev₂]; omega) (by simp [st₁, st₀, rev₂, canonicalGenesisSheState]))
   exact ⟨[.revokeOrAttenuateMandate rev₁, .revokeOrAttenuateMandate rev₂], st₂, rfl, ⟨st₁, hs₁, ⟨st₂, hs₂, rfl⟩⟩, rfl, rfl⟩
+/-- Constructive inhabitedness witness for `verifyExactRecomputeAudit_sound` reusing the
+    1-round `UD-100` `MXFP4` candidate from `verifyCandidateComputation_inhabited`. -/
+private theorem verifyExactRecomputeAudit_inhabited :
+    ∃ c : CandidateComputation, verifyExactRecomputeAudit c = true ∧ ValidExactRecomputeWitness c := by
+  obtain ⟨c, hc, _⟩ := verifyCandidateComputation_inhabited
+  unfold verifyCandidateComputation at hc
+  simp only [Bool.and_eq_true] at hc
+  exact ⟨c, hc.2, verifyExactRecomputeAudit_sound hc.2⟩
 end Obend.Polis.SecureHardwareEnv
 end

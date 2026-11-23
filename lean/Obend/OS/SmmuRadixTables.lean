@@ -1465,5 +1465,17 @@ theorem walkSmmuV3Stage2_agrees_on_region {m : SmmuManifest} {arenaBase : UInt64
   simp only [hEn, hDeny, hSidOk, hLenB, hDecRoot, hLookSt, hLookReg, hIova48, decide_true,
     hW0, hContig, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
   cases reg.perm.permits acc <;> rfl
+/-- Constructive inhabitedness witness for `checkRegionsNonCoalescable_sound` on two adjacent
+    Stage-2 DMA regions with distinct permissions (`readOnly` vs `writeOnly`). -/
+private theorem checkRegionsNonCoalescable_inhabited :
+    ∃ r0 r1 : Stage2DmaRegion,
+      r0.iova.toNat + r0.size.toNat = r1.iova.toNat ∧
+      r0.paddr.toNat + r0.size.toNat = r1.paddr.toNat ∧
+      r0.perm = .readOnly ∧ r1.perm = .writeOnly ∧
+      checkRegionsNonCoalescable [r0, r1] = true ∧ RegionsNonCoalescable [r0, r1] := by
+  let r0 : Stage2DmaRegion := ⟨0x1000, 0x2000, 0x1000, .page4KiB, .readOnly, .ingressRing⟩
+  let r1 : Stage2DmaRegion := ⟨0x2000, 0x3000, 0x1000, .page4KiB, .writeOnly, .egressOutboxRing⟩
+  have hOk : checkRegionsNonCoalescable [r0, r1] = true := by decide
+  exact ⟨r0, r1, by decide, by decide, rfl, rfl, hOk, checkRegionsNonCoalescable_sound hOk⟩
 end Obend.OS.SmmuDmaConfinement
 end

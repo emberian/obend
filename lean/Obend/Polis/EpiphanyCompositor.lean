@@ -1470,5 +1470,48 @@ theorem rtlAndStreamSealer_inhabited :
   cases h : runScanlineStreamTrace (ScanlineStreamState.init canonicalStreamConfig) canonicalStreamPackets with
   | error _ => rw [h] at hOk; cases hOk
   | ok res => rw [h] at hOk; exact ⟨res.1, res.2, rfl, of_decide_eq_true hOk⟩
+private def isReadyScanlineStream :
+    Except ScanlineStreamError (ScanlineStreamState × List (List SensorTile)) → Bool
+  | .ok (s, _) =>
+    let cfg := s.activeCfg
+    checkCompleteScanlines cfg.frameWidth cfg.frameHeight s.assembledTiles &&
+    (s.sealerState.lookupSeq cfg.sensorId == none) &&
+    !(cfg.monoSeq == maxSensorMonoSeq) &&
+    checkFrameGeometry ⟨cfg.sensorId, cfg.monoSeq, cfg.frameWidth, cfg.frameHeight,
+      s.assembledTiles, cfg.redactBoxes⟩
+  | .error _ => false
+
+/-- Constructive inhabitedness witness for `validScanlineSessionTrace_sound` on a non-empty
+    1-frame streaming session using `canonicalStreamConfig` and `canonicalStreamPackets`. -/
+private theorem validScanlineSessionTrace_inhabited :
+    ∃ stEnd,
+      ValidScanlineSessionTrace SensorSealerState.empty
+        [(canonicalStreamConfig, canonicalStreamPackets)] stEnd ∧
+      canonicalStreamConfig.monoSeq.toNat < maxSensorMonoSeq.toNat := by
+  have hR : isReadyScanlineStream
+      (runScanlineStreamTrace (ScanlineStreamState.init canonicalStreamConfig SensorSealerState.empty)
+        canonicalStreamPackets) = true := by
+    decide
+  cases hRun : runScanlineStreamTrace
+      (ScanlineStreamState.init canonicalStreamConfig SensorSealerState.empty)
+      canonicalStreamPackets with
+  | error _ =>
+    rw [hRun] at hR
+    cases hR
+  | ok res =>
+    rcases res with ⟨stMid, hist⟩
+    rw [hRun] at hR
+    simp only [isReadyScanlineStream, Bool.and_eq_true, Bool.not_eq_true', beq_iff_eq] at hR
+    obtain ⟨⟨⟨hComp, hNone⟩, hMax⟩, hGeom⟩ := hR
+    have hFin : ∃ stDone red dig, finalizeScanlineStream stMid = .ok (stDone, red, dig) := by
+      unfold finalizeScanlineStream stepSensorSealer commitValidSensorFrame
+      simp only [hComp, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hNone, hMax, hGeom]
+      exact ⟨_, _, _, rfl⟩
+    obtain ⟨stDone, red, dig, hFin⟩ := hFin
+    have hTr : ValidScanlineSessionTrace SensorSealerState.empty
+        [(canonicalStreamConfig, canonicalStreamPackets)] stDone.sealerState :=
+      .cons hRun hFin rfl (.nil _)
+    have _ := validScanlineSessionTrace_sound hTr (canonicalStreamConfig, canonicalStreamPackets) List.mem_cons_self
+    exact ⟨stDone.sealerState, hTr, by decide⟩
 end Obend.Polis.EpiphanyCompositor
 end
