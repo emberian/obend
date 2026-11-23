@@ -78,7 +78,7 @@ const PROTECTED_RANGES: [ProtectedFrameRange; 4] = [
     ProtectedFrameRange {
         class: ProtectedFrameClass::KernelPageTable,
         base_paddr: 0x6015_0000,
-        size: 16 * PAGE_SIZE_4K,
+        size: 32 * PAGE_SIZE_4K,
     },
 ];
 
@@ -1558,3 +1558,1190 @@ fn coupled_copy_before_verify_and_adversarial_dma_burst_preserves_settled_actuat
     assert_eq!(egress.tx_packets_emitted(), 1);
     assert_eq!(egress.released_seq(), 1);
 }
+
+#[test]
+fn smmuv3_ste_riscv_ddt_stage2_descriptors_and_cmdq_match_locked_bit_layouts() {
+    // 1. Golden 512-bit Armv8 SMMUv3 STE (`vmid = 1`, `s2ttb = 0x6015_2000`):
+    //    w0 = 0x0d (`V[0]=1, Config[3:1]=0b110`), w1 = 0 (`EATS[93:92]=0b00`),
+    //    w2 = 0x040d_0090_0000_0001 (`S2VMID=1, S2T0SZ=16, S2SL0=2, S2TG=0, S2PS=5, S2AA64=1, S2S=0, S2R=1`),
+    //    w3 = 0x6015_2000 (`S2TTB[243:196]`).
+    let ste = SmmuV3Ste::pack_stage2(1, 0x6015_2000).expect("valid STE");
+    assert_eq!(
+        ste.words,
+        [
+            0x0000_0000_0000_000d,
+            0x0000_0000_0000_0000,
+            0x040d_0090_0000_0001,
+            0x0000_0000_6015_2000,
+            0,
+            0,
+            0,
+            0,
+        ]
+    );
+    assert_eq!(
+        ste.decode(),
+        Ok(DecodedSmmuV3Ste::Stage2Translate {
+            vmid: 1,
+            s2ttb_paddr: 0x6015_2000,
+        })
+    );
+    assert_eq!(SmmuV3Ste::ABORT.decode(), Ok(DecodedSmmuV3Ste::Abort));
+    let ste_bytes = ste.to_le_bytes();
+    assert_eq!(SmmuV3Ste::from_le_bytes(&ste_bytes), ste);
+
+    // 16-bit VMID using bits [11:10] (`0x0c01`, global bits [139:138]) round-trips cleanly without colliding with EATS[93:92]!
+    let ste_hi_vmid = SmmuV3Ste::pack_stage2(0x0c01, 0x6015_3000).expect("16-bit VMID valid");
+    assert_eq!(
+        ste_hi_vmid.decode(),
+        Ok(DecodedSmmuV3Ste::Stage2Translate {
+            vmid: 0x0c01,
+            s2ttb_paddr: 0x6015_3000,
+        })
+    );
+
+    // Mutating EATS[93:92] (`w1` bit 28) is unconditionally refused (`PcieAtsBypassEnabled`).
+    let mut bad_eats = ste;
+    bad_eats.words[1] |= 1u64 << 28;
+    assert_eq!(
+        bad_eats.decode(),
+        Err(SteDecodeError::PcieAtsBypassEnabled(1))
+    );
+
+    // Mutating `Config[3:1]` to `0b100` (Stage-1 & Stage-2 bypass!) is refused.
+    let mut bad_bypass = ste;
+    bad_bypass.words[0] = 1 | (0b100 << 1);
+    assert_eq!(
+        bad_bypass.decode(),
+        Err(SteDecodeError::ForbiddenConfigMode(0b100))
+    );
+
+    // Mutating `S2S[185]` (`w2` bit 57) without stall handler is refused.
+    let mut bad_stall = ste;
+    bad_stall.words[2] |= 1u64 << 57;
+    assert_eq!(bad_stall.decode(), Err(SteDecodeError::StallWithoutHandler));
+
+    // 2. Golden 256-bit RISC-V IOMMU Base-Format DDT Entry (`gscid = 1`, `16 KiB`-aligned `root_paddr = 0x6015_4000`):
+    let ddte = RiscvDdtEntry::pack_sv48x4(1, 0x6015_4000).expect("valid 16KiB-aligned RISC-V DDTE");
+    assert_eq!(
+        ddte.words,
+        [0x0000_0000_0000_0001, 0x9000_1000_0006_0154, 0, 0]
+    );
+    assert_eq!(
+        ddte.decode(),
+        Ok(DecodedRiscvDdte::Sv48x4Translate {
+            gscid: 1,
+            root_paddr: 0x6015_4000,
+        })
+    );
+    // 4 KiB-only aligned root (`0x6015_2000`, `PPN[1:0] = 0b10 != 0`) is rejected by `Sv48x4`!
+    assert_eq!(
+        RiscvDdtEntry::pack_sv48x4(1, 0x6015_2000),
+        Err(DdteDecodeError::UnalignedOrOutOfRangeRoot(0x6015_2000))
+    );
+    assert_eq!(RiscvDdtEntry::ABORT.decode(), Ok(DecodedRiscvDdte::Abort));
+    let mut bad_rv_ats = ddte;
+    bad_rv_ats.words[0] |= 1 << 1; // EN_ATS=1
+    assert_eq!(bad_rv_ats.decode(), Err(DdteDecodeError::PcieAtsOrPriEnabled));
+    let mut bad_rv_bare = ddte;
+    bad_rv_bare.words[1] &= !(0xfu64 << 60); // MODE=0 Bare bypass!
+    assert_eq!(
+        bad_rv_bare.decode(),
+        Err(DdteDecodeError::BareBypassOrInvalidMode(0))
+    );
+
+    // 3. Golden 64-bit Armv8 Stage-2 Descriptors (Table, L2 2MiB Block, L3 4KiB Page):
+    let tbl_desc = encode_stage2_table_desc(0x6015_3000).unwrap();
+    assert_eq!(tbl_desc, 0x0000_0000_6015_3003);
+    assert_eq!(decode_stage2_table_desc(tbl_desc), Some(0x6015_3000));
+    assert_eq!(decode_stage2_table_desc(0x0000_0000_6020_0441), None); // Block invalid at L0/L1!
+
+    let page_desc = encode_stage2_page4k_desc(0x6084_6000, IoPerm::WriteOnly).unwrap();
+    assert_eq!(page_desc, 0x0040_0000_6084_6483);
+    assert_eq!(
+        decode_stage2_l3_desc(page_desc),
+        Some(DecodedL3Desc::Page4KiB {
+            oa_paddr: 0x6084_6000,
+            perm: IoPerm::WriteOnly,
+        })
+    );
+    // Clearing AF[10] or flipping S2XN[54:53] from `0b10` (XN-all) to `0b11` (EL1 executable under FEAT_XNX) faults!
+    assert_eq!(decode_stage2_l3_desc(page_desc & !(1u64 << 10)), None);
+    assert_eq!(decode_stage2_l3_desc(page_desc | (1u64 << 53)), None);
+    assert_eq!(decode_stage2_l3_desc(0x0040_0000_6084_6481), None); // 0b01 invalid at L3!
+
+    let blk_desc = encode_stage2_block2m_desc(0x6020_0000, IoPerm::ReadOnly).unwrap();
+    assert_eq!(blk_desc, 0x0040_0000_6020_0441);
+    assert_eq!(
+        decode_stage2_l2_desc(blk_desc),
+        Some(DecodedL2Desc::Block2MiB {
+            oa_paddr: 0x6020_0000,
+            perm: IoPerm::ReadOnly,
+        })
+    );
+    // Non-zero low OA bits [20:12] in a 2 MiB block descriptor must be rejected!
+    assert_eq!(decode_stage2_l2_desc(blk_desc | 0x1000), None);
+
+    // 4. Golden 128-bit SMMUv3 Command Queue encodings:
+    let cfgi = SmmuCmd::CfgiSte {
+        stream_id: StreamId(0x10),
+        leaf: false,
+    };
+    assert_eq!(cfgi.pack(), Some([0x0000_0010_0000_0003, 0]));
+    assert_eq!(SmmuCmd::decode([0x0000_0010_0000_0003, 0]), Some(cfgi));
+
+    let tlbi = SmmuCmd::TlbiS2Ipa {
+        vmid: 1,
+        ipa: 0x8000_0000,
+        leaf: false,
+    };
+    assert_eq!(
+        tlbi.pack(),
+        Some([0x0000_0001_0000_002a, 0x0000_0000_8000_0000])
+    );
+    assert_eq!(
+        SmmuCmd::decode([0x0000_0001_0000_002a, 0x0000_0000_8000_0000]),
+        Some(tlbi)
+    );
+    // Non-zero RES0 bits [63:48] must be rejected on Stage-2 TLBI commands!
+    assert_eq!(
+        SmmuCmd::decode([0x0001_0001_0000_002a, 0x0000_0000_8000_0000]),
+        None
+    );
+    let vmall = SmmuCmd::TlbiS12Vmall { vmid: 1 };
+    assert_eq!(vmall.pack(), Some([0x0000_0001_0000_0028, 0]));
+    assert_eq!(SmmuCmd::decode([0x0000_0001_0000_0028, 0]), Some(vmall));
+
+    assert_eq!(SmmuCmd::Sync.pack(), Some([0x46, 0]));
+    assert_eq!(SmmuCmd::decode([0x46, 0]), Some(SmmuCmd::Sync));
+}
+
+#[test]
+fn differential_fuzzer_2000_ops_proves_walk_smmuv3_stage2_equals_translate_dma_and_protects_tables() {
+    // 0. Coalescable IOVA-adjacent + PA-contiguous + same-permission regions cannot be distinguished
+    //    by pure hardware Stage-2 PTEs (`RegionsNonCoalescable`), so `RadixTableArena::compile` refuses them!
+    let coalescable_adj = [
+        DmaRegion {
+            iova: 0x1000_0000,
+            paddr: 0x6080_0000,
+            size: 16 * PAGE_SIZE_4K,
+            granule: PageGranule::Page4KiB,
+            perm: IoPerm::ReadWrite,
+            kind: DmaRegionKind::IngressRing,
+        },
+        DmaRegion {
+            iova: 0x1001_0000,
+            paddr: 0x6081_0000,
+            size: 2 * PAGE_SIZE_4K,
+            granule: PageGranule::Page4KiB,
+            perm: IoPerm::ReadWrite,
+            kind: DmaRegionKind::IngressRing,
+        },
+    ];
+    let coalescable_streams = [DeviceStreamBinding {
+        stream_id: StreamId(0x10),
+        role: DeviceRole::IngressNic,
+        owner_pd: ChokepointRole::Ingress,
+        regions: &coalescable_adj,
+    }];
+    let coalescable_policy = ChokepointIommuPolicy {
+        arch: IommuArch::ArmSmmuV3,
+        default_deny_unmapped: true,
+        rootserver_phys_start: 0x6020_0000,
+        rootserver_phys_end: 0x6060_0000,
+        dma_pool_base: 0x6080_0000,
+        dma_pool_size: 4 * PAGE_SIZE_2M / 2,
+        protected_ranges: &PROTECTED_RANGES,
+        streams: &coalescable_streams,
+    };
+    assert_eq!(
+        RadixTableArena::<20>::compile(&coalescable_policy, 0x6015_0000),
+        Err(RadixBuildError::CoalescableAdjacentRegions {
+            stream_id: 0x10,
+            first_iova: 0x1000_0000,
+            second_iova: 0x1001_0000,
+        })
+    );
+
+    // Include IOVA-adjacent non-contiguous-PA regions (`0x1001_0000 -> 0x6081_4000` right after `0x1000_0000..0x1001_0000`),
+    // a 2 MiB L2 huge-page block (`0x2000_0000..0x2020_0000`), RO outbox, and WO camera!
+    let ingress_two_adj = [
+        DmaRegion {
+            iova: 0x1000_0000,
+            paddr: 0x6080_0000,
+            size: 16 * PAGE_SIZE_4K,
+            granule: PageGranule::Page4KiB,
+            perm: IoPerm::ReadWrite,
+            kind: DmaRegionKind::IngressRing,
+        },
+        DmaRegion {
+            iova: 0x1001_0000,
+            paddr: 0x6081_4000,
+            size: 2 * PAGE_SIZE_4K,
+            granule: PageGranule::Page4KiB,
+            perm: IoPerm::ReadWrite,
+            kind: DmaRegionKind::IngressRing,
+        },
+    ];
+    let persist_huge = [DmaRegion {
+        iova: 0x2000_0000,
+        paddr: 0x60a0_0000,
+        size: PAGE_SIZE_2M,
+        granule: PageGranule::Huge2MiB,
+        perm: IoPerm::ReadWrite,
+        kind: DmaRegionKind::PersistWalPool,
+    }];
+    let egress_ro = [DmaRegion {
+        iova: 0x3000_0000,
+        paddr: 0x6082_0000,
+        size: 4 * PAGE_SIZE_4K,
+        granule: PageGranule::Page4KiB,
+        perm: IoPerm::ReadOnly,
+        kind: DmaRegionKind::EgressOutboxRing,
+    }];
+    let camera_wo = [DmaRegion {
+        iova: 0x5000_0000,
+        paddr: 0x6083_0000,
+        size: 4 * PAGE_SIZE_4K,
+        granule: PageGranule::Page4KiB,
+        perm: IoPerm::WriteOnly,
+        kind: DmaRegionKind::CameraRing,
+    }];
+    let streams = [
+        DeviceStreamBinding {
+            stream_id: StreamId(0x10),
+            role: DeviceRole::IngressNic,
+            owner_pd: ChokepointRole::Ingress,
+            regions: &ingress_two_adj,
+        },
+        DeviceStreamBinding {
+            stream_id: StreamId(0x20),
+            role: DeviceRole::PersistNvme,
+            owner_pd: ChokepointRole::Persist,
+            regions: &persist_huge,
+        },
+        DeviceStreamBinding {
+            stream_id: StreamId(0x30),
+            role: DeviceRole::EgressNic,
+            owner_pd: ChokepointRole::TxEgress,
+            regions: &egress_ro,
+        },
+        DeviceStreamBinding {
+            stream_id: StreamId(0x50),
+            role: DeviceRole::CameraCsi2,
+            owner_pd: ChokepointRole::Ingress,
+            regions: &camera_wo,
+        },
+    ];
+    let policy = ChokepointIommuPolicy {
+        arch: IommuArch::ArmSmmuV3,
+        default_deny_unmapped: true,
+        rootserver_phys_start: 0x6020_0000,
+        rootserver_phys_end: 0x6060_0000,
+        dma_pool_base: 0x6080_0000,
+        dma_pool_size: 4 * PAGE_SIZE_2M / 2, // 4 MiB (`0x6080_0000..0x60c0_0000`), total 8 MiB < 10 MiB!
+        protected_ranges: &PROTECTED_RANGES,
+        streams: &streams,
+    };
+
+    // Attempting to place the radix arena outside `KernelPageTable` protected frames is refused,
+    // AND leaves `arena` completely disarmed (`active_stream_limit == 0`, unwalkable)!
+    let mut arena = RadixTableArena::<20>::empty();
+    arena
+        .compile_into(&policy, 0x6015_0000)
+        .expect("initial compile succeeds");
+    assert_eq!(
+        arena.compile_into(&policy, 0x6010_0000),
+        Err(RadixBuildError::ArenaNotInKernelPageTableRange {
+            arena_base: 0x6010_0000,
+            arena_bytes: 18 * PAGE_SIZE_4K,
+        })
+    );
+    assert_eq!(arena.active_stream_limit(), 0);
+    assert_eq!(
+        walk_smmuv3_stage2(&arena, StreamId(0x10), 0x1000_0000, 64, DmaAccess::Write),
+        Err(DmaFault::UnmappedStream { stream_id: 0x10 })
+    );
+
+    arena
+        .compile_into(&policy, 0x6015_0000)
+        .expect("compiles into KernelPageTable arena");
+    assert!(
+        arena.smmu_tables_dma_unreachable(&policy),
+        "Stream Table + CmdQ + L0..L3 radix tables must sit in KernelPageTable and be 100% DMA-unreachable"
+    );
+    let mut rv_mismatch = policy;
+    rv_mismatch.arch = IommuArch::RiscvIommu;
+    assert_eq!(
+        RadixTableArena::<20>::compile(&rv_mismatch, 0x6015_0000),
+        Err(RadixBuildError::UnsupportedArchForSmmuV3Radix(
+            IommuArch::RiscvIommu
+        ))
+    );
+    // Misaligned `SMMU_STRTAB_BASE` (`0x6015_1000` is 4 KiB-aligned, NOT 8 KiB-aligned for 128 STEs!) is refused!
+    assert_eq!(
+        RadixTableArena::<20>::compile(&policy, 0x6015_1000),
+        Err(RadixBuildError::UnalignedOrOutOfRangeArenaBase(0x6015_1000))
+    );
+
+    // Explicit edge-case corpus before 2,000-op PRNG sweep:
+    let edge_cases: &[(u32, u64, u64, DmaAccess)] = &[
+        // Multi-page contiguous transfer inside region 0 (`0x1000_0ff0..0x1000_2010`): succeeds!
+        (0x10, 0x1000_0ff0, 0x1020, DmaAccess::Write),
+        // Multi-page boundary escape off the end of mapped region (`0x1001_1fc0..0x1001_2040` into unmapped L3 PTE): faults!
+        (0x10, 0x1001_1fc0, 128, DmaAccess::Write),
+        // Two-byte transfer straddling two adjacent `ReadWrite` regions (`0x1000_ffff..0x1001_0001`): CrossRegionSpanDenied!
+        (0x10, 0x1000_ffff, 2, DmaAccess::Write),
+        // Interior offset inside 2 MiB L2 block (`0x201a_bcde`):
+        (0x20, 0x201a_bcde, 512, DmaAccess::Read),
+        // High IOVA >= 2^48 with mapped low bits (`(1 << 48) | 0x1000_0000`): UnmappedIova!
+        (0x10, (1u64 << 48) | 0x1000_0000, 64, DmaAccess::Write),
+        // Zero length and u64 wraparound:
+        (0x10, 0x1000_0000, 0, DmaAccess::Read),
+        (0x10, u64::MAX - 7, 16, DmaAccess::Write),
+        // Unmapped / sentinel StreamIds:
+        (0, 0x1000_0000, 64, DmaAccess::Read),
+        (u32::MAX, 0x1000_0000, 64, DmaAccess::Write),
+        (0x77, 0x1000_0000, 64, DmaAccess::Read),
+        // Permission denials on RO and WO leaves:
+        (0x30, 0x3000_0100, 64, DmaAccess::Write),
+        (0x50, 0x5000_0200, 64, DmaAccess::Read),
+    ];
+    for &(sid, iova, len, access) in edge_cases {
+        assert_eq!(
+            walk_smmuv3_stage2(&arena, StreamId(sid), iova, len, access),
+            translate_dma(&policy, StreamId(sid), iova, len, access),
+            "edge case mismatch for sid={sid:#x} iova={iova:#x} len={len:#x}"
+        );
+    }
+
+    // 2,000-op deterministic differential fuzzer checking exact `Result<DmaTranslation, DmaFault>` equality!
+    let mut rng = 0xd1b5_4a32_d192_ed03u64;
+    let sids = [0u32, 0x10, 0x20, 0x30, 0x50, 0x66, 0x80, u32::MAX];
+    let bases = [
+        0x1000_0000u64,
+        0x1000_ff00,
+        0x1001_0000,
+        0x2000_0000,
+        0x201f_f800,
+        0x3000_0000,
+        0x5000_0000,
+        0x6015_0000, // KernelPageTable SMMU radix arena base!
+        COMMIT_PRIVATE_PADDR,
+        1u64 << 48,
+        u64::MAX - 64,
+    ];
+    let mut ok_count = 0usize;
+    let mut err_count = 0usize;
+    for step in 0..2000usize {
+        rng ^= rng >> 12;
+        rng ^= rng << 25;
+        rng ^= rng >> 27;
+        let sid = sids[(rng as usize) % sids.len()];
+        let base = if step % 2 == 0 {
+            match sid {
+                0x10 => 0x1000_0000,
+                0x20 => 0x2000_0000,
+                0x30 => 0x3000_0000,
+                0x50 => 0x5000_0000,
+                _ => bases[((rng >> 8) as usize) % bases.len()],
+            }
+        } else {
+            bases[((rng >> 8) as usize) % bases.len()]
+        };
+        let off = (rng >> 16) & 0x3fff;
+        let len = (rng >> 32) & 0x2fff; // includes 0, sub-page, and multi-page lengths up to ~12 KiB!
+        let access = if (rng >> 48) & 1 == 0 {
+            DmaAccess::Read
+        } else {
+            DmaAccess::Write
+        };
+        let iova = base.wrapping_add(off);
+        let hw_res = walk_smmuv3_stage2(&arena, StreamId(sid), iova, len, access);
+        let spec_res = translate_dma(&policy, StreamId(sid), iova, len, access);
+        assert_eq!(
+            hw_res, spec_res,
+            "2000-op differential fuzz mismatch at step={step} sid={sid:#x} iova={iova:#x} len={len:#x}"
+        );
+        match hw_res {
+            Ok(tr) => {
+                ok_count += 1;
+                // Verify NO translated DMA ever touches the SMMU radix arena (`0x6015_0000..0x6017_0000`)!
+                assert!(
+                    tr.paddr + tr.len <= arena.arena_base_paddr()
+                        || tr.paddr >= arena.arena_base_paddr() + arena.total_allocated_bytes()
+                );
+            }
+            Err(_) => err_count += 1,
+        }
+    }
+    assert!(ok_count > 200);
+    assert!(err_count > 1000);
+}
+
+#[test]
+fn stateful_iotlb_refuses_unsynced_reconfig_and_enforces_tlbi_sync_epoch_safety() {
+    let base_policy = canonical_policy();
+    let mut arena0 = RadixTableArena::<20>::empty();
+    arena0
+        .compile_into(&base_policy, 0x6015_0000)
+        .expect("epoch 0 arena");
+    let mut arena1 = RadixTableArena::<20>::empty();
+    let mut engine = SmmuIotlbEngine::<16, 32>::new();
+
+    // Warm the IOTLB with a writable IngressNic (`0x10`) DMA translation at `0x1000_0000 -> DMA_POOL_BASE`.
+    let hit0 = engine
+        .translate_with_iotlb(&arena0, StreamId(0x10), 0x1000_0040, 64, DmaAccess::Write)
+        .expect("epoch 0 DMA write cached");
+    assert_eq!(hit0.paddr, DMA_POOL_BASE + 0x40);
+    assert_eq!(engine.live_entry_count(), 1);
+
+    let vmid_ingress = arena0.stream_vmid(StreamId(0x10)).unwrap();
+    assert_eq!(vmid_ingress, 0x10);
+    let old_reg = INGRESS_REGIONS[0];
+
+    // Epoch 1 policy: unmap `DMA_POOL_BASE..DMA_POOL_BASE+0x1_0000` from `IngressNic` (`0x10`),
+    // moving `IngressNic` to `DMA_POOL_BASE + 0x6_0000` so the old frames can be repurposed safely!
+    let reassigned_ingress = [DmaRegion {
+        iova: 0x1000_0000,
+        paddr: DMA_POOL_BASE + 0x6_0000,
+        size: 4 * PAGE_SIZE_4K,
+        granule: PageGranule::Page4KiB,
+        perm: IoPerm::ReadWrite,
+        kind: DmaRegionKind::IngressRing,
+    }];
+    let mut epoch1_streams = CANONICAL_STREAMS;
+    epoch1_streams[0].regions = &reassigned_ingress;
+    let epoch1_policy = ChokepointIommuPolicy {
+        streams: &epoch1_streams,
+        ..base_policy
+    };
+    arena1
+        .compile_into(&epoch1_policy, 0x6015_0000)
+        .expect("unflushed arena1");
+
+    // 1. Active-arena enforcement: BEFORE `unmap_or_reassign_dma_region` commits `arena1`,
+    //    passing the unactivated `arena1` is refused (`StaleOrForeignArenaEpoch`) on BOTH cached-hit
+    //    (`0x1000_0040`) and miss (`0x1000_1000`) paths, while `arena0` still hits `DMA_POOL_BASE`!
+    let live_hit = engine
+        .translate_with_iotlb(&arena0, StreamId(0x10), 0x1000_0040, 64, DmaAccess::Write)
+        .expect("epoch-0 IOTLB entry still live on arena0 before TLBI+SYNC");
+    assert_eq!(live_hit.paddr, DMA_POOL_BASE + 0x40);
+    assert_eq!(
+        engine.translate_with_iotlb(&arena1, StreamId(0x10), 0x1000_0040, 64, DmaAccess::Write),
+        Err(DmaFault::StaleOrForeignArenaEpoch)
+    );
+    assert_eq!(
+        engine.translate_with_iotlb(&arena1, StreamId(0x10), 0x1000_1000, 64, DmaAccess::Write),
+        Err(DmaFault::StaleOrForeignArenaEpoch)
+    );
+
+    // 1b. Spoofing `old_vmid` (e.g., passing `0x99` instead of `vmid_ingress = 0x10`) is refused!
+    assert_eq!(
+        engine
+            .unmap_or_reassign_dma_region(
+                &arena0,
+                StreamId(0x10),
+                0x99,
+                &old_reg,
+                &epoch1_policy,
+                0x6015_0000,
+                &mut arena1,
+            )
+            .unwrap_err(),
+        TlbiReconfigError::InvalidOldStreamVmidOrRegion {
+            stream_id: 0x10,
+            claimed_vmid: 0x99,
+        }
+    );
+
+    // 2. Attempting `unmap_or_reassign_dma_region` with NO invalidation commands is refused (`MissingCfgiSte`)!
+    assert_eq!(
+        engine
+            .unmap_or_reassign_dma_region(
+                &arena0,
+                StreamId(0x10),
+                vmid_ingress,
+                &old_reg,
+                &epoch1_policy,
+                0x6015_0000,
+                &mut arena1,
+            )
+            .unwrap_err(),
+        TlbiReconfigError::MissingCfgiSte { stream_id: 0x10 }
+    );
+
+    // 3. Arm IHI 0070 §4.3.1: `CMD_CFGI_STE + CMD_SYNC` alone flushes STE config cache ONLY,
+    //    leaving the VMID-tagged IOTLB entry LIVE (`live_entry_count() == 1`) and refusing reconfig!
+    engine
+        .submit_raw_cmd([0x0000_0010_0000_0003, 0])
+        .expect("raw CMD_CFGI_STE");
+    engine
+        .submit_raw_cmd([0x46, 0])
+        .expect("raw CMD_SYNC");
+    assert_eq!(
+        engine.live_entry_count(),
+        1,
+        "CMD_CFGI_STE + CMD_SYNC alone must NOT evict VMID-tagged IOTLB entries"
+    );
+    assert_eq!(
+        engine
+            .unmap_or_reassign_dma_region(
+                &arena0,
+                StreamId(0x10),
+                vmid_ingress,
+                &old_reg,
+                &epoch1_policy,
+                0x6015_0000,
+                &mut arena1,
+            )
+            .unwrap_err(),
+        TlbiReconfigError::MissingCoveringTlbiS2Ipa {
+            vmid: vmid_ingress,
+            iova: old_reg.iova,
+        }
+    );
+    // Malformed RES0 bits [63:48] in raw command words are rejected!
+    assert_eq!(
+        engine.submit_raw_cmd([0x0001_0010_0000_002a, old_reg.iova]),
+        Err(TlbiReconfigError::MalformedCommandWords([
+            0x0001_0010_0000_002a,
+            old_reg.iova,
+        ]))
+    );
+
+    // 4. Submitting covering `CMD_TLBI_S2_IPA` WITHOUT `CMD_SYNC` is refused (`UnsyncedCommandsPending`),
+    //    AND the stale IOTLB entry is STILL live in hardware!
+    for page_idx in 0..16u64 {
+        let words = SmmuCmd::TlbiS2Ipa {
+            vmid: vmid_ingress,
+            ipa: old_reg.iova + page_idx * PAGE_SIZE_4K,
+            leaf: false,
+        }
+        .pack()
+        .unwrap();
+        engine.submit_raw_cmd(words).unwrap();
+    }
+    assert_eq!(engine.live_entry_count(), 1, "pending TLBI must not evict before CMD_SYNC");
+    assert_eq!(
+        engine
+            .unmap_or_reassign_dma_region(
+                &arena0,
+                StreamId(0x10),
+                vmid_ingress,
+                &old_reg,
+                &epoch1_policy,
+                0x6015_0000,
+                &mut arena1,
+            )
+            .unwrap_err(),
+        TlbiReconfigError::UnsyncedCommandsPending
+    );
+
+    // 5. Issuing `CMD_SYNC` drains the queue and evicts the IOTLB entry, BUT if a DMA miss refills
+    //    from `arena0` AFTER `CMD_SYNC` and BEFORE `unmap_or_reassign_dma_region`, `synced_len` is
+    //    invalidated so the stale `CMD_SYNC` CANNOT be replayed!
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    assert_eq!(engine.live_entry_count(), 0);
+    let _refilled = engine
+        .translate_with_iotlb(&arena0, StreamId(0x10), 0x1000_0040, 64, DmaAccess::Write)
+        .expect("refill from arena0 after early sync");
+    assert_eq!(engine.live_entry_count(), 1);
+    assert_eq!(
+        engine
+            .unmap_or_reassign_dma_region(
+                &arena0,
+                StreamId(0x10),
+                vmid_ingress,
+                &old_reg,
+                &epoch1_policy,
+                0x6015_0000,
+                &mut arena1,
+            )
+            .unwrap_err(),
+        TlbiReconfigError::MissingCfgiSte { stream_id: 0x10 }
+    );
+
+    // 6. Batching `CMD_CFGI_STE` + `CMD_TLBI_S2_IPA` + `CMD_SYNC` WITHOUT an intervening `CMD_SYNC`
+    //    between `CFGI_STE` and `TLBI_S2_IPA` is refused per Arm IHI 0070 §3.21.1.1; adding `CMD_SYNC`
+    //    after `CMD_CFGI_STE` and then issuing `CMD_TLBI_S2_IPA` + `CMD_SYNC` unlocks `epoch1_policy`!
+    engine
+        .submit_cmd(SmmuCmd::CfgiSte {
+            stream_id: StreamId(0x10),
+            leaf: false,
+        })
+        .unwrap();
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    for page_idx in 0..16u64 {
+        engine
+            .submit_cmd(SmmuCmd::TlbiS2Ipa {
+                vmid: vmid_ingress,
+                ipa: old_reg.iova + page_idx * PAGE_SIZE_4K,
+                leaf: false,
+            })
+            .unwrap();
+    }
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    assert_eq!(engine.live_entry_count(), 0);
+
+    let truncated_streams = [epoch1_streams[0]];
+    let sneaky_policy = ChokepointIommuPolicy {
+        streams: &truncated_streams,
+        ..epoch1_policy
+    };
+    assert_eq!(
+        engine
+            .unmap_or_reassign_dma_region(
+                &arena0,
+                StreamId(0x10),
+                vmid_ingress,
+                &old_reg,
+                &sneaky_policy,
+                0x6015_0000,
+                &mut arena1,
+            )
+            .unwrap_err(),
+        TlbiReconfigError::UnannouncedMappingChange {
+            stream_id: CANONICAL_STREAMS[1].stream_id.0,
+            iova_base: 0,
+        }
+    );
+
+    engine
+        .unmap_or_reassign_dma_region(
+            &arena0,
+            StreamId(0x10),
+            vmid_ingress,
+            &old_reg,
+            &epoch1_policy,
+            0x6015_0000,
+            &mut arena1,
+        )
+        .expect("CFGI_STE + covering TLBI_S2_IPA + CMD_SYNC unlocks safe epoch transition");
+    assert_eq!(engine.epoch(), 1);
+
+    // Subsequent DMA on `0x10` now resolves to the new physical frame `DMA_POOL_BASE + 0x6_0040`, never old `DMA_POOL_BASE`!
+    let hit1 = engine
+        .translate_with_iotlb(&arena1, StreamId(0x10), 0x1000_0040, 64, DmaAccess::Write)
+        .expect("epoch 1 DMA write");
+    assert_eq!(hit1.paddr, DMA_POOL_BASE + 0x6_0040);
+    assert_eq!(engine.live_entry_count(), 1);
+
+    // 7. Verify `CMD_TLBI_S12_VMALL(vmid_ingress) + CMD_SYNC` evicts all live entries for `vmid_ingress`,
+    //    AND passing retired `arena0` as `old_arena` at epoch 1 or keeping `reassigned_ingress[0]` unchanged is refused!
+    let mut scratch_arena = RadixTableArena::<20>::empty();
+    assert_eq!(
+        engine
+            .unmap_or_reassign_dma_region(
+                &arena0,
+                StreamId(0x10),
+                vmid_ingress,
+                &old_reg,
+                &base_policy,
+                0x6015_0000,
+                &mut scratch_arena,
+            )
+            .unwrap_err(),
+        TlbiReconfigError::StaleOrMismatchedOldArena
+    );
+    assert_eq!(
+        engine
+            .unmap_or_reassign_dma_region(
+                &arena1,
+                StreamId(0x10),
+                vmid_ingress,
+                &reassigned_ingress[0],
+                &epoch1_policy,
+                0x6015_0000,
+                &mut scratch_arena,
+            )
+            .unwrap_err(),
+        TlbiReconfigError::TargetRegionUnchanged
+    );
+    engine
+        .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: vmid_ingress })
+        .unwrap();
+    assert_eq!(engine.live_entry_count(), 1, "pending TLBI_S12_VMALL must wait for CMD_SYNC");
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    assert_eq!(engine.live_entry_count(), 0, "synced TLBI_S12_VMALL evicts vmid_ingress IOTLB entries");
+}
+
+#[test]
+fn stateful_iotlb_enforces_arena_base_binding_cfgi_ordering_subtree_coherence_queue_bounds_and_multi_epoch() {
+    // 1. CommandQueueFull on both pending queue and synced window (`MAX_CMDS = 2`):
+    let mut tiny_q = SmmuIotlbEngine::<4, 2>::new();
+    tiny_q
+        .submit_cmd(SmmuCmd::CfgiSte {
+            stream_id: StreamId(0x10),
+            leaf: false,
+        })
+        .unwrap();
+    tiny_q
+        .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: 0x10 })
+        .unwrap();
+    assert_eq!(
+        tiny_q.submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: 0x10 }),
+        Err(TlbiReconfigError::CommandQueueFull)
+    );
+    tiny_q.submit_cmd(SmmuCmd::Sync).unwrap();
+    tiny_q
+        .submit_cmd(SmmuCmd::CfgiSte {
+            stream_id: StreamId(0x10),
+            leaf: false,
+        })
+        .unwrap();
+    assert_eq!(
+        tiny_q.submit_cmd(SmmuCmd::Sync),
+        Err(TlbiReconfigError::CommandQueueFull)
+    );
+
+    // 2. Same-policy, different-`arena_base` (`0x6015_0000` vs `0x6015_8000` inside `KernelPageTable`) is refused!
+    let base_policy = canonical_policy();
+    let arena_a = RadixTableArena::<24>::compile(&base_policy, 0x6015_0000).unwrap();
+    let arena_b = RadixTableArena::<24>::compile(&base_policy, 0x6015_8000).unwrap();
+    assert_eq!(arena_a.policy_digest(), arena_b.policy_digest());
+    let mut engine = SmmuIotlbEngine::<16, 64>::new();
+    engine
+        .translate_with_iotlb(&arena_a, StreamId(0x10), 0x1000_0000, 64, DmaAccess::Write)
+        .expect("bind engine to arena_a at 0x6015_0000");
+    assert_eq!(engine.active_arena_base(), Some(0x6015_0000));
+    // Foreign arena `arena_b` is refused on BOTH cached IOTLB hit (`0x1000_0000`) AND miss (`0x1000_1000`)!
+    assert_eq!(
+        engine.translate_with_iotlb(&arena_b, StreamId(0x10), 0x1000_0000, 64, DmaAccess::Write),
+        Err(DmaFault::StaleOrForeignArenaEpoch)
+    );
+    assert_eq!(
+        engine.translate_with_iotlb(&arena_b, StreamId(0x10), 0x1000_1000, 64, DmaAccess::Write),
+        Err(DmaFault::StaleOrForeignArenaEpoch)
+    );
+
+    // Epoch 1 policy that spans two 2 MiB windows on stream `0x10` (`0x101f_f000..0x1020_1000`),
+    // allocating +1 L3 table and shifting the physical L0..L3 frames of streams `0x20..0x50`!
+    let split_2m_ingress = [DmaRegion {
+        iova: 0x101f_f000,
+        paddr: DMA_POOL_BASE + 0x6_0000,
+        size: 2 * PAGE_SIZE_4K,
+        granule: PageGranule::Page4KiB,
+        perm: IoPerm::ReadWrite,
+        kind: DmaRegionKind::IngressRing,
+    }];
+    let mut epoch1_streams = CANONICAL_STREAMS;
+    epoch1_streams[0].regions = &split_2m_ingress;
+    let epoch1_policy = ChokepointIommuPolicy {
+        streams: &epoch1_streams,
+        ..base_policy
+    };
+    let mut arena1 = RadixTableArena::<24>::empty();
+
+    // Passing `arena_b` (same policy digest & epoch 0, wrong physical base `0x6015_8000`) as `old_arena` is refused!
+    assert_eq!(
+        engine.unmap_or_reassign_dma_region(
+            &arena_b,
+            StreamId(0x10),
+            0x10,
+            &INGRESS_REGIONS[0],
+            &epoch1_policy,
+            0x6015_0000,
+            &mut arena1,
+        ),
+        Err(TlbiReconfigError::StaleOrMismatchedOldArena)
+    );
+
+    // 3. Reversed ordering (`CMD_TLBI_S12_VMALL` BEFORE `CMD_CFGI_STE`) is refused!
+    engine
+        .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: 0x10 })
+        .unwrap();
+    engine
+        .submit_cmd(SmmuCmd::CfgiSte {
+            stream_id: StreamId(0x10),
+            leaf: false,
+        })
+        .unwrap();
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    assert_eq!(
+        engine.unmap_or_reassign_dma_region(
+            &arena_a,
+            StreamId(0x10),
+            0x10,
+            &INGRESS_REGIONS[0],
+            &epoch1_policy,
+            0x6015_0000,
+            &mut arena1,
+        ),
+        Err(TlbiReconfigError::MissingCoveringTlbiS2Ipa {
+            vmid: 0x10,
+            iova: INGRESS_REGIONS[0].iova,
+        })
+    );
+
+    // 4. Proper `CFGI_STE(0x10) -> TLBI_S12_VMALL(0x10) -> SYNC`, but streams `0x20..0x50` shifted physical
+    //    table addresses (+1 L3 table on `0x10`), so omitting `CFGI_STE(0x20)` / `TLBI_S12_VMALL(0x20)` is refused!
+    engine
+        .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: 0x10 })
+        .unwrap();
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    assert_eq!(
+        engine.unmap_or_reassign_dma_region(
+            &arena_a,
+            StreamId(0x10),
+            0x10,
+            &INGRESS_REGIONS[0],
+            &epoch1_policy,
+            0x6015_0000,
+            &mut arena1,
+        ),
+        Err(TlbiReconfigError::MissingCfgiSte { stream_id: 0x20 })
+    );
+    for &sid in &[0x20u32, 0x30, 0x40, 0x50] {
+        engine
+            .submit_cmd(SmmuCmd::CfgiSte {
+                stream_id: StreamId(sid),
+                leaf: false,
+            })
+            .unwrap();
+    }
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    assert_eq!(
+        engine.unmap_or_reassign_dma_region(
+            &arena_a,
+            StreamId(0x10),
+            0x10,
+            &INGRESS_REGIONS[0],
+            &epoch1_policy,
+            0x6015_0000,
+            &mut arena1,
+        ),
+        Err(TlbiReconfigError::MissingWalkCacheTlbiVmall { vmid: 0x20 })
+    );
+    for &vmid in &[0x20u16, 0x30, 0x40, 0x50] {
+        engine.submit_cmd(SmmuCmd::TlbiS12Vmall { vmid }).unwrap();
+    }
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    engine
+        .unmap_or_reassign_dma_region(
+            &arena_a,
+            StreamId(0x10),
+            0x10,
+            &INGRESS_REGIONS[0],
+            &epoch1_policy,
+            0x6015_0000,
+            &mut arena1,
+        )
+        .expect("Epoch 0 -> Epoch 1 succeeds once shifted streams flush CFGI_STE + TLBI_S12_VMALL");
+    assert_eq!(engine.epoch(), 1);
+    let hit_e1 = engine
+        .translate_with_iotlb(&arena1, StreamId(0x10), 0x101f_f080, 64, DmaAccess::Write)
+        .expect("epoch 1 split-2M translation");
+    assert_eq!(hit_e1.paddr, DMA_POOL_BASE + 0x6_0080);
+
+    // 5. Multi-epoch transition `Epoch 1 -> Epoch 2` into new physical arena base `0x6015_8000`
+    //    (verifying single-batch CFGI+TLBI without intervening CMD_SYNC is refused, AND weakening
+    //    CommitPrivate protected ranges across epochs is refused)!
+    let epoch2_ingress = [DmaRegion {
+        iova: 0x101f_f000,
+        paddr: DMA_POOL_BASE + 0x7_0000,
+        size: 2 * PAGE_SIZE_4K,
+        granule: PageGranule::Page4KiB,
+        perm: IoPerm::ReadWrite,
+        kind: DmaRegionKind::IngressRing,
+    }];
+    let mut epoch2_streams = epoch1_streams;
+    epoch2_streams[0].regions = &epoch2_ingress;
+    let epoch2_policy = ChokepointIommuPolicy {
+        streams: &epoch2_streams,
+        ..epoch1_policy
+    };
+    let mut arena2 = RadixTableArena::<24>::empty();
+    // Single-batch `CFGI_STE + TLBI_S12_VMALL + SYNC` without intervening `CMD_SYNC` is refused!
+    engine
+        .submit_cmd(SmmuCmd::CfgiSte {
+            stream_id: StreamId(0x10),
+            leaf: false,
+        })
+        .unwrap();
+    engine
+        .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: 0x10 })
+        .unwrap();
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    assert_eq!(
+        engine.unmap_or_reassign_dma_region(
+            &arena1,
+            StreamId(0x10),
+            0x10,
+            &split_2m_ingress[0],
+            &epoch2_policy,
+            0x6015_8000,
+            &mut arena2,
+        ),
+        Err(TlbiReconfigError::MissingCoveringTlbiS2Ipa {
+            vmid: 0x10,
+            iova: split_2m_ingress[0].iova,
+        })
+    );
+    // Now complete proper two-barrier `CFGI_STE(0x10..0x50) -> SYNC -> TLBI_S12_VMALL(0x10..0x50) -> SYNC`:
+    for &sid in &[0x20u32, 0x30, 0x40, 0x50] {
+        engine
+            .submit_cmd(SmmuCmd::CfgiSte {
+                stream_id: StreamId(sid),
+                leaf: false,
+            })
+            .unwrap();
+    }
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    for &sid in &[0x10u32, 0x20, 0x30, 0x40, 0x50] {
+        engine
+            .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: sid as u16 })
+            .unwrap();
+    }
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+
+    // Shrinking `CommitPrivate` protected range across epochs is refused (`ProtectedRangeWeakened`)!
+    let mut shrunk_prot = PROTECTED_RANGES;
+    shrunk_prot[0].size = PAGE_SIZE_4K;
+    let weakened_policy = ChokepointIommuPolicy {
+        protected_ranges: &shrunk_prot,
+        ..epoch2_policy
+    };
+    assert_eq!(
+        engine.unmap_or_reassign_dma_region(
+            &arena1,
+            StreamId(0x10),
+            0x10,
+            &split_2m_ingress[0],
+            &weakened_policy,
+            0x6015_8000,
+            &mut arena2,
+        ),
+        Err(TlbiReconfigError::ProtectedRangeWeakened {
+            class: ProtectedFrameClass::CommitPrivate,
+            base_paddr: PROTECTED_RANGES[0].base_paddr,
+        })
+    );
+
+    engine
+        .unmap_or_reassign_dma_region(
+            &arena1,
+            StreamId(0x10),
+            0x10,
+            &split_2m_ingress[0],
+            &epoch2_policy,
+            0x6015_8000,
+            &mut arena2,
+        )
+        .expect("Epoch 1 -> Epoch 2 transition into 0x6015_8000");
+    assert_eq!(engine.epoch(), 2);
+    assert_eq!(engine.active_arena_base(), Some(0x6015_8000));
+    let hit_e2 = engine
+        .translate_with_iotlb(&arena2, StreamId(0x10), 0x101f_f080, 64, DmaAccess::Write)
+        .expect("epoch 2 translation");
+    assert_eq!(hit_e2.paddr, DMA_POOL_BASE + 0x7_0080);
+
+    // 6. Multi-epoch cumulative outbox protection (`Epoch 2 -> Epoch 3 -> Epoch 4`):
+    //    Retiring `EgressOutboxRing` (`0x30`) in `Epoch 2 -> 3` still forbids repurposing that
+    //    retired outbox physical frame as writable DMA in `Epoch 3 -> 4`!
+    let mut epoch3_streams = epoch2_streams;
+    epoch3_streams[2].regions = &[];
+    let epoch3_policy = ChokepointIommuPolicy {
+        streams: &epoch3_streams,
+        ..epoch2_policy
+    };
+    let mut arena3 = RadixTableArena::<24>::empty();
+    for &sid in &[0x30u32, 0x40, 0x50] {
+        engine
+            .submit_cmd(SmmuCmd::CfgiSte {
+                stream_id: StreamId(sid),
+                leaf: false,
+            })
+            .unwrap();
+    }
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    for &sid in &[0x30u32, 0x40, 0x50] {
+        engine
+            .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: sid as u16 })
+            .unwrap();
+    }
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    engine
+        .unmap_or_reassign_dma_region(
+            &arena2,
+            StreamId(0x30),
+            0x30,
+            &EGRESS_REGIONS[0],
+            &epoch3_policy,
+            0x6015_8000,
+            &mut arena3,
+        )
+        .expect("Epoch 2 -> Epoch 3 retires EgressOutboxRing on stream 0x30");
+    assert_eq!(engine.epoch(), 3);
+
+    // Build an alternate `arena3_no_history` via a separate engine that NEVER mapped `EGRESS_REGIONS[0]`,
+    // reaching the EXACT SAME `(built_epoch = 3, policy_digest = epoch3_policy, arena_base_paddr = 0x6015_8000)`!
+    let mut alt_engine = SmmuIotlbEngine::<16, 64>::new();
+    let mut alt_streams0 = CANONICAL_STREAMS;
+    alt_streams0[2].regions = &[];
+    let alt_pol0 = ChokepointIommuPolicy {
+        streams: &alt_streams0,
+        ..base_policy
+    };
+    let mut alt_streams1 = alt_streams0;
+    alt_streams1[0].regions = &split_2m_ingress;
+    let alt_pol1 = ChokepointIommuPolicy {
+        streams: &alt_streams1,
+        ..base_policy
+    };
+    let alt_arena0 = RadixTableArena::<24>::compile(&alt_pol0, 0x6015_8000).unwrap();
+    let mut alt_arena1 = RadixTableArena::<24>::empty();
+    let mut alt_arena2 = RadixTableArena::<24>::empty();
+    let mut arena3_no_history = RadixTableArena::<24>::empty();
+    for &sid in &[0x10u32, 0x20, 0x30, 0x40, 0x50] {
+        alt_engine
+            .submit_cmd(SmmuCmd::CfgiSte {
+                stream_id: StreamId(sid),
+                leaf: false,
+            })
+            .unwrap();
+    }
+    alt_engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    for &sid in &[0x10u32, 0x20, 0x30, 0x40, 0x50] {
+        alt_engine
+            .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: sid as u16 })
+            .unwrap();
+    }
+    alt_engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    alt_engine
+        .unmap_or_reassign_dma_region(
+            &alt_arena0,
+            StreamId(0x10),
+            0x10,
+            &INGRESS_REGIONS[0],
+            &alt_pol1,
+            0x6015_8000,
+            &mut alt_arena1,
+        )
+        .unwrap();
+    for &sid in &[0x10u32, 0x20, 0x30, 0x40, 0x50] {
+        alt_engine
+            .submit_cmd(SmmuCmd::CfgiSte {
+                stream_id: StreamId(sid),
+                leaf: false,
+            })
+            .unwrap();
+    }
+    alt_engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    for &sid in &[0x10u32, 0x20, 0x30, 0x40, 0x50] {
+        alt_engine
+            .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: sid as u16 })
+            .unwrap();
+    }
+    alt_engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    alt_engine
+        .unmap_or_reassign_dma_region(
+            &alt_arena1,
+            StreamId(0x10),
+            0x10,
+            &split_2m_ingress[0],
+            &alt_pol0,
+            0x6015_8000,
+            &mut alt_arena2,
+        )
+        .unwrap();
+    for &sid in &[0x10u32, 0x20, 0x30, 0x40, 0x50] {
+        alt_engine
+            .submit_cmd(SmmuCmd::CfgiSte {
+                stream_id: StreamId(sid),
+                leaf: false,
+            })
+            .unwrap();
+    }
+    alt_engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    for &sid in &[0x10u32, 0x20, 0x30, 0x40, 0x50] {
+        alt_engine
+            .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: sid as u16 })
+            .unwrap();
+    }
+    alt_engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    alt_engine
+        .unmap_or_reassign_dma_region(
+            &alt_arena2,
+            StreamId(0x10),
+            0x10,
+            &INGRESS_REGIONS[0],
+            &epoch3_policy,
+            0x6015_8000,
+            &mut arena3_no_history,
+        )
+        .unwrap();
+    assert_eq!(arena3_no_history.built_epoch(), arena3.built_epoch());
+    assert_eq!(arena3_no_history.policy_digest(), arena3.policy_digest());
+    assert_eq!(
+        arena3_no_history.arena_base_paddr(),
+        arena3.arena_base_paddr()
+    );
+
+    // Now in `Epoch 3 -> Epoch 4`, attempting to map the retired outbox physical frame
+    // (`EGRESS_REGIONS[0].paddr`) as writable on stream `0x10` is refused — AND swapping in
+    // `arena3_no_history` (matching epoch/digest/base, missing retired outbox history) is ALSO refused!
+    let hijack_retired_outbox = [DmaRegion {
+        iova: 0x101f_f000,
+        paddr: EGRESS_REGIONS[0].paddr,
+        size: 2 * PAGE_SIZE_4K,
+        granule: PageGranule::Page4KiB,
+        perm: IoPerm::ReadWrite,
+        kind: DmaRegionKind::IngressRing,
+    }];
+    let mut epoch4_streams = epoch3_streams;
+    epoch4_streams[0].regions = &hijack_retired_outbox;
+    let epoch4_policy = ChokepointIommuPolicy {
+        streams: &epoch4_streams,
+        ..epoch3_policy
+    };
+    let mut arena4 = RadixTableArena::<24>::empty();
+    engine
+        .submit_cmd(SmmuCmd::CfgiSte {
+            stream_id: StreamId(0x10),
+            leaf: false,
+        })
+        .unwrap();
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    engine
+        .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: 0x10 })
+        .unwrap();
+    engine.submit_cmd(SmmuCmd::Sync).unwrap();
+    assert_eq!(
+        engine.translate_with_iotlb(
+            &arena3_no_history,
+            StreamId(0x10),
+            0x101f_f080,
+            64,
+            DmaAccess::Write
+        ),
+        Err(DmaFault::StaleOrForeignArenaEpoch)
+    );
+    assert_eq!(
+        engine.unmap_or_reassign_dma_region(
+            &arena3_no_history,
+            StreamId(0x10),
+            0x10,
+            &epoch2_ingress[0],
+            &epoch4_policy,
+            0x6015_8000,
+            &mut arena4,
+        ),
+        Err(TlbiReconfigError::StaleOrMismatchedOldArena)
+    );
+    assert_eq!(
+        engine.unmap_or_reassign_dma_region(
+            &arena3,
+            StreamId(0x10),
+            0x10,
+            &epoch2_ingress[0],
+            &epoch4_policy,
+            0x6015_8000,
+            &mut arena4,
+        ),
+        Err(TlbiReconfigError::OutboxFrameWriteEscalation {
+            paddr: EGRESS_REGIONS[0].paddr,
+        })
+    );
+}
+
