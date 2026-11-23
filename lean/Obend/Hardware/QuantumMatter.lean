@@ -1242,7 +1242,103 @@ def liftQuotientAdjointOutputs (qAdjOut : List Int) : List Int :=
   let dy1 := qAdjOut.getD 5 0
   [z0, z0, z1, z1, dx0, dy0, dx0, dy0, dx1, dy1, dx1, dy1]
 
-set_option maxHeartbeats 1600000 in
+private theorem quotientOpenHypergraph_fwd_comb (W0 W1 : Int) (op2 : OpticOp)
+    (x0 y0 x1 y1 dOut0 dOut1 : Int) :
+    evalHypergraphComb (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2)
+      (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1) =
+    liftQuotientFwdOutputs (evalHypergraphComb (quotientOpenHypergraph W0 W1 op2)
+      (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1)) := by
+  unfold buildSymmetric4LaneHypergraph quotientOpenHypergraph
+  rw [evalHypergraphComb_mkStrictOpenHypergraph_reindex, evalHypergraphComb_mkStrictOpenHypergraph_reindex]
+  cases op2 <;>
+    dsimp [opticFwdHyperEdges, evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp,
+      liftSymmetric4LaneInitEnv, quotientHypergraphInitEnv, liftQuotientFwdOutputs,
+      List.foldl, List.map, list_getD_zero_cons, list_getD_one_cons] <;> rfl
+
+private theorem quotient_adj_eq_full (W0 W1 : Int) (op2 : OpticOp) :
+    compileGraphAdjoint (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2) =
+      compileGraphAdjointAux 24 [0, 1, 6, 7, 12, 13, 18, 19] [3, 9, 15, 21]
+        (reindexHyperEdges
+          ((opticFwdHyperEdges (.scale W0) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5) ++
+           (opticFwdHyperEdges (.scale W0) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11) ++
+           (opticFwdHyperEdges (.scale W1) 12 13 14 16 ++ opticFwdHyperEdges op2 14 13 15 17) ++
+           (opticFwdHyperEdges (.scale W1) 18 19 20 22 ++ opticFwdHyperEdges op2 20 19 21 23))) := by
+  unfold compileGraphAdjoint buildSymmetric4LaneHypergraph
+  change compileGraphAdjointAux (List.replicate 24 64).length [0, 1, 6, 7, 12, 13, 18, 19] [3, 9, 15, 21]
+    (extractHyperEdges (mkStrictOpenHypergraph 24 [0, 1, 6, 7, 12, 13, 18, 19] [3, 9, 15, 21] _)) = _
+  rw [List.length_replicate, extractHyperEdges_mkStrictOpenHypergraph]
+
+private theorem quotient_adj_eq_quot (W0 W1 : Int) (op2 : OpticOp) :
+    compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2) =
+      compileGraphAdjointAux 12 [0, 1, 6, 7] [3, 9]
+        (reindexHyperEdges
+          ((opticFwdHyperEdges (.scale W0) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5) ++
+           (opticFwdHyperEdges (.scale W1) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11))) := by
+  unfold compileGraphAdjoint quotientOpenHypergraph
+  change compileGraphAdjointAux (List.replicate 12 64).length [0, 1, 6, 7] [3, 9]
+    (extractHyperEdges (mkStrictOpenHypergraph 12 [0, 1, 6, 7] [3, 9] _)) = _
+  rw [List.length_replicate, extractHyperEdges_mkStrictOpenHypergraph]
+
+private abbrev QuotientAdjGoal (W0 W1 : Int) (op2 : OpticOp) (x0 y0 x1 y1 dOut0 dOut1 : Int) : Prop :=
+  evalHypergraphComb (compileGraphAdjoint (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2))
+    (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1) =
+  liftQuotientAdjointOutputs (evalHypergraphComb (compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2))
+    (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1))
+
+local macro "quotient_adj_step" : tactic =>
+  `(tactic| (
+    dsimp only [QuotientAdjGoal]
+    rw [quotient_adj_eq_full, quotient_adj_eq_quot,
+        evalHypergraphComb_compileGraphAdjointAux, evalHypergraphComb_compileGraphAdjointAux]
+    dsimp [evalBuildGraphAdjointComb, buildGraphAdjointState,
+      opticFwdHyperEdges, reindexHyperEdges, reindexHyperEdgesAux,
+      seedCotangentStateAux, accumWireCotangent, emitAndAccum, upsertCotWire,
+      pullbackHyperEdge, wireAt, emitRevEdge, resolveInputCotWires, setCotWire,
+      evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp,
+      liftSymmetric4LaneInitEnv, quotientHypergraphInitEnv, liftQuotientAdjointOutputs,
+      List.reverse, List.reverseAux, List.foldl, List.map, List.lookup,
+      list_getD_zero_cons, list_getD_one_cons, list_getD_two_cons, list_getD_nil]
+    rfl))
+
+private theorem quotient_adj_add (W0 W1 x0 y0 x1 y1 d0 d1 : Int) :
+    QuotientAdjGoal W0 W1 .add x0 y0 x1 y1 d0 d1 := by
+  quotient_adj_step
+
+private theorem quotient_adj_sub (W0 W1 x0 y0 x1 y1 d0 d1 : Int) :
+    QuotientAdjGoal W0 W1 .sub x0 y0 x1 y1 d0 d1 := by
+  quotient_adj_step
+
+private theorem quotient_adj_mul (W0 W1 x0 y0 x1 y1 d0 d1 : Int) :
+    QuotientAdjGoal W0 W1 .mul x0 y0 x1 y1 d0 d1 := by
+  quotient_adj_step
+
+private theorem quotient_adj_scale (W0 W1 k x0 y0 x1 y1 d0 d1 : Int) :
+    QuotientAdjGoal W0 W1 (.scale k) x0 y0 x1 y1 d0 d1 := by
+  quotient_adj_step
+
+private theorem quotient_adj_square (W0 W1 x0 y0 x1 y1 d0 d1 : Int) :
+    QuotientAdjGoal W0 W1 .square x0 y0 x1 y1 d0 d1 := by
+  quotient_adj_step
+
+private theorem quotient_adj_linearMac (W0 W1 w x0 y0 x1 y1 d0 d1 : Int) :
+    QuotientAdjGoal W0 W1 (.linearMac w) x0 y0 x1 y1 d0 d1 := by
+  quotient_adj_step
+
+private theorem quotient_adj_bilinear (W0 W1 c x0 y0 x1 y1 d0 d1 : Int) :
+    QuotientAdjGoal W0 W1 (.bilinear c) x0 y0 x1 y1 d0 d1 := by
+  quotient_adj_step
+
+private theorem quotientOpenHypergraph_adj_comb (W0 W1 : Int) (op2 : OpticOp)
+    (x0 y0 x1 y1 dOut0 dOut1 : Int) : QuotientAdjGoal W0 W1 op2 x0 y0 x1 y1 dOut0 dOut1 := by
+  cases op2 with
+  | add => exact quotient_adj_add W0 W1 x0 y0 x1 y1 dOut0 dOut1
+  | sub => exact quotient_adj_sub W0 W1 x0 y0 x1 y1 dOut0 dOut1
+  | mul => exact quotient_adj_mul W0 W1 x0 y0 x1 y1 dOut0 dOut1
+  | scale k => exact quotient_adj_scale W0 W1 k x0 y0 x1 y1 dOut0 dOut1
+  | square => exact quotient_adj_square W0 W1 x0 y0 x1 y1 dOut0 dOut1
+  | linearMac w => exact quotient_adj_linearMac W0 W1 w x0 y0 x1 y1 dOut0 dOut1
+  | bilinear c => exact quotient_adj_bilinear W0 W1 c x0 y0 x1 y1 dOut0 dOut1
+
 /-- **Theorem (`quotientOpenHypergraph_intertwines_eval_and_adjoint`)**:
 **Universal Symmetric `StrictOpenHypergraph` Forward & Reverse-Mode AD Quotient Intertwining Theorem**:
 For EVERY stage-2 operation `op2 : OpticOp`, EVERY symmetry-cell weight pair `W0, W1 : Int`,
@@ -1282,78 +1378,14 @@ theorem quotientOpenHypergraph_intertwines_eval_and_adjoint
     -- 3. Whole-DAG reverse-mode AD (compileGraphAdjoint) combinational & layered intertwining
     evalHypergraphComb adjFull envFull = liftQuotientAdjointOutputs (evalHypergraphComb adjQuot envQuot) ∧
     evalHypergraphLayered adjFull envFull = liftQuotientAdjointOutputs (evalHypergraphLayered adjQuot envQuot) := by
-  have hPipeFull := (evalHypergraph_pipelined_eq_comb (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2)
-    (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1)).1
-  have hPipeQuot := (evalHypergraph_pipelined_eq_comb (quotientOpenHypergraph W0 W1 op2)
-    (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1)).1
-  have hPipeAdjFull := (evalHypergraph_pipelined_eq_comb
-    (compileGraphAdjoint (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2))
-    (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1)).1
-  have hPipeAdjQuot := (evalHypergraph_pipelined_eq_comb
-    (compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2))
-    (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1)).1
-  have hWfFull : (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2).wf = true := by
-    cases op2 <;> rfl
-  have hWfQuot : (quotientOpenHypergraph W0 W1 op2).wf = true := by
-    cases op2 <;> rfl
-  have hFwdComb :
-      evalHypergraphComb (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2)
-        (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1) =
-      liftQuotientFwdOutputs
-        (evalHypergraphComb (quotientOpenHypergraph W0 W1 op2)
-          (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1)) := by
-    unfold buildSymmetric4LaneHypergraph quotientOpenHypergraph
-    rw [evalHypergraphComb_mkStrictOpenHypergraph_reindex,
-        evalHypergraphComb_mkStrictOpenHypergraph_reindex]
-    cases op2 <;>
-      dsimp [opticFwdHyperEdges, evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp,
-        liftSymmetric4LaneInitEnv, quotientHypergraphInitEnv, liftQuotientFwdOutputs,
-        List.foldl, List.map, list_getD_zero_cons, list_getD_one_cons] <;>
-      rfl
-  have hAdjComb :
-      evalHypergraphComb (compileGraphAdjoint (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2))
-        (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1) =
-      liftQuotientAdjointOutputs
-        (evalHypergraphComb (compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2))
-          (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1)) := by
-    have hEqFull :
-        compileGraphAdjoint (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2) =
-          compileGraphAdjointAux 24 [0, 1, 6, 7, 12, 13, 18, 19] [3, 9, 15, 21]
-            (reindexHyperEdges
-              ((opticFwdHyperEdges (.scale W0) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5) ++
-               (opticFwdHyperEdges (.scale W0) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11) ++
-               (opticFwdHyperEdges (.scale W1) 12 13 14 16 ++ opticFwdHyperEdges op2 14 13 15 17) ++
-               (opticFwdHyperEdges (.scale W1) 18 19 20 22 ++ opticFwdHyperEdges op2 20 19 21 23))) := by
-      unfold compileGraphAdjoint buildSymmetric4LaneHypergraph
-      change compileGraphAdjointAux (List.replicate 24 64).length
-        [0, 1, 6, 7, 12, 13, 18, 19] [3, 9, 15, 21]
-        (extractHyperEdges (mkStrictOpenHypergraph 24 [0, 1, 6, 7, 12, 13, 18, 19] [3, 9, 15, 21] _)) = _
-      rw [List.length_replicate, extractHyperEdges_mkStrictOpenHypergraph]
-    have hEqQuot :
-        compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2) =
-          compileGraphAdjointAux 12 [0, 1, 6, 7] [3, 9]
-            (reindexHyperEdges
-              ((opticFwdHyperEdges (.scale W0) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5) ++
-               (opticFwdHyperEdges (.scale W1) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11))) := by
-      unfold compileGraphAdjoint quotientOpenHypergraph
-      change compileGraphAdjointAux (List.replicate 12 64).length [0, 1, 6, 7] [3, 9]
-        (extractHyperEdges (mkStrictOpenHypergraph 12 [0, 1, 6, 7] [3, 9] _)) = _
-      rw [List.length_replicate, extractHyperEdges_mkStrictOpenHypergraph]
-    rw [hEqFull, hEqQuot, evalHypergraphComb_compileGraphAdjointAux, evalHypergraphComb_compileGraphAdjointAux]
-    cases op2 <;>
-      dsimp [evalBuildGraphAdjointComb, buildGraphAdjointState,
-        opticFwdHyperEdges, reindexHyperEdges, reindexHyperEdgesAux,
-        seedCotangentStateAux, accumWireCotangent, emitAndAccum, upsertCotWire,
-        pullbackHyperEdge, wireAt, emitRevEdge, resolveInputCotWires, setCotWire,
-        evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp,
-        liftSymmetric4LaneInitEnv, quotientHypergraphInitEnv, liftQuotientAdjointOutputs,
-        List.reverse, List.reverseAux, List.foldl, List.map, List.lookup,
-        list_getD_zero_cons, list_getD_one_cons, list_getD_two_cons, list_getD_nil] <;>
-      rfl
+  have hWfFull : (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2).wf = true := by cases op2 <;> rfl
+  have hWfQuot : (quotientOpenHypergraph W0 W1 op2).wf = true := by cases op2 <;> rfl
+  have hFwd := quotientOpenHypergraph_fwd_comb W0 W1 op2 x0 y0 x1 y1 dOut0 dOut1
+  have hAdj := quotientOpenHypergraph_adj_comb W0 W1 op2 x0 y0 x1 y1 dOut0 dOut1
   dsimp only
-  refine ⟨hWfFull, hWfQuot, rfl, rfl, hFwdComb, ?_, hAdjComb, ?_⟩
-  · rw [hPipeFull, hPipeQuot, hFwdComb]
-  · rw [hPipeAdjFull, hPipeAdjQuot, hAdjComb]
+  refine ⟨hWfFull, hWfQuot, rfl, rfl, hFwd, ?_, hAdj, ?_⟩
+  · rw [(evalHypergraph_pipelined_eq_comb _ _).1, (evalHypergraph_pipelined_eq_comb _ _).1, hFwd]
+  · rw [(evalHypergraph_pipelined_eq_comb _ _).1, (evalHypergraph_pipelined_eq_comb _ _).1, hAdj]
 
 /-- Specialization candidates for `quotientHypergraphSlot`:
 - `.quotientCompressed gFull gQuot weightPins eqOk`: the compressed $r$-lane quotient hypergraph

@@ -1333,7 +1333,116 @@ theorem compileGraphAdjoint_chain2_eq (op1 op2 : OpticOp) :
 @[simp] theorem list_getD_nil {α : Type} (i : Nat) (d : α) :
     ([] : List α).getD i d = d := rfl
 
-set_option maxHeartbeats 1600000 in
+private abbrev Chain2CombGoal (op1 op2 : OpticOp) (x y dOut : Int) : Prop :=
+  evalBuildGraphAdjointComb 6 [0, 1] [3]
+      (reindexHyperEdges (opticFwdHyperEdges op1 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5))
+      (opticChain2AdjointInitEnv x y dOut) =
+    [ (evalOpticChain2Fwd op1 op2 x y).1
+    , (evalOpticChain2Rev (compileOpticAdjoint op1) (compileOpticAdjoint op2)
+        (evalOpticChain2Fwd op1 op2 x y).2 dOut).1
+    , (evalOpticChain2Rev (compileOpticAdjoint op1) (compileOpticAdjoint op2)
+        (evalOpticChain2Fwd op1 op2 x y).2 dOut).2 ]
+
+local macro "chain2_comb_step" : tactic =>
+  `(tactic| (
+    dsimp [Chain2CombGoal, evalBuildGraphAdjointComb, buildGraphAdjointState,
+      opticFwdHyperEdges, reindexHyperEdges, reindexHyperEdgesAux,
+      seedCotangentStateAux, accumWireCotangent, emitAndAccum, upsertCotWire,
+      pullbackHyperEdge, wireAt, emitRevEdge, resolveInputCotWires, setCotWire,
+      evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp, opticChain2AdjointInitEnv,
+      evalOpticChain2Fwd, evalOpticChain2Rev, evalOpticFwd, evalOpticRev, compileOpticAdjoint,
+      List.reverse, List.reverseAux, List.foldl, List.map, List.lookup,
+      list_getD_zero_cons, list_getD_one_cons, list_getD_two_cons, list_getD_nil]
+    grind))
+
+private theorem chain2_comb_add (op2 : OpticOp) (x y dOut : Int) :
+    Chain2CombGoal .add op2 x y dOut := by
+  cases op2 <;> chain2_comb_step
+
+private theorem chain2_comb_sub (op2 : OpticOp) (x y dOut : Int) :
+    Chain2CombGoal .sub op2 x y dOut := by
+  cases op2 <;> chain2_comb_step
+
+private theorem chain2_comb_mul_1 (x y dOut : Int) :
+    Chain2CombGoal .mul .add x y dOut ∧
+    Chain2CombGoal .mul .sub x y dOut ∧
+    Chain2CombGoal .mul .mul x y dOut ∧
+    (∀ k, Chain2CombGoal .mul (.scale k) x y dOut) := by
+  refine ⟨by chain2_comb_step, by chain2_comb_step, by chain2_comb_step, fun k => by chain2_comb_step⟩
+
+private theorem chain2_comb_mul_2 (x y dOut : Int) :
+    Chain2CombGoal .mul .square x y dOut ∧
+    (∀ w, Chain2CombGoal .mul (.linearMac w) x y dOut) ∧
+    (∀ c, Chain2CombGoal .mul (.bilinear c) x y dOut) := by
+  refine ⟨by chain2_comb_step, fun w => by chain2_comb_step, fun c => by chain2_comb_step⟩
+
+private theorem chain2_comb_mul (op2 : OpticOp) (x y dOut : Int) :
+    Chain2CombGoal .mul op2 x y dOut := by
+  cases op2 with
+  | add => exact (chain2_comb_mul_1 x y dOut).1
+  | sub => exact (chain2_comb_mul_1 x y dOut).2.1
+  | mul => exact (chain2_comb_mul_1 x y dOut).2.2.1
+  | scale k => exact (chain2_comb_mul_1 x y dOut).2.2.2 k
+  | square => exact (chain2_comb_mul_2 x y dOut).1
+  | linearMac w => exact (chain2_comb_mul_2 x y dOut).2.1 w
+  | bilinear c => exact (chain2_comb_mul_2 x y dOut).2.2 c
+
+private theorem chain2_comb_scale (k : Int) (op2 : OpticOp) (x y dOut : Int) :
+    Chain2CombGoal (.scale k) op2 x y dOut := by
+  cases op2 <;> chain2_comb_step
+
+private theorem chain2_comb_square (op2 : OpticOp) (x y dOut : Int) :
+    Chain2CombGoal .square op2 x y dOut := by
+  cases op2 <;> chain2_comb_step
+
+private theorem chain2_comb_linearMac_1 (w x y dOut : Int) :
+    Chain2CombGoal (.linearMac w) .add x y dOut ∧
+    Chain2CombGoal (.linearMac w) .sub x y dOut ∧
+    Chain2CombGoal (.linearMac w) .mul x y dOut ∧
+    (∀ k, Chain2CombGoal (.linearMac w) (.scale k) x y dOut) := by
+  refine ⟨by chain2_comb_step, by chain2_comb_step, by chain2_comb_step, fun k => by chain2_comb_step⟩
+
+private theorem chain2_comb_linearMac_2 (w x y dOut : Int) :
+    Chain2CombGoal (.linearMac w) .square x y dOut ∧
+    (∀ w2, Chain2CombGoal (.linearMac w) (.linearMac w2) x y dOut) ∧
+    (∀ c, Chain2CombGoal (.linearMac w) (.bilinear c) x y dOut) := by
+  refine ⟨by chain2_comb_step, fun w2 => by chain2_comb_step, fun c => by chain2_comb_step⟩
+
+private theorem chain2_comb_linearMac (w : Int) (op2 : OpticOp) (x y dOut : Int) :
+    Chain2CombGoal (.linearMac w) op2 x y dOut := by
+  cases op2 with
+  | add => exact (chain2_comb_linearMac_1 w x y dOut).1
+  | sub => exact (chain2_comb_linearMac_1 w x y dOut).2.1
+  | mul => exact (chain2_comb_linearMac_1 w x y dOut).2.2.1
+  | scale k => exact (chain2_comb_linearMac_1 w x y dOut).2.2.2 k
+  | square => exact (chain2_comb_linearMac_2 w x y dOut).1
+  | linearMac w2 => exact (chain2_comb_linearMac_2 w x y dOut).2.1 w2
+  | bilinear c => exact (chain2_comb_linearMac_2 w x y dOut).2.2 c
+
+private theorem chain2_comb_bilinear_1 (c x y dOut : Int) :
+    Chain2CombGoal (.bilinear c) .add x y dOut ∧
+    Chain2CombGoal (.bilinear c) .sub x y dOut ∧
+    Chain2CombGoal (.bilinear c) .mul x y dOut ∧
+    (∀ k, Chain2CombGoal (.bilinear c) (.scale k) x y dOut) := by
+  refine ⟨by chain2_comb_step, by chain2_comb_step, by chain2_comb_step, fun k => by chain2_comb_step⟩
+
+private theorem chain2_comb_bilinear_2 (c x y dOut : Int) :
+    Chain2CombGoal (.bilinear c) .square x y dOut ∧
+    (∀ w, Chain2CombGoal (.bilinear c) (.linearMac w) x y dOut) ∧
+    (∀ c2, Chain2CombGoal (.bilinear c) (.bilinear c2) x y dOut) := by
+  refine ⟨by chain2_comb_step, fun w => by chain2_comb_step, fun c2 => by chain2_comb_step⟩
+
+private theorem chain2_comb_bilinear (c : Int) (op2 : OpticOp) (x y dOut : Int) :
+    Chain2CombGoal (.bilinear c) op2 x y dOut := by
+  cases op2 with
+  | add => exact (chain2_comb_bilinear_1 c x y dOut).1
+  | sub => exact (chain2_comb_bilinear_1 c x y dOut).2.1
+  | mul => exact (chain2_comb_bilinear_1 c x y dOut).2.2.1
+  | scale k => exact (chain2_comb_bilinear_1 c x y dOut).2.2.2 k
+  | square => exact (chain2_comb_bilinear_2 c x y dOut).1
+  | linearMac w => exact (chain2_comb_bilinear_2 c x y dOut).2.1 w
+  | bilinear c2 => exact (chain2_comb_bilinear_2 c x y dOut).2.2 c2
+
 theorem compileGraphAdjoint_chain2_comb (op1 op2 : OpticOp) (x y dOut : Int) :
     evalHypergraphComb (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2))
       (opticChain2AdjointInitEnv x y dOut) =
@@ -1343,18 +1452,122 @@ theorem compileGraphAdjoint_chain2_comb (op1 op2 : OpticOp) (x y dOut : Int) :
     , (evalOpticChain2Rev (compileOpticAdjoint op1) (compileOpticAdjoint op2)
         (evalOpticChain2Fwd op1 op2 x y).2 dOut).2 ] := by
   rw [compileGraphAdjoint_chain2_eq, evalHypergraphComb_compileGraphAdjointAux]
-  cases op1 <;> cases op2 <;>
-    dsimp [evalBuildGraphAdjointComb, buildGraphAdjointState,
-      opticFwdHyperEdges, reindexHyperEdges, reindexHyperEdgesAux,
-      seedCotangentStateAux, accumWireCotangent, emitAndAccum, upsertCotWire,
-      pullbackHyperEdge, wireAt, emitRevEdge, resolveInputCotWires, setCotWire,
-      evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp, opticChain2AdjointInitEnv,
-      evalOpticChain2Fwd, evalOpticChain2Rev, evalOpticFwd, evalOpticRev, compileOpticAdjoint,
-      List.reverse, List.reverseAux, List.foldl, List.map, List.lookup,
-      list_getD_zero_cons, list_getD_one_cons, list_getD_two_cons, list_getD_nil] <;>
-    grind
+  cases op1 with
+  | add => exact chain2_comb_add op2 x y dOut
+  | sub => exact chain2_comb_sub op2 x y dOut
+  | mul => exact chain2_comb_mul op2 x y dOut
+  | scale k => exact chain2_comb_scale k op2 x y dOut
+  | square => exact chain2_comb_square op2 x y dOut
+  | linearMac w => exact chain2_comb_linearMac w op2 x y dOut
+  | bilinear c => exact chain2_comb_bilinear c op2 x y dOut
 
-set_option maxHeartbeats 1600000 in
+private abbrev Chain2WfGoal (op1 op2 : OpticOp) : Prop :=
+  (compileGraphAdjointAux 6 [0, 1] [3]
+    (reindexHyperEdges (opticFwdHyperEdges op1 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5))).wf = true
+
+local macro "chain2_wf_step" : tactic =>
+  `(tactic| (
+    dsimp [Chain2WfGoal, compileGraphAdjointAux, buildGraphAdjointState,
+      opticFwdHyperEdges, reindexHyperEdges, reindexHyperEdgesAux,
+      seedCotangentStateAux, makeSeedWires, accumWireCotangent, emitAndAccum, upsertCotWire,
+      pullbackHyperEdge, wireAt, emitRevEdge, resolveInputCotWires, setCotWire,
+      mkStrictOpenHypergraph, StrictOpenHypergraph.wf, IndexedCoproduct.wf,
+      IndexedCoproduct.fromSegments, FiniteFunction.wf, sumNatList,
+      List.reverse, List.reverseAux, List.foldl, List.map, List.lookup,
+      List.flatten, List.all, List.replicate, List.length]
+    rfl))
+
+private theorem chain2_wf_add (op2 : OpticOp) : Chain2WfGoal .add op2 := by
+  cases op2 <;> chain2_wf_step
+
+private theorem chain2_wf_sub (op2 : OpticOp) : Chain2WfGoal .sub op2 := by
+  cases op2 <;> chain2_wf_step
+
+private theorem chain2_wf_mul_1 :
+    Chain2WfGoal .mul .add ∧ Chain2WfGoal .mul .sub ∧ Chain2WfGoal .mul .mul ∧
+    (∀ k, Chain2WfGoal .mul (.scale k)) := by
+  refine ⟨by chain2_wf_step, by chain2_wf_step, by chain2_wf_step, fun _ => by chain2_wf_step⟩
+
+private theorem chain2_wf_mul_2 :
+    Chain2WfGoal .mul .square ∧ (∀ w, Chain2WfGoal .mul (.linearMac w)) ∧
+    (∀ c, Chain2WfGoal .mul (.bilinear c)) := by
+  refine ⟨by chain2_wf_step, fun _ => by chain2_wf_step, fun _ => by chain2_wf_step⟩
+
+private theorem chain2_wf_mul (op2 : OpticOp) : Chain2WfGoal .mul op2 := by
+  cases op2 with
+  | add => exact chain2_wf_mul_1.1
+  | sub => exact chain2_wf_mul_1.2.1
+  | mul => exact chain2_wf_mul_1.2.2.1
+  | scale k => exact chain2_wf_mul_1.2.2.2 k
+  | square => exact chain2_wf_mul_2.1
+  | linearMac w => exact chain2_wf_mul_2.2.1 w
+  | bilinear c => exact chain2_wf_mul_2.2.2 c
+
+private theorem chain2_wf_scale (k : Int) (op2 : OpticOp) : Chain2WfGoal (.scale k) op2 := by
+  cases op2 <;> chain2_wf_step
+
+private theorem chain2_wf_square (op2 : OpticOp) : Chain2WfGoal .square op2 := by
+  cases op2 <;> chain2_wf_step
+
+private theorem chain2_wf_linearMac_1 (w : Int) :
+    Chain2WfGoal (.linearMac w) .add ∧ Chain2WfGoal (.linearMac w) .sub ∧
+    Chain2WfGoal (.linearMac w) .mul ∧ (∀ k, Chain2WfGoal (.linearMac w) (.scale k)) := by
+  refine ⟨by chain2_wf_step, by chain2_wf_step, by chain2_wf_step, fun _ => by chain2_wf_step⟩
+
+private theorem chain2_wf_linearMac_2 (w : Int) :
+    Chain2WfGoal (.linearMac w) .square ∧ (∀ w2, Chain2WfGoal (.linearMac w) (.linearMac w2)) ∧
+    (∀ c, Chain2WfGoal (.linearMac w) (.bilinear c)) := by
+  refine ⟨by chain2_wf_step, fun _ => by chain2_wf_step, fun _ => by chain2_wf_step⟩
+
+private theorem chain2_wf_linearMac (w : Int) (op2 : OpticOp) : Chain2WfGoal (.linearMac w) op2 := by
+  cases op2 with
+  | add => exact (chain2_wf_linearMac_1 w).1
+  | sub => exact (chain2_wf_linearMac_1 w).2.1
+  | mul => exact (chain2_wf_linearMac_1 w).2.2.1
+  | scale k => exact (chain2_wf_linearMac_1 w).2.2.2 k
+  | square => exact (chain2_wf_linearMac_2 w).1
+  | linearMac w2 => exact (chain2_wf_linearMac_2 w).2.1 w2
+  | bilinear c => exact (chain2_wf_linearMac_2 w).2.2 c
+
+private theorem chain2_wf_bilinear_1 (c : Int) :
+    Chain2WfGoal (.bilinear c) .add ∧ Chain2WfGoal (.bilinear c) .sub ∧
+    Chain2WfGoal (.bilinear c) .mul ∧ (∀ k, Chain2WfGoal (.bilinear c) (.scale k)) := by
+  refine ⟨by chain2_wf_step, by chain2_wf_step, by chain2_wf_step, fun _ => by chain2_wf_step⟩
+
+private theorem chain2_wf_bilinear_2 (c : Int) :
+    Chain2WfGoal (.bilinear c) .square ∧ (∀ w, Chain2WfGoal (.bilinear c) (.linearMac w)) ∧
+    (∀ c2, Chain2WfGoal (.bilinear c) (.bilinear c2)) := by
+  refine ⟨by chain2_wf_step, fun _ => by chain2_wf_step, fun _ => by chain2_wf_step⟩
+
+private theorem chain2_wf_bilinear (c : Int) (op2 : OpticOp) : Chain2WfGoal (.bilinear c) op2 := by
+  cases op2 with
+  | add => exact (chain2_wf_bilinear_1 c).1
+  | sub => exact (chain2_wf_bilinear_1 c).2.1
+  | mul => exact (chain2_wf_bilinear_1 c).2.2.1
+  | scale k => exact (chain2_wf_bilinear_1 c).2.2.2 k
+  | square => exact (chain2_wf_bilinear_2 c).1
+  | linearMac w => exact (chain2_wf_bilinear_2 c).2.1 w
+  | bilinear c2 => exact (chain2_wf_bilinear_2 c).2.2 c2
+
+private theorem compileGraphAdjoint_chain2_wf (op1 op2 : OpticOp) :
+    (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2)).wf = true := by
+  rw [compileGraphAdjoint_chain2_eq]
+  cases op1 with
+  | add => exact chain2_wf_add op2
+  | sub => exact chain2_wf_sub op2
+  | mul => exact chain2_wf_mul op2
+  | scale k => exact chain2_wf_scale k op2
+  | square => exact chain2_wf_square op2
+  | linearMac w => exact chain2_wf_linearMac w op2
+  | bilinear c => exact chain2_wf_bilinear c op2
+
+private theorem compileGraphAdjoint_diamond_eval :
+    (compileGraphAdjoint diamondAddMulConstHypergraph).wf = true ∧
+    evalHypergraphComb (compileGraphAdjoint diamondAddMulConstHypergraph)
+      (fun w => match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0) =
+      [87, 11, 11, 7, 7] := by
+  decide +kernel
+
 /-- **Theorem (`compileGraphAdjoint_multiEdge_sound`)**:
 1. **Universal 2-Stage Composed Multi-Edge Functorial AD Soundness**:
    For EVERY pair of operations `op1 op2 : OpticOp` and EVERY `(x, y, dOut : Int)`:
@@ -1393,22 +1606,9 @@ theorem compileGraphAdjoint_multiEdge_sound (op1 op2 : OpticOp) (x y dOut : Int)
     evalHypergraphComb gAdj envUnit = [dualX.primal, dualX.tangent, dualY.tangent] ∧
     diamondAdj.wf = true ∧
     evalHypergraphComb diamondAdj diamondEnv = [87, 11, 11, 7, 7] := by
-  have hWf : (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2)).wf = true := by
-    rw [compileGraphAdjoint_chain2_eq]
-    cases op1 <;> cases op2 <;>
-      dsimp [compileGraphAdjointAux, buildGraphAdjointState,
-        opticFwdHyperEdges, reindexHyperEdges, reindexHyperEdgesAux,
-        seedCotangentStateAux, makeSeedWires, accumWireCotangent, emitAndAccum, upsertCotWire,
-        pullbackHyperEdge, wireAt, emitRevEdge, resolveInputCotWires, setCotWire,
-        mkStrictOpenHypergraph, StrictOpenHypergraph.wf, IndexedCoproduct.wf,
-        IndexedCoproduct.fromSegments, FiniteFunction.wf, sumNatList,
-        List.reverse, List.reverseAux, List.foldl, List.map, List.lookup,
-        List.flatten, List.all, List.replicate, List.length] <;>
-      rfl
   have hComb := compileGraphAdjoint_chain2_comb op1 op2 x y dOut
   have hPipe := evalHypergraph_pipelined_eq_comb
-    (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2))
-    (opticChain2AdjointInitEnv x y dOut)
+    (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2)) (opticChain2AdjointInitEnv x y dOut)
   have hCombUnit :
       evalHypergraphComb (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2))
         (opticChain2AdjointInitEnv x y 1) =
@@ -1418,14 +1618,9 @@ theorem compileGraphAdjoint_multiEdge_sound (op1 op2 : OpticOp) (x y dOut : Int)
     rw [compileGraphAdjoint_chain2_comb op1 op2 x y 1]
     rcases optic_comp_chain_rule_sound op1 op2 x y with ⟨hP, hX, hY⟩
     rw [← hP, ← hX, ← hY]
-  have hDiamond :
-      (compileGraphAdjoint diamondAddMulConstHypergraph).wf = true ∧
-      evalHypergraphComb (compileGraphAdjoint diamondAddMulConstHypergraph)
-        (fun w => match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0) =
-        [87, 11, 11, 7, 7] := by
-    decide +kernel
   dsimp only
-  refine ⟨hWf, hComb, ?_, ?_, hCombUnit, hDiamond.1, hDiamond.2⟩
+  refine ⟨compileGraphAdjoint_chain2_wf op1 op2, hComb, ?_, ?_, hCombUnit,
+    compileGraphAdjoint_diamond_eval.1, compileGraphAdjoint_diamond_eval.2⟩
   · rw [hPipe.1, hComb]
   · rw [hPipe.2, hComb]
 

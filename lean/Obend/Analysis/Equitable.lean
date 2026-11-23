@@ -2394,7 +2394,104 @@ theorem computeLagrangeProjector_triple_2 (Q : IntMatrix) (mu0 mu1 mu2 : Int) :
 def twoBosonQuotientMatrix : IntMatrix :=
   mat3x3 0 2 0 1 0 1 0 2 0
 
-set_option maxHeartbeats 800000 in
+private theorem lagrange_2x2_universal (a b c d lam0 lam1 : Int) :
+    let Q2 := mat2x2 a b c d
+    let s2 := lam0 - lam1
+    let p2_0 := computeLagrangeProjector Q2 [lam0, lam1] 0
+    let p2_1 := computeLagrangeProjector Q2 [lam0, lam1] 1
+    let E2_0 := p2_0.1
+    let E2_1 := p2_1.1.scale (-1)
+    p2_0.2 = s2 ∧
+    p2_1.2 = -s2 ∧
+    E2_0.add E2_1 = IntMatrix.scaledIdentity 2 s2 ∧
+    (E2_0.scale lam0).add (E2_1.scale lam1) = Q2.scale s2 ∧
+    (a + d = lam0 + lam1 → a * d - b * c = lam0 * lam1 →
+      E2_0.mul E2_1 = IntMatrix.zero 2 ∧
+      E2_1.mul E2_0 = IntMatrix.zero 2 ∧
+      E2_0.mul E2_0 = E2_0.scale s2 ∧
+      E2_1.mul E2_1 = E2_1.scale s2) := by
+  simp only [computeLagrangeProjector_pair_0, computeLagrangeProjector_pair_1,
+    mat2x2_scaledIdentity, mat2x2_add, mat2x2_scale, mat2x2_mul]
+  refine ⟨by grind, by grind, ?_, ?_, ?_⟩
+  · simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+    exact ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩
+  · simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+    exact ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩
+  · intro hTr hDet
+    simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+    exact ⟨⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩,
+           ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩,
+           ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩,
+           ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩⟩
+
+private theorem lagrange_3x3_denoms (a00 a01 a02 a10 a11 a12 a20 a21 a22 mu0 mu1 mu2 : Int) :
+    let Q3 := mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22
+    let s3 := (mu0 - mu1) * (mu0 - mu2) * (mu1 - mu2)
+    (mu1 - mu2) * (computeLagrangeProjector Q3 [mu0, mu1, mu2] 0).2 = s3 ∧
+    (mu2 - mu0) * (computeLagrangeProjector Q3 [mu0, mu1, mu2] 1).2 = s3 ∧
+    (mu0 - mu1) * (computeLagrangeProjector Q3 [mu0, mu1, mu2] 2).2 = s3 := by
+  simp only [computeLagrangeProjector_triple_0, computeLagrangeProjector_triple_1,
+    computeLagrangeProjector_triple_2]
+  exact ⟨by grind, by grind, by grind⟩
+
+private theorem lagrange_3x3_completeness (a00 a01 a02 a10 a11 a12 a20 a21 a22 mu0 mu1 mu2 : Int) :
+    let Q3 := mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22
+    let s3 := (mu0 - mu1) * (mu0 - mu2) * (mu1 - mu2)
+    let E3_0 := (computeLagrangeProjector Q3 [mu0, mu1, mu2] 0).1.scale (mu1 - mu2)
+    let E3_1 := (computeLagrangeProjector Q3 [mu0, mu1, mu2] 1).1.scale (mu2 - mu0)
+    let E3_2 := (computeLagrangeProjector Q3 [mu0, mu1, mu2] 2).1.scale (mu0 - mu1)
+    (E3_0.add E3_1).add E3_2 = IntMatrix.scaledIdentity 3 s3 := by
+  dsimp only
+  have hDim3 : (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).dim = 3 := rfl
+  simp only [computeLagrangeProjector_triple_0, computeLagrangeProjector_triple_1,
+    computeLagrangeProjector_triple_2, hDim3,
+    mat3x3_scaledIdentity, mat3x3_add, mat3x3_scale, mat3x3_mul]
+  simp only [mat3x3, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+  exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
+
+private theorem lagrange_3x3_linear_recon (a00 a01 a02 a10 a11 a12 a20 a21 a22 mu0 mu1 mu2 : Int) :
+    let Q3 := mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22
+    let s3 := (mu0 - mu1) * (mu0 - mu2) * (mu1 - mu2)
+    let E3_0 := (computeLagrangeProjector Q3 [mu0, mu1, mu2] 0).1.scale (mu1 - mu2)
+    let E3_1 := (computeLagrangeProjector Q3 [mu0, mu1, mu2] 1).1.scale (mu2 - mu0)
+    let E3_2 := (computeLagrangeProjector Q3 [mu0, mu1, mu2] 2).1.scale (mu0 - mu1)
+    ((E3_0.scale mu0).add (E3_1.scale mu1)).add (E3_2.scale mu2) = Q3.scale s3 := by
+  dsimp only
+  have hDim3 : (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).dim = 3 := rfl
+  simp only [computeLagrangeProjector_triple_0, computeLagrangeProjector_triple_1,
+    computeLagrangeProjector_triple_2, hDim3,
+    mat3x3_scaledIdentity, mat3x3_add, mat3x3_scale, mat3x3_mul]
+  simp only [mat3x3, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+  exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
+
+private theorem lagrange_3x3_quad_recon (a00 a01 a02 a10 a11 a12 a20 a21 a22 mu0 mu1 mu2 : Int) :
+    let Q3 := mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22
+    let s3 := (mu0 - mu1) * (mu0 - mu2) * (mu1 - mu2)
+    let E3_0 := (computeLagrangeProjector Q3 [mu0, mu1, mu2] 0).1.scale (mu1 - mu2)
+    let E3_1 := (computeLagrangeProjector Q3 [mu0, mu1, mu2] 1).1.scale (mu2 - mu0)
+    let E3_2 := (computeLagrangeProjector Q3 [mu0, mu1, mu2] 2).1.scale (mu0 - mu1)
+    ((E3_0.scale (mu0 * mu0)).add (E3_1.scale (mu1 * mu1))).add (E3_2.scale (mu2 * mu2)) =
+      (Q3.mul Q3).scale s3 := by
+  dsimp only
+  have hDim3 : (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).dim = 3 := rfl
+  simp only [computeLagrangeProjector_triple_0, computeLagrangeProjector_triple_1,
+    computeLagrangeProjector_triple_2, hDim3,
+    mat3x3_scaledIdentity, mat3x3_add, mat3x3_scale, mat3x3_mul]
+  simp only [mat3x3, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+  exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
+
+private theorem twoBosonQuotient_projectors :
+    let bosP0 := (computeLagrangeProjector twoBosonQuotientMatrix [2, 0, -2] 0).1
+    let bosP1 := (computeLagrangeProjector twoBosonQuotientMatrix [2, 0, -2] 1).1
+    let bosP2 := (computeLagrangeProjector twoBosonQuotientMatrix [2, 0, -2] 2).1
+    bosP0.mul bosP1 = IntMatrix.zero 3 ∧
+    bosP0.mul bosP2 = IntMatrix.zero 3 ∧
+    bosP1.mul bosP2 = IntMatrix.zero 3 ∧
+    bosP0.mul bosP0 = bosP0.scale (computeLagrangeDenominator [2, 0, -2] 0) ∧
+    bosP1.mul bosP1 = bosP1.scale (computeLagrangeDenominator [2, 0, -2] 1) ∧
+    bosP2.mul bosP2 = bosP2.scale (computeLagrangeDenominator [2, 0, -2] 2) := by
+  decide +kernel
+
 /-- **Theorem (`computeLagrangeProjector_2x2_and_3x3_universal`)**:
 **Universal Lagrange–Sylvester Spectral Projector Theorem for $2 \times 2$ and $3 \times 3$ Quotients**:
 1. **Universal $2 \times 2$ Quotient Projectors**:
@@ -2468,30 +2565,15 @@ theorem computeLagrangeProjector_2x2_and_3x3_universal
     bosP0.mul bosP0 = bosP0.scale (computeLagrangeDenominator [2, 0, -2] 0) ∧
     bosP1.mul bosP1 = bosP1.scale (computeLagrangeDenominator [2, 0, -2] 1) ∧
     bosP2.mul bosP2 = bosP2.scale (computeLagrangeDenominator [2, 0, -2] 2) := by
-  have hDim3 : (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).dim = 3 := rfl
-  simp only [computeLagrangeProjector_pair_0, computeLagrangeProjector_pair_1,
-    computeLagrangeProjector_triple_0, computeLagrangeProjector_triple_1, computeLagrangeProjector_triple_2,
-    hDim3,
-    mat2x2_scaledIdentity, mat2x2_add, mat2x2_scale, mat2x2_mul,
-    mat3x3_scaledIdentity, mat3x3_add, mat3x3_scale, mat3x3_mul]
-  refine ⟨by grind, by grind, ?_, ?_, ?_, by grind, by grind, by grind, ?_, ?_, ?_, ?_⟩
-  · simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
-    exact ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩
-  · simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
-    exact ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩
-  · intro hTr hDet
-    simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
-    exact ⟨⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩,
-           ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩,
-           ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩,
-           ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩⟩
-  · simp only [mat3x3, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
-    exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
-  · simp only [mat3x3, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
-    exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
-  · simp only [mat3x3, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
-    exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
-  · decide +kernel
+  have h2 := lagrange_2x2_universal a b c d lam0 lam1
+  have hD := lagrange_3x3_denoms a00 a01 a02 a10 a11 a12 a20 a21 a22 mu0 mu1 mu2
+  have hC := lagrange_3x3_completeness a00 a01 a02 a10 a11 a12 a20 a21 a22 mu0 mu1 mu2
+  have hL := lagrange_3x3_linear_recon a00 a01 a02 a10 a11 a12 a20 a21 a22 mu0 mu1 mu2
+  have hQ := lagrange_3x3_quad_recon a00 a01 a02 a10 a11 a12 a20 a21 a22 mu0 mu1 mu2
+  have hB := twoBosonQuotient_projectors
+  exact ⟨h2.1, h2.2.1, h2.2.2.1, h2.2.2.2.1, h2.2.2.2.2,
+    hD.1, hD.2.1, hD.2.2, hC, hL, hQ,
+    hB.1, hB.2.1, hB.2.2.1, hB.2.2.2.1, hB.2.2.2.2.1, hB.2.2.2.2.2⟩
 
 end Obend.Analysis
 end
