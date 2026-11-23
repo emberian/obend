@@ -4518,10 +4518,15 @@ private theorem step0_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
   have hha2 : s2.halted = false := h.2.2.1.symm.trans hha
   have her2 : s2.err = none := h.2.2.2.1.symm.trans her
   have ⟨hmA, hoA, hsA, hdA, hc0, hc1, _, _⟩ := rdnaAddInst_props
-  have hP0 : addEndProg[0]? = some (some rdnaAddInst) := rfl
-  have hLenA : rdnaAddInst.words.length = 1 := rfl
-  rw [Obend.Hardware.Gpu.Rdna2.step_eq, Obend.Hardware.Gpu.Rdna2.step_eq]
-  simp only [hha, her, hha2, her2, hpc, hpc2, Option.isSome_none, Bool.or_self, Bool.false_eq_true, ↓reduceIte, hP0, Nat.zero_add, hLenA]
+  have hCond1 : (s1.halted || s1.err.isSome) = false := by simp [hha, her]
+  have hCond2 : (s2.halted || s2.err.isSome) = false := by simp [hha2, her2]
+  have hProg1 : addEndProg[s1.pc]? = some (some rdnaAddInst) := by rw [hpc]; rfl
+  have hProg2 : addEndProg[s2.pc]? = some (some rdnaAddInst) := by rw [hpc2]; rfl
+  have hPc1 : s1.pc + rdnaAddInst.words.length = 1 := by rw [hpc]; rfl
+  have hPc2 : s2.pc + rdnaAddInst.words.length = 1 := by rw [hpc2]; rfl
+  rw [Obend.Hardware.Gpu.Rdna2.step_eq, Obend.Hardware.Gpu.Rdna2.step_eq,
+      hCond1, hCond2, hProg1, hProg2, hPc1, hPc2]
+  simp only [Bool.false_eq_true, ↓reduceIte]
   rw [Obend.Hardware.Gpu.Rdna2.execInst_eq, Obend.Hardware.Gpu.Rdna2.execInst_eq]
   simp only [hmA, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hoA]
   rw [Obend.Hardware.Gpu.Rdna2.valuLanes_eq, Obend.Hardware.Gpu.Rdna2.valuLanes_eq]
@@ -4545,6 +4550,8 @@ private theorem step0_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
           Obend.Hardware.Gpu.Rdna2.execBit_eq, Obend.Hardware.Gpu.Rdna2.execBit_eq, h'.1]
     have hExB : Obend.Hardware.Gpu.Rdna2.execBit s1' l = Obend.Hardware.Gpu.Rdna2.execBit s2' l := by
       rw [Obend.Hardware.Gpu.Rdna2.execBit_eq, Obend.Hardware.Gpu.Rdna2.execBit_eq, h'.1]
+    have hR0 := readVgpr_vgpr128Sim h' (r := 0) (lane := l) (by decide) hl64
+    have hR1 := readVgpr_vgpr128Sim h' (r := 1) (lane := l) (by decide) hl64
     have hSrc : Obend.Hardware.Gpu.Rdna2.laneSources rdnaAddInst s1' 2 l =
                 Obend.Hardware.Gpu.Rdna2.laneSources rdnaAddInst s2' 2 l := by
       rw [Obend.Hardware.Gpu.Rdna2.laneSources_eq, Obend.Hardware.Gpu.Rdna2.laneSources_eq]
@@ -4553,12 +4560,10 @@ private theorem step0_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
         show (256 ≤ 256 && 256 ≤ 511) = true from rfl,
         show (256 ≤ 257 && 257 ≤ 511) = true from rfl, ↓reduceIte,
         show 256 - 256 = 0 from rfl, show 257 - 256 = 1 from rfl,
-        readVgpr_vgpr128Sim h' (by decide) hl64, readVgpr_vgpr128Sim h' (by decide) hl64]
+        hR0, hR1]
     rw [Obend.Hardware.Gpu.Rdna2.laneStep_eq, Obend.Hardware.Gpu.Rdna2.laneStep_eq,
-        hOff, hExB, hSrc, readVgpr_vgpr128Sim h' (by decide) hl64]
+        hOff, hExB, hSrc, hR0]
   have hMapEq := list_mapM_congr_mem hStepEq
-  change vgpr128Sim (Obend.Hardware.Gpu.Rdna2.GWave.withSome s1' _ _ _)
-                    (Obend.Hardware.Gpu.Rdna2.GWave.withSome s2' _ _ _)
   rw [Obend.Hardware.Gpu.Rdna2.GWave.withSome_eq, Obend.Hardware.Gpu.Rdna2.GWave.withSome_eq, ← hMapEq]
   cases hm : List.mapM (fun lane =>
       Obend.Hardware.Gpu.Rdna2.laneStep s1' lane (Obend.Hardware.Gpu.Rdna2.laneSources rdnaAddInst s1' 2 lane)
@@ -4568,7 +4573,7 @@ private theorem step0_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
   | none =>
     rw [Obend.Hardware.Gpu.Rdna2.GWave.fail_eq, Obend.Hardware.Gpu.Rdna2.GWave.fail_eq]
     simp only [s1', s2', hha, her, hha2, her2, Option.isSome_none, Bool.false_eq_true, ↓reduceIte]
-    exact ⟨h.1, rfl, h.2.2.1, rfl, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2⟩
+    exact ⟨h.1, rfl, rfl, rfl, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2⟩
   | some rs =>
     have hrs : ∀ p ∈ rs, p.1 < 64 := by
       have hm' : ((List.range Obend.Hardware.Gpu.Rdna2.lanes).mapM fun l =>
@@ -4590,10 +4595,15 @@ private theorem step1_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
   have hha1 : s1.halted = false := h.2.2.1.trans hha2
   have her1 : s1.err = none := h.2.2.2.1.trans her2
   have ⟨_, _, _, _, _, _, hmE, hoE⟩ := rdnaAddInst_props
-  have hP1 : addEndProg[1]? = some (some rdnaEndInst) := rfl
-  have hLenE : rdnaEndInst.words.length = 1 := rfl
-  rw [Obend.Hardware.Gpu.Rdna2.step_eq, Obend.Hardware.Gpu.Rdna2.step_eq]
-  simp only [hha1, her1, hha2, her2, hpc1, hpc2, Option.isSome_none, Bool.or_self, Bool.false_eq_true, ↓reduceIte, hP1, hLenE]
+  have hCond1 : (s1.halted || s1.err.isSome) = false := by simp [hha1, her1]
+  have hCond2 : (s2.halted || s2.err.isSome) = false := by simp [hha2, her2]
+  have hProg1 : addEndProg[s1.pc]? = some (some rdnaEndInst) := by rw [hpc1]; rfl
+  have hProg2 : addEndProg[s2.pc]? = some (some rdnaEndInst) := by rw [hpc2]; rfl
+  have hPc1 : s1.pc + rdnaEndInst.words.length = 2 := by rw [hpc1]; rfl
+  have hPc2 : s2.pc + rdnaEndInst.words.length = 2 := by rw [hpc2]; rfl
+  rw [Obend.Hardware.Gpu.Rdna2.step_eq, Obend.Hardware.Gpu.Rdna2.step_eq,
+      hCond1, hCond2, hProg1, hProg2, hPc1, hPc2]
+  simp only [Bool.false_eq_true, ↓reduceIte]
   rw [Obend.Hardware.Gpu.Rdna2.execInst_eq, Obend.Hardware.Gpu.Rdna2.execInst_eq]
   simp only [hmE, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hoE]
   exact ⟨h.1, rfl, rfl, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2⟩
@@ -4608,6 +4618,7 @@ private def w0Small : Obend.Hardware.Gpu.Rdna2.WaveState :=
   { sgpr := #[], exec := (0xFFFFFFFF, 0xFFFFFFFF), scc := 0, m0 := 0,
     vgpr := w0SmallVgprList.toArray, pc := 0, mem := {}, halted := false, err := none, ldsBase := 0, ldsDwords := 0 }
 
+set_option maxRecDepth 200000 in
 private theorem w0Small_run_props :
     let w1 := Obend.Hardware.Gpu.Rdna2.step addEndProg w0Small
     let w2 := Obend.Hardware.Gpu.Rdna2.run addEndProg 9 w0Small
@@ -4625,6 +4636,14 @@ private theorem w0Small_run_props :
     set_option cbv.maxSteps 500000 in cbv
   simpa only [Prod.mk.injEq] using h
 
+private theorem list_toArray_prefix128 (xs ys : List UInt32) (hx : xs.length = 128) :
+    128 ≤ (xs ++ ys).toArray.size ∧ 128 ≤ xs.toArray.size ∧
+    (∀ i < 128, (xs ++ ys).toArray[i]? = xs.toArray[i]?) := by
+  refine ⟨by rw [List.size_toArray, List.length_append, hx]; omega,
+          by rw [List.size_toArray, hx]; exact Nat.le_refl 128, fun i hi => ?_⟩
+  simp only [List.getElem?_toArray]
+  exact List.getElem?_append_left (by omega)
+
 private theorem executeRdna2AddDispatch_eq :
     ClusterGov.executeRdna2SliceReduction ClusterGov.rdna2AddDispatch =
       some ClusterGov.rdna2AddDispatch.hwReducedOut := by
@@ -4641,17 +4660,12 @@ private theorem executeRdna2AddDispatch_eq :
         (fun lane => Int.ofNat (Obend.Hardware.Gpu.Rdna2.readVgpr final 0 lane).toNat)).toArray)
     else none) = some #[7, 11]
   have hLen128 : w0SmallVgprList.length = 128 := by decide +kernel
+  have hPref := list_toArray_prefix128 w0SmallVgprList
+    (List.replicate ((256 - ClusterGov.rdna2AddDispatch.workgroupSlices.size) * 64) 0) hLen128
   have hSim0 : vgpr128Sim (ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch) w0Small := by
     unfold ClusterGov.rdna2DispatchInput w0Small
     rw [Obend.Hardware.Gpu.Rdna2.GWave.init_eq]
-    dsimp only
-    refine ⟨rfl, rfl, rfl, rfl, ?_, ?_, fun i hi => ?_⟩
-    · change 128 ≤ (w0SmallVgprList ++ List.replicate ((256 - ClusterGov.rdna2AddDispatch.workgroupSlices.size) * 64) 0).toArray.size
-      rw [List.size_toArray, List.length_append, hLen128]; omega
-    · rw [List.size_toArray, hLen128]
-    · change (w0SmallVgprList ++ List.replicate ((256 - ClusterGov.rdna2AddDispatch.workgroupSlices.size) * 64) 0).toArray[i]? = w0SmallVgprList.toArray[i]?
-      simp only [List.getElem?_toArray]
-      exact List.getElem?_append_left (by omega)
+    exact ⟨rfl, rfl, rfl, rfl, hPref.1, hPref.2.1, hPref.2.2⟩
   have ⟨hw1_pc, hw1_ha, hw1_er, hw2_ha, hw2_er, hw2_v0, hw2_v1⟩ := w0Small_run_props
   have hSim1 : vgpr128Sim (Obend.Hardware.Gpu.Rdna2.step addEndProg (ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch))
                           (Obend.Hardware.Gpu.Rdna2.step addEndProg w0Small) :=
@@ -4666,14 +4680,23 @@ private theorem executeRdna2AddDispatch_eq :
     simp only [hw1_ha, hw1_er, hw1_pc, Option.isSome_none, Bool.or_self, Bool.false_eq_true, ↓reduceIte, hP1]
     rw [Obend.Hardware.Gpu.Rdna2.execInst_eq]
     simp only [hmE, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hoE]
+  have hBigC0 : ((ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch).halted ||
+      (ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch).err.isSome) = false := by
+    rw [hSim0.2.2.1, hSim0.2.2.2.1]; rfl
+  have hBigC1 : ((Obend.Hardware.Gpu.Rdna2.step addEndProg (ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch)).halted ||
+      (Obend.Hardware.Gpu.Rdna2.step addEndProg (ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch)).err.isSome) = false := by
+    rw [hSim1.2.2.1, hSim1.2.2.2.1, hw1_ha, hw1_er]; rfl
+  have hBigC2 : ((Obend.Hardware.Gpu.Rdna2.step addEndProg (Obend.Hardware.Gpu.Rdna2.step addEndProg (ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch))).halted ||
+      (Obend.Hardware.Gpu.Rdna2.step addEndProg (Obend.Hardware.Gpu.Rdna2.step addEndProg (ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch))).err.isSome) = true := by
+    rw [hSim2.2.2.1, hStep2Small_ha]; rfl
   have hRunBig : Obend.Hardware.Gpu.Rdna2.run addEndProg 9 (ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch) =
       Obend.Hardware.Gpu.Rdna2.step addEndProg (Obend.Hardware.Gpu.Rdna2.step addEndProg (ClusterGov.rdna2DispatchInput ClusterGov.rdna2AddDispatch)) := by
-    rw [show (9 : Nat) = 8 + 1 from rfl, Obend.Hardware.Gpu.Rdna2.run_succ]
-    simp only [hSim0.2.2.1, hSim0.2.2.2.1, Option.isSome_none, Bool.or_self, Bool.false_eq_true, ↓reduceIte]
-    rw [show (8 : Nat) = 7 + 1 from rfl, Obend.Hardware.Gpu.Rdna2.run_succ]
-    simp only [hSim1.2.2.1.trans hw1_ha, hSim1.2.2.2.1.trans hw1_er, Option.isSome_none, Bool.or_self, Bool.false_eq_true, ↓reduceIte]
-    rw [show (7 : Nat) = 6 + 1 from rfl, Obend.Hardware.Gpu.Rdna2.run_succ]
-    simp only [hSim2.2.2.1.trans hStep2Small_ha, Bool.true_or, ↓reduceIte]
+    rw [show (9 : Nat) = 8 + 1 from rfl, Obend.Hardware.Gpu.Rdna2.run_succ, hBigC0]
+    simp only [Bool.false_eq_true, ↓reduceIte]
+    rw [show (8 : Nat) = 7 + 1 from rfl, Obend.Hardware.Gpu.Rdna2.run_succ, hBigC1]
+    simp only [Bool.false_eq_true, ↓reduceIte]
+    rw [show (7 : Nat) = 6 + 1 from rfl, Obend.Hardware.Gpu.Rdna2.run_succ, hBigC2]
+    simp only [↓reduceIte]
   have hRunSmall : Obend.Hardware.Gpu.Rdna2.run addEndProg 9 w0Small =
       Obend.Hardware.Gpu.Rdna2.step addEndProg (Obend.Hardware.Gpu.Rdna2.step addEndProg w0Small) := by
     rw [show (9 : Nat) = 8 + 1 from rfl, Obend.Hardware.Gpu.Rdna2.run_succ]

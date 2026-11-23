@@ -413,19 +413,6 @@ private def storeConst7Words : Array UInt32 :=
 private def storeConst7Prog : Program :=
   (decodeProgFast storeConst7Words).toOption.getD #[]
 
-private instance : DecidableEq Encoding := fun a b =>
-  if h : a.name = b.name ∧ a.order = b.order ∧ a.bitCount = b.bitCount ∧ a.mask = b.mask ∧
-      a.identifiers = b.identifiers ∧ a.conditions = b.conditions ∧ a.fields = b.fields then
-    isTrue (by cases a; cases b; obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ := h; rfl)
-  else
-    isFalse (fun heq => by subst heq; exact h ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩)
-
-private instance : DecidableEq Inst := fun a b =>
-  if h : a.inst = b.inst ∧ a.enc = b.enc ∧ a.ie = b.ie ∧ a.fields = b.fields ∧ a.words = b.words then
-    isTrue (by cases a; cases b; obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := h; rfl)
-  else
-    isFalse (fun heq => by subst heq; exact h ⟨rfl, rfl, rfl, rfl, rfl⟩)
-
 private theorem decodeProgram_storeConst7 :
     decodeProgram storeConst7Words = .ok storeConst7Prog := by
   apply decodeProgram_eq_fast_ok
@@ -436,34 +423,23 @@ private theorem decodeProgram_storeConst7 :
   | error e => rw [h] at hOk; cases hOk
   | ok p => rfl
 
-private theorem hashMap_getElem?_insert_cbv {α β : Type} [BEq α] [Hashable α]
-    [LawfulBEq α] [LawfulHashable α] (m : Std.HashMap α β) (k a : α) (v : β) :
-    (m.insert k v)[a]? = if k == a then some v else m[a]? :=
+private theorem hashMap_getElem?_insert_cbv {α β : Type} [BEq α] [Hashable α] [LawfulBEq α] [LawfulHashable α]
+    (m : Std.HashMap α β) (k a : α) (v : β) : (m.insert k v)[a]? = if k == a then some v else m[a]? :=
   Std.HashMap.getElem?_insert
-
-private theorem hashMap_getElem?_empty_cbv {α β : Type} [BEq α] [Hashable α]
-    [LawfulBEq α] [LawfulHashable α] {c : Nat} (a : α) :
-    (Std.HashMap.emptyWithCapacity c : Std.HashMap α β)[a]? = none :=
+private theorem hashMap_getElem?_empty_cbv {α β : Type} [BEq α] [Hashable α] [LawfulBEq α] [LawfulHashable α]
+    {c : Nat} (a : α) : (Std.HashMap.emptyWithCapacity c : Std.HashMap α β)[a]? = none :=
   Std.HashMap.getElem?_emptyWithCapacity
-
-private theorem hashMap_get?_insert_cbv {α β : Type} [BEq α] [Hashable α]
-    [LawfulBEq α] [LawfulHashable α] (m : Std.HashMap α β) (k a : α) (v : β) :
-    (m.insert k v).get? a = if k == a then some v else m.get? a :=
+private theorem hashMap_get?_insert_cbv {α β : Type} [BEq α] [Hashable α] [LawfulBEq α] [LawfulHashable α]
+    (m : Std.HashMap α β) (k a : α) (v : β) : (m.insert k v).get? a = if k == a then some v else m.get? a :=
   Std.HashMap.getElem?_insert
-
-private theorem hashMap_get?_empty_cbv {α β : Type} [BEq α] [Hashable α]
-    [LawfulBEq α] [LawfulHashable α] {c : Nat} (a : α) :
-    (Std.HashMap.emptyWithCapacity c : Std.HashMap α β).get? a = none :=
+private theorem hashMap_get?_empty_cbv {α β : Type} [BEq α] [Hashable α] [LawfulBEq α] [LawfulHashable α]
+    {c : Nat} (a : α) : (Std.HashMap.emptyWithCapacity c : Std.HashMap α β).get? a = none :=
   Std.HashMap.getElem?_emptyWithCapacity
-
-private theorem hashSet_contains_insert_cbv {α : Type} [BEq α] [Hashable α]
-    [LawfulBEq α] [LawfulHashable α] (s : Std.HashSet α) (k a : α) :
-    (s.insert k).contains a = ((k == a) || s.contains a) :=
+private theorem hashSet_contains_insert_cbv {α : Type} [BEq α] [Hashable α] [LawfulBEq α] [LawfulHashable α]
+    (s : Std.HashSet α) (k a : α) : (s.insert k).contains a = ((k == a) || s.contains a) :=
   Std.HashSet.contains_insert
-
-private theorem hashSet_contains_empty_cbv {α : Type} [BEq α] [Hashable α]
-    [LawfulBEq α] [LawfulHashable α] {c : Nat} (a : α) :
-    (Std.HashSet.emptyWithCapacity c : Std.HashSet α).contains a = false :=
+private theorem hashSet_contains_empty_cbv {α : Type} [BEq α] [Hashable α] [LawfulBEq α] [LawfulHashable α]
+    {c : Nat} (a : α) : (Std.HashSet.emptyWithCapacity c : Std.HashSet α).contains a = false :=
   Std.HashSet.contains_emptyWithCapacity
 
 private theorem srun_succ_cbv (prog : Program) (n : Nat) (s : SymWave) :
@@ -481,63 +457,45 @@ private theorem srun_succ_cbv (prog : Program) (n : Nat) (s : SymWave) :
   rw [srun.eq_def]; rfl
 
 attribute [local cbv_eval] hashMap_getElem?_insert_cbv hashMap_getElem?_empty_cbv
-  hashMap_get?_insert_cbv hashMap_get?_empty_cbv
-  hashSet_contains_insert_cbv hashSet_contains_empty_cbv
+  hashMap_get?_insert_cbv hashMap_get?_empty_cbv hashSet_contains_insert_cbv hashSet_contains_empty_cbv
 
-private theorem hashMap_toList_one {α β : Type} [BEq α] [Hashable α] [LawfulBEq α] [LawfulHashable α]
-    (k : α) (v : β) :
+private theorem hashMap_toList_one {α β : Type} [BEq α] [Hashable α] [LawfulBEq α] [LawfulHashable α] (k : α) (v : β) :
     (({} : Std.HashMap α β).insert k v).toList = [(k, v)] := by
   apply List.Perm.eq_singleton
-  simpa [Std.HashMap.toList_empty] using
-    (Std.HashMap.toList_insert_perm (m := ({} : Std.HashMap α β)) (k := k) (v := v))
+  simpa [Std.HashMap.toList_empty] using (Std.HashMap.toList_insert_perm (m := ({} : Std.HashMap α β)) (k := k) (v := v))
 
 private theorem hashMap_toList_two {α β : Type} [BEq α] [Hashable α] [LawfulBEq α] [LawfulHashable α]
     (k1 k2 : α) (v1 v2 : β) (hne : (k2 == k1) = false) :
     let m := (({} : Std.HashMap α β).insert k1 v1).insert k2 v2
     m.toList = [(k1, v1), (k2, v2)] ∨ m.toList = [(k2, v2), (k1, v1)] := by
-  intro m
-  have h1 := hashMap_toList_one k1 v1
+  intro m; have h1 := hashMap_toList_one k1 v1
   have h2 : m.toList.Perm [(k2, v2), (k1, v1)] := by
-    have hp := Std.HashMap.toList_insert_perm (m := ({} : Std.HashMap α β).insert k1 v1) (k := k2) (v := v2)
-    simpa [m, h1, hne] using hp
-  cases hL : m.toList with
-  | nil => rw [hL] at h2; have := h2.length_eq; simp at this
-  | cons a rest =>
-    cases rest with
-    | nil => rw [hL] at h2; have := h2.length_eq; simp at this
-    | cons b rest2 =>
-      cases rest2 with
-      | nil =>
-        rw [hL] at h2
-        have ha : a ∈ [(k2, v2), (k1, v1)] := h2.subset (by simp)
-        have hb : b ∈ [(k2, v2), (k1, v1)] := h2.subset (by simp)
-        have hnd : [a, b].Nodup := by
-          have hnd' : [(k2, v2), (k1, v1)].Nodup := by
-            simp only [List.nodup_cons, List.mem_cons, List.not_mem_nil, or_false, List.nodup_nil, and_true]
-            refine ⟨fun heq => ?_, not_false⟩
-            have hk : k2 = k1 := congrArg Prod.fst heq
-            subst hk
-            simp at hne
-          exact (h2.nodup_iff).mpr hnd'
-        simp only [List.mem_cons, List.not_mem_nil, or_false] at ha hb
-        rcases ha with rfl | rfl <;> rcases hb with rfl | rfl
-        · simp at hnd
-        · exact Or.inr rfl
-        · exact Or.inl rfl
-        · simp at hnd
-      | cons _ _ => rw [hL] at h2; have := h2.length_eq; simp at this
+    simpa [m, h1, hne] using Std.HashMap.toList_insert_perm (m := ({} : Std.HashMap α β).insert k1 v1) (k := k2) (v := v2)
+  rcases hL : m.toList with _ | ⟨a, _ | ⟨b, _ | _⟩⟩
+  · rw [hL] at h2; have := h2.length_eq; simp at this
+  · rw [hL] at h2; have := h2.length_eq; simp at this
+  · rw [hL] at h2
+    have ha : a ∈ [(k2, v2), (k1, v1)] := h2.subset (by simp)
+    have hb : b ∈ [(k2, v2), (k1, v1)] := h2.subset (by simp)
+    have hnd : [a, b].Nodup := (h2.nodup_iff).mpr (by
+      simp only [List.nodup_cons, List.mem_cons, List.not_mem_nil, or_false, List.nodup_nil, and_true]
+      exact ⟨fun heq => by cases congrArg Prod.fst heq; simp at hne, not_false⟩)
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at ha hb
+    rcases ha with rfl | rfl <;> rcases hb with rfl | rfl
+    · simp at hnd
+    · exact Or.inr rfl
+    · exact Or.inl rfl
+    · simp at hnd
+  · rw [hL] at h2; have := h2.length_eq; simp at this
 
 private theorem srun_step_eq (prog : Program) (n : Nat) (s : SymWave)
     (hH : s.halted = false) (hE : s.err = none) (hJ : joinTarget prog s = none) :
     srun prog (n + 1) s = srun prog n (step prog s) := by
-  rw [srun_succ_cbv]
-  simp only [hH, hE, Option.isSome_none, Bool.or_self, Bool.false_eq_true, ↓reduceIte, hJ]
+  rw [srun_succ_cbv]; simp only [hH, hE, Option.isSome_none, Bool.or_self, Bool.false_eq_true, ↓reduceIte, hJ]
 
-private theorem srun_halted_eq (prog : Program) (n : Nat) (s : SymWave)
-    (hH : s.halted = true) :
+private theorem srun_halted_eq (prog : Program) (n : Nat) (s : SymWave) (hH : s.halted = true) :
     srun prog (n + 1) s = s := by
-  rw [srun_succ_cbv]
-  simp only [hH, Bool.true_or, ↓reduceIte]
+  rw [srun_succ_cbv]; simp only [hH, Bool.true_or, ↓reduceIte]
 
 private def stripInst (i : Inst) : Inst :=
   ⟨⟨i.inst.name, i.inst.isBranch, i.inst.isConditionalBranch, i.inst.isTerminator, i.inst.isImmediatelyExecuted, []⟩,
@@ -673,10 +631,43 @@ private def sc7_i10 : Inst := mkCompactInst "S_ENDPGM" true false "ENC_SOPP" [] 
 private def sc7Compact : Program :=
   #[some sc7_i0, some sc7_i1, some sc7_i2, none, some sc7_i4, some sc7_i5, some sc7_i6, some sc7_i7, none, some sc7_i9, some sc7_i10]
 
+private def opEqb (a b : Operand) : Bool :=
+  a.field.toList == b.field.toList && a.type.toList == b.type.toList &&
+  a.format.toList == b.format.toList && a.size == b.size && a.input == b.input &&
+  a.output == b.output && a.implicit == b.implicit && a.binaryRequired == b.binaryRequired
+private theorem opEqb_eq {a b : Operand} (h : opEqb a b = true) : a = b := by
+  cases a; cases b; simp only [opEqb, Bool.and_eq_true, beq_iff_eq] at h
+  obtain ⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩ := h
+  cases String.ext h1; cases String.ext h2; cases String.ext h3; rfl
+private def fldEqb (a b : String × Nat) : Bool := a.1.toList == b.1.toList && a.2 == b.2
+private theorem fldEqb_eq {a b : String × Nat} (h : fldEqb a b = true) : a = b := by
+  cases a; cases b; simp only [fldEqb, Bool.and_eq_true, beq_iff_eq] at h; cases String.ext h.1; cases h.2; rfl
+private theorem list_beq_eq {α : Type} {eqb : α → α → Bool} (heq : ∀ {x y}, eqb x y = true → x = y) :
+    ∀ {xs ys : List α}, List.beq eqb xs ys = true → xs = ys
+  | [], [], _ => rfl
+  | _ :: _, [], h | [], _ :: _, h => by simp [List.beq] at h
+  | x :: xs, y :: ys, h => by simp only [List.beq, Bool.and_eq_true] at h; rw [heq h.1, list_beq_eq heq h.2]
+private def compactInstEqb (a b : Inst) : Bool :=
+  a.inst.name.toList == b.inst.name.toList && a.inst.isBranch == b.inst.isBranch &&
+  a.inst.isConditionalBranch == b.inst.isConditionalBranch && a.inst.isTerminator == b.inst.isTerminator &&
+  a.inst.isImmediatelyExecuted == b.inst.isImmediatelyExecuted && a.inst.encodings.isEmpty && b.inst.encodings.isEmpty &&
+  a.enc.name.toList == b.enc.name.toList && a.enc.order == 0 && b.enc.order == 0 &&
+  a.enc.bitCount == 0 && b.enc.bitCount == 0 && a.enc.mask == 0 && b.enc.mask == 0 &&
+  a.enc.identifiers.isEmpty && b.enc.identifiers.isEmpty && a.enc.conditions.isEmpty && b.enc.conditions.isEmpty &&
+  a.enc.fields.isEmpty && b.enc.fields.isEmpty && a.ie.encoding.toList.isEmpty && b.ie.encoding.toList.isEmpty &&
+  a.ie.condition.toList.isEmpty && b.ie.condition.toList.isEmpty && a.ie.opcode == 0 && b.ie.opcode == 0 &&
+  List.beq opEqb a.ie.operands b.ie.operands && List.beq fldEqb a.fields b.fields && a.words == b.words
+private theorem compactInstEqb_eq {a b : Inst} (h : compactInstEqb a b = true) : a = b := by
+  rcases a with ⟨⟨in1, ib1, ic1, it1, ii1, ies1⟩, ⟨en1, eo1, eb1, em1, eid1, ec1, ef1⟩, ⟨ien1, icd1, iop1, iops1⟩, fs1, ws1⟩
+  rcases b with ⟨⟨in2, ib2, ic2, it2, ii2, ies2⟩, ⟨en2, eo2, eb2, em2, eid2, ec2, ef2⟩, ⟨ien2, icd2, iop2, iops2⟩, fs2, ws2⟩
+  simp only [compactInstEqb, Bool.and_eq_true, beq_iff_eq, List.isEmpty_iff] at h
+  rcases h with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨h1, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, h2⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, h3⟩, h4⟩, h5⟩, h6⟩, rfl⟩, rfl⟩, hops⟩, hfs⟩, rfl⟩
+  cases String.ext h1; cases String.ext h2; cases String.ext (h3.trans h4.symm); cases String.ext (h5.trans h6.symm)
+  cases list_beq_eq opEqb_eq hops; cases list_beq_eq fldEqb_eq hfs; rfl
+private theorem optInstEqb_eq {a b : Option Inst} (h : Option.beq compactInstEqb a b = true) : a = b := by
+  cases a <;> cases b <;> simp [Option.beq] at h; exact compactInstEqb_eq h
 private theorem storeConst7Prog_strip : storeConst7Prog.map (Option.map stripInst) = sc7Compact := by
-  apply Array.ext'
-  simp only [Array.toList_map]
-  decide +kernel
+  apply Array.ext'; rw [Array.toList_map]; exact list_beq_eq optInstEqb_eq (by decide +kernel)
 
 private theorem list_mapM_eq_some {α β : Type} (f : α → Option β) (g : α → β) (xs : List α)
     (h : ∀ x ∈ xs, f x = some (g x)) : xs.mapM f = some (xs.map g) := by
