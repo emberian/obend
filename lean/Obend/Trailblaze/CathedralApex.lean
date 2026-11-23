@@ -4394,17 +4394,16 @@ private theorem rdnaDrop_eval (s : String) (n : Nat) :
 attribute [local cbv_eval] rdnaStartsWith_eval rdnaDrop_eval
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 8000000 in
 private theorem decodeRdnaEndInst :
-    ClusterGov.decodeRdnaSliceInst [0xbf810000] = some (rdnaEndInst, 1) := by rfl
+    ClusterGov.decodeRdnaSliceInst [0xbf810000] = some (rdnaEndInst, 1) := by
+  set_option cbv.maxSteps 1000000 in cbv
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 8000000 in
 private theorem decodeRdnaAddInst :
-    ClusterGov.decodeRdnaSliceInst [0x4a000300, 0xbf810000] = some (rdnaAddInst, 1) := by rfl
+    ClusterGov.decodeRdnaSliceInst [0x4a000300, 0xbf810000] = some (rdnaAddInst, 1) := by
+  set_option cbv.maxSteps 1000000 in cbv
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 8000000 in
 private theorem checkRdna2DispatchEnvelope_inhabited :
     ∃ d : ClusterGov.Rdna2WavefrontDispatch,
       2 ≤ d.workgroupSlices.size ∧

@@ -361,7 +361,6 @@ private theorem checkVscntProg_map_stripInst (strict : Bool) (prog : Program) :
   rw [leadersOf_map_stripInst, vscntFixpoint_map_stripInst]
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 2000000 in
 private theorem parseDump_storeConst7 :
     parseDump storeConst7Dump = #[#[#[0x7da80081], #[0xb0038000], #[0xf4080001, 0xfa000000],
       #[0xbf8cc07f], #[0x7e080287], #[0x7e0a0280], #[0xe0741000, 0x80000400],
@@ -370,7 +369,6 @@ private theorem parseDump_storeConst7 :
   cbv
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 2000000 in
 private theorem parseDumpLds_storeConst7 :
     parseDumpLds storeConst7Dump = #[0] := by
   set_option cbv.maxSteps 500000 in
@@ -417,12 +415,10 @@ private theorem checkVscntDumpReport_storeConst7 (block : Bool)
   rfl
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 2000000 in
 private theorem checkVscntDump_storeConst7 : checkVscntDump storeConst7Dump = true :=
   checkVscntDumpReport_storeConst7 false (by set_option cbv.maxSteps 500000 in cbv)
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 2000000 in
 private theorem checkVscntBlockDump_storeConst7 : checkVscntBlockDump storeConst7Dump = true :=
   checkVscntDumpReport_storeConst7 true (by set_option cbv.maxSteps 500000 in cbv)
 
@@ -442,7 +438,6 @@ unowned `Waitcnt.runBlock` (`Waitcnt.lean:209`, `partial def`) and `Waitcnt.chec
 (`Waitcnt.lean:241`, `while` loop) are opaque to Lean's kernel (`#eval checkWaitcntDump storeConst7Dump = true`). -/
 open Schedule ArrayEmit ArrayEmitCorrect in
 set_option maxRecDepth 200000 in
-set_option maxHeartbeats 4000000 in
 private theorem certifyDump_inhabited
     (hWait : checkWaitcntDump storeConst7Dump = true) :
     0 < witnessConst7Graph.edges.length ∧
@@ -505,20 +500,19 @@ RDNA2 dump is discharged unconditionally (bar `hWait`) in `certifyDump_inhabited
 `certifyBlockDump_inhabited`. -/
 open Schedule ArrayEmit ArrayEmitCorrect in
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 2000000 in
 private theorem certifyNamed_diamond_inhabited {isa : String} {progs : List Program}
     (hWait : checkWaitcntDump isa = true) (hVscnt : checkVscntDump isa = true)
     (hProgs : progsOf isa = some progs)
     (hSched : certifySchedule (lowerArrayToGpu (Obend.Hardware.ArrayHypergraph.ofScalar
-        Obend.Hardware.OpenHypergraph.goldenDiamondHypergraph)) diamondSched
+        Obend.Hardware.OpenHypergraph.diamondAddMulConstHypergraph)) diamondSched
         (ldssOf isa) progs Residuals.all = true) :
     certifyNamed "diamond" isa = true := by
-  let g := Obend.Hardware.ArrayHypergraph.ofScalar Obend.Hardware.OpenHypergraph.goldenDiamondHypergraph
+  let g := Obend.Hardware.ArrayHypergraph.ofScalar Obend.Hardware.OpenHypergraph.diamondAddMulConstHypergraph
   let c := Obend.Hardware.SquareGraphs.scalarCase "diamond"
-    "Obend.Hardware.OpenHypergraph.goldenDiamondHypergraph"
-    Obend.Hardware.OpenHypergraph.goldenDiamondHypergraph
+    "Obend.Hardware.OpenHypergraph.diamondAddMulConstHypergraph"
+    Obend.Hardware.OpenHypergraph.diamondAddMulConstHypergraph
   have hTyp : Obend.Hardware.ArrayTyping.GraphTyping (Obend.Hardware.ArrayTyping.wordTypes g) g := by
-    decide
+    decide +kernel
   have hLay : layoutOk g = true := by cbv
   let tg : Obend.Hardware.ArrayTyping.TypedGraph :=
     ⟨g, Obend.Hardware.ArrayTyping.wordTypes g, hTyp, hLay⟩
@@ -541,7 +535,6 @@ remains a hypothesis due to kernel-opaque `partial def Waitcnt.runBlock` (`Waitc
 and `while` loop in `Waitcnt.checkWaitcnt` (`Waitcnt.lean:241`); `#eval checkWaitcntDump storeConst7Dump = true`. -/
 open Obend.Hardware.ArrayKernel Block in
 set_option maxRecDepth 200000 in
-set_option maxHeartbeats 4000000 in
 private theorem certifyBlockDump_inhabited
     (hWait : checkWaitcntDump storeConst7Dump = true) :
     let ph : Phase := ⟨1, [], [⟨.scalar (.const 7), [], 0⟩], [⟨0, .lane, 0⟩]⟩

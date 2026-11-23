@@ -289,12 +289,10 @@ private def decodeInstFast (ws : List UInt32) : Option (Inst × Nat) :=
   | w0 :: _ => decGoFast ws w0 encodings
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 2000000 in
 private theorem encOrd_eq_encodings : encodingsInOrder = encodings := by
   set_option cbv.maxSteps 2000000 in cbv
 
 set_option maxRecDepth 200000 in
-set_option maxHeartbeats 4000000 in
 private theorem decodeInst_go_cons (ws : List UInt32) (w0 : UInt32) (e : Encoding) (es : List Encoding) :
     decodeInst.go ws w0 (e :: es) =
       if !encodingMatches w0 e then decodeInst.go ws w0 es else
@@ -326,7 +324,6 @@ private theorem decodeInst_go_cons (ws : List UInt32) (w0 : UInt32) (e : Encodin
       | some op => dsimp only; rw [instIndex_getD]; rfl
 
 set_option maxRecDepth 200000 in
-set_option maxHeartbeats 4000000 in
 private theorem decGoFast_cons (ws : List UInt32) (w0 : UInt32) (e : Encoding) (es : List Encoding) :
     decGoFast ws w0 (e :: es) =
       if !encodingMatches w0 e then decGoFast ws w0 es else
@@ -417,12 +414,12 @@ private def storeConst7Prog : Program :=
   (decodeProgFast storeConst7Words).toOption.getD #[]
 
 set_option maxRecDepth 200000 in
-set_option maxHeartbeats 8000000 in
 private theorem decodeProgram_storeConst7 :
     decodeProgram storeConst7Words = .ok storeConst7Prog := by
   apply decodeProgram_eq_fast_ok
   unfold storeConst7Prog
-  have hOk : (decodeProgFast storeConst7Words).isOk = true := by rfl
+  have hOk : (decodeProgFast storeConst7Words).isOk = true := by
+    set_option cbv.maxSteps 2000000 in cbv
   cases h : decodeProgFast storeConst7Words with
   | error e => rw [h] at hOk; cases hOk
   | ok p => rfl
@@ -664,9 +661,9 @@ private def sc7_i10 : Inst := mkCompactInst "S_ENDPGM" true false "ENC_SOPP" [] 
 private def sc7Compact : Program :=
   #[some sc7_i0, some sc7_i1, some sc7_i2, none, some sc7_i4, some sc7_i5, some sc7_i6, some sc7_i7, none, some sc7_i9, some sc7_i10]
 
-set_option maxRecDepth 200000 in set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 200000 in
 private theorem storeConst7Prog_strip : storeConst7Prog.map (Option.map stripInst) = sc7Compact := by
-  apply Array.ext'; simp only [Array.toList_map]; rfl
+  set_option cbv.maxSteps 2000000 in cbv
 
 private theorem list_mapM_eq_some {α β : Type} (f : α → Option β) (g : α → β) (xs : List α)
     (h : ∀ x ∈ xs, f x = some (g x)) : xs.mapM f = some (xs.map g) := by
@@ -966,7 +963,273 @@ private theorem joinTarget_none_of (prog : Program) (s : SymWave) (i : Inst)
   unfold joinTarget
   simp only [hI, hNe, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
 
-set_option maxRecDepth 200000 in set_option maxHeartbeats 8000000 in
+private theorem valuLanes_vmov_lit (s : SymWave) (dst srcCodeVal : Nat) (val : UInt32) (wrd : UInt32)
+    (hDstLt : dst < vgprCount) (hVsz : s.vgpr.size = vgprCount * lanes)
+    (hExec : s.exec = (.lit 1, .lit 0)) (hSk : srcKind srcCodeVal = .lit val)
+    (hNotV : (256 ≤ srcCodeVal && srcCodeVal ≤ 511) = false) :
+    ∃ w' : SymWave,
+      valuLanes (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+        [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 (fun src _ => src0 src) = w' ∧
+      w'.sgpr = s.sgpr ∧ w'.exec = s.exec ∧ w'.pc = s.pc ∧ w'.mem = s.mem ∧
+      w'.halted = s.halted ∧ w'.err = s.err ∧ w'.vgpr.size = vgprCount * lanes ∧
+      readVgpr w' dst 0 = Tm.lit val ∧
+      (∀ r', r' ≠ dst → readVgpr w' r' 0 = readVgpr s r' 0) := by
+  have hSdwaV := sc7_flags.2.2.2.2.2.2.2.2.2.2.1
+  let rest := (List.range 63).map fun k => (k + 1, readVgpr s dst (k + 1))
+  let w' := writeLanes s dst ((0, Tm.lit val) :: rest)
+  have hValu : valuLanes (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+      [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 (fun src _ => src0 src) = w' := by
+    unfold valuLanes
+    have hSdwa : isSdwa (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+        [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) = false := hSdwaV
+    have hRange : List.range lanes = 0 :: (List.range 63).map (· + 1) := by decide
+    have hMapM : ((List.range lanes).mapM fun lane =>
+        laneStep s lane
+          (laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+            [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 lane)
+          (readVgpr s dst lane) (fun src => src0 src) Dom.ite) =
+        some ((0, Tm.lit val) :: rest) := by
+      rw [hRange, List.mapM_cons]
+      have h0 : laneStep s 0
+          (laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+            [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 0)
+          (readVgpr s dst 0) (fun src => src0 src) Dom.ite = some (0, Tm.lit val) := by
+        have hOff0 : laneOff s 0 = false := by
+          unfold laneOff execBit maskBit; rw [hExec]
+          simp only [show (0 : Nat) < 32 from by decide, ↓reduceIte, tm_bit_lit]
+          change (some (((1 : UInt32) >>> (0 : Nat).toUInt32) &&& 1) == some 0) = false; decide
+        have hBit0 : execBit s 0 = Tm.lit 1 := by
+          unfold execBit maskBit; rw [hExec]
+          simp only [show (0 : Nat) < 32 from by decide, ↓reduceIte, tm_bit_lit]
+          exact congrArg Tm.lit (by decide)
+        have hSrc0 : laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+            [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 0 = some [Tm.lit val] := by
+          have hSC0' : srcCode (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+              [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) 0 = srcCodeVal := by
+            unfold srcCode; rw [hSdwa]; rfl
+          simp only [laneSources, List.range, List.range.loop, List.mapM_cons, List.mapM_nil,
+            hSC0', vectorSource, hNotV, Bool.false_eq_true, ↓reduceIte, scalarSource, hSk,
+            bind, Option.bind, pure]; rfl
+        unfold laneStep; rw [hOff0, hSrc0, hBit0]
+        simp only [Bool.false_eq_true, ↓reduceIte, Option.map_some, src0, List.getD_cons_zero, tm_ite_lit_one]
+      have hRest : ((List.range 63).map (· + 1)).mapM (fun lane =>
+          laneStep s lane
+            (laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+              [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 lane)
+            (readVgpr s dst lane) (fun src => src0 src) Dom.ite) =
+          some rest := by
+        have hM := list_mapM_eq_some
+          (fun lane => laneStep s lane
+            (laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+              [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 lane)
+            (readVgpr s dst lane) (fun src => src0 src) Dom.ite)
+          (fun lane => (lane, readVgpr s dst lane))
+          ((List.range 63).map (· + 1)) (by
+            intro lane hlane; rw [List.mem_map] at hlane; obtain ⟨k, hk, rfl⟩ := hlane; rw [List.mem_range] at hk
+            have hOffK : laneOff s (k + 1) = true := by
+              unfold laneOff execBit maskBit; simp only [hExec]
+              split
+              · rename_i hlt32
+                rw [tm_bit_lit, u32_one_bit_pos (k + 1) (by omega) hlt32]; rfl
+              · rw [tm_bit_lit, u32_zero_bit (k + 1 - 32) (by omega)]; rfl
+            simp [laneStep, hOffK])
+        rw [hM]; simp [rest, List.map_map, Function.comp]
+      rw [h0, hRest]; rfl
+    simp only [hSdwa, Bool.false_eq_true, ↓reduceIte, Bool.false_and, GWave.withSome]
+    have hDst : (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
+        [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]).field "VDST" = dst := rfl
+    rw [hDst, hMapM]
+  have hc := writeLanes_ctrl s dst ((0, Tm.lit val) :: rest)
+  refine ⟨w', hValu, hc.1, hc.2.1, hc.2.2.1, hc.2.2.2.1, hc.2.2.2.2.1, hc.2.2.2.2.2.1,
+    hc.2.2.2.2.2.2.trans hVsz, ?_, ?_⟩
+  · show readVgpr (writeLanes s dst ((0, Tm.lit val) :: rest)) dst 0 = Tm.lit val
+    rw [writeLanes_cons, readVgpr_writeLanes_of_ne]
+    · exact readVgpr_writeVgpr_eq s dst 0 (Tm.lit val) hDstLt
+        (by rw [hVsz]; unfold vgprCount lanes at *; omega)
+    · intro p hp; rw [List.mem_map] at hp; obtain ⟨k, hk, rfl⟩ := hp; rw [List.mem_range] at hk; unfold lanes; omega
+  · intro r' hne
+    exact readVgpr_writeLanes_of_ne s dst r' 0 ((0, Tm.lit val) :: rest) (by
+      intro p hp; rcases List.mem_cons.mp hp with rfl | hmem
+      · unfold lanes; omega
+      · rw [List.mem_map] at hmem; obtain ⟨k, hk, rfl⟩ := hmem; rw [List.mem_range] at hk; unfold lanes; omega)
+
+set_option maxRecDepth 200000 in
+private theorem symWave_sc7_steps0to3 (f : Nat) (bv : UInt64 → Option Tm) (w0 : SymWave)
+    (hB0 : bv (descSetAddr >>> 2) = some (.lit 0))
+    (hB1 : bv ((descSetAddr >>> 2) + 1) = some (.lit 1))
+    (hB2 : bv ((descSetAddr >>> 2) + 2) = some (.lit 8))
+    (hB3 : bv ((descSetAddr >>> 2) + 3) = some (.lit 0x31000000))
+    (hw0_pc : w0.pc = 0) (hw0_halted : w0.halted = false) (hw0_err : w0.err = none)
+    (hw0_exec : w0.exec = (Tm.lit 0xFFFFFFFF, Tm.lit 0xFFFFFFFF))
+    (hw0_mem : w0.mem = ⟨{}, bv⟩)
+    (hw0_vsize : w0.vgpr.size = vgprCount * lanes)
+    (hw0_ssize : w0.sgpr.size = sgprCount)
+    (hw0_s2 : readSgpr w0 2 = Tm.lit descSetLo)
+    (hw0_v0 : ∀ l < lanes, readVgpr w0 0 l = Tm.lit (UInt32.ofNat l)) :
+    ∃ w4 : SymWave,
+      srun sc7Compact (f + 10) w0 = srun sc7Compact (f + 6) w4 ∧
+      w4.pc = 5 ∧ w4.halted = false ∧ w4.err = none ∧
+      w4.exec = (.lit 1, .lit 0) ∧ w4.mem = ⟨{}, bv⟩ ∧
+      w4.vgpr.size = vgprCount * lanes ∧
+      readVgpr w4 0 0 = Tm.lit 0 ∧
+      readSgpr w4 0 = Tm.lit 0 ∧ readSgpr w4 1 = Tm.lit 1 ∧
+      readSgpr w4 2 = Tm.lit 8 ∧ readSgpr w4 3 = Tm.lit 0x31000000 := by
+  have hG0 : sc7Compact[0]? = some (some sc7_i0) := by simp [sc7Compact]
+  have hG1 : sc7Compact[1]? = some (some sc7_i1) := by simp [sc7Compact]
+  have hG2 : sc7Compact[2]? = some (some sc7_i2) := by simp [sc7Compact]
+  have hG4 : sc7Compact[4]? = some (some sc7_i4) := by simp [sc7Compact]
+  have ⟨hMod0, hMod1, hMod2, hMod4, _, _, _, _, _, hSdwa0, _, hCmpx, hNotBuf, hSC0, hSC1⟩ := sc7_flags
+  have ⟨hAddr0, hAddr1, hAddr2, hAddr3, _, hp1, hp0, _⟩ := sc7_addrs
+  let w1 : SymWave := { w0 with pc := 1, exec := (.lit 1, .lit 0) }
+  have hStep0 : step sc7Compact w0 = w1 := by
+    rw [step_at sc7Compact w0 sc7_i0 hw0_halted hw0_err (by rw [hw0_pc]; exact hG0), hw0_pc]
+    change execInst sc7_i0 { w0 with pc := 1 } = w1
+    unfold execInst
+    have hOp : instOp sc7_i0.name = .v_cmpx_gt_u32 := rfl
+    simp only [hMod0, Bool.false_eq_true, ↓reduceIte, hOp]
+    unfold valuCompare
+    have hMapM : ((List.range lanes).mapM fun lane =>
+        laneStep { w0 with pc := 1 } lane (laneSources sc7_i0 { w0 with pc := 1 } 2 lane)
+          (Dom.lit 0) (fun src => Dom.ugt (src0 src) (src1 src)) Dom.ite) =
+        some ((List.range lanes).map fun lane => (lane, if lane == 0 then Tm.lit 1 else Tm.lit 0)) := by
+      apply list_mapM_eq_some
+      intro lane hlane
+      rw [List.mem_range] at hlane
+      have hOff : laneOff { w0 with pc := 1 } lane = false := by
+        unfold laneOff execBit maskBit; simp only [hw0_exec]
+        split
+        · rename_i hlt32; rw [tm_bit_lit, u32_allones_bit lane hlt32]; rfl
+        · rename_i hge32; rw [tm_bit_lit, u32_allones_bit (lane - 32) (by unfold lanes at hlane; omega)]; rfl
+      have hBit : execBit { w0 with pc := 1 } lane = Tm.lit 1 := by
+        unfold execBit maskBit; simp only [hw0_exec]
+        split
+        · rename_i hlt32; rw [tm_bit_lit, u32_allones_bit lane hlt32]
+        · rename_i hge32; rw [tm_bit_lit, u32_allones_bit (lane - 32) (by unfold lanes at hlane; omega)]
+      have hSrc : laneSources sc7_i0 { w0 with pc := 1 } 2 lane =
+          some [Tm.lit 1, Tm.lit (UInt32.ofNat lane)] := by
+        have hRead : readVgpr { w0 with pc := 1 } 0 lane = Tm.lit (UInt32.ofNat lane) := hw0_v0 lane hlane
+        simp only [laneSources, List.range, List.range.loop, List.mapM_cons, List.mapM_nil,
+          hSC0, hSC1, vectorSource, scalarSource, srcKind, hRead, bind, Option.bind, pure]
+        rfl
+      unfold laneStep
+      rw [hOff, hSrc, hBit]
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.map_some, src0, src1,
+        List.getD_cons_zero, List.getD_cons_succ, tm_ite_lit_one, tm_ugt_lit_one lane hlane]
+    simp only [hSdwa0, Bool.false_eq_true, ↓reduceIte, hMapM, GWave.withSome]
+    have hMask : maskOfBits (((List.range lanes).map fun lane => (lane, if lane == 0 then Tm.lit 1 else Tm.lit 0)).map (·.2)) =
+        (Tm.lit 1, Tm.lit 0) := by
+      unfold maskOfBits
+      have hEq : (((List.range lanes).map fun lane => (lane, if lane == 0 then Tm.lit 1 else Tm.lit 0)).map (·.2)) =
+          ((List.range lanes).map fun lane => if lane == 0 then (1 : UInt32) else 0).map Tm.lit := by
+        rw [List.map_map, List.map_map]
+        apply List.map_congr_left; intro l _; cases l <;> rfl
+      rw [hEq, ← List.map_take, ← List.map_drop, tm_pack_map_lit, tm_pack_map_lit, hp1, hp0]
+    rw [hMask, hCmpx]; rfl
+  let w2 : SymWave := writeSgpr { w1 with pc := 2 } 3 (Tm.lit 0xFFFF8000)
+  have hStep1 : step sc7Compact w1 = w2 := by
+    rw [step_at sc7Compact w1 sc7_i1 hw0_halted hw0_err hG1]
+    unfold execInst
+    have hMovk : movkValue 32768 = 0xFFFF8000 := by decide
+    have hOp1 : instOp sc7_i1.name = .s_movk_i32 := rfl
+    have hFsdst : sc7_i1.field "SDST" = 3 := rfl
+    have hFsimm : sc7_i1.field "SIMM16" = 32768 := rfl
+    simp only [hMod1, Bool.false_eq_true, ↓reduceIte, hOp1, hFsdst, hFsimm, hMovk,
+      writeScalarDst, dstKind]
+    rfl
+  have hw2_s2 : readSgpr w2 2 = Tm.lit descSetLo := by
+    rw [show w2 = writeSgpr { w1 with pc := 2 } 3 (Tm.lit 0xFFFF8000) from rfl,
+        readSgpr_writeSgpr_ne _ 3 2 _ (by decide)]
+    exact hw0_s2
+  have hw2_s3 : readSgpr w2 3 = Tm.lit 0xFFFF8000 :=
+    readSgpr_writeSgpr_eq _ 3 _ (by decide) (by show 3 < w0.sgpr.size; rw [hw0_ssize]; decide)
+  have hw2_ssize : w2.sgpr.size = sgprCount := (writeSgpr_size _ _ _).trans hw0_ssize
+  have hw2_ctrl := writeSgpr_ctrl { w1 with pc := 2 } 3 (Tm.lit 0xFFFF8000)
+  have hH2 : w2.halted = false := hw2_ctrl.2.2.2.1.trans hw0_halted
+  have hE2 : w2.err = none := hw2_ctrl.2.2.2.2.1.trans hw0_err
+  have hP2 : w2.pc = 2 := hw2_ctrl.2.1
+  have hM2 : w2.mem = ⟨{}, bv⟩ := hw2_ctrl.2.2.1.trans hw0_mem
+  let w3 : SymWave := writeSgprs { w2 with pc := 4 } [(0, .lit 0), (1, .lit 1), (2, .lit 8), (3, .lit 0x31000000)]
+  have hStep2 : step sc7Compact w2 = w3 := by
+    rw [step_at sc7Compact w2 sc7_i2 hH2 hE2 (by rw [hP2]; exact hG2), hP2]
+    change execInst sc7_i2 { w2 with pc := 4 } = w3
+    unfold execInst execSmem
+    have hRS2 : readSgpr { w2 with pc := 4 } 2 = Tm.lit descSetLo := hw2_s2
+    have hRS3 : readSgpr { w2 with pc := 4 } 3 = Tm.lit 0xFFFF8000 := hw2_s3
+    have hL0 : MemDom.load ({ w2 with pc := 4 }.mem) (descSetAddr >>> 2) = some (Tm.lit 0) := by
+      change SymMem.load w2.mem _ = _; rw [hM2]; simp [SymMem.load, hB0]
+    have hL1 : MemDom.load ({ w2 with pc := 4 }.mem) ((descSetAddr >>> 2) + 1) = some (Tm.lit 1) := by
+      change SymMem.load w2.mem _ = _; rw [hM2]; simp [SymMem.load, hB1]
+    have hL2 : MemDom.load ({ w2 with pc := 4 }.mem) ((descSetAddr >>> 2) + 2) = some (Tm.lit 8) := by
+      change SymMem.load w2.mem _ = _; rw [hM2]; simp [SymMem.load, hB2]
+    have hL3 : MemDom.load ({ w2 with pc := 4 }.mem) ((descSetAddr >>> 2) + 3) = some (Tm.lit 0x31000000) := by
+      change SymMem.load w2.mem _ = _; rw [hM2]; simp [SymMem.load, hB3]
+    have hOp : instOp sc7_i2.name = .smem := rfl
+    have hSdata : sc7_i2.ie.operands.find? (·.field == "SDATA") =
+        some ⟨"SDATA", "OPR_SREG", "FMT_ANY", 128, false, true, false, true⟩ := rfl
+    have hFsd : sc7_i2.field "SDATA" = 0 := rfl
+    have hFsoff : sc7_i2.field "SOFFSET" = 125 := rfl
+    have hFoff : sc7_i2.field "OFFSET" = 0 := rfl
+    have hFsb : sc7_i2.field "SBASE" = 1 := rfl
+    have hNeg : ¬(signed21 0 < 0) := by decide
+    have hAlign : ((128 / 32 == 2 && 0 % 2 != 0) || (128 / 32 ≥ 4 && 0 % 4 != 0)) = false := by decide
+    simp only [hMod2, hOp, hSdata, hFsd, hFsoff, hFoff, hFsb, hNotBuf, hAlign, hNeg,
+      show (125 == 125) = true from rfl, show 2 * 1 = 2 from rfl, show 2 * 1 + 1 = 3 from rfl,
+      show 128 / 32 = 4 from rfl, show List.range 4 = [0, 1, 2, 3] from rfl,
+      Bool.false_eq_true, ↓reduceIte, GWave.withSome,
+      hRS2, hRS3, tm_conc_lit, Option.map_some,
+      List.mapM_cons, List.mapM_nil,
+      hAddr0, hAddr1, hAddr2, hAddr3, hL0, hL1, hL2, hL3, bind, Option.bind, pure]
+    rfl
+  have hw3_s0 : readSgpr w3 0 = Tm.lit 0 := by
+    simp only [w3, writeSgprs, List.foldl_cons, List.foldl_nil]
+    rw [readSgpr_writeSgpr_ne _ 3 0 _ (by decide), readSgpr_writeSgpr_ne _ 2 0 _ (by decide),
+        readSgpr_writeSgpr_ne _ 1 0 _ (by decide)]
+    exact readSgpr_writeSgpr_eq _ 0 _ (by decide) (by rw [hw2_ssize]; decide)
+  have hw3_s1 : readSgpr w3 1 = Tm.lit 1 := by
+    simp only [w3, writeSgprs, List.foldl_cons, List.foldl_nil]
+    rw [readSgpr_writeSgpr_ne _ 3 1 _ (by decide), readSgpr_writeSgpr_ne _ 2 1 _ (by decide)]
+    exact readSgpr_writeSgpr_eq _ 1 _ (by decide) (by rw [writeSgpr_size, hw2_ssize]; decide)
+  have hw3_s2 : readSgpr w3 2 = Tm.lit 8 := by
+    simp only [w3, writeSgprs, List.foldl_cons, List.foldl_nil]
+    rw [readSgpr_writeSgpr_ne _ 3 2 _ (by decide)]
+    exact readSgpr_writeSgpr_eq _ 2 _ (by decide) (by rw [writeSgpr_size, writeSgpr_size, hw2_ssize]; decide)
+  have hw3_s3 : readSgpr w3 3 = Tm.lit 0x31000000 := by
+    simp only [w3, writeSgprs, List.foldl_cons, List.foldl_nil]
+    exact readSgpr_writeSgpr_eq _ 3 _ (by decide)
+      (by rw [writeSgpr_size, writeSgpr_size, writeSgpr_size, hw2_ssize]; decide)
+  have hw3_ctrl : w3.pc = 4 ∧ w3.halted = false ∧ w3.err = none ∧
+      w3.exec = (.lit 1, .lit 0) ∧ w3.mem = ⟨{}, bv⟩ ∧ w3.vgpr = w0.vgpr := by
+    have c0 := writeSgpr_ctrl { w2 with pc := 4 } 0 (.lit 0)
+    have c1 := writeSgpr_ctrl (writeSgpr { w2 with pc := 4 } 0 (.lit 0)) 1 (.lit 1)
+    have c2 := writeSgpr_ctrl (writeSgpr (writeSgpr { w2 with pc := 4 } 0 (.lit 0)) 1 (.lit 1)) 2 (.lit 8)
+    have c3 := writeSgpr_ctrl (writeSgpr (writeSgpr (writeSgpr { w2 with pc := 4 } 0 (.lit 0)) 1 (.lit 1)) 2 (.lit 8)) 3 (.lit 0x31000000)
+    exact ⟨c3.2.1.trans (c2.2.1.trans (c1.2.1.trans c0.2.1)),
+      c3.2.2.2.1.trans (c2.2.2.2.1.trans (c1.2.2.2.1.trans (c0.2.2.2.1.trans hH2))),
+      c3.2.2.2.2.1.trans (c2.2.2.2.2.1.trans (c1.2.2.2.2.1.trans (c0.2.2.2.2.1.trans hE2))),
+      c3.1.trans (c2.1.trans (c1.1.trans (c0.1.trans hw2_ctrl.1))),
+      c3.2.2.1.trans (c2.2.2.1.trans (c1.2.2.1.trans (c0.2.2.1.trans hM2))),
+      c3.2.2.2.2.2.1.trans (c2.2.2.2.2.2.1.trans (c1.2.2.2.2.2.1.trans (c0.2.2.2.2.2.1.trans hw2_ctrl.2.2.2.2.2.1)))⟩
+  let w4 : SymWave := { w3 with pc := 5 }
+  have hStep3 : step sc7Compact w3 = w4 := by
+    rw [step_at sc7Compact w3 sc7_i4 hw3_ctrl.2.1 hw3_ctrl.2.2.1 (by rw [hw3_ctrl.1]; exact hG4), hw3_ctrl.1]
+    unfold execInst
+    have hOp4 : instOp sc7_i4.name = .s_waitcnt := rfl
+    simp only [hMod4, Bool.false_eq_true, ↓reduceIte, hOp4]; rfl
+  have hRun03 : srun sc7Compact (f + 10) w0 = srun sc7Compact (f + 6) w4 := by
+    rw [show f + 10 = (f + 9) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 9) w0 hw0_halted hw0_err (joinTarget_none_of sc7Compact w0 sc7_i0 (by rw [hw0_pc]; exact hG0) rfl), hStep0]
+    rw [show f + 9 = (f + 8) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 8) w1 hw0_halted hw0_err (joinTarget_none_of sc7Compact w1 sc7_i1 hG1 rfl), hStep1]
+    rw [show f + 8 = (f + 7) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 7) w2 hH2 hE2 (joinTarget_none_of sc7Compact w2 sc7_i2 (by rw [hP2]; exact hG2) rfl), hStep2]
+    rw [show f + 7 = (f + 6) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 6) w3 hw3_ctrl.2.1 hw3_ctrl.2.2.1 (joinTarget_none_of sc7Compact w3 sc7_i4 (by rw [hw3_ctrl.1]; exact hG4) rfl), hStep3]
+  refine ⟨w4, hRun03, rfl, hw3_ctrl.2.1, hw3_ctrl.2.2.1, hw3_ctrl.2.2.2.1, hw3_ctrl.2.2.2.2.1,
+    by change w3.vgpr.size = _; rw [hw3_ctrl.2.2.2.2.2]; exact hw0_vsize,
+    by unfold readVgpr; change w3.vgpr.getD 0 (Dom.lit 0) = Tm.lit 0; rw [hw3_ctrl.2.2.2.2.2]; exact hw0_v0 0 (by decide),
+    hw3_s0, hw3_s1, hw3_s2, hw3_s3⟩
+
+set_option maxRecDepth 200000 in
 private theorem symWave_storeConst7_base (consts : List Word) (ex : UInt64 → Bool)
     (hLay0 : (layoutMem 1 consts [])[descSetAddr >>> 2]? = some 0)
     (hLay1 : (layoutMem 1 consts [])[(descSetAddr >>> 2) + 1]? = some 1)
@@ -993,385 +1256,119 @@ private theorem symWave_storeConst7_base (consts : List Word) (ex : UInt64 → B
   have hB3 := mkB _ 0x31000000 hEx3 (by decide) (by decide) hLay3
   have ⟨hw0_pc, hw0_halted, hw0_err, hw0_exec, hw0_mem, hw0_vsize, hw0_ssize, hw0_s2, hw0_v0⟩ :=
     initWave_props (⟨{}, bv⟩ : SymMem) descSetLo 0 (ldsBaseOf 0) 0
-  -- Keep `w0` and `bv` completely abstract during all 9 steps so `Array.replicate 16384` is never unfolded.
-  have hMain : ∀ (bv : UInt64 → Option Tm) (w0 : SymWave),
-      bv (descSetAddr >>> 2) = some (.lit 0) →
-      bv ((descSetAddr >>> 2) + 1) = some (.lit 1) →
-      bv ((descSetAddr >>> 2) + 2) = some (.lit 8) →
-      bv ((descSetAddr >>> 2) + 3) = some (.lit 0x31000000) →
-      w0.pc = 0 → w0.halted = false → w0.err = none →
-      w0.exec = (Tm.lit 0xFFFFFFFF, Tm.lit 0xFFFFFFFF) →
-      w0.mem = ⟨{}, bv⟩ →
-      w0.vgpr.size = vgprCount * lanes →
-      w0.sgpr.size = sgprCount →
-      readSgpr w0 2 = Tm.lit descSetLo →
-      (∀ l < lanes, readVgpr w0 0 l = Tm.lit (UInt32.ofNat l)) →
-      let st := srun sc7Compact (f + 10) w0
-      st.err = none ∧ st.halted = true ∧
-      st.mem.stores = (({} : Std.HashMap UInt64 Tm).insert (dwLo 0) (.lit 7) |>.insert (dwLo 0 + 1) (.lit 0)) := by
-    intro bv w0 hB0 hB1 hB2 hB3 hw0_pc hw0_halted hw0_err hw0_exec hw0_mem hw0_vsize hw0_ssize hw0_s2 hw0_v0
-    -- Step 0 (pc = 0): V_CMPX_GT_U32 1, v0 -> exec := (1, 0), pc := 1
-    have hG0 : sc7Compact[0]? = some (some sc7_i0) := by simp [sc7Compact]
-    have hG1 : sc7Compact[1]? = some (some sc7_i1) := by simp [sc7Compact]
-    have hG2 : sc7Compact[2]? = some (some sc7_i2) := by simp [sc7Compact]
-    have hG4 : sc7Compact[4]? = some (some sc7_i4) := by simp [sc7Compact]
-    have hG5 : sc7Compact[5]? = some (some sc7_i5) := by simp [sc7Compact]
-    have hG6 : sc7Compact[6]? = some (some sc7_i6) := by simp [sc7Compact]
-    have hG7 : sc7Compact[7]? = some (some sc7_i7) := by simp [sc7Compact]
-    have hG9 : sc7Compact[9]? = some (some sc7_i9) := by simp [sc7Compact]
-    have hG10 : sc7Compact[10]? = some (some sc7_i10) := by simp [sc7Compact]
-    have ⟨hMod0, hMod1, hMod2, hMod4, hMod5, hMod6, hMod7, hMod9, hMod10, hSdwa0, hSdwaV, hCmpx, hNotBuf, hSC0, hSC1⟩ := sc7_flags
-    have ⟨hAddr0, hAddr1, hAddr2, hAddr3, hMA, hp1, hp0, hRflags⟩ := sc7_addrs
-    let w1 : SymWave := { w0 with pc := 1, exec := (.lit 1, .lit 0) }
-    have hStep0 : step sc7Compact w0 = w1 := by
-      rw [step_at sc7Compact w0 sc7_i0 hw0_halted hw0_err (by rw [hw0_pc]; exact hG0), hw0_pc]
-      change execInst sc7_i0 { w0 with pc := 1 } = w1
-      unfold execInst
-      have hOp : instOp sc7_i0.name = .v_cmpx_gt_u32 := rfl
-      simp only [hMod0, Bool.false_eq_true, ↓reduceIte, hOp]
-      unfold valuCompare
-      have hMapM : ((List.range lanes).mapM fun lane =>
-          laneStep { w0 with pc := 1 } lane (laneSources sc7_i0 { w0 with pc := 1 } 2 lane)
-            (Dom.lit 0) (fun src => Dom.ugt (src0 src) (src1 src)) Dom.ite) =
-          some ((List.range lanes).map fun lane => (lane, if lane == 0 then Tm.lit 1 else Tm.lit 0)) := by
-        apply list_mapM_eq_some
-        intro lane hlane
-        rw [List.mem_range] at hlane
-        have hOff : laneOff { w0 with pc := 1 } lane = false := by
-          unfold laneOff execBit maskBit; simp only [hw0_exec]
-          split
-          · rename_i hlt32; rw [tm_bit_lit, u32_allones_bit lane hlt32]; rfl
-          · rename_i hge32; rw [tm_bit_lit, u32_allones_bit (lane - 32) (by unfold lanes at hlane; omega)]; rfl
-        have hBit : execBit { w0 with pc := 1 } lane = Tm.lit 1 := by
-          unfold execBit maskBit; simp only [hw0_exec]
-          split
-          · rename_i hlt32; rw [tm_bit_lit, u32_allones_bit lane hlt32]
-          · rename_i hge32; rw [tm_bit_lit, u32_allones_bit (lane - 32) (by unfold lanes at hlane; omega)]
-        have hSrc : laneSources sc7_i0 { w0 with pc := 1 } 2 lane =
-            some [Tm.lit 1, Tm.lit (UInt32.ofNat lane)] := by
-          have hRead : readVgpr { w0 with pc := 1 } 0 lane = Tm.lit (UInt32.ofNat lane) := hw0_v0 lane hlane
-          simp only [laneSources, List.range, List.range.loop, List.mapM_cons, List.mapM_nil,
-            hSC0, hSC1, vectorSource, scalarSource, srcKind, hRead, bind, Option.bind, pure]
-          rfl
-        unfold laneStep
-        rw [hOff, hSrc, hBit]
-        simp only [Bool.false_eq_true, ↓reduceIte, Option.map_some, src0, src1,
-          List.getD_cons_zero, List.getD_cons_succ, tm_ite_lit_one, tm_ugt_lit_one lane hlane]
-      simp only [hSdwa0, Bool.false_eq_true, ↓reduceIte, hMapM, GWave.withSome]
-      have hMask : maskOfBits (((List.range lanes).map fun lane => (lane, if lane == 0 then Tm.lit 1 else Tm.lit 0)).map (·.2)) =
-          (Tm.lit 1, Tm.lit 0) := by
-        unfold maskOfBits
-        have hEq : (((List.range lanes).map fun lane => (lane, if lane == 0 then Tm.lit 1 else Tm.lit 0)).map (·.2)) =
-            ((List.range lanes).map fun lane => if lane == 0 then (1 : UInt32) else 0).map Tm.lit := by
-          rw [List.map_map, List.map_map]
-          apply List.map_congr_left; intro l _; cases l <;> rfl
-        rw [hEq, ← List.map_take, ← List.map_drop, tm_pack_map_lit, tm_pack_map_lit, hp1, hp0]
-      rw [hMask, hCmpx]; rfl
-    -- Step 1 (pc = 1): S_MOVK_I32 s3, 0x8000 -> sgpr[3] := 0xFFFF8000, pc := 2
-    let w2 : SymWave := writeSgpr { w1 with pc := 2 } 3 (Tm.lit 0xFFFF8000)
-    have hStep1 : step sc7Compact w1 = w2 := by
-      rw [step_at sc7Compact w1 sc7_i1 hw0_halted hw0_err hG1]
-      unfold execInst
-      have hMovk : movkValue 32768 = 0xFFFF8000 := by decide
-      have hOp1 : instOp sc7_i1.name = .s_movk_i32 := rfl
-      have hFsdst : sc7_i1.field "SDST" = 3 := rfl
-      have hFsimm : sc7_i1.field "SIMM16" = 32768 := rfl
-      simp only [hMod1, Bool.false_eq_true, ↓reduceIte, hOp1, hFsdst, hFsimm, hMovk,
-        writeScalarDst, dstKind]
+  obtain ⟨w4, hRun03, hw4_pc, hw4_h, hw4_e, hw4_ex, hw4_m, hw4_vsz, hw4_v0, hw4_s0, hw4_s1, hw4_s2, hw4_s3⟩ :=
+    symWave_sc7_steps0to3 f bv (initWave (⟨{}, bv⟩ : SymMem) descSetLo 0 (ldsBaseOf 0) 0)
+      hB0 hB1 hB2 hB3 hw0_pc hw0_halted hw0_err hw0_exec hw0_mem hw0_vsize hw0_ssize hw0_s2 hw0_v0
+  rw [hRun03]
+  have hG5 : sc7Compact[5]? = some (some sc7_i5) := by simp [sc7Compact]
+  have hG6 : sc7Compact[6]? = some (some sc7_i6) := by simp [sc7Compact]
+  have hG7 : sc7Compact[7]? = some (some sc7_i7) := by simp [sc7Compact]
+  have hG9 : sc7Compact[9]? = some (some sc7_i9) := by simp [sc7Compact]
+  have hG10 : sc7Compact[10]? = some (some sc7_i10) := by simp [sc7Compact]
+  have ⟨_, _, _, _, hMod5, hMod6, hMod7, hMod9, hMod10, _, _, _, _, _, _⟩ := sc7_flags
+  have ⟨_, _, _, _, hMA, _, _, hRflags⟩ := sc7_addrs
+  obtain ⟨w5, h5⟩ := valuLanes_vmov_lit { w4 with pc := 6 } 4 135 7 2114454151 (by decide) hw4_vsz hw4_ex rfl rfl
+  have hStep4 : step sc7Compact w4 = w5 := by
+    rw [step_at sc7Compact w4 sc7_i5 hw4_h hw4_e (by rw [hw4_pc]; exact hG5), hw4_pc]
+    change execInst sc7_i5 { w4 with pc := 6 } = w5
+    unfold execInst; have hOp5 : instOp sc7_i5.name = .v_mov_b32 := rfl
+    simp only [hMod5, Bool.false_eq_true, ↓reduceIte, hOp5]; exact h5.1
+  have hw5_v0 : readVgpr w5 0 0 = Tm.lit 0 := (h5.2.2.2.2.2.2.2.2.2 0 (by decide)).trans hw4_v0
+  have hw5_exec' : ({ w5 with pc := 7 } : SymWave).exec = (.lit 1, .lit 0) := h5.2.2.1.trans hw4_ex
+  obtain ⟨w6, h6⟩ := valuLanes_vmov_lit { w5 with pc := 7 } 5 128 0 2114585216 (by decide) h5.2.2.2.2.2.2.2.1 hw5_exec' rfl rfl
+  have hStep5 : step sc7Compact w5 = w6 := by
+    rw [step_at sc7Compact w5 sc7_i6 (h5.2.2.2.2.2.1.trans hw4_h) (h5.2.2.2.2.2.2.1.trans hw4_e) (by rw [h5.2.2.2.1]; exact hG6), h5.2.2.2.1]
+    change execInst sc7_i6 { w5 with pc := 7 } = w6
+    unfold execInst; have hOp6 : instOp sc7_i6.name = .v_mov_b32 := rfl
+    simp only [hMod6, Bool.false_eq_true, ↓reduceIte, hOp6]; exact h6.1
+  have hw6_v0 : readVgpr w6 0 0 = Tm.lit 0 := (h6.2.2.2.2.2.2.2.2.2 0 (by decide)).trans hw5_v0
+  have hw6_v4 : readVgpr w6 4 0 = Tm.lit 7 := (h6.2.2.2.2.2.2.2.2.2 4 (by decide)).trans h5.2.2.2.2.2.2.2.2.1
+  have hw6_v5 : readVgpr w6 5 0 = Tm.lit 0 := h6.2.2.2.2.2.2.2.2.1
+  have hw5_pc : w5.pc = 6 := h5.2.2.2.1
+  have hw6_pc : w6.pc = 7 := h6.2.2.2.1
+  have hw5_h : w5.halted = false := h5.2.2.2.2.2.1.trans hw4_h
+  have hw5_e : w5.err = none := h5.2.2.2.2.2.2.1.trans hw4_e
+  have hw6_h : w6.halted = false := h6.2.2.2.2.2.1.trans hw5_h
+  have hw6_e : w6.err = none := h6.2.2.2.2.2.2.1.trans hw5_e
+  have hw6_ex : w6.exec = (.lit 1, .lit 0) := h6.2.2.1.trans hw5_exec'
+  have hw6_sg : w6.sgpr = w4.sgpr := h6.2.1.trans h5.2.1
+  have hw6_m : w6.mem = ⟨{}, bv⟩ := h6.2.2.2.2.1.trans (h5.2.2.2.2.1.trans hw4_m)
+  let stFinal : Std.HashMap UInt64 Tm :=
+    (({} : Std.HashMap UInt64 Tm).insert (dwLo 0) (.lit 7)).insert (dwLo 0 + 1) (.lit 0)
+  let w7 : SymWave := { w6 with pc := 9, mem := { w6.mem with stores := stFinal } }
+  have hStep6 : step sc7Compact w6 = w7 := by
+    rw [step_at sc7Compact w6 sc7_i7 hw6_h hw6_e (by rw [hw6_pc]; exact hG7), hw6_pc]
+    change execInst sc7_i7 { w6 with pc := 9 } = w7
+    unfold execInst execMubuf
+    have hRes : readResource { w6 with pc := 9 } 0 = some (resourceOfWords 0 1 8 0x31000000) := by
+      unfold readResource readSgpr
+      simp only [hw6_sg]
+      rw [show w4.sgpr.getD 0 (Dom.lit 0) = Tm.lit 0 from hw4_s0,
+          show w4.sgpr.getD 1 (Dom.lit 0) = Tm.lit 1 from hw4_s1,
+          show w4.sgpr.getD 2 (Dom.lit 0) = Tm.lit 8 from hw4_s2,
+          show w4.sgpr.getD 3 (Dom.lit 0) = Tm.lit 0x31000000 from hw4_s3]
       rfl
-    have hw2_s2 : readSgpr w2 2 = Tm.lit descSetLo := by
-      rw [show w2 = writeSgpr { w1 with pc := 2 } 3 (Tm.lit 0xFFFF8000) from rfl,
-          readSgpr_writeSgpr_ne _ 3 2 _ (by decide)]
-      exact hw0_s2
-    have hw2_s3 : readSgpr w2 3 = Tm.lit 0xFFFF8000 :=
-      readSgpr_writeSgpr_eq _ 3 _ (by decide) (by show 3 < w0.sgpr.size; rw [hw0_ssize]; decide)
-    have hw2_ssize : w2.sgpr.size = sgprCount := (writeSgpr_size _ _ _).trans hw0_ssize
-    have hw2_ctrl := writeSgpr_ctrl { w1 with pc := 2 } 3 (Tm.lit 0xFFFF8000)
-    have hH2 : w2.halted = false := hw2_ctrl.2.2.2.1.trans hw0_halted
-    have hE2 : w2.err = none := hw2_ctrl.2.2.2.2.1.trans hw0_err
-    have hP2 : w2.pc = 2 := hw2_ctrl.2.1
-    have hM2 : w2.mem = ⟨{}, bv⟩ := hw2_ctrl.2.2.1.trans hw0_mem
-    -- Step 2 (pc = 2): S_LOAD_DWORDX4 s[0:3], s[2:3], null -> sgpr[0..3] := {0, 1, 8, 0x31000000}, pc := 4
-    let w3 : SymWave := writeSgprs { w2 with pc := 4 } [(0, .lit 0), (1, .lit 1), (2, .lit 8), (3, .lit 0x31000000)]
-    have hStep2 : step sc7Compact w2 = w3 := by
-      rw [step_at sc7Compact w2 sc7_i2 hH2 hE2 (by rw [hP2]; exact hG2), hP2]
-      change execInst sc7_i2 { w2 with pc := 4 } = w3
-      unfold execInst execSmem
-      have hRS2 : readSgpr { w2 with pc := 4 } 2 = Tm.lit descSetLo := hw2_s2
-      have hRS3 : readSgpr { w2 with pc := 4 } 3 = Tm.lit 0xFFFF8000 := hw2_s3
-      have hL0 : MemDom.load ({ w2 with pc := 4 }.mem) (descSetAddr >>> 2) = some (Tm.lit 0) := by
-        change SymMem.load w2.mem _ = _; rw [hM2]; simp [SymMem.load, hB0]
-      have hL1 : MemDom.load ({ w2 with pc := 4 }.mem) ((descSetAddr >>> 2) + 1) = some (Tm.lit 1) := by
-        change SymMem.load w2.mem _ = _; rw [hM2]; simp [SymMem.load, hB1]
-      have hL2 : MemDom.load ({ w2 with pc := 4 }.mem) ((descSetAddr >>> 2) + 2) = some (Tm.lit 8) := by
-        change SymMem.load w2.mem _ = _; rw [hM2]; simp [SymMem.load, hB2]
-      have hL3 : MemDom.load ({ w2 with pc := 4 }.mem) ((descSetAddr >>> 2) + 3) = some (Tm.lit 0x31000000) := by
-        change SymMem.load w2.mem _ = _; rw [hM2]; simp [SymMem.load, hB3]
-      have hOp : instOp sc7_i2.name = .smem := rfl
-      have hSdata : sc7_i2.ie.operands.find? (·.field == "SDATA") =
-          some ⟨"SDATA", "OPR_SREG", "FMT_ANY", 128, false, true, false, true⟩ := rfl
-      have hFsd : sc7_i2.field "SDATA" = 0 := rfl
-      have hFsoff : sc7_i2.field "SOFFSET" = 125 := rfl
-      have hFoff : sc7_i2.field "OFFSET" = 0 := rfl
-      have hFsb : sc7_i2.field "SBASE" = 1 := rfl
-      have hNeg : ¬(signed21 0 < 0) := by decide
-      have hAlign : ((128 / 32 == 2 && 0 % 2 != 0) || (128 / 32 ≥ 4 && 0 % 4 != 0)) = false := by decide
-      simp only [hMod2, hOp, hSdata, hFsd, hFsoff, hFoff, hFsb, hNotBuf, hAlign, hNeg,
-        show (125 == 125) = true from rfl, show 2 * 1 = 2 from rfl, show 2 * 1 + 1 = 3 from rfl,
-        show 128 / 32 = 4 from rfl, show List.range 4 = [0, 1, 2, 3] from rfl,
-        Bool.false_eq_true, ↓reduceIte, GWave.withSome,
-        hRS2, hRS3, tm_conc_lit, Option.map_some,
-        List.mapM_cons, List.mapM_nil,
-        hAddr0, hAddr1, hAddr2, hAddr3, hL0, hL1, hL2, hL3, bind, Option.bind, pure]
+    have hAct : activeLanes? { w6 with pc := 9 } = some [0] := activeLanes_exec_one _ hw6_ex
+    have hAddrs : mubufLaneAddrs sc7_i7 { w6 with pc := 9 } [0] (resourceOfWords 0 1 8 0x31000000) 0 2 =
+        some [(0, [some (dwLo 0), some (dwLo 0 + 1)])] := by
+      unfold mubufLaneAddrs
+      have hv0 : readVgpr { w6 with pc := 9 } 0 0 = Tm.lit 0 := hw6_v0
+      have hFoffen : sc7_i7.field "OFFEN" = 1 := rfl
+      have hFvaddr : sc7_i7.field "VADDR" = 0 := rfl
+      simp only [hFoffen, hFvaddr, List.mapM_cons, List.mapM_nil, hv0,
+        tm_conc_lit, Option.map_some, bind, Option.bind, pure, hMA]
       rfl
-    have hw3_s0 : readSgpr w3 0 = Tm.lit 0 := by
-      simp only [w3, writeSgprs, List.foldl_cons, List.foldl_nil]
-      rw [readSgpr_writeSgpr_ne _ 3 0 _ (by decide), readSgpr_writeSgpr_ne _ 2 0 _ (by decide),
-          readSgpr_writeSgpr_ne _ 1 0 _ (by decide)]
-      exact readSgpr_writeSgpr_eq _ 0 _ (by decide) (by rw [hw2_ssize]; decide)
-    have hw3_s1 : readSgpr w3 1 = Tm.lit 1 := by
-      simp only [w3, writeSgprs, List.foldl_cons, List.foldl_nil]
-      rw [readSgpr_writeSgpr_ne _ 3 1 _ (by decide), readSgpr_writeSgpr_ne _ 2 1 _ (by decide)]
-      exact readSgpr_writeSgpr_eq _ 1 _ (by decide) (by rw [writeSgpr_size, hw2_ssize]; decide)
-    have hw3_s2 : readSgpr w3 2 = Tm.lit 8 := by
-      simp only [w3, writeSgprs, List.foldl_cons, List.foldl_nil]
-      rw [readSgpr_writeSgpr_ne _ 3 2 _ (by decide)]
-      exact readSgpr_writeSgpr_eq _ 2 _ (by decide) (by rw [writeSgpr_size, writeSgpr_size, hw2_ssize]; decide)
-    have hw3_s3 : readSgpr w3 3 = Tm.lit 0x31000000 := by
-      simp only [w3, writeSgprs, List.foldl_cons, List.foldl_nil]
-      exact readSgpr_writeSgpr_eq _ 3 _ (by decide)
-        (by rw [writeSgpr_size, writeSgpr_size, writeSgpr_size, hw2_ssize]; decide)
-    have hw3_ctrl : w3.pc = 4 ∧ w3.halted = false ∧ w3.err = none ∧
-        w3.exec = (.lit 1, .lit 0) ∧ w3.mem = ⟨{}, bv⟩ ∧ w3.vgpr = w0.vgpr := by
-      have c0 := writeSgpr_ctrl { w2 with pc := 4 } 0 (.lit 0)
-      have c1 := writeSgpr_ctrl (writeSgpr { w2 with pc := 4 } 0 (.lit 0)) 1 (.lit 1)
-      have c2 := writeSgpr_ctrl (writeSgpr (writeSgpr { w2 with pc := 4 } 0 (.lit 0)) 1 (.lit 1)) 2 (.lit 8)
-      have c3 := writeSgpr_ctrl (writeSgpr (writeSgpr (writeSgpr { w2 with pc := 4 } 0 (.lit 0)) 1 (.lit 1)) 2 (.lit 8)) 3 (.lit 0x31000000)
-      exact ⟨c3.2.1.trans (c2.2.1.trans (c1.2.1.trans c0.2.1)),
-        c3.2.2.2.1.trans (c2.2.2.2.1.trans (c1.2.2.2.1.trans (c0.2.2.2.1.trans hH2))),
-        c3.2.2.2.2.1.trans (c2.2.2.2.2.1.trans (c1.2.2.2.2.1.trans (c0.2.2.2.2.1.trans hE2))),
-        c3.1.trans (c2.1.trans (c1.1.trans (c0.1.trans hw2_ctrl.1))),
-        c3.2.2.1.trans (c2.2.2.1.trans (c1.2.2.1.trans (c0.2.2.1.trans hM2))),
-        c3.2.2.2.2.2.1.trans (c2.2.2.2.2.2.1.trans (c1.2.2.2.2.2.1.trans (c0.2.2.2.2.2.1.trans hw2_ctrl.2.2.2.2.2.1)))⟩
-    -- Step 3 (pc = 4): S_WAITCNT -> pc := 5
-    let w4 : SymWave := { w3 with pc := 5 }
-    have hStep3 : step sc7Compact w3 = w4 := by
-      rw [step_at sc7Compact w3 sc7_i4 hw3_ctrl.2.1 hw3_ctrl.2.2.1 (by rw [hw3_ctrl.1]; exact hG4), hw3_ctrl.1]
-      unfold execInst
-      have hOp4 : instOp sc7_i4.name = .s_waitcnt := rfl
-      simp only [hMod4, Bool.false_eq_true, ↓reduceIte, hOp4]; rfl
-    -- Helper for V_MOV_B32 on exec = (1, 0): returns an opaque post-state `w'` so `List.range 63` never leaks downstream.
-    have hVmov : ∀ (s : SymWave) (dst srcCodeVal : Nat) (val : UInt32) (wrd : UInt32),
-        dst < vgprCount → s.vgpr.size = vgprCount * lanes →
-        s.exec = (.lit 1, .lit 0) → srcKind srcCodeVal = .lit val →
-        (256 ≤ srcCodeVal && srcCodeVal ≤ 511) = false →
-        ∃ w' : SymWave,
-          valuLanes (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-            [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 (fun src _ => src0 src) = w' ∧
-          w'.sgpr = s.sgpr ∧ w'.exec = s.exec ∧ w'.pc = s.pc ∧ w'.mem = s.mem ∧
-          w'.halted = s.halted ∧ w'.err = s.err ∧ w'.vgpr.size = vgprCount * lanes ∧
-          readVgpr w' dst 0 = Tm.lit val ∧
-          (∀ r', r' ≠ dst → readVgpr w' r' 0 = readVgpr s r' 0) := by
-      intro s dst srcCodeVal val wrd hDstLt hVsz hExec hSk hNotV
-      let rest := (List.range 63).map fun k => (k + 1, readVgpr s dst (k + 1))
-      let w' := writeLanes s dst ((0, Tm.lit val) :: rest)
-      have hValu : valuLanes (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-          [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 (fun src _ => src0 src) = w' := by
-        unfold valuLanes
-        have hSdwa : isSdwa (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-            [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) = false := hSdwaV
-        have hRange : List.range lanes = 0 :: (List.range 63).map (· + 1) := by decide
-        have hMapM : ((List.range lanes).mapM fun lane =>
-            laneStep s lane
-              (laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-                [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 lane)
-              (readVgpr s dst lane) (fun src => src0 src) Dom.ite) =
-            some ((0, Tm.lit val) :: rest) := by
-          rw [hRange, List.mapM_cons]
-          have h0 : laneStep s 0
-              (laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-                [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 0)
-              (readVgpr s dst 0) (fun src => src0 src) Dom.ite = some (0, Tm.lit val) := by
-            have hOff0 : laneOff s 0 = false := by
-              unfold laneOff execBit maskBit; rw [hExec]
-              simp only [show (0 : Nat) < 32 from by decide, ↓reduceIte, tm_bit_lit]
-              change (some (((1 : UInt32) >>> (0 : Nat).toUInt32) &&& 1) == some 0) = false; decide
-            have hBit0 : execBit s 0 = Tm.lit 1 := by
-              unfold execBit maskBit; rw [hExec]
-              simp only [show (0 : Nat) < 32 from by decide, ↓reduceIte, tm_bit_lit]
-              exact congrArg Tm.lit (by decide)
-            have hSrc0 : laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-                [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 0 = some [Tm.lit val] := by
-              have hSC0' : srcCode (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-                  [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) 0 = srcCodeVal := by
-                unfold srcCode; rw [hSdwa]; rfl
-              simp only [laneSources, List.range, List.range.loop, List.mapM_cons, List.mapM_nil,
-                hSC0', vectorSource, hNotV, Bool.false_eq_true, ↓reduceIte, scalarSource, hSk,
-                bind, Option.bind, pure]; rfl
-            unfold laneStep; rw [hOff0, hSrc0, hBit0]
-            simp only [Bool.false_eq_true, ↓reduceIte, Option.map_some, src0, List.getD_cons_zero, tm_ite_lit_one]
-          have hRest : ((List.range 63).map (· + 1)).mapM (fun lane =>
-              laneStep s lane
-                (laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-                  [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 lane)
-                (readVgpr s dst lane) (fun src => src0 src) Dom.ite) =
-              some rest := by
-            have hM := list_mapM_eq_some
-              (fun lane => laneStep s lane
-                (laneSources (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-                  [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]) s 1 lane)
-                (readVgpr s dst lane) (fun src => src0 src) Dom.ite)
-              (fun lane => (lane, readVgpr s dst lane))
-              ((List.range 63).map (· + 1)) (by
-                intro lane hlane; rw [List.mem_map] at hlane; obtain ⟨k, hk, rfl⟩ := hlane; rw [List.mem_range] at hk
-                have hOffK : laneOff s (k + 1) = true := by
-                  unfold laneOff execBit maskBit; simp only [hExec]
-                  split
-                  · rename_i hlt32
-                    rw [tm_bit_lit, u32_one_bit_pos (k + 1) (by omega) hlt32]; rfl
-                  · rw [tm_bit_lit, u32_zero_bit (k + 1 - 32) (by omega)]; rfl
-                simp [laneStep, hOffK])
-            rw [hM]; simp [rest, List.map_map, Function.comp]
-          rw [h0, hRest]; rfl
-        simp only [hSdwa, Bool.false_eq_true, ↓reduceIte, Bool.false_and, GWave.withSome]
-        have hDst : (mkCompactInst "V_MOV_B32" false false "ENC_VOP1" []
-            [("ENCODING", 63), ("OP", 1), ("SRC0", srcCodeVal), ("VDST", dst)] [wrd]).field "VDST" = dst := rfl
-        rw [hDst, hMapM]
-      have hc := writeLanes_ctrl s dst ((0, Tm.lit val) :: rest)
-      refine ⟨w', hValu, hc.1, hc.2.1, hc.2.2.1, hc.2.2.2.1, hc.2.2.2.2.1, hc.2.2.2.2.2.1,
-        hc.2.2.2.2.2.2.trans hVsz, ?_, ?_⟩
-      · show readVgpr (writeLanes s dst ((0, Tm.lit val) :: rest)) dst 0 = Tm.lit val
-        rw [writeLanes_cons, readVgpr_writeLanes_of_ne]
-        · exact readVgpr_writeVgpr_eq s dst 0 (Tm.lit val) hDstLt
-            (by rw [hVsz]; unfold vgprCount lanes at *; omega)
-        · intro p hp; rw [List.mem_map] at hp; obtain ⟨k, hk, rfl⟩ := hp; rw [List.mem_range] at hk; unfold lanes; omega
-      · intro r' hne
-        exact readVgpr_writeLanes_of_ne s dst r' 0 ((0, Tm.lit val) :: rest) (by
-          intro p hp; rcases List.mem_cons.mp hp with rfl | hmem
-          · unfold lanes; omega
-          · rw [List.mem_map] at hmem; obtain ⟨k, hk, rfl⟩ := hmem; rw [List.mem_range] at hk; unfold lanes; omega)
-    -- Step 4 (pc = 5): V_MOV_B32 v4, 7 -> opaque w5 with v4[0] = 7, pc = 6
-    have hw4_vsize : ({ w4 with pc := 6 } : SymWave).vgpr.size = vgprCount * lanes := by
-      change w3.vgpr.size = vgprCount * lanes; rw [hw3_ctrl.2.2.2.2.2]; exact hw0_vsize
-    have hw4_exec : ({ w4 with pc := 6 } : SymWave).exec = (.lit 1, .lit 0) := hw3_ctrl.2.2.2.1
-    obtain ⟨w5, h5⟩ := hVmov { w4 with pc := 6 } 4 135 7 2114454151 (by decide) hw4_vsize hw4_exec rfl rfl
-    have hStep4 : step sc7Compact w4 = w5 := by
-      rw [step_at sc7Compact w4 sc7_i5 hw3_ctrl.2.1 hw3_ctrl.2.2.1 hG5]
-      change execInst sc7_i5 { w4 with pc := 6 } = w5
-      unfold execInst; have hOp5 : instOp sc7_i5.name = .v_mov_b32 := rfl
-      simp only [hMod5, Bool.false_eq_true, ↓reduceIte, hOp5]; exact h5.1
-    have hw5_v0 : readVgpr w5 0 0 = Tm.lit 0 := by
-      rw [h5.2.2.2.2.2.2.2.2.2 0 (by decide)]; unfold readVgpr; change w3.vgpr.getD 0 (Dom.lit 0) = Tm.lit 0
-      rw [hw3_ctrl.2.2.2.2.2]; exact hw0_v0 0 (by decide)
-    -- Step 5 (pc = 6): V_MOV_B32 v5, 0 -> opaque w6 with v5[0] = 0, pc = 7
-    have hw5_exec' : ({ w5 with pc := 7 } : SymWave).exec = (.lit 1, .lit 0) := h5.2.2.1.trans hw3_ctrl.2.2.2.1
-    obtain ⟨w6, h6⟩ := hVmov { w5 with pc := 7 } 5 128 0 2114585216 (by decide) h5.2.2.2.2.2.2.2.1 hw5_exec' rfl rfl
-    have hStep5 : step sc7Compact w5 = w6 := by
-      rw [step_at sc7Compact w5 sc7_i6 (h5.2.2.2.2.2.1.trans hw3_ctrl.2.1) (h5.2.2.2.2.2.2.1.trans hw3_ctrl.2.2.1) (by rw [h5.2.2.2.1]; exact hG6), h5.2.2.2.1]
-      change execInst sc7_i6 { w5 with pc := 7 } = w6
-      unfold execInst; have hOp6 : instOp sc7_i6.name = .v_mov_b32 := rfl
-      simp only [hMod6, Bool.false_eq_true, ↓reduceIte, hOp6]; exact h6.1
-    have hw6_v0 : readVgpr w6 0 0 = Tm.lit 0 := (h6.2.2.2.2.2.2.2.2.2 0 (by decide)).trans hw5_v0
-    have hw6_v4 : readVgpr w6 4 0 = Tm.lit 7 := (h6.2.2.2.2.2.2.2.2.2 4 (by decide)).trans h5.2.2.2.2.2.2.2.2.1
-    have hw6_v5 : readVgpr w6 5 0 = Tm.lit 0 := h6.2.2.2.2.2.2.2.2.1
-    have hw5_pc : w5.pc = 6 := h5.2.2.2.1
-    have hw6_pc : w6.pc = 7 := h6.2.2.2.1
-    have hw5_h : w5.halted = false := h5.2.2.2.2.2.1.trans hw3_ctrl.2.1
-    have hw5_e : w5.err = none := h5.2.2.2.2.2.2.1.trans hw3_ctrl.2.2.1
-    have hw6_h : w6.halted = false := h6.2.2.2.2.2.1.trans hw5_h
-    have hw6_e : w6.err = none := h6.2.2.2.2.2.2.1.trans hw5_e
-    have hw6_ex : w6.exec = (.lit 1, .lit 0) := h6.2.2.1.trans hw5_exec'
-    have hw6_sg : w6.sgpr = w3.sgpr := h6.2.1.trans h5.2.1
-    have hw6_m : w6.mem = ⟨{}, bv⟩ := h6.2.2.2.2.1.trans (h5.2.2.2.2.1.trans hw3_ctrl.2.2.2.2.1)
-    -- Step 6 (pc = 7): BUFFER_STORE_DWORDX2 v[4:5], v0, s[0:3], 0 offen -> stores (dwLo 0, 7), (dwLo 0 + 1, 0), pc := 9
-    let stFinal : Std.HashMap UInt64 Tm :=
-      (({} : Std.HashMap UInt64 Tm).insert (dwLo 0) (.lit 7)).insert (dwLo 0 + 1) (.lit 0)
-    let w7 : SymWave := { w6 with pc := 9, mem := { w6.mem with stores := stFinal } }
-    have hStep6 : step sc7Compact w6 = w7 := by
-      rw [step_at sc7Compact w6 sc7_i7 hw6_h hw6_e (by rw [hw6_pc]; exact hG7), hw6_pc]
-      change execInst sc7_i7 { w6 with pc := 9 } = w7
-      unfold execInst execMubuf
-      have hRes : readResource { w6 with pc := 9 } 0 = some (resourceOfWords 0 1 8 0x31000000) := by
-        unfold readResource readSgpr
-        simp only [hw6_sg]
-        rw [show w3.sgpr.getD 0 (Dom.lit 0) = Tm.lit 0 from hw3_s0,
-            show w3.sgpr.getD 1 (Dom.lit 0) = Tm.lit 1 from hw3_s1,
-            show w3.sgpr.getD 2 (Dom.lit 0) = Tm.lit 8 from hw3_s2,
-            show w3.sgpr.getD 3 (Dom.lit 0) = Tm.lit 0x31000000 from hw3_s3]
-        rfl
-      have hAct : activeLanes? { w6 with pc := 9 } = some [0] := activeLanes_exec_one _ hw6_ex
-      have hAddrs : mubufLaneAddrs sc7_i7 { w6 with pc := 9 } [0] (resourceOfWords 0 1 8 0x31000000) 0 2 =
-          some [(0, [some (dwLo 0), some (dwLo 0 + 1)])] := by
-        unfold mubufLaneAddrs
-        have hv0 : readVgpr { w6 with pc := 9 } 0 0 = Tm.lit 0 := hw6_v0
-        have hFoffen : sc7_i7.field "OFFEN" = 1 := rfl
-        have hFvaddr : sc7_i7.field "VADDR" = 0 := rfl
-        simp only [hFoffen, hFvaddr, List.mapM_cons, List.mapM_nil, hv0,
-          tm_conc_lit, Option.map_some, bind, Option.bind, pure, hMA]
-        rfl
-      have hv4 : readVgpr { w6 with pc := 9 } 4 0 = Tm.lit 7 := hw6_v4
-      have hv5 : readVgpr { w6 with pc := 9 } 5 0 = Tm.lit 0 := hw6_v5
-      have hOp7 : instOp sc7_i7.name = .mubuf_store := rfl
-      have hVdata : sc7_i7.ie.operands.find? (·.field == "VDATA") =
-          some ⟨"VDATA", "OPR_VGPR", "FMT_ANY", 64, true, false, false, true⟩ := rfl
-      have hFsrsrc : sc7_i7.field "SRSRC" = 0 := rfl
-      have hFidxen : sc7_i7.field "IDXEN" = 0 := rfl
-      have hFlds : sc7_i7.field "LDS" = 0 := rfl
-      have hFtfe : sc7_i7.field "TFE" = 0 := rfl
-      have hFsoff : sc7_i7.field "SOFFSET" = 128 := rfl
-      have hFvdata : sc7_i7.field "VDATA" = 4 := rfl
-      have hZip : ([some (dwLo 0), some (dwLo 0 + 1)] : List (Option UInt64)).zipIdx =
-          [(some (dwLo 0), 0), (some (dwLo 0 + 1), 1)] := rfl
-      have hStAll : storeAll { w6 with pc := 9 } [(dwLo 0, Tm.lit 7), (dwLo 0 + 1, Tm.lit 0)] = w7 := by
-        simp only [storeAll, List.foldl_cons, List.foldl_nil, w7, stFinal, hw6_m]
-        rfl
-      simp only [hMod7, hOp7, hVdata, hFsrsrc, hFidxen, hFlds, hFtfe, hFsoff, hFvdata,
-        show 64 / 32 = 2 from rfl, show 4 * 0 = 0 from rfl, show 4 + 0 = 4 from rfl, show 4 + 1 = 5 from rfl,
-        GWave.withSome, hRes, hRflags, hAct, hAddrs, scalarSource, show srcKind 128 = .lit 0 from rfl,
-        show (Dom.conc (Dom.lit 0 : Tm) : Option UInt32) = some 0 from rfl,
-        Option.bind_some, ↓reduceIte, Bool.false_eq_true,
-        List.flatMap_cons, List.flatMap_nil, List.append_nil,
-        hZip, List.filterMap_cons, List.filterMap_nil, Option.map_some,
-        hv4, hv5, hStAll]
-    -- Step 7 (pc = 9): S_WAITCNT_VSCNT -> pc := 10
-    let w8 : SymWave := { w7 with pc := 10 }
-    have hStep7 : step sc7Compact w7 = w8 := by
-      rw [step_at sc7Compact w7 sc7_i9 hw6_h hw6_e hG9]
-      unfold execInst
-      have hOp9 : instOp sc7_i9.name = .s_waitcnt_vscnt := rfl
-      simp only [hMod9, Bool.false_eq_true, ↓reduceIte, hOp9]; rfl
-    -- Step 8 (pc = 10): S_ENDPGM -> halted := true, pc := 11
-    let w9 : SymWave := { w8 with pc := 11, halted := true }
-    have hStep8 : step sc7Compact w8 = w9 := by
-      rw [step_at sc7Compact w8 sc7_i10 hw6_h hw6_e hG10]
-      unfold execInst
-      have hOp10 : instOp sc7_i10.name = .s_endpgm := rfl
-      simp only [hMod10, Bool.false_eq_true, ↓reduceIte, hOp10]; rfl
-    -- Combine all 9 steps via srun_step_eq + srun_halted_eq (zero unfolding of w1..w8!)
-    have hRun : srun sc7Compact (f + 10) w0 = w9 := by
-      rw [show f + 10 = (f + 9) + 1 from rfl,
-          srun_step_eq sc7Compact (f + 9) w0 hw0_halted hw0_err (joinTarget_none_of sc7Compact w0 sc7_i0 (by rw [hw0_pc]; exact hG0) rfl), hStep0]
-      rw [show f + 9 = (f + 8) + 1 from rfl,
-          srun_step_eq sc7Compact (f + 8) w1 hw0_halted hw0_err (joinTarget_none_of sc7Compact w1 sc7_i1 hG1 rfl), hStep1]
-      rw [show f + 8 = (f + 7) + 1 from rfl,
-          srun_step_eq sc7Compact (f + 7) w2 hH2 hE2 (joinTarget_none_of sc7Compact w2 sc7_i2 (by rw [hP2]; exact hG2) rfl), hStep2]
-      rw [show f + 7 = (f + 6) + 1 from rfl,
-          srun_step_eq sc7Compact (f + 6) w3 hw3_ctrl.2.1 hw3_ctrl.2.2.1 (joinTarget_none_of sc7Compact w3 sc7_i4 (by rw [hw3_ctrl.1]; exact hG4) rfl), hStep3]
-      rw [show f + 6 = (f + 5) + 1 from rfl,
-          srun_step_eq sc7Compact (f + 5) w4 hw3_ctrl.2.1 hw3_ctrl.2.2.1 (joinTarget_none_of sc7Compact w4 sc7_i5 hG5 rfl), hStep4]
-      rw [show f + 5 = (f + 4) + 1 from rfl,
-          srun_step_eq sc7Compact (f + 4) w5 hw5_h hw5_e (joinTarget_none_of sc7Compact w5 sc7_i6 (by rw [hw5_pc]; exact hG6) rfl), hStep5]
-      rw [show f + 4 = (f + 3) + 1 from rfl,
-          srun_step_eq sc7Compact (f + 3) w6 hw6_h hw6_e (joinTarget_none_of sc7Compact w6 sc7_i7 (by rw [hw6_pc]; exact hG7) rfl), hStep6]
-      rw [show f + 3 = (f + 2) + 1 from rfl,
-          srun_step_eq sc7Compact (f + 2) w7 hw6_h hw6_e (joinTarget_none_of sc7Compact w7 sc7_i9 hG9 rfl), hStep7]
-      rw [show f + 2 = (f + 1) + 1 from rfl,
-          srun_step_eq sc7Compact (f + 1) w8 hw6_h hw6_e (joinTarget_none_of sc7Compact w8 sc7_i10 hG10 rfl), hStep8]
-      exact srun_halted_eq sc7Compact f w9 rfl
-    dsimp only
-    rw [hRun]
-    exact ⟨hw6_e, rfl, rfl⟩
-  exact hMain bv (initWave (⟨{}, bv⟩ : SymMem) descSetLo 0 (ldsBaseOf 0) 0) hB0 hB1 hB2 hB3 hw0_pc hw0_halted hw0_err hw0_exec hw0_mem hw0_vsize hw0_ssize hw0_s2 hw0_v0
+    have hv4 : readVgpr { w6 with pc := 9 } 4 0 = Tm.lit 7 := hw6_v4
+    have hv5 : readVgpr { w6 with pc := 9 } 5 0 = Tm.lit 0 := hw6_v5
+    have hOp7 : instOp sc7_i7.name = .mubuf_store := rfl
+    have hVdata : sc7_i7.ie.operands.find? (·.field == "VDATA") =
+        some ⟨"VDATA", "OPR_VGPR", "FMT_ANY", 64, true, false, false, true⟩ := rfl
+    have hFsrsrc : sc7_i7.field "SRSRC" = 0 := rfl
+    have hFidxen : sc7_i7.field "IDXEN" = 0 := rfl
+    have hFlds : sc7_i7.field "LDS" = 0 := rfl
+    have hFtfe : sc7_i7.field "TFE" = 0 := rfl
+    have hFsoff : sc7_i7.field "SOFFSET" = 128 := rfl
+    have hFvdata : sc7_i7.field "VDATA" = 4 := rfl
+    have hZip : ([some (dwLo 0), some (dwLo 0 + 1)] : List (Option UInt64)).zipIdx =
+        [(some (dwLo 0), 0), (some (dwLo 0 + 1), 1)] := rfl
+    have hStAll : storeAll { w6 with pc := 9 } [(dwLo 0, Tm.lit 7), (dwLo 0 + 1, Tm.lit 0)] = w7 := by
+      simp only [storeAll, List.foldl_cons, List.foldl_nil, w7, stFinal, hw6_m]
+      rfl
+    simp only [hMod7, hOp7, hVdata, hFsrsrc, hFidxen, hFlds, hFtfe, hFsoff, hFvdata,
+      show 64 / 32 = 2 from rfl, show 4 * 0 = 0 from rfl, show 4 + 0 = 4 from rfl, show 4 + 1 = 5 from rfl,
+      GWave.withSome, hRes, hRflags, hAct, hAddrs, scalarSource, show srcKind 128 = .lit 0 from rfl,
+      show (Dom.conc (Dom.lit 0 : Tm) : Option UInt32) = some 0 from rfl,
+      Option.bind_some, ↓reduceIte, Bool.false_eq_true,
+      List.flatMap_cons, List.flatMap_nil, List.append_nil,
+      hZip, List.filterMap_cons, List.filterMap_nil, Option.map_some,
+      hv4, hv5, hStAll]
+  let w8 : SymWave := { w7 with pc := 10 }
+  have hStep7 : step sc7Compact w7 = w8 := by
+    rw [step_at sc7Compact w7 sc7_i9 hw6_h hw6_e hG9]
+    unfold execInst
+    have hOp9 : instOp sc7_i9.name = .s_waitcnt_vscnt := rfl
+    simp only [hMod9, Bool.false_eq_true, ↓reduceIte, hOp9]; rfl
+  let w9 : SymWave := { w8 with pc := 11, halted := true }
+  have hStep8 : step sc7Compact w8 = w9 := by
+    rw [step_at sc7Compact w8 sc7_i10 hw6_h hw6_e hG10]
+    unfold execInst
+    have hOp10 : instOp sc7_i10.name = .s_endpgm := rfl
+    simp only [hMod10, Bool.false_eq_true, ↓reduceIte, hOp10]; rfl
+  have hRun48 : srun sc7Compact (f + 6) w4 = w9 := by
+    rw [show f + 6 = (f + 5) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 5) w4 hw4_h hw4_e (joinTarget_none_of sc7Compact w4 sc7_i5 (by rw [hw4_pc]; exact hG5) rfl), hStep4]
+    rw [show f + 5 = (f + 4) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 4) w5 hw5_h hw5_e (joinTarget_none_of sc7Compact w5 sc7_i6 (by rw [hw5_pc]; exact hG6) rfl), hStep5]
+    rw [show f + 4 = (f + 3) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 3) w6 hw6_h hw6_e (joinTarget_none_of sc7Compact w6 sc7_i7 (by rw [hw6_pc]; exact hG7) rfl), hStep6]
+    rw [show f + 3 = (f + 2) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 2) w7 hw6_h hw6_e (joinTarget_none_of sc7Compact w7 sc7_i9 hG9 rfl), hStep7]
+    rw [show f + 2 = (f + 1) + 1 from rfl,
+        srun_step_eq sc7Compact (f + 1) w8 hw6_h hw6_e (joinTarget_none_of sc7Compact w8 sc7_i10 hG10 rfl), hStep8]
+    exact srun_halted_eq sc7Compact f w9 rfl
+  dsimp only
+  rw [hRun48]
+  exact ⟨hw6_e, rfl, rfl⟩
 
 private theorem checkStageW_storeConst7 {σ : Type} (consts : List Word) (s : Spec σ)
     (hs_th : s.threads = 1) (hs_lds : s.lds = 0)
@@ -1429,7 +1426,7 @@ private theorem checkStageW_storeConst7 {σ : Type} (consts : List Word) (s : Sp
       tableStored, hTabList, beq_self_eq_true, Bool.true_or, Bool.or_true, List.all_cons, List.all_nil, Bool.and_self,
       show (Tm.lit 7).litVal? = some 7 from rfl, show (Tm.lit 0).litVal? = some 0 from rfl]
 
-set_option maxRecDepth 200000 in set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 200000 in
 private theorem certifySchedule_inhabited :
     ∃ (p : GpuProgram) (sched : Schedule) (ldss : List Nat) (progs : List Program) (rs : List Residual),
       0 < p.stages.length ∧ 0 < (p.stages.headD ⟨[]⟩).threads ∧ progs = [storeConst7Prog] ∧
