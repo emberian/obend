@@ -4,7 +4,8 @@
     obend-emit-sv <target> [--out FILE]      targets: zk golden-zk fidget fidget-ngc
                                                       foc-hil drex silicon-elab mac2
                                                       ice40-mac8 risc64 goldilocks-bfly4
-                                                      gf2-64-karatsuba ospc-tile0
+                                                      gf2-64-karatsuba ospc-tile0 ospc-tile1
+                                                      ospc-tile2 ospc-tile3
                                                       golden-silicon-kernel width-probe
                                                       sdr-nco sdr-cic sdr-disc
     obend-emit-sv square-<graph> [--out FILE] the RTL lowering of a graph of `Obend.Hardware.SquareGraphs`
@@ -95,6 +96,9 @@ def targets : List (String × String) :=
   , ("goldilocks-bfly4", "hardware/sim/obend_goldilocks_bfly4.sv")
   , ("gf2-64-karatsuba", "hardware/sim/obend_gf2_64_karatsuba.sv")
   , ("ospc-tile0", "hardware/sim/obend_ospc_tile0.sv")
+  , ("ospc-tile1", "hardware/sim/obend_ospc_tile1.sv")
+  , ("ospc-tile2", "hardware/sim/obend_ospc_tile2.sv")
+  , ("ospc-tile3", "hardware/sim/obend_ospc_tile3.sv")
   , ("width-probe", "hardware/sim/obend_width_probe.sv")
   , ("sdr-nco", "apps/sdr-ft8/verilator/sdr_nco_mix.sv")
   , ("sdr-cic", "apps/sdr-ft8/verilator/sdr_cic3_r64.sv")
@@ -124,6 +128,9 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
   | "goldilocks-bfly4" => some (.ok ("Obend.Hardware.PipelinedZkCrypto.pipelinedGlButterflyRtlModule", Obend.Hardware.PipelinedZkCrypto.pipelinedGlButterflyRtlModule))
   | "gf2-64-karatsuba" => some (.ok ("Obend.Hardware.PipelinedZkCrypto.gf2_64TowerMulRtlModule", Obend.Hardware.PipelinedZkCrypto.gf2_64TowerMulRtlModule))
   | "ospc-tile0"       => some (.ok ("Obend.Hardware.OspcProver.ospcTileDatapathRtl 0", Obend.Hardware.OspcProver.ospcTileDatapathRtl ⟨0, by decide⟩))
+  | "ospc-tile1"       => some (.ok ("Obend.Hardware.OspcProver.ospcTileDatapathRtl 1", Obend.Hardware.OspcProver.ospcTileDatapathRtl ⟨1, by decide⟩))
+  | "ospc-tile2"       => some (.ok ("Obend.Hardware.OspcProver.ospcTileDatapathRtl 2", Obend.Hardware.OspcProver.ospcTileDatapathRtl ⟨2, by decide⟩))
+  | "ospc-tile3"       => some (.ok ("Obend.Hardware.OspcProver.ospcTileDatapathRtl 3", Obend.Hardware.OspcProver.ospcTileDatapathRtl ⟨3, by decide⟩))
   | "drex"             => some (.ok ("Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule", Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule))
   | "width-probe"      => some (.ok ("Obend.Hardware.VerilateRunner.goldenWidthProbeRtl", Obend.Hardware.VerilateRunner.widthProbeTwoClockRtl))
   | "sdr-nco"          => some (.ok ("Obend.Apps.SdrFt8Rx.sdrNcoModule", Obend.Apps.SdrFt8Rx.sdrNcoModule))
@@ -142,7 +149,8 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
 /-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
 def moduleTargetNames : List String :=
   [ "zk", "fidget", "foc-hil", "drex", "mac2", "ice40-mac8",
-    "risc64", "goldilocks-bfly4", "gf2-64-karatsuba", "ospc-tile0",
+    "risc64", "goldilocks-bfly4", "gf2-64-karatsuba",
+    "ospc-tile0", "ospc-tile1", "ospc-tile2", "ospc-tile3",
     "width-probe", "sdr-nco", "sdr-cic", "sdr-disc", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut" ] ++
   squarePlan.map fun (name, _) => s!"square-{name}"
 

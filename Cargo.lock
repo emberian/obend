@@ -115,11 +115,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "obend-hw-dpi"
+version = "0.1.0"
+
+[[package]]
+name = "obend-lightclients"
+version = "0.1.0"
+
+[[package]]
+name = "obend-oracles-e2ee"
+version = "0.1.0"
+
+[[package]]
 name = "obend-pq-mpc"
 version = "0.1.0"
 dependencies = [
  "obend-crypto-exec",
 ]
+
+[[package]]
+name = "obend-prove-worker"
+version = "0.1.0"
 
 [[package]]
 name = "obend-sandbox"
@@ -134,6 +150,10 @@ dependencies = [
 
 [[package]]
 name = "obend-sel4-verifier"
+version = "0.1.0"
+
+[[package]]
+name = "obend-surfaces"
 version = "0.1.0"
 
 [[package]]

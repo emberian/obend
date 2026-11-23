@@ -14,6 +14,7 @@ Sumcheck & canonical Merkle folding and 256-bit 4-limb verifiable receipts:
    fault-rejection completeness, and inhabited non-tautological `ospcProverJudge`.
 -/
 public import Obend.Hardware.HDL
+public import Obend.Hardware.OspcSignalFabric
 public import Obend.Crypto.Multilinear
 public import Obend.Crypto.Transcript
 public import Obend.Crypto.Sumcheck
@@ -21,6 +22,7 @@ public import Obend.Judge.Lrat
 public import Obend.Receipt.Merkle
 public import Obend.Judge.Class
 import all Obend.Hardware.HDL
+import all Obend.Hardware.OspcSignalFabric
 import all Obend.Crypto.Multilinear
 import all Obend.Crypto.Transcript
 import all Obend.Crypto.Sumcheck
@@ -28,7 +30,8 @@ import all Obend.Receipt.Merkle
 
 public section
 namespace Obend.Hardware.OspcProver
-open Obend.Hardware.HDL Obend.Crypto Obend.Digest.Cshake256
+open Obend.Hardware.HDL Obend.Hardware.Synth Obend.Hardware.Fabulous Obend.Hardware.OspcSignalFabric
+open Obend.Crypto Obend.Digest.Cshake256
 open Obend.Core.Digest (digestWith admissible_of_lt binds_or_collides deployed preimage)
 open Obend.Digest.HashBytes (Hash CollisionAmong be ofBE be_injective length_be)
 open Obend.Judge.Lrat (Clause litTrue Sat)
@@ -1278,6 +1281,185 @@ theorem ospcProverJudge_inhabited (seed : BitVec 64) :
   have hMean : OspcProverMeaning o c := ⟨List.cons_ne_nil _ _, st1, hReach, rfl, hLimbEq, rfl⟩
   exact ⟨o, c, List.cons_ne_nil _ _, hMean,
     checkOspcProver_of_reach 1 o c st1 (Nat.le_refl 1) (List.cons_ne_nil _ _) hReach rfl hLimbEq rfl⟩
+
+/-! ## 5. 4-Tile `RtlSignal` / BEL Synthesis, `FABulous`/ECP5 Bitstream & Isolated DPI Apex Refinement -/
+
+/-- **4-Tile `RtlSignal .proverCore` + `synthesizeModuleToBels` Multi-Cycle Equivalence**:
+For every OSPC tile `t : Fin 4`, arbitrary initial `MemState` `st₀`, arbitrary stimulus stream `stim`,
+and arbitrary cycle horizon `n`, lifting `ospcTileDatapathRtl t` into `RtlSignal .proverCore`
+agrees identically with `runMemModuleTrace (ospcTileRtl t)` and with the technology-mapped
+`BelNetlist` produced by `synthesizeModuleToBels (ospcTileDatapathRtl t)`. -/
+theorem ospc_4tile_signal_and_bel_equiv
+    (t : Fin 4) (st₀ : MemState) (stim : Nat → Bool × (Nat → BitVec 64)) (n : Nat) :
+    let dpStim := liftMemStim (ospcTileDatapathInputs t) (ospcTileRtl t) st₀ stim
+    (∀ regIdx : Nat,
+      (moduleRegSignal (ospcTileDatapathRtl t) st₀.regs dpStim regIdx).atCycle n =
+        (runMemModuleTrace (ospcTileRtl t) st₀ (stimPrefix stim n)).regs regIdx) ∧
+    runBelNetlistTrace (synthesizeModuleToBels (ospcTileDatapathRtl t)) st₀.regs (stimPrefix dpStim n) =
+      runRtlModuleTrace (ospcTileDatapathRtl t) st₀.regs (stimPrefix dpStim n) ∧
+    checkSynthesizedRtlSignoff (ospcTileDatapathRtl t) = true ∧
+    countFfBels (synthesizeModuleToBels (ospcTileDatapathRtl t)) = (ospcTileDatapathRtl t).regs.length :=
+  memModule_datapath_signal_and_bel_equiv
+    (ospcTileRtl t) (ospcTileDatapathRtl t) (ospcTileDatapathInputs t)
+    (ospcTileDatapathRtl_wellFormed t).1
+    (fun rst ins st => (ospcTileRtl_refines_ospcTileDatapathRtl t rst ins st).1)
+    st₀ stim n
+
+/-- Canonical 256-bit receipt folding for the isolated `obend-hw-dpi` 4-tile cycle server. -/
+def ospcDpiReceipt (H : Hash) (inst : OspcPublicInstance) (tiles : Fin 4 → MemState) : BitVec 256 :=
+  computeCycleReceipt256 H (initOspc4TileState H inst).transcript.state
+    (stepButterflyMerkle2Hop H (tileLeavesOf tiles) ⟨0, by omega⟩)
+
+/-- **Apex Vertical Spine Theorem (`ospc_4tile_fabulous_ecp5_refines_spec`)**:
+Unifies the full Pillar-2 hardware stack for the 4-tile OSPC prover:
+1. Multi-cycle `OspcTraceReach` soundness, bounded tile memories, Tile 2 `DeltaNet` linearity,
+   depth-2 butterfly Merkle root equality, and 256-bit 4-limb receipt round-trip;
+2. Clock-domain-indexed `RtlSignal .proverCore` lifting and `synthesizeModuleToBels` multi-cycle
+   equivalence across all 4 tiles (`Fin 4`), plus 2-FF `cdcSync2FF` latency across `.hostDpi → .proverCore`;
+3. Kernel-verified `FABulous` `decodeBin` + `extractFabulousNet` refinement of `ospcFabulousBitstream`
+   to `ospcExtractedNet`, ECP5 `lut4cModule` cell equivalence, multi-cycle `Net.run` refinement of
+   `ospcFabricSliceRtl`, and tamper refusal on corrupt sync/desync/pip/carry bitstreams;
+4. Isolated `obend-hw-dpi` length-framed `"ODPI"` v1 multi-cycle server refinement (`runOspcDpiServerTrace`)
+   preserving canonical 87-byte decodable response frames and Tile 2 `DeltaNet` linearity. -/
+theorem ospc_4tile_fabulous_ecp5_refines_spec
+    (H : Hash) (inst : OspcPublicInstance)
+    (turns : List OspcProverCycleTurn) (stFinal : Ospc4TileProverState)
+    (hRun : runOspc4TileTrace H (initOspc4TileState H inst) turns = .ok stFinal)
+    (fabRegs : Nat → BitVec 64) (fabTrace : List (Bool × (Nat → BitVec 64)))
+    (hFabRegs : RegsFit ospcFabricSliceRtl fabRegs)
+    (hFabIn : ∀ c ∈ fabTrace, InputsFit ospcFabricSliceRtl c)
+    (dpiSt₀ dpiStEnd : OspcDpiServerState) (dpiReqs dpiResps : List ByteArray)
+    (hDpiRun : runOspcDpiServerTrace ospcTileRtl (ospcDpiReceipt H inst) dpiSt₀ dpiReqs = .ok (dpiStEnd, dpiResps)) :
+    -- (1) Multi-cycle 4-tile OSPC trace soundness + 256-bit Merkle receipt
+    (OspcTraceReach H (initOspc4TileState H inst) turns stFinal ∧
+     stFinal.cycleCount = turns.length ∧
+     (∀ t : Fin 4, checkRtlMemModuleW (ospcTileRtl t) = true ∧ tileMemStateBounded (ospcTileRtl t) (stFinal.tiles t)) ∧
+     (stFinal.tiles ⟨2, by omega⟩).regs 1 = 1#64 ∧
+     stFinal.merkleRoot = Obend.Receipt.Merkle.root H (tileLeafList stFinal.tiles) ∧
+     (encodeOspcReceipt256 stFinal.verifierReceipt256).size = 32) ∧
+    -- (2) All 4 tiles lifted to `RtlSignal .proverCore` & refined through `synthesizeModuleToBels`
+    (∀ (t : Fin 4) (st₀ : MemState) (stim : Nat → Bool × (Nat → BitVec 64)) (n : Nat),
+      let dpStim := liftMemStim (ospcTileDatapathInputs t) (ospcTileRtl t) st₀ stim
+      (∀ regIdx : Nat,
+        (moduleRegSignal (ospcTileDatapathRtl t) st₀.regs dpStim regIdx).atCycle n =
+          (runMemModuleTrace (ospcTileRtl t) st₀ (stimPrefix stim n)).regs regIdx) ∧
+      runBelNetlistTrace (synthesizeModuleToBels (ospcTileDatapathRtl t)) st₀.regs (stimPrefix dpStim n) =
+        runRtlModuleTrace (ospcTileDatapathRtl t) st₀.regs (stimPrefix dpStim n) ∧
+      checkSynthesizedRtlSignoff (ospcTileDatapathRtl t) = true) ∧
+    -- (3) `FABulous` / ECP5 bitstream decode + extract + multi-cycle `Net` refinement + tamper refusal
+    (decodeAndExtractFabulous ospcKernelFabric ospcFabricPins ospcFabulousBitstream = .ok ospcExtractedNet ∧
+     ospcExtractedNet.run (projOf ospcFabricFlopMap fabRegs) (fabTrace.map (pinValues ospcFabricPins)) =
+       ((moduleRun ospcFabricSliceRtl fabRegs fabTrace).1.map fun outs =>
+           ospcExtractedNet.outs.map fun (p, _) => (p, outPinValue ospcFabricPins outs p),
+        projOf ospcFabricFlopMap (runModuleTrace ospcFabricSliceRtl fabRegs fabTrace)) ∧
+     (decodeBin 2 3 corruptSyncBitstream).isOk = false ∧
+     (decodeFabulousFrames 2 3 corruptDesyncBitstream).isOk = false ∧
+     (decodeAndExtractFabulous ospcKernelFabric ospcFabricPins corruptPipSelectBitstream).isOk = false) ∧
+    -- (4) Isolated `obend-hw-dpi` framed RPC trace refinement
+    (dpiResps.length = dpiReqs.length ∧
+     (∀ r ∈ dpiResps, r.size = ODPI_HEADER_LEN + ODPI_RESP_PAYLOAD_LEN ∧ (decodeOspcDpiResp r).isOk = true) ∧
+     (dpiReqs ≠ [] → (dpiStEnd.tiles ⟨2, by omega⟩).regs 1 = 1#64)) ∧
+    -- (5) Explicit 2-FF CDC synchronizer crossing `.hostDpi → .proverCore`
+    (∀ (w : Nat) (iv : BitVec w) (sig : RtlSignal .hostDpi w iv) (n : Nat),
+      (cdcSync2FF (dst := .proverCore) sig).atCycle 0 = iv ∧
+      (cdcSync2FF (dst := .proverCore) sig).atCycle 1 = iv ∧
+      (cdcSync2FF (dst := .proverCore) sig).atCycle (n + 2) = sig.atCycle n) := by
+  have hProver := ospc_four_tile_prover_multi_cycle_sound H inst turns stFinal hRun
+  have hFab := ospc_fabulous_bitstream_refines_slice fabTrace fabRegs hFabRegs hFabIn
+  have hCorrupt := ospc_fabulous_corrupt_bitstreams_refused
+  have hDpi := runOspcDpiServerTrace_refines_spec ospcTileRtl (ospcDpiReceipt H inst) dpiReqs dpiSt₀ dpiStEnd dpiResps hDpiRun
+  refine ⟨⟨hProver.1, hProver.2.1, hProver.2.2.1, hProver.2.2.2.1, hProver.2.2.2.2.1, hProver.2.2.2.2.2.1⟩,
+    ?_, ⟨hFab.1, hFab.2, hCorrupt.1, hCorrupt.2.2.1, hCorrupt.2.2.2.2.1⟩, hDpi,
+    fun _ _ _ _ => ⟨rfl, rfl, rfl⟩⟩
+  intro t st₀ stim n
+  have hTile := ospc_4tile_signal_and_bel_equiv t st₀ stim n
+  exact ⟨hTile.1, hTile.2.1, hTile.2.2.1⟩
+
+/-- Non-vacuity witness inhabiting EVERY premise of `ospc_4tile_fabulous_ecp5_refines_spec` with
+non-empty multi-cycle prover, FABulous fabric, and isolated `obend-hw-dpi` request traces. -/
+private theorem ospc_4tile_fabulous_ecp5_inhabited :
+    ∃ (inst : OspcPublicInstance) (turns : List OspcProverCycleTurn) (stFinal : Ospc4TileProverState)
+      (fabRegs : Nat → BitVec 64) (fabTrace : List (Bool × (Nat → BitVec 64)))
+      (dpiSt₀ dpiStEnd : OspcDpiServerState) (dpiReqs dpiResps : List ByteArray),
+      turns ≠ [] ∧ fabTrace ≠ [] ∧ dpiReqs ≠ [] ∧
+      runOspc4TileTrace deployed (initOspc4TileState deployed inst) turns = .ok stFinal ∧
+      RegsFit ospcFabricSliceRtl fabRegs ∧
+      (∀ c ∈ fabTrace, InputsFit ospcFabricSliceRtl c) ∧
+      runOspcDpiServerTrace ospcTileRtl (ospcDpiReceipt deployed inst) dpiSt₀ dpiReqs = .ok (dpiStEnd, dpiResps) := by
+  let inst : OspcPublicInstance := ⟨1, 1, Goldilocks.zero, 0xCAFE#64, 0#64, 0#64, 0#64⟩
+  let zPort : DeltaPortWord64 := ⟨0#16, 0#2, 0#16, 0#2, 1#1, 0#27⟩
+  let turn0 : OspcProverCycleTurn :=
+    ⟨false, ⟨1#2, 0#64, 0#17, 0#1, 0#8, 0#64, 0#64⟩, ⟨0#1, 0#6, 0#1, 0#12, 0#64⟩,
+     ⟨0#1, zPort, 0#1, 0#8, zPort⟩, ⟨0#1, 0#1, 0#8, ⟨0#32, 0#32⟩⟩,
+     fun _ => ⟨[Goldilocks.zero, Goldilocks.zero]⟩, 1⟩
+  let initSt := initOspc4TileState deployed inst
+  let tiles' : Fin 4 → MemState := fun t => stepMemModule (ospcTileRtl t) turn0.rst (turn0.inputsFor t) (initSt.tiles t)
+  let aggPoly := stepButterflySumcheck2Hop turn0.tilePolys ⟨0, by omega⟩
+  let sq := absorbAndSqueezeRound aggPoly initSt.transcript
+  let mRoot := stepButterflyMerkle2Hop deployed (tileLeavesOf tiles') ⟨0, by omega⟩
+  let rec256 := computeCycleReceipt256 deployed sq.2.state mRoot
+  let st1 : Ospc4TileProverState := ⟨tiles', sq.2, aggPoly.eval sq.1, mRoot, rec256, initSt.cycleCount + 1⟩
+  have hLin : (tiles' ⟨2, by omega⟩).regs 1 = 1#64 := by
+    change (stepMemModule (ospcTileRtl ⟨2, by omega⟩) turn0.rst (turn0.inputsFor ⟨2, by omega⟩)
+      ((initOspc4TileState deployed inst).tiles ⟨2, by omega⟩)).regs 1 = 1#64
+    rw [initOspc4TileState_tiles]; decide +kernel
+  have hDeg : aggPoly.degLe 1 = true := by decide
+  have hSum : CommRingOps.add (aggPoly.eval CommRingOps.zero) (aggPoly.eval CommRingOps.one) = initSt.currentClaim := by
+    rw [initOspc4TileState_claim]
+    change CommRingOps.add (aggPoly.eval CommRingOps.zero) (aggPoly.eval CommRingOps.one) = Goldilocks.zero
+    decide
+  have hRun : runOspc4TileTrace deployed initSt [turn0] = .ok st1 :=
+    (runOspc4TileTrace_eq_ok_iff deployed [turn0] initSt st1).mpr
+      (.cons ⟨hLin, fun _ hen => by simp [turn0] at hen, hDeg, hSum, rfl⟩ (.nil st1))
+  let fabRegs : Nat → BitVec 64 := fun i => if i = 1 then 1#64 else 0#64
+  let fabIn0 : Nat → BitVec 64 := fun i => if i = 0 then 3#64 else if i = 1 then 1#64 else 0#64
+  have hFabRegs : RegsFit ospcFabricSliceRtl fabRegs := by
+    intro i
+    cases i with
+    | zero => simp [fabRegs, ospcFabricSliceRtl, regWidthOf]
+    | succ k =>
+      cases k with
+      | zero => simp [fabRegs, ospcFabricSliceRtl, regWidthOf]
+      | succ j => simp [fabRegs, ospcFabricSliceRtl, regWidthOf]
+  have hFabIn : ∀ c ∈ [(false, fabIn0)], InputsFit ospcFabricSliceRtl c := by
+    intro c hc
+    simp only [List.mem_singleton] at hc
+    subst hc
+    intro i
+    match i with
+    | 0 | 1 | 2 | 3 => simp [fabIn0, ospcFabricSliceRtl, inputWidth]
+    | _ + 4 => simp [fabIn0, ospcFabricSliceRtl, inputWidth]
+  let dpiReq0 : OspcDpiReq :=
+    ⟨.hostDpi, 0#32, false, 3#2, 0x1234#64, 0x55#17, 0#1, 0#8, 0#64, 0#64,
+     0#1, 0#6, 0#1, 0#12, 0#64, 0#1, 0#64, 0#1, 0#8, 0#64, 0#1, 0#1, 0#8, 0#64⟩
+  let dpiSt₀ : OspcDpiServerState := ⟨initOspcTiles, 0#32, 0#32, 0#256⟩
+  let dpiTiles' : Fin 4 → MemState :=
+    fun t => stepMemModule (ospcTileRtl t) dpiReq0.rst (dpiReq0.inputsFor t) (dpiSt₀.tiles t)
+  let dpiRec' := ospcDpiReceipt deployed inst dpiTiles'
+  let dpiSt1 : OspcDpiServerState := ⟨dpiTiles', 1#32, 1#32, dpiRec'⟩
+  let dpiResp0 := encodeOspcDpiResp (buildOspcDpiResp ospcTileRtl dpiReq0 1#32 dpiSt₀.tiles dpiTiles' dpiRec')
+  have hDpiLin : (dpiTiles' ⟨2, by omega⟩).regs 1 = 1#64 := by decide +kernel
+  have hDpiStep : stepOspcDpiServer ospcTileRtl (ospcDpiReceipt deployed inst) dpiSt₀ (encodeOspcDpiReq dpiReq0) =
+      .ok (dpiSt1, dpiResp0) := by
+    unfold stepOspcDpiServer
+    dsimp only [bind, Except.bind]
+    rw [decodeOspcDpiReq_encodeOspcDpiReq]
+    dsimp only
+    have hDom : (dpiReq0.domain != .hostDpi) = false := rfl
+    have hSeq : (dpiReq0.seqNo != dpiSt₀.expectedSeq) = false := rfl
+    have hLinBne : ((dpiTiles' ⟨2, by omega⟩).regs 1 != 1#64) = false := by rw [hDpiLin]; rfl
+    simp only [hDom, hSeq, Bool.false_eq_true, ↓reduceIte]
+    change (if ((dpiTiles' ⟨2, by omega⟩).regs 1 != 1#64) = true then Except.error OspcDpiError.deltaNetLinearityViolation
+            else Except.ok (dpiSt1, dpiResp0)) = Except.ok (dpiSt1, dpiResp0)
+    simp only [hLinBne, Bool.false_eq_true, ↓reduceIte]
+  have hDpiRun : runOspcDpiServerTrace ospcTileRtl (ospcDpiReceipt deployed inst) dpiSt₀ [encodeOspcDpiReq dpiReq0] =
+      .ok (dpiSt1, [dpiResp0]) := by
+    unfold runOspcDpiServerTrace
+    dsimp only [bind, Except.bind]
+    rw [hDpiStep]
+    rfl
+  exact ⟨inst, [turn0], st1, fabRegs, [(false, fabIn0)], dpiSt₀, dpiSt1, [encodeOspcDpiReq dpiReq0], [dpiResp0],
+    List.cons_ne_nil _ _, List.cons_ne_nil _ _, List.cons_ne_nil _ _, hRun, hFabRegs, hFabIn, hDpiRun⟩
 
 end Obend.Hardware.OspcProver
 end
