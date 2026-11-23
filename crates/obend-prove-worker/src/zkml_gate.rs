@@ -1,41 +1,33 @@
 #![forbid(unsafe_code)]
-//! Unconditional `UDR`/`JBR` zkML soundness floor gate and streaming recurrent Gated-DeltaNet /
-//! SSM chunk-carry `ProveService` backend.
+//! Honest `UD-100` (`UDR` / `JBR` vs. withdrawn `CBR-130`) zkML suite parameter floor gate and
+//! base-field `Goldilocks` native `MXFP4` (`E2M1` + `2^sh`) `EinSumcheck` + BCS-Merkle Chunk PIOP.
 //!
-//! Closes *Rainbows End* SHE Gap #4 in pure-`std` Rust (`#![forbid(unsafe_code)]`, zero external
-//! dependencies), aligned byte-for-byte with `Obend.SymbolicZk.ProvenZkmlGate`:
-//!
-//! 1. **Unconditional Soundness Accounting (`ZkmlSuiteProfile`, `SecurityRegime`)**:
-//!    - Computes exact integer milli-bit (`1_000` = `1.000` bit) soundness under:
-//!      - Unconditional Unique-Decoding Regime (`udr_milli_bits`),
-//!      - Proven Johnson-Bound Regime (`jbr_milli_bits`),
-//!      - Legacy Withdrawn Capacity-Bound Regime (`legacy_withdrawn_cbr_milli_bits`, unconditionally
-//!        refused by [`ZkmlSuiteProfile::check_proven_floor`]),
-//!      - Extension-field LogUp ceiling (`logup_ext_ceiling_milli_bits`), and
-//!      - BCS Merkle digest birthday ceiling (`bcs_digest_ceiling_milli_bits`).
-//!    - Refuses any suite relying on [`SecurityRegime::WithdrawnCapacityBound`] or scoring
-//!      `< 100_000` milli-bits (`100` bits) in the requested proven regime. In particular, the
-//!      legacy deployed BabyBear Ext4 `(lb=6, q=19, pow=16)` profile (`34_563` milli-bits UDR,
-//!      `73_000` JBR, `130_000` withdrawn CBR) is refused, while `(lb=6, q=86, pow=16)` (`100_022`
-//!      milli-bits UDR) and proven `Ext5` profiles pass.
-//! 2. **Byte-Exact `OBEND.SHE.ZKML_CHUNK/v1` `cSHAKE256` Chunk Commitments**:
-//!    - Pure-Rust NIST FIPS 202 / SP 800-185 `cSHAKE256` (`N = ""`, `S = "OBEND.SHE.ZKML_CHUNK/v1"`,
-//!      32-byte output) over self-delimiting LEB128-length-framed fields (`encodeListField`),
-//!      matching `Obend.Digest.Cshake256.cshake256Bytes` and `Obend.SymbolicZk.ProvenZkmlGate`.
-//! 3. **Streaming Recurrent GDN / SSM Chunk-Carry `ProveService` Backend (`StreamingZkmlBackend`)**:
-//!    - Wires [`CancellableBackend`] onto [`ProveService`] and deterministic `c = 1/4`
-//!      [`windowed_find_map_first_cancellable`] PoW grinding so `1T == NT` produces bit-identical
-//!      [`CandidateComputation`] receipts with verified recurrent carry
-//!      (`state_out_commit[i] == state_in_commit[i+1]`), pinned `model_weights_root` and
-//!      `policy_floor_digest`, and prompt cooperative epoch cancellation.
-//!    - Per `CROSS_REPO_CONTRACTS.md`, native execution emits candidate bytes and receipts only;
-//!      all verification fails closed via [`verify_candidate_computation`].
+//! Aligned byte-for-byte with `Obend.SymbolicZk.EinSumcheckMxfp4`, `Obend.SymbolicZk.ProvenZkmlGate`,
+//! `Obend.Crypto.Transcript`, `Obend.Crypto.Sumcheck`, and `Obend.Crypto.PCS`
+//! (`#![forbid(unsafe_code)]`, zero external crate dependencies):
+//! 1. **Honest `UD-100` Suite Parameter Accounting (`ZkmlSuiteProfile::check_proven_floor`)**:
+//!    prices Reed–Solomon / BaseFold / WHIR / `zkml-ir-v2` suite parameter profiles (`log_arity >= 1`,
+//!    `num_queries >= 1` with explicit `pinned_num_queries` equality, extension-field LogUp ceiling,
+//!    and BCS digest ceiling) at `>= 100_000` milli-bits across `(lb=6, q=86, pow=16)` (`100.022`b)
+//!    and wide-leaf `(lb=2, q=148, pow=0, log_arity=4)` (`100.344`b), refusing withdrawn `CBR-130`.
+//! 2. **Executable Base-Field `Goldilocks` Native 3-Operand `MXFP4` `EinSumcheck` Chunk PIOP**:
+//!    verifies `D[i,j] = Σ_{k,b} X[i,b,k] · Q[b,k,j] · S[k,j]` over base-field `Goldilocks`
+//!    (`p = 2^64 - 2^32 + 1`) with signed `E2M1` mantissas `{0, ±1, ±2, ±3, ±4, ±6, ±8, ±12}`,
+//!    power-of-two block scales `2^{sh}` (`sh <= 30`), exact sumcheck round degrees
+//!    `(2^logB, 3^logK, 3^logJ)` under `b -> k -> j` (never degree 4: Lean's
+//!    `verifyMxfp4ChunkIop_sound` proves a constructive failure-event disjunction with `0`
+//!    probability axioms; under uniform squeeze bytes, uniform field challenges bound the algebraic
+//!    root-hit events by `(logI + logJ + 2·logB + 3·logK + 3·logJ) / p`, while 128-bit modular
+//!    squeezing shifts per-point mass to `<= ceil(2^128 / p) / 2^128`), rate-1 binary
+//!    `cSHAKE256` Merkle butterfly fold-walk openings (not RS codewords; static weight-domain
+//!    validity is enforced at manifest/witness construction), and `windowed_find_map_first` minimal
+//!    PoW witness `w` (`w - 1` provably invalid).
 
 use std::fmt;
 use std::sync::Arc;
 
 use crate::grinder::{
-    default_grind_window, sha256, windowed_find_map_first_cancellable,
+    default_grind_window, sha256, windowed_find_map_first_cancellable, MAX_DEFAULT_GRIND_THREADS,
 };
 use crate::service::{CancelToken, CancellableBackend, ProveService, ProveServiceConfig};
 
@@ -44,57 +36,75 @@ use crate::service::{CancelToken, CancellableBackend, ProveService, ProveService
 // ---------------------------------------------------------------------------
 
 /// Canonical SP 800-185 `cSHAKE256` customization tag for zkML streaming chunk commitments.
-/// Must stay byte-identical to `Obend.SymbolicZk.ProvenZkmlGate`.
 pub const ZKML_CHUNK_DOMAIN_TAG: &[u8] = b"OBEND.SHE.ZKML_CHUNK/v1";
+/// Canonical `cSHAKE256` customization tag for outer `CandidateComputation` artifact-to-chain bindings.
+pub const ZKML_CANDIDATE_DOMAIN_TAG: &[u8] = b"OBEND.SHE.ZKML_CANDIDATE/v1";
+/// Canonical `cSHAKE256` customization tag for zkML binary Merkle trees.
+pub const ZKML_MERKLE_DOMAIN_TAG: &[u8] = b"OBEND.SHE.ZKML_MERKLE/v1";
+/// Canonical `cSHAKE256` customization tag for static `MXFP4` model weight manifests.
+pub const ZKML_WEIGHTS_DOMAIN_TAG: &[u8] = b"OBEND.SHE.ZKML_WEIGHTS/v1";
+/// Canonical `cSHAKE256` customization tag for `ZkmlSuiteProfile` parameter digests.
+pub const ZKML_SUITE_DOMAIN_TAG: &[u8] = b"OBEND.SHE.ZKML_SUITE/v1";
+/// Canonical Fenzi Fiat–Shamir protocol ID for the Goldilocks `MXFP4` `EinSumcheck` Chunk PIOP.
+pub const ZKML_IOP_PROTOCOL_ID: &[u8] = b"OBEND.SHE.ZKML_IOP/v1";
+
+const FS_SEED_TAG: &[u8] = b"OBEND.CRYPTO.FS.SEED/v1";
+const FS_BIND_TAG: &[u8] = b"OBEND.CRYPTO.FS.BIND/v1";
+const FS_INSTANCE_TAG: &[u8] = b"OBEND.CRYPTO.FS.INSTANCE/v1";
+const FS_ABSORB_TAG: &[u8] = b"OBEND.CRYPTO.FS.ABSORB/v1";
+const FS_SQUEEZE_TAG: &[u8] = b"OBEND.CRYPTO.FS.SQUEEZE/v1";
+const FS_RATCHET_TAG: &[u8] = b"OBEND.CRYPTO.FS.RATCHET/v1";
+
+const SUMCHECK_ROUND_LABEL: &[u8] = b"SUMCHECK.ROUND";
+const ZKML_D_CLAIM_LABEL: &[u8] = b"ZKML.D.CLAIM";
+const ZKML_FOLD_ROOTS_LABEL: &[u8] = b"ZKML.FOLD.ROOTS";
+const ZKML_POW_NONCE_LABEL: &[u8] = b"ZKML.POW.NONCE";
 
 /// Minimum required unconditional soundness floor in milli-bits (`100_000` = `100.000` bits).
 pub const PROVEN_MIN_MILLI_BITS: u64 = 100_000;
-
 /// Milli-bits per whole bit.
 pub const MILLI_BITS_PER_BIT: u64 = 1_000;
 
+/// Canonical Goldilocks prime modulus (`2^64 - 2^32 + 1 = 0xFFFF_FFFF_0000_0001`).
+pub const GOLDILOCKS_MODULUS: u64 = 0xFFFF_FFFF_0000_0001;
+/// Bit-width of the Goldilocks prime (`ceil(log2(p)) = 64`).
+pub const GOLDILOCKS_MODULUS_BITS: u32 = 64;
+
 /// BabyBear prime modulus (`15 * 2^27 + 1 = 2_013_265_921`).
 pub const BABYBEAR_MODULUS: u64 = 2_013_265_921;
-
 /// Bit-width of the BabyBear prime (`ceil(log2(p)) = 31`).
 pub const BABYBEAR_MODULUS_BITS: u32 = 31;
 
 /// KoalaBear prime modulus (`127 * 2^24 + 1 = 2_130_706_433`).
 pub const KOALABEAR_MODULUS: u64 = 2_130_706_433;
-
 /// Bit-width of the KoalaBear prime (`ceil(log2(p)) = 31`).
 pub const KOALABEAR_MODULUS_BITS: u32 = 31;
 
 /// Default maximum nonce span searched by [`StreamingZkmlBackend`] when `grind_span == 0`.
 pub const DEFAULT_ZKML_GRIND_SPAN: u64 = 1u64 << 28;
 
-/// Serialized byte width of one [`ZkmlChunkReceipt`] inside `CandidateComputation::proof_bytes`.
-/// `8 * 32` (roots/commitments + `chunk_commitment`) + `2 * 8` (`chunk_idx`, `pow_nonce`) = `272` bytes.
+/// Minimum serialized byte floor of one [`ZkmlChunkReceipt`] record (7 × 32B digests + 2 × 8B indices + framing).
 pub const SERIALIZED_CHUNK_RECEIPT_BYTES: usize = 272;
 
-/// Pre-computed integer floor of `1000 * (1 - log2(1 + 2^(-lb)))` for `lb = 0..=11`.
-/// For all `lb >= 12`, `floor(1000 * (1 - log2(1 + 2^(-lb)))) = 999`.
-///
-/// Crucially, for every `lb >= 1`:
-/// `udr_query_milli_bits(lb) <= 999 < lb * 500` (for `lb >= 2`, and `415 < 500` for `lb == 1`)
-/// `< lb * 1000` (`legacy_withdrawn_cbr`).
-const UDR_QUERY_MILLI_BITS_TABLE: [u64; 12] = [
-    0,   // lb = 0 (rho = 1)
-    415, // lb = 1 (rho = 1/2):   1 - log2(3/2)   = 0.415037...
-    678, // lb = 2 (rho = 1/4):   1 - log2(5/4)   = 0.678071...
-    830, // lb = 3 (rho = 1/8):   1 - log2(9/8)   = 0.830075...
-    912, // lb = 4 (rho = 1/16):  1 - log2(17/16) = 0.912537...
-    955, // lb = 5 (rho = 1/32):  1 - log2(33/32) = 0.955605...
-    977, // lb = 6 (rho = 1/64):  1 - log2(65/64) = 0.977632...
-    988, // lb = 7 (rho = 1/128): 1 - log2(129/128) = 0.988772...
-    994, // lb = 8 (rho = 1/256): 1 - log2(257/256) = 0.994375...
-    997, // lb = 9 (rho = 1/512)
-    998, // lb = 10 (rho = 1/1024)
-    999, // lb = 11 (rho = 1/2048)
-];
+/// Canonical 15-element signed `E2M1` (`MXFP4`, `2x`-scaled integer) mantissa domain.
+pub const E2M1_MANTISSA_DOMAIN: [i64; 15] = [-12, -8, -6, -4, -3, -2, -1, 0, 1, 2, 3, 4, 6, 8, 12];
+
+/// Maximum supported `MXFP4` power-of-two block scale shift (`2^30 < p_GL`).
+pub const MAX_MXFP4_SCALE_SHIFT: u32 = 30;
+/// Hard per-tensor hypercube variable bound (`< 20`, capping each table at `<= 2^19 = 524,288` felts).
+pub const MAX_ZKML_HYPERCUBE_VARS: usize = 20;
+/// Hard per-chunk query count cap preventing unbounded challenge/opening DoS.
+pub const MAX_ZKML_NUM_QUERIES: usize = 1_024;
+/// Hard sumcheck round count cap (`log_b + log_k + log_j < 60`).
+pub const MAX_ZKML_SUMCHECK_ROUNDS: usize = 60;
+/// Hard multi-layer manifest cap.
+pub const MAX_ZKML_MODEL_LAYERS: usize = 1_024;
+
+const UDR_QUERY_MILLI_BITS_TABLE: [u64; 12] =
+    [0, 415, 678, 830, 912, 955, 977, 988, 994, 997, 998, 999];
 
 // ---------------------------------------------------------------------------
-// Pure-Std NIST FIPS 202 / SP 800-185 cSHAKE256 + LEB128 Framing
+// Pure-Std NIST FIPS 202 / SP 800-185 cSHAKE256 + Canonical LEB128 Framing
 // ---------------------------------------------------------------------------
 
 const KECCAK_RATE_BYTES: usize = 136;
@@ -221,10 +231,8 @@ impl CshakeSponge {
 
     fn finalize_32(mut self) -> [u8; 32] {
         self.lanes[self.pos / 8] ^= (self.suffix as u64) << (8 * (self.pos % 8));
-        self.lanes[(KECCAK_RATE_BYTES - 1) / 8] ^=
-            0x80u64 << (8 * ((KECCAK_RATE_BYTES - 1) % 8));
+        self.lanes[(KECCAK_RATE_BYTES - 1) / 8] ^= 0x80u64 << (8 * ((KECCAK_RATE_BYTES - 1) % 8));
         keccak_f1600(&mut self.lanes);
-
         let mut out = [0u8; 32];
         for (i, byte) in out.iter_mut().enumerate() {
             *byte = (self.lanes[i / 8] >> (8 * (i % 8))) as u8;
@@ -233,8 +241,7 @@ impl CshakeSponge {
     }
 }
 
-/// Computes SP 800-185 `cSHAKE256` with empty function-name `N = ""`, customization `S`, and
-/// 32-byte output, matching `Obend.Digest.Cshake256.cshake256Bytes` byte-for-byte.
+/// Computes SP 800-185 `cSHAKE256` (`N = ""`, customization `S`, 32-byte output).
 pub fn cshake256_32(customization: &[u8], input: &[u8]) -> [u8; 32] {
     let mut sponge = CshakeSponge::new(customization);
     sponge.absorb(input);
@@ -253,11 +260,143 @@ pub fn encode_leb128(mut value: u64, out: &mut Vec<u8>) {
     }
 }
 
-/// Appends one self-delimiting LEB128 length-prefixed field (`leb128(field.len()) || field`),
-/// matching `Obend.Crypto.encodeListField` and `Obend.Polis.SandboxDomainTags.encodeSandboxFields`.
+fn leb128_vec(value: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(10);
+    encode_leb128(value, &mut out);
+    out
+}
+
+/// Decodes canonical unsigned LEB128, rejecting truncation, u64 overflow, and non-minimal zero padding.
+pub fn decode_leb128(bytes: &[u8], cursor: &mut usize) -> Result<u64, ZkmlGateRefusal> {
+    let mut acc = 0u64;
+    let mut shift = 0u32;
+    loop {
+        if *cursor >= bytes.len() {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "truncated LEB128 varint",
+            });
+        }
+        let byte = bytes[*cursor];
+        *cursor += 1;
+        let low = (byte & 0x7f) as u64;
+        if shift == 63 && low > 1 {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "LEB128 varint overflows u64",
+            });
+        }
+        if byte < 0x80 {
+            if shift > 0 && low == 0 {
+                return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                    reason: "non-canonical overlong LEB128 varint",
+                });
+            }
+            return Ok(acc | (low << shift));
+        }
+        acc |= low << shift;
+        shift += 7;
+        if shift > 63 {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "LEB128 varint exceeds 10 bytes",
+            });
+        }
+    }
+}
+
+/// Canonical bijective signed integer encoding matching Lean `encodeSignedInt`:
+/// `z >= 0 => 0x00 || leb128(z)`, `z < 0 => 0x01 || leb128(-1 - z)` (`Int.negSucc`).
+pub fn encode_signed_int(z: i64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(11);
+    if z >= 0 {
+        out.push(0x00);
+        encode_leb128(z as u64, &mut out);
+    } else {
+        out.push(0x01);
+        let neg_succ = ((-1i128) - (z as i128)) as u64;
+        encode_leb128(neg_succ, &mut out);
+    }
+    out
+}
+
+pub fn decode_signed_int(bytes: &[u8]) -> Result<i64, ZkmlGateRefusal> {
+    if bytes.is_empty() {
+        return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "empty signed integer field",
+        });
+    }
+    let tag = bytes[0];
+    let mut cursor = 1usize;
+    let mag = decode_leb128(bytes, &mut cursor)?;
+    if cursor != bytes.len() {
+        return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "trailing bytes in signed integer field",
+        });
+    }
+    match tag {
+        0x00 => i64::try_from(mag).map_err(|_| ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "positive signed integer overflows i64",
+        }),
+        0x01 => {
+            let v = -1i128 - (mag as i128);
+            i64::try_from(v).map_err(|_| ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "negative signed integer underflows i64",
+            })
+        }
+        _ => Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "invalid sign tag in signed integer field",
+        }),
+    }
+}
+
+/// Appends one self-delimiting LEB128 length-prefixed field (`leb128(field.len()) || field`).
 pub fn push_framed_field(out: &mut Vec<u8>, field: &[u8]) {
     encode_leb128(field.len() as u64, out);
     out.extend_from_slice(field);
+}
+
+fn encode_zkml_fields(fields: &[&[u8]]) -> Vec<u8> {
+    let total: usize = fields.iter().map(|f| 2 + f.len()).sum();
+    let mut out = Vec::with_capacity(total);
+    for f in fields {
+        push_framed_field(&mut out, f);
+    }
+    out
+}
+
+fn read_framed_field<'a>(bytes: &'a [u8], cursor: &mut usize) -> Result<&'a [u8], ZkmlGateRefusal> {
+    let len_u64 = decode_leb128(bytes, cursor)?;
+    let len = usize::try_from(len_u64).map_err(|_| ZkmlGateRefusal::CandidateBindingMismatch {
+        reason: "framed field length overflows usize",
+    })?;
+    let end = cursor
+        .checked_add(len)
+        .ok_or(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "framed field length overflow",
+        })?;
+    if end > bytes.len() {
+        return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "framed field truncated",
+        });
+    }
+    let slice = &bytes[*cursor..end];
+    *cursor = end;
+    Ok(slice)
+}
+
+fn read_bounded_framed_fields(
+    bytes: &[u8],
+    max_fields: usize,
+) -> Result<Vec<&[u8]>, ZkmlGateRefusal> {
+    let mut cursor = 0usize;
+    let mut out = Vec::with_capacity(max_fields.min(16));
+    while cursor < bytes.len() {
+        if out.len() >= max_fields {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "framed field count exceeds protocol arity bound",
+            });
+        }
+        out.push(read_framed_field(bytes, &mut cursor)?);
+    }
+    Ok(out)
 }
 
 /// Checks whether the first `bits` low bits (little-endian in `digest[0..8]`) of `digest` are zero.
@@ -280,28 +419,21 @@ pub fn digest_has_low_zero_bits(digest: &[u8; 32], bits: u32) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Unconditional UDR / JBR vs. Withdrawn CBR Soundness Gate
+// 1. Honest UD-100 (UDR / JBR vs. Withdrawn CBR-130) Soundness Gate
 // ---------------------------------------------------------------------------
 
-/// Soundness regime requested for a zkML proof suite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SecurityRegime {
-    /// Unconditional Unique-Decoding Regime (`delta = (1 - rho) / 2`), requiring `>= 100` bits.
     ProvenUdr100,
-    /// Proven Johnson-Bound Regime (`delta = 1 - sqrt(rho)`), requiring `>= 100` bits.
     ProvenJbr100,
-    /// Legacy Withdrawn Capacity-Bound Regime (`log_blowup * num_queries + grind_bits`).
-    /// Unconditionally refused by [`ZkmlSuiteProfile::check_proven_floor`].
     WithdrawnCapacityBound,
 }
 
-/// Protocol mode recorded in [`ZkmlSuiteArtifact`] (per `CROSS_REPO_CONTRACTS.md`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ZkmlProtocolMode {
-    /// IR-v2 FRI (e.g., `dregg.ir2.babybear-ext4.poseidon2-w16.fri.v1`).
     IrV2Fri,
-    /// BaseFold / Reed-Solomon IOP.
     BaseFoldRs,
+    EinSumcheckMxfp4,
 }
 
 impl ZkmlProtocolMode {
@@ -310,68 +442,49 @@ impl ZkmlProtocolMode {
         match self {
             ZkmlProtocolMode::IrV2Fri => 1,
             ZkmlProtocolMode::BaseFoldRs => 2,
+            ZkmlProtocolMode::EinSumcheckMxfp4 => 3,
         }
     }
 }
 
-/// Soundness-relevant parameters of a zkML STARK / FRI / BaseFold suite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ZkmlSuiteProfile {
-    /// Base prime field bit width (e.g., `31` for BabyBear / KoalaBear).
     pub field_modulus_bits: u32,
-    /// Challenge extension field degree (e.g., `4` for Ext4, `5` for Ext5).
     pub ext_degree: u32,
-    /// Base-2 logarithm of FRI / RS blowup factor (`rho = 2^(-log_blowup)`).
     pub log_blowup: u32,
-    /// Number of pinned FRI / BaseFold queries.
     pub num_queries: u32,
-    /// Query-phase proof-of-work grinding bits (`pow`, additive and regime-free).
     pub grind_bits: u32,
-    /// Base-2 logarithm of the execution trace height (`|H| = 2^log_trace_height`).
     pub log_trace_height: u32,
-    /// BCS Merkle hash digest width in bits (e.g., `256` for cSHAKE256 / SHA-256).
     pub digest_bits: u32,
+    pub log_arity: u32,
 }
 
-/// Certified soundness breakdown emitted when [`ZkmlSuiteProfile::check_proven_floor`] succeeds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkmlSoundnessReport {
-    /// Proven regime that admitted this suite (`ProvenUdr100` or `ProvenJbr100`).
     pub regime: SecurityRegime,
-    /// Query + grind soundness in the requested proven regime (milli-bits).
     pub regime_query_grind_milli_bits: u64,
-    /// Unconditional Unique-Decoding Regime query + grind soundness (milli-bits).
     pub udr_milli_bits: u64,
-    /// Proven Johnson-Bound Regime query + grind soundness (milli-bits).
     pub jbr_milli_bits: u64,
-    /// Legacy withdrawn CBR diagnostic value (never used for admission).
     pub legacy_withdrawn_cbr_milli_bits: u64,
-    /// Extension-field LogUp ceiling `(field_modulus_bits * ext_degree - log_trace_height) * 1000`.
     pub logup_ext_ceiling_milli_bits: u64,
-    /// BCS Merkle digest birthday ceiling `(digest_bits / 2) * 1000`.
     pub bcs_digest_ceiling_milli_bits: u64,
-    /// Effective composite proven soundness:
-    /// `min(regime_query_grind_milli_bits, logup_ext_ceiling_milli_bits, bcs_digest_ceiling_milli_bits)`.
     pub effective_proven_milli_bits: u64,
 }
 
-/// Fail-closed refusal reasons for the zkML soundness gate and streaming chunk-carry verifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZkmlGateRefusal {
-    /// Refused any suite requesting [`SecurityRegime::WithdrawnCapacityBound`].
     WithdrawnCbrRegime {
         legacy_cbr_milli_bits: u64,
         udr_milli_bits: u64,
     },
-    /// Refused any suite whose proven query+grind or BCS digest soundness falls below `100_000`
-    /// milli-bits (`100` bits).
+    UnpinnedOrZeroAritySuite {
+        reason: &'static str,
+    },
     InsufficientProvenBits {
         regime: SecurityRegime,
         achieved_milli_bits: u64,
         required_milli_bits: u64,
     },
-    /// Refused any suite whose extension-field LogUp ceiling falls below `100_000` milli-bits
-    /// (e.g., BabyBear Ext4 at high trace heights where Ext5 is required).
     LogUpExtensionWall {
         ext_degree: u32,
         field_modulus_bits: u32,
@@ -379,53 +492,48 @@ pub enum ZkmlGateRefusal {
         realized_milli_bits: u64,
         required_milli_bits: u64,
     },
-    /// Refused a multi-chunk recurrent GDN / SSM sequence whose hidden state carry is broken
-    /// (`state_out_commit[i] != state_in_commit[i + 1]` or boundary state mismatch).
     BrokenChunkCarry {
         chunk_idx: u64,
         expected_state_in: [u8; 32],
         actual_state_in: [u8; 32],
     },
-    /// Refused a job or chunk receipt whose `model_weights_root` drifted from the pinned root.
     WeightRootMismatch {
         chunk_idx: Option<u64>,
         expected: [u8; 32],
         actual: [u8; 32],
     },
-    /// Refused a chunk receipt whose `pow_nonce` fails the profile's `grind_bits` requirement or
-    /// whose PoW search exhausted its span.
     InvalidChunkPow {
         chunk_idx: u64,
         required_bits: u32,
         pow_nonce: u64,
     },
-    /// Refused a job or chunk receipt whose `policy_floor_digest` drifted from the pinned digest.
+    InvalidChunkIopProof {
+        chunk_idx: u64,
+        reason: &'static str,
+    },
     PolicyFloorMismatch {
         chunk_idx: Option<u64>,
         expected: [u8; 32],
         actual: [u8; 32],
     },
-    /// Refused a chunk receipt or candidate whose `suite_digest` does not match the suite artifact.
     SuiteDigestMismatch {
         chunk_idx: Option<u64>,
         expected: [u8; 32],
         actual: [u8; 32],
     },
-    /// Refused a streaming job or candidate with zero chunks.
     EmptyChunkChain,
-    /// Refused a chunk receipt whose `chunk_idx` is not strictly contiguous `0..K`.
-    ChunkIndexMismatch { expected: u64, actual: u64 },
-    /// Refused a chunk receipt whose stored `chunk_commitment` does not match recomputed
-    /// `cSHAKE256("OBEND.SHE.ZKML_CHUNK/v1", preimage)`.
+    ChunkIndexMismatch {
+        expected: u64,
+        actual: u64,
+    },
     ChunkCommitmentMismatch {
         chunk_idx: u64,
         expected: [u8; 32],
         actual: [u8; 32],
     },
-    /// Refused a candidate whose `request_id`, `canonical_input_root`, `canonical_output_root`, or
-    /// serialized `proof_bytes` failed fail-closed verification.
-    CandidateBindingMismatch { reason: &'static str },
-    /// Streaming proving job was cooperatively cancelled (e.g., via stale-epoch invalidation).
+    CandidateBindingMismatch {
+        reason: &'static str,
+    },
     Cancelled,
 }
 
@@ -439,6 +547,9 @@ impl fmt::Display for ZkmlGateRefusal {
                 f,
                 "withdrawn CapacityBound regime refused (legacy_cbr={legacy_cbr_milli_bits} mbit, actual_udr={udr_milli_bits} mbit)"
             ),
+            ZkmlGateRefusal::UnpinnedOrZeroAritySuite { reason } => {
+                write!(f, "unpinned or zero-arity zkML suite refused: {reason}")
+            }
             ZkmlGateRefusal::InsufficientProvenBits {
                 regime,
                 achieved_milli_bits,
@@ -458,7 +569,7 @@ impl fmt::Display for ZkmlGateRefusal {
                 "LogUp extension wall hit (ext_degree={ext_degree}, field_bits={field_modulus_bits}, log_trace={log_trace_height}): {realized_milli_bits} < {required_milli_bits} milli-bits"
             ),
             ZkmlGateRefusal::BrokenChunkCarry { chunk_idx, .. } => {
-                write!(f, "broken recurrent chunk carry at chunk {chunk_idx}")
+                write!(f, "broken layer activation carry at chunk {chunk_idx}")
             }
             ZkmlGateRefusal::WeightRootMismatch { chunk_idx, .. } => match chunk_idx {
                 Some(idx) => write!(f, "model_weights_root mismatch at chunk {idx}"),
@@ -472,6 +583,9 @@ impl fmt::Display for ZkmlGateRefusal {
                 f,
                 "invalid chunk PoW at chunk {chunk_idx}: nonce {pow_nonce} fails {required_bits}-bit target"
             ),
+            ZkmlGateRefusal::InvalidChunkIopProof { chunk_idx, reason } => {
+                write!(f, "invalid MXFP4 EinSumcheck chunk IOP proof at chunk {chunk_idx}: {reason}")
+            }
             ZkmlGateRefusal::PolicyFloorMismatch { chunk_idx, .. } => match chunk_idx {
                 Some(idx) => write!(f, "policy_floor_digest mismatch at chunk {idx}"),
                 None => write!(f, "policy_floor_digest mismatch"),
@@ -497,8 +611,6 @@ impl fmt::Display for ZkmlGateRefusal {
 
 impl std::error::Error for ZkmlGateRefusal {}
 
-/// Per-query unconditional Unique-Decoding Regime soundness in milli-bits:
-/// `floor(1000 * (1 - log2(1 + 2^(-log_blowup))))`.
 #[inline]
 pub const fn udr_query_milli_bits(log_blowup: u32) -> u64 {
     if (log_blowup as usize) < UDR_QUERY_MILLI_BITS_TABLE.len() {
@@ -508,22 +620,17 @@ pub const fn udr_query_milli_bits(log_blowup: u32) -> u64 {
     }
 }
 
-/// Per-query Johnson-Bound Regime soundness in milli-bits: `log_blowup * 500`.
 #[inline]
 pub const fn jbr_query_milli_bits(log_blowup: u32) -> u64 {
     (log_blowup as u64).saturating_mul(500)
 }
 
-/// Per-query legacy withdrawn Capacity-Bound Regime soundness in milli-bits: `log_blowup * 1000`.
 #[inline]
 pub const fn legacy_cbr_query_milli_bits(log_blowup: u32) -> u64 {
     (log_blowup as u64).saturating_mul(MILLI_BITS_PER_BIT)
 }
 
 impl ZkmlSuiteProfile {
-    /// Legacy deployed BabyBear Ext4 IR-v2 profile `(lb=6, q=19, pow=16)`:
-    /// reads UDR `34_563` mbit (`~34.56` bits), JBR `73_000` mbit, withdrawn CBR `130_000` mbit.
-    /// Must be **refused** under `ProvenUdr100`, `ProvenJbr100`, and `WithdrawnCapacityBound`.
     pub const fn deployed_ir2_babybear_ext4_legacy() -> Self {
         Self {
             field_modulus_bits: BABYBEAR_MODULUS_BITS,
@@ -533,11 +640,10 @@ impl ZkmlSuiteProfile {
             grind_bits: 16,
             log_trace_height: 20,
             digest_bits: 256,
+            log_arity: 1,
         }
     }
 
-    /// Unconditional 100-bit UDR BabyBear Ext4 profile `(lb=6, q=86, pow=16)` at `2^20` rows:
-    /// UDR `100_022` mbit (`>= 100_000`), LogUp `104_000` mbit, BCS `128_000` mbit.
     pub const fn proven_udr100_babybear_ext4() -> Self {
         Self {
             field_modulus_bits: BABYBEAR_MODULUS_BITS,
@@ -547,11 +653,10 @@ impl ZkmlSuiteProfile {
             grind_bits: 16,
             log_trace_height: 20,
             digest_bits: 256,
+            log_arity: 1,
         }
     }
 
-    /// Unconditional 100-bit UDR BabyBear Ext5 profile `(lb=6, q=86, pow=16)` clearing the Ext4
-    /// LogUp wall even at `log_trace_height = 25` (`LogUp = 130_000` mbit vs Ext4's `99_000`).
     pub const fn proven_udr100_babybear_ext5() -> Self {
         Self {
             field_modulus_bits: BABYBEAR_MODULUS_BITS,
@@ -561,11 +666,10 @@ impl ZkmlSuiteProfile {
             grind_bits: 16,
             log_trace_height: 25,
             digest_bits: 256,
+            log_arity: 1,
         }
     }
 
-    /// Proven 100-bit JBR BabyBear Ext4 profile `(lb=6, q=28, pow=16)`:
-    /// JBR `100_000` mbit (passes `ProvenJbr100`), UDR `43_356` mbit (refused under `ProvenUdr100`).
     pub const fn proven_jbr100_babybear_ext4() -> Self {
         Self {
             field_modulus_bits: BABYBEAR_MODULUS_BITS,
@@ -575,10 +679,37 @@ impl ZkmlSuiteProfile {
             grind_bits: 16,
             log_trace_height: 20,
             digest_bits: 256,
+            log_arity: 1,
         }
     }
 
-    /// Exact integer milli-bits under the unconditional Unique-Decoding Regime (UDR).
+    pub const fn proven_udr100_goldilocks_ext2() -> Self {
+        Self {
+            field_modulus_bits: GOLDILOCKS_MODULUS_BITS,
+            ext_degree: 2,
+            log_blowup: 6,
+            num_queries: 86,
+            grind_bits: 16,
+            log_trace_height: 20,
+            digest_bits: 256,
+            log_arity: 1,
+        }
+    }
+
+    /// Wide-leaf `UD-100` profile `(lb=2, q=148, pow=0, log_arity=4)` (`100.344` proven UDR bits).
+    pub const fn wide_leaf_udr100_goldilocks_ext2() -> Self {
+        Self {
+            field_modulus_bits: GOLDILOCKS_MODULUS_BITS,
+            ext_degree: 2,
+            log_blowup: 2,
+            num_queries: 148,
+            grind_bits: 0,
+            log_trace_height: 20,
+            digest_bits: 256,
+            log_arity: 4,
+        }
+    }
+
     #[inline]
     pub const fn udr_milli_bits(&self) -> u64 {
         (self.num_queries as u64)
@@ -586,7 +717,6 @@ impl ZkmlSuiteProfile {
             .saturating_add((self.grind_bits as u64).saturating_mul(MILLI_BITS_PER_BIT))
     }
 
-    /// Exact integer milli-bits under the proven Johnson-Bound Regime (JBR).
     #[inline]
     pub const fn jbr_milli_bits(&self) -> u64 {
         (self.num_queries as u64)
@@ -594,9 +724,6 @@ impl ZkmlSuiteProfile {
             .saturating_add((self.grind_bits as u64).saturating_mul(MILLI_BITS_PER_BIT))
     }
 
-    /// Exact integer milli-bits under the legacy withdrawn Capacity-Bound Regime (CBR):
-    /// `log_blowup * num_queries * 1000 + grind_bits * 1000`.
-    /// Diagnostic only — never admitted for security claims.
     #[inline]
     pub const fn legacy_withdrawn_cbr_milli_bits(&self) -> u64 {
         (self.num_queries as u64)
@@ -604,33 +731,53 @@ impl ZkmlSuiteProfile {
             .saturating_add((self.grind_bits as u64).saturating_mul(MILLI_BITS_PER_BIT))
     }
 
-    /// Realized extension-field LogUp ceiling in milli-bits:
-    /// `saturating_sub(field_modulus_bits * ext_degree, log_trace_height) * 1000`.
+    /// Conservative LogUp extension-field ceiling using `floor(log2(p)) = field_modulus_bits - 1`
+    /// (since every odd prime of bit-width `b` satisfies `2^{b-1} < p < 2^b`, preventing
+    /// boundary overcounts such as BabyBear `b = 31` where `4 * log2(2^31 - 2^27 + 1) = 123.628 < 124`).
     #[inline]
     pub const fn logup_ext_ceiling_milli_bits(&self) -> u64 {
-        let ext_bits = (self.field_modulus_bits as u64).saturating_mul(self.ext_degree as u64);
+        let floor_log2_p = (self.field_modulus_bits as u64).saturating_sub(1);
+        let ext_bits = floor_log2_p.saturating_mul(self.ext_degree as u64);
         ext_bits
             .saturating_sub(self.log_trace_height as u64)
             .saturating_mul(MILLI_BITS_PER_BIT)
     }
 
-    /// BCS Merkle digest collision ceiling in milli-bits (`(digest_bits / 2) * 1000`).
     #[inline]
     pub const fn bcs_digest_ceiling_milli_bits(&self) -> u64 {
         ((self.digest_bits / 2) as u64).saturating_mul(MILLI_BITS_PER_BIT)
     }
 
-    /// Evaluates the unconditional `>= 100_000` milli-bit floor gate in `regime`.
-    ///
-    /// Fails closed on:
-    /// 1. [`SecurityRegime::WithdrawnCapacityBound`],
-    /// 2. LogUp extension-field wall `< 100_000` milli-bits,
-    /// 3. BCS Merkle digest ceiling `< 100_000` milli-bits,
-    /// 4. Query + grind soundness in `regime` `< 100_000` milli-bits.
+    /// Canonical 8-field `cSHAKE256("OBEND.SHE.ZKML_SUITE/v1", ...)` digest matching
+    /// `ZkmlSuiteProfile.digest` in `EinSumcheckMxfp4.lean`.
+    pub fn profile_digest(&self) -> [u8; 32] {
+        let fb = leb128_vec(self.field_modulus_bits as u64);
+        let ed = leb128_vec(self.ext_degree as u64);
+        let lb = leb128_vec(self.log_blowup as u64);
+        let nq = leb128_vec(self.num_queries as u64);
+        let gb = leb128_vec(self.grind_bits as u64);
+        let th = leb128_vec(self.log_trace_height as u64);
+        let db = leb128_vec(self.digest_bits as u64);
+        let la = leb128_vec(self.log_arity as u64);
+        let pre = encode_zkml_fields(&[&fb, &ed, &lb, &nq, &gb, &th, &db, &la]);
+        cshake256_32(ZKML_SUITE_DOMAIN_TAG, &pre)
+    }
+
     pub const fn check_proven_floor(
         &self,
         regime: SecurityRegime,
     ) -> Result<ZkmlSoundnessReport, ZkmlGateRefusal> {
+        if self.log_arity == 0 {
+            return Err(ZkmlGateRefusal::UnpinnedOrZeroAritySuite {
+                reason: "log_arity == 0 is refused (must be >= 1)",
+            });
+        }
+        if self.num_queries == 0 {
+            return Err(ZkmlGateRefusal::UnpinnedOrZeroAritySuite {
+                reason: "num_queries == 0 is refused (must be >= 1)",
+            });
+        }
+
         let udr = self.udr_milli_bits();
         let jbr = self.jbr_milli_bits();
         let cbr = self.legacy_withdrawn_cbr_milli_bits();
@@ -698,7 +845,6 @@ impl ZkmlSuiteProfile {
     }
 }
 
-/// Versioned zkML proof-suite export matching `CROSS_REPO_CONTRACTS.md` §2 (`ZkmlSuiteArtifact`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkmlSuiteArtifact {
     pub suite_id: String,
@@ -730,7 +876,6 @@ pub struct ZkmlSuiteArtifact {
 }
 
 impl ZkmlSuiteArtifact {
-    /// Builds a canonical BabyBear IR-v2 FRI suite artifact for `profile`.
     pub fn babybear_fri(suite_id: impl Into<String>, profile: ZkmlSuiteProfile) -> Self {
         let ext_poly = match profile.ext_degree {
             4 => "X^4 - 11",
@@ -762,20 +907,52 @@ impl ZkmlSuiteArtifact {
             poseidon2_full_rounds: 8,
             poseidon2_partial_rounds: 13,
             round_constants_digest: sha256(b"babybear-poseidon2-w16-rc-v1"),
-            merkle_arity: 2,
+            merkle_arity: 1u32 << profile.log_arity.min(16),
             protocol_mode: ZkmlProtocolMode::IrV2Fri,
             fiat_shamir_alphabet_id: "bcs-cshake256-leb128-v1".to_string(),
             checker_id: "obend.zkml.proven_gate".to_string(),
-            checker_version: 1,
-            checker_content_digest: sha256(b"obend.zkml.proven_gate.v1"),
+            checker_version: 3,
+            checker_content_digest: sha256(b"obend.zkml.proven_gate.einsumcheck_mxfp4.v3"),
             profile,
         }
     }
 
-    /// Computes a collision-free 256-bit SHA-256 identity over every field of the suite artifact
-    /// using self-delimiting LEB128 length-prefixed framing.
+    pub fn goldilocks_einsumcheck_mxfp4(
+        suite_id: impl Into<String>,
+        profile: ZkmlSuiteProfile,
+    ) -> Self {
+        Self {
+            suite_id: suite_id.into(),
+            source_repo: "obend".to_string(),
+            source_commit: "proven-zkml-goldilocks-einsumcheck-mxfp4-v1".to_string(),
+            artifact_content_digest: sha256(b"obend.she.zkml.goldilocks.einsumcheck_mxfp4.v1"),
+            statement_codec_version: 1,
+            proof_codec_version: 1,
+            transcript_codec_version: 1,
+            base_field_modulus: GOLDILOCKS_MODULUS,
+            base_field_codec_id: "goldilocks-canonical-u64-be".to_string(),
+            ext_degree: profile.ext_degree,
+            defining_polynomial: "X (base Goldilocks p = 2^64 - 2^32 + 1)".to_string(),
+            ext_basis: "[1]".to_string(),
+            poseidon2_width: 0,
+            poseidon2_rate: 0,
+            poseidon2_capacity: 0,
+            poseidon2_sbox_alpha: 0,
+            poseidon2_full_rounds: 0,
+            poseidon2_partial_rounds: 0,
+            round_constants_digest: sha256(b"cshake256-obend-she-zkml-merkle-v1"),
+            merkle_arity: 1u32 << profile.log_arity.min(16),
+            protocol_mode: ZkmlProtocolMode::EinSumcheckMxfp4,
+            fiat_shamir_alphabet_id: "fenzi-cshake256-leb128-v1".to_string(),
+            checker_id: "obend.zkml.proven_gate".to_string(),
+            checker_version: 3,
+            checker_content_digest: sha256(b"obend.zkml.proven_gate.einsumcheck_mxfp4.v3"),
+            profile,
+        }
+    }
+
     pub fn suite_digest(&self) -> [u8; 32] {
-        let mut buf = Vec::with_capacity(512);
+        let mut buf = Vec::with_capacity(520);
         push_framed_field(&mut buf, self.suite_id.as_bytes());
         push_framed_field(&mut buf, self.source_repo.as_bytes());
         push_framed_field(&mut buf, self.source_commit.as_bytes());
@@ -808,11 +985,10 @@ impl ZkmlSuiteArtifact {
         push_framed_field(&mut buf, &self.profile.grind_bits.to_be_bytes());
         push_framed_field(&mut buf, &self.profile.log_trace_height.to_be_bytes());
         push_framed_field(&mut buf, &self.profile.digest_bits.to_be_bytes());
+        push_framed_field(&mut buf, &self.profile.log_arity.to_be_bytes());
         sha256(&buf)
     }
 
-    /// Checks consistency between top-level `ext_degree`/`base_field_modulus` and
-    /// `profile.{ext_degree, field_modulus_bits}`, then runs the unconditional soundness floor gate.
     pub fn check_proven_floor(
         &self,
         regime: SecurityRegime,
@@ -829,190 +1005,2097 @@ impl ZkmlSuiteArtifact {
                 reason: "artifact base_field_modulus bit-width disagrees with profile field_modulus_bits",
             });
         }
+        if self.merkle_arity < 2 {
+            return Err(ZkmlGateRefusal::UnpinnedOrZeroAritySuite {
+                reason: "artifact merkle_arity < 2 refused",
+            });
+        }
         self.profile.check_proven_floor(regime)
     }
 }
 
 // ---------------------------------------------------------------------------
-// 2. Streaming Recurrent GDN / SSM Chunk-Carry Receipts & Commitments
+// 2. Canonical Goldilocks Field, E2M1 / 2^sh Domain, Merkle & Transcript
 // ---------------------------------------------------------------------------
 
-/// One authenticated chunk receipt in a streaming Gated-DeltaNet / SSM recurrent inference chain.
-///
-/// Matches `Obend.SymbolicZk.ProvenZkmlGate.ZkmlChunkReceipt` field-for-field.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Goldilocks(pub u64);
+
+impl Goldilocks {
+    pub const ZERO: Self = Self(0);
+    pub const ONE: Self = Self(1);
+
+    #[inline]
+    pub const fn new(raw: u64) -> Self {
+        Self(((raw as u128) % (GOLDILOCKS_MODULUS as u128)) as u64)
+    }
+
+    #[inline]
+    pub const fn from_canonical_u64(raw: u64) -> Option<Self> {
+        if raw < GOLDILOCKS_MODULUS {
+            Some(Self(raw))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub const fn is_canonical(self) -> bool {
+        self.0 < GOLDILOCKS_MODULUS
+    }
+
+    #[inline]
+    pub const fn add(self, rhs: Self) -> Self {
+        let s = (self.0 as u128) + (rhs.0 as u128);
+        Self((s % (GOLDILOCKS_MODULUS as u128)) as u64)
+    }
+
+    #[inline]
+    pub const fn sub(self, rhs: Self) -> Self {
+        let a = (self.0 as u128) % (GOLDILOCKS_MODULUS as u128);
+        let b = (rhs.0 as u128) % (GOLDILOCKS_MODULUS as u128);
+        let d = (a + (GOLDILOCKS_MODULUS as u128) - b) % (GOLDILOCKS_MODULUS as u128);
+        Self(d as u64)
+    }
+
+    #[inline]
+    pub const fn mul(self, rhs: Self) -> Self {
+        let p = (self.0 as u128) * (rhs.0 as u128);
+        Self((p % (GOLDILOCKS_MODULUS as u128)) as u64)
+    }
+}
+
+#[inline]
+pub fn is_valid_e2m1_mantissa(q: i64) -> bool {
+    E2M1_MANTISSA_DOMAIN.contains(&q)
+}
+
+#[inline]
+pub const fn is_valid_mxfp4_shift(sh: u32) -> bool {
+    sh <= MAX_MXFP4_SCALE_SHIFT
+}
+
+#[inline]
+pub const fn int_to_goldilocks(z: i64) -> Goldilocks {
+    if z >= 0 {
+        Goldilocks::new(z as u64)
+    } else {
+        Goldilocks::ZERO.sub(Goldilocks::new(z.unsigned_abs()))
+    }
+}
+
+#[inline]
+pub const fn shift_to_goldilocks(sh: u32) -> Goldilocks {
+    Goldilocks::new(1u64 << sh)
+}
+
+#[inline]
+pub fn gl_horner(coeffs: &[Goldilocks], x: Goldilocks) -> Goldilocks {
+    let mut acc = Goldilocks::ZERO;
+    for &c in coeffs.iter().rev() {
+        acc = c.add(x.mul(acc));
+    }
+    acc
+}
+
+fn decode_gl_be8(bytes: &[u8]) -> Result<Goldilocks, ZkmlGateRefusal> {
+    if bytes.len() != 8 {
+        return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "Goldilocks scalar field must be 8 bytes",
+        });
+    }
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(bytes);
+    Goldilocks::from_canonical_u64(u64::from_be_bytes(buf)).ok_or(
+        ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "non-canonical Goldilocks scalar >= modulus",
+        },
+    )
+}
+
+pub fn encode_goldilocks_vec(xs: &[Goldilocks]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + xs.len() * 8);
+    encode_leb128(xs.len() as u64, &mut out);
+    for &x in xs {
+        out.extend_from_slice(&(x.0 % GOLDILOCKS_MODULUS).to_be_bytes());
+    }
+    out
+}
+
+pub fn decode_goldilocks_vec_bounded(
+    bytes: &[u8],
+    max_elems: usize,
+) -> Result<Vec<Goldilocks>, ZkmlGateRefusal> {
+    let mut cursor = 0usize;
+    let count_u64 = decode_leb128(bytes, &mut cursor)?;
+    let count =
+        usize::try_from(count_u64).map_err(|_| ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "Goldilocks vector length overflows usize",
+        })?;
+    if count > max_elems {
+        return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "Goldilocks vector length exceeds protocol bound",
+        });
+    }
+    let expected = count
+        .checked_mul(8)
+        .and_then(|n| n.checked_add(cursor))
+        .ok_or(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "Goldilocks vector byte length overflow",
+        })?;
+    if expected != bytes.len() {
+        return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "Goldilocks vector byte length mismatch",
+        });
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let elem = decode_gl_be8(&bytes[cursor..cursor + 8])?;
+        cursor += 8;
+        out.push(elem);
+    }
+    Ok(out)
+}
+
+pub fn decode_goldilocks_vec(bytes: &[u8]) -> Result<Vec<Goldilocks>, ZkmlGateRefusal> {
+    decode_goldilocks_vec_bounded(bytes, 1usize << MAX_ZKML_HYPERCUBE_VARS)
+}
+
+fn encode_digest32_list(ds: &[[u8; 32]]) -> Vec<u8> {
+    let refs: Vec<&[u8]> = ds.iter().map(|d| &d[..]).collect();
+    encode_zkml_fields(&refs)
+}
+
+fn decode_digest32_list(bytes: &[u8]) -> Result<Vec<[u8; 32]>, ZkmlGateRefusal> {
+    let fields = read_bounded_framed_fields(bytes, MAX_ZKML_HYPERCUBE_VARS)?;
+    let mut out = Vec::with_capacity(fields.len());
+    for f in fields {
+        if f.len() != 32 {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "Merkle digest in list is not 32 bytes",
+            });
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(f);
+        out.push(arr);
+    }
+    Ok(out)
+}
+
+/// Succinct verifier key for one native `MXFP4` contraction layer (`OBEND.SHE.ZKML_WEIGHTS/v1`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Mxfp4LayerKey {
+    pub log_i: usize,
+    pub log_j: usize,
+    pub log_k: usize,
+    pub log_b: usize,
+    pub q_merkle_root: [u8; 32],
+    pub s_merkle_root: [u8; 32],
+}
+
+impl Mxfp4LayerKey {
+    pub fn valid_dims(&self) -> bool {
+        let Some(ij) = self.log_i.checked_add(self.log_j) else {
+            return false;
+        };
+        let Some(ibk) = self
+            .log_i
+            .checked_add(self.log_b)
+            .and_then(|v| v.checked_add(self.log_k))
+        else {
+            return false;
+        };
+        let Some(bkj) = self
+            .log_b
+            .checked_add(self.log_k)
+            .and_then(|v| v.checked_add(self.log_j))
+        else {
+            return false;
+        };
+        self.log_i >= 1
+            && self.log_j >= 1
+            && self.log_k >= 1
+            && self.log_b >= 1
+            && ij < MAX_ZKML_HYPERCUBE_VARS
+            && ibk < MAX_ZKML_HYPERCUBE_VARS
+            && bkj < MAX_ZKML_HYPERCUBE_VARS
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let li = leb128_vec(self.log_i as u64);
+        let lj = leb128_vec(self.log_j as u64);
+        let lk = leb128_vec(self.log_k as u64);
+        let lb = leb128_vec(self.log_b as u64);
+        encode_zkml_fields(&[&li, &lj, &lk, &lb, &self.q_merkle_root, &self.s_merkle_root])
+    }
+}
+
+/// Verifier-pinned multi-layer `MXFP4` model manifest (`OBEND.SHE.ZKML_WEIGHTS/v1`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Mxfp4ModelManifest {
+    pub layers: Vec<Mxfp4LayerKey>,
+}
+
+impl Mxfp4ModelManifest {
+    pub fn valid(&self) -> bool {
+        !self.layers.is_empty()
+            && self.layers.len() <= MAX_ZKML_MODEL_LAYERS
+            && self.layers.iter().all(Mxfp4LayerKey::valid_dims)
+    }
+
+    pub fn root(&self) -> [u8; 32] {
+        let enc_layers: Vec<Vec<u8>> = self.layers.iter().map(Mxfp4LayerKey::encode).collect();
+        let refs: Vec<&[u8]> = enc_layers.iter().map(Vec::as_slice).collect();
+        cshake256_32(ZKML_WEIGHTS_DOMAIN_TAG, &encode_zkml_fields(&refs))
+    }
+}
+
+fn zkml_leaf_32(tag: u8, idx: usize, payload: &[u8]) -> [u8; 32] {
+    let mut pre = Vec::with_capacity(12 + payload.len());
+    pre.push(tag);
+    encode_leb128(idx as u64, &mut pre);
+    pre.extend_from_slice(payload);
+    cshake256_32(ZKML_MERKLE_DOMAIN_TAG, &pre)
+}
+
+pub fn hash_tensor_leaf(idx: usize, x: Goldilocks) -> [u8; 32] {
+    zkml_leaf_32(0x03, idx, &(x.0 % GOLDILOCKS_MODULUS).to_be_bytes())
+}
+
+pub fn hash_mantissa_leaf(idx: usize, q: i64) -> [u8; 32] {
+    zkml_leaf_32(0x06, idx, &encode_signed_int(q))
+}
+
+pub fn hash_shift_leaf(idx: usize, sh: u32) -> [u8; 32] {
+    zkml_leaf_32(0x07, idx, &leb128_vec(sh as u64))
+}
+
+pub fn hash_fold_pair_leaf(
+    layer_idx: usize,
+    pair_idx: usize,
+    lo: Goldilocks,
+    hi: Goldilocks,
+) -> [u8; 32] {
+    let pair_bytes = encode_goldilocks_vec(&[lo, hi]);
+    let mut pre = Vec::with_capacity(24 + pair_bytes.len());
+    pre.push(0x05);
+    encode_leb128(layer_idx as u64, &mut pre);
+    encode_leb128(pair_idx as u64, &mut pre);
+    pre.extend_from_slice(&pair_bytes);
+    cshake256_32(ZKML_MERKLE_DOMAIN_TAG, &pre)
+}
+
+fn hash_merkle_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut pre = [0u8; 65];
+    pre[0] = 0x01;
+    pre[1..33].copy_from_slice(left);
+    pre[33..65].copy_from_slice(right);
+    cshake256_32(ZKML_MERKLE_DOMAIN_TAG, &pre)
+}
+
+/// Precomputed `O(N)` binary `OBEND.SHE.ZKML_MERKLE/v1` tree enabling `O(log N)` sibling-path
+/// lookups per query with zero subtree rehashing.
+struct CachedMerkleTree {
+    levels: Vec<Vec<[u8; 32]>>,
+}
+
+impl CachedMerkleTree {
+    fn build(leaves: Vec<[u8; 32]>) -> Self {
+        if leaves.is_empty() {
+            return Self {
+                levels: vec![vec![cshake256_32(ZKML_MERKLE_DOMAIN_TAG, &[0x02])]],
+            };
+        }
+        debug_assert!(leaves.len().is_power_of_two());
+        let mut levels = Vec::with_capacity(leaves.len().trailing_zeros() as usize + 1);
+        levels.push(leaves);
+        while levels.last().map_or(0, Vec::len) > 1 {
+            let prev = levels.last().expect("non-empty");
+            let mut next = Vec::with_capacity(prev.len() / 2);
+            let mut i = 0usize;
+            while i + 1 < prev.len() {
+                next.push(hash_merkle_node(&prev[i], &prev[i + 1]));
+                i += 2;
+            }
+            levels.push(next);
+        }
+        Self { levels }
+    }
+
+    #[inline]
+    fn root(&self) -> [u8; 32] {
+        self.levels
+            .last()
+            .and_then(|top| top.first().copied())
+            .unwrap_or_else(|| cshake256_32(ZKML_MERKLE_DOMAIN_TAG, &[0x02]))
+    }
+
+    /// Root-to-leaf sibling path identical to [`zkml_merkle_path`] in `O(log N)` array reads.
+    fn open_path(&self, idx: usize) -> Vec<[u8; 32]> {
+        let depth = self.levels.len().saturating_sub(1);
+        let mut path = Vec::with_capacity(depth);
+        for d in (0..depth).rev() {
+            let pos = idx >> d;
+            let sib = pos ^ 1;
+            path.push(self.levels[d][sib]);
+        }
+        path
+    }
+}
+
+pub fn zkml_merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+    if leaves.is_empty() {
+        return cshake256_32(ZKML_MERKLE_DOMAIN_TAG, &[0x02]);
+    }
+    if leaves.len() == 1 {
+        return leaves[0];
+    }
+    let half = leaves.len() / 2;
+    let l = zkml_merkle_root(&leaves[..half]);
+    let r = zkml_merkle_root(&leaves[half..]);
+    hash_merkle_node(&l, &r)
+}
+
+pub fn zkml_merkle_path(leaves: &[[u8; 32]], idx: usize) -> Vec<[u8; 32]> {
+    if leaves.len() < 2 {
+        return Vec::new();
+    }
+    let half = leaves.len() / 2;
+    if idx < half {
+        let mut p = Vec::with_capacity(16);
+        p.push(zkml_merkle_root(&leaves[half..]));
+        p.extend(zkml_merkle_path(&leaves[..half], idx));
+        p
+    } else {
+        let mut p = Vec::with_capacity(16);
+        p.push(zkml_merkle_root(&leaves[..half]));
+        p.extend(zkml_merkle_path(&leaves[half..], idx - half));
+        p
+    }
+}
+
+pub fn climb_zkml_merkle(
+    tree_size: usize,
+    idx: usize,
+    leaf: [u8; 32],
+    path: &[[u8; 32]],
+) -> Option<[u8; 32]> {
+    if path.is_empty() {
+        return (tree_size == 1 && idx == 0).then_some(leaf);
+    }
+    if tree_size < 2 || idx >= tree_size {
+        return None;
+    }
+    let half = tree_size / 2;
+    let sib = path[0];
+    if idx < half {
+        climb_zkml_merkle(half, idx, leaf, &path[1..]).map(|l| hash_merkle_node(&l, &sib))
+    } else {
+        climb_zkml_merkle(tree_size - half, idx - half, leaf, &path[1..])
+            .map(|r| hash_merkle_node(&sib, &r))
+    }
+}
+
+pub fn mxfp4_tensor_root(xs: &[Goldilocks]) -> [u8; 32] {
+    let leaves: Vec<[u8; 32]> = xs
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| hash_tensor_leaf(i, x))
+        .collect();
+    zkml_merkle_root(&leaves)
+}
+
+pub fn mxfp4_mantissa_root(qs: &[i64]) -> [u8; 32] {
+    let leaves: Vec<[u8; 32]> = qs
+        .iter()
+        .enumerate()
+        .map(|(i, &q)| hash_mantissa_leaf(i, q))
+        .collect();
+    zkml_merkle_root(&leaves)
+}
+
+pub fn mxfp4_shift_root(ss: &[u32]) -> [u8; 32] {
+    let leaves: Vec<[u8; 32]> = ss
+        .iter()
+        .enumerate()
+        .map(|(i, &sh)| hash_shift_leaf(i, sh))
+        .collect();
+    zkml_merkle_root(&leaves)
+}
+
+/// Phase-exact mirror of `Obend.Crypto.Transcript` (`Fenzi ePrint 2026/1838`).
+#[derive(Clone, Debug)]
+struct FsTranscript {
+    state: [u8; 32],
+    step_count: u64,
+}
+
+impl FsTranscript {
+    fn new_instance_bound(
+        protocol_id: &[u8],
+        rel_bytes: &[u8],
+        pub_io_bytes: &[u8],
+        inst_root: &[u8; 32],
+    ) -> Self {
+        let seed_state = cshake256_32(FS_SEED_TAG, b"");
+        let mut bind_pre =
+            Vec::with_capacity(64 + protocol_id.len() + rel_bytes.len() + pub_io_bytes.len());
+        push_framed_field(&mut bind_pre, &seed_state);
+        push_framed_field(&mut bind_pre, protocol_id);
+        push_framed_field(&mut bind_pre, rel_bytes);
+        push_framed_field(&mut bind_pre, pub_io_bytes);
+        let rel_state = cshake256_32(FS_BIND_TAG, &bind_pre);
+
+        let step1 = leb128_vec(1);
+        let inst_pre = encode_zkml_fields(&[&rel_state, &step1, inst_root]);
+        let inst_state = cshake256_32(FS_INSTANCE_TAG, &inst_pre);
+        Self {
+            state: inst_state,
+            step_count: 2,
+        }
+    }
+
+    fn absorb_msg(&mut self, label: &[u8], msg_bytes: &[u8]) {
+        let mut third = Vec::with_capacity(10 + msg_bytes.len());
+        encode_leb128(self.step_count, &mut third);
+        third.extend_from_slice(msg_bytes);
+        let frame = encode_zkml_fields(&[&self.state, label, &third]);
+        self.state = cshake256_32(FS_ABSORB_TAG, &frame);
+        self.step_count += 1;
+    }
+
+    fn squeeze_challenge_256(&mut self) -> [u8; 32] {
+        let mut payload = Vec::with_capacity(44);
+        push_framed_field(&mut payload, &self.state);
+        encode_leb128(self.step_count, &mut payload);
+        let out = cshake256_32(FS_SQUEEZE_TAG, &payload);
+
+        let mut ratchet = Vec::with_capacity(68);
+        push_framed_field(&mut ratchet, &self.state);
+        push_framed_field(&mut ratchet, &out);
+        self.state = cshake256_32(FS_RATCHET_TAG, &ratchet);
+        self.step_count += 1;
+        out
+    }
+
+    fn squeeze_goldilocks(&mut self) -> Goldilocks {
+        let out = self.squeeze_challenge_256();
+        let mut hi16 = [0u8; 16];
+        hi16.copy_from_slice(&out[..16]);
+        let limb = u128::from_be_bytes(hi16);
+        Goldilocks((limb % (GOLDILOCKS_MODULUS as u128)) as u64)
+    }
+
+    fn squeeze_goldilocks_vec(&mut self, n: usize) -> Vec<Goldilocks> {
+        (0..n).map(|_| self.squeeze_goldilocks()).collect()
+    }
+
+    fn squeeze_raw_queries(&mut self, num_queries: usize) -> Vec<u64> {
+        (0..num_queries)
+            .map(|_| {
+                let bytes = self.squeeze_challenge_256();
+                u64::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                ])
+            })
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Characteristic-Free Quadratic/Cubic Sumcheck, MXFP4 Contraction & Fold Walk
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoundPoly {
+    pub coeffs: Vec<Goldilocks>,
+}
+
+impl RoundPoly {
+    #[inline]
+    pub fn eval(&self, x: Goldilocks) -> Goldilocks {
+        gl_horner(&self.coeffs, x)
+    }
+
+    #[inline]
+    pub fn deg_le(&self, max_deg: usize) -> bool {
+        self.coeffs.len() <= max_deg + 1 && self.coeffs.iter().all(|c| c.is_canonical())
+    }
+
+    fn encode_transcript_msg(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + self.coeffs.len() * 9);
+        encode_leb128(self.coeffs.len() as u64, &mut out);
+        for &c in &self.coeffs {
+            push_framed_field(&mut out, &c.0.to_be_bytes());
+        }
+        out
+    }
+}
+
+fn encode_round_poly_list(ps: &[RoundPoly]) -> Vec<u8> {
+    let enc: Vec<Vec<u8>> = ps
+        .iter()
+        .map(|p| encode_goldilocks_vec(&p.coeffs))
+        .collect();
+    let refs: Vec<&[u8]> = enc.iter().map(Vec::as_slice).collect();
+    encode_zkml_fields(&refs)
+}
+
+fn decode_round_poly_list(bytes: &[u8]) -> Result<Vec<RoundPoly>, ZkmlGateRefusal> {
+    let fields = read_bounded_framed_fields(bytes, MAX_ZKML_SUMCHECK_ROUNDS)?;
+    fields
+        .into_iter()
+        .map(|f| {
+            // Every MXFP4 EinSumcheck round has degree <= 3 (at most 4 coefficients), enforced pre-allocation:
+            let coeffs = decode_goldilocks_vec_bounded(f, 4)?;
+            Ok(RoundPoly { coeffs })
+        })
+        .collect()
+}
+
+pub fn fold_first_var(tbl: &[Goldilocks], r0: Goldilocks) -> Vec<Goldilocks> {
+    let mut out = Vec::with_capacity(tbl.len().div_ceil(2));
+    let mut i = 0usize;
+    while i + 1 < tbl.len() {
+        let lo = tbl[i];
+        let hi = tbl[i + 1];
+        out.push(lo.add(r0.mul(hi.sub(lo))));
+        i += 2;
+    }
+    if i < tbl.len() {
+        let lo = tbl[i];
+        out.push(lo.add(r0.mul(Goldilocks::ZERO.sub(lo))));
+    }
+    out
+}
+
+pub fn fold_vars(tbl: &[Goldilocks], rs: &[Goldilocks]) -> Vec<Goldilocks> {
+    let mut cur = tbl.to_vec();
+    for &r in rs {
+        cur = fold_first_var(&cur, r);
+    }
+    cur
+}
+
+pub fn mle_eval(tbl: &[Goldilocks], rs: &[Goldilocks]) -> Goldilocks {
+    let eqs = eq_table(rs);
+    tbl.iter()
+        .zip(eqs.iter())
+        .fold(Goldilocks::ZERO, |acc, (&v, &w)| acc.add(v.mul(w)))
+}
+
+pub fn eq_table(xs: &[Goldilocks]) -> Vec<Goldilocks> {
+    let mut cur = vec![Goldilocks::ONE];
+    for &x in xs.iter().rev() {
+        let one_minus_x = Goldilocks::ONE.sub(x);
+        let mut next = Vec::with_capacity(cur.len() * 2);
+        for &w in &cur {
+            next.push(one_minus_x.mul(w));
+            next.push(x.mul(w));
+        }
+        cur = next;
+    }
+    cur
+}
+
+pub fn eq_poly_vec(xs: &[Goldilocks], ys: &[Goldilocks]) -> Goldilocks {
+    if xs.len() != ys.len() {
+        return Goldilocks::ZERO;
+    }
+    let mut acc = Goldilocks::ONE;
+    for (&x, &y) in xs.iter().zip(ys.iter()) {
+        let term = Goldilocks::ONE
+            .sub(x)
+            .mul(Goldilocks::ONE.sub(y))
+            .add(x.mul(y));
+        acc = acc.mul(term);
+    }
+    acc
+}
+
+/// Characteristic-free degree-2 round polynomial matching `quadPairRoundPoly` in Lean.
+pub fn quad_pair_round_poly(a: &[Goldilocks], b: &[Goldilocks]) -> RoundPoly {
+    let mut c0 = Goldilocks::ZERO;
+    let mut c1 = Goldilocks::ZERO;
+    let mut c2 = Goldilocks::ZERO;
+    let pairs = a.len().min(b.len()) / 2;
+    for g in (0..pairs).rev() {
+        let a0 = a[2 * g];
+        let a1 = a[2 * g + 1];
+        let b0 = b[2 * g];
+        let b1 = b[2 * g + 1];
+        let da = a1.sub(a0);
+        let db = b1.sub(b0);
+        c0 = a0.mul(b0).add(c0);
+        c1 = a0.mul(db).add(da.mul(b0)).add(c1);
+        c2 = da.mul(db).add(c2);
+    }
+    RoundPoly {
+        coeffs: vec![c0, c1, c2],
+    }
+}
+
+/// Characteristic-free degree-3 round polynomial matching `cubicTripleRoundPoly` in Lean.
+pub fn cubic_triple_round_poly(a: &[Goldilocks], b: &[Goldilocks], c: &[Goldilocks]) -> RoundPoly {
+    let mut d0 = Goldilocks::ZERO;
+    let mut d1 = Goldilocks::ZERO;
+    let mut d2 = Goldilocks::ZERO;
+    let mut d3 = Goldilocks::ZERO;
+    let pairs = a.len().min(b.len()).min(c.len()) / 2;
+    for g in (0..pairs).rev() {
+        let a0 = a[2 * g];
+        let a1 = a[2 * g + 1];
+        let b0 = b[2 * g];
+        let b1 = b[2 * g + 1];
+        let c0 = c[2 * g];
+        let c1 = c[2 * g + 1];
+        let da = a1.sub(a0);
+        let db = b1.sub(b0);
+        let dc = c1.sub(c0);
+        let u0 = a0.mul(b0);
+        let u1 = a0.mul(db).add(da.mul(b0));
+        let u2 = da.mul(db);
+        d0 = u0.mul(c0).add(d0);
+        d1 = u0.mul(dc).add(u1.mul(c0)).add(d1);
+        d2 = u1.mul(dc).add(u2.mul(c0)).add(d2);
+        d3 = u2.mul(dc).add(d3);
+    }
+    RoundPoly {
+        coeffs: vec![d0, d1, d2, d3],
+    }
+}
+
+pub fn mxfp4_deg_schedule(log_b: usize, log_k: usize, log_j: usize) -> Vec<usize> {
+    let mut s = Vec::with_capacity(log_b + log_k + log_j);
+    s.extend(std::iter::repeat_n(2, log_b));
+    s.extend(std::iter::repeat_n(3, log_k));
+    s.extend(std::iter::repeat_n(3, log_j));
+    s
+}
+
+/// Native 3-operand `MXFP4` contraction `D[i, j] = Σ_{k, b} X[i, b, k] · Q[b, k, j] · S[k, j]`
+/// matching `mxfp4ContractTable` in `EinSumcheckMxfp4.lean`.
+pub fn mxfp4_contract_table(
+    log_i: usize,
+    log_j: usize,
+    log_k: usize,
+    log_b: usize,
+    x_tbl: &[Goldilocks],
+    q_ints: &[i64],
+    s_shifts: &[u32],
+) -> Vec<Goldilocks> {
+    let cap_i = 1usize << log_i;
+    let cap_j = 1usize << log_j;
+    let cap_k = 1usize << log_k;
+    let cap_b = 1usize << log_b;
+    let mut out = vec![Goldilocks::ZERO; cap_i * cap_j];
+    for j in 0..cap_j {
+        for i in 0..cap_i {
+            let mut acc = Goldilocks::ZERO;
+            for k in 0..cap_k {
+                let s_kj = shift_to_goldilocks(s_shifts[k + cap_k * j]);
+                for b in 0..cap_b {
+                    let x_val = x_tbl[i + cap_i * (b + cap_b * k)];
+                    let q_val = int_to_goldilocks(q_ints[b + cap_b * (k + cap_k * j)]);
+                    acc = acc.add(s_kj.mul(q_val).mul(x_val));
+                }
+            }
+            out[i + cap_i * j] = acc;
+        }
+    }
+    out
+}
+
+fn verify_scheduled_sumcheck(
+    deg_schedule: &[usize],
+    mut claimed_sum: Goldilocks,
+    rounds: &[RoundPoly],
+    tr: &mut FsTranscript,
+) -> Option<(Vec<Goldilocks>, Goldilocks)> {
+    if rounds.len() != deg_schedule.len() {
+        return None;
+    }
+    let mut chals = Vec::with_capacity(deg_schedule.len());
+    for (&max_deg, poly) in deg_schedule.iter().zip(rounds.iter()) {
+        if !poly.deg_le(max_deg) {
+            return None;
+        }
+        let sum01 = poly.eval(Goldilocks::ZERO).add(poly.eval(Goldilocks::ONE));
+        if sum01 != claimed_sum {
+            return None;
+        }
+        tr.absorb_msg(SUMCHECK_ROUND_LABEL, &poly.encode_transcript_msg());
+        let r = tr.squeeze_goldilocks();
+        claimed_sum = poly.eval(r);
+        chals.push(r);
+    }
+    Some((chals, claimed_sum))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prove_mxfp4_sumcheck(
+    log_i: usize,
+    log_j: usize,
+    log_k: usize,
+    log_b: usize,
+    x_tbl: &[Goldilocks],
+    q_tbl: &[Goldilocks],
+    s_tbl: &[Goldilocks],
+    r_i: &[Goldilocks],
+    r_j: &[Goldilocks],
+    tr: &mut FsTranscript,
+) -> (
+    Vec<RoundPoly>,
+    Vec<Goldilocks>,
+    Vec<Goldilocks>,
+    Vec<Goldilocks>,
+) {
+    let cap_j = 1usize << log_j;
+    let cap_k = 1usize << log_k;
+    let cap_b = 1usize << log_b;
+    let _ = log_i;
+
+    let x_bk = fold_vars(x_tbl, r_i);
+    let eq_j = eq_table(r_j);
+
+    // Phase 1 (`b`-rounds, deg <= 2):
+    let mut a_b = Vec::with_capacity(cap_b * cap_k * cap_j);
+    for _ in 0..cap_j {
+        a_b.extend_from_slice(&x_bk);
+    }
+    let mut s_eq_kj = Vec::with_capacity(cap_k * cap_j);
+    for (j, &ej) in eq_j.iter().enumerate() {
+        for k in 0..cap_k {
+            s_eq_kj.push(ej.mul(s_tbl[k + cap_k * j]));
+        }
+    }
+    let mut b_b = Vec::with_capacity(cap_b * cap_k * cap_j);
+    for (kj, &w) in s_eq_kj.iter().enumerate() {
+        let base = kj * cap_b;
+        for b in 0..cap_b {
+            b_b.push(w.mul(q_tbl[base + b]));
+        }
+    }
+
+    let mut rounds = Vec::with_capacity(log_b + log_k + log_j);
+    let mut r_b = Vec::with_capacity(log_b);
+    for _ in 0..log_b {
+        let p = quad_pair_round_poly(&a_b, &b_b);
+        tr.absorb_msg(SUMCHECK_ROUND_LABEL, &p.encode_transcript_msg());
+        let r = tr.squeeze_goldilocks();
+        a_b = fold_first_var(&a_b, r);
+        b_b = fold_first_var(&b_b, r);
+        rounds.push(p);
+        r_b.push(r);
+    }
+
+    // Phase 2 (`k`-rounds, deg <= 3):
+    let x_k = fold_vars(&x_bk, &r_b);
+    let mut a_k = Vec::with_capacity(cap_k * cap_j);
+    for _ in 0..cap_j {
+        a_k.extend_from_slice(&x_k);
+    }
+    let mut b_k = fold_vars(q_tbl, &r_b);
+    let mut c_k = s_eq_kj;
+    let mut r_k = Vec::with_capacity(log_k);
+    for _ in 0..log_k {
+        let p = cubic_triple_round_poly(&a_k, &b_k, &c_k);
+        tr.absorb_msg(SUMCHECK_ROUND_LABEL, &p.encode_transcript_msg());
+        let r = tr.squeeze_goldilocks();
+        a_k = fold_first_var(&a_k, r);
+        b_k = fold_first_var(&b_k, r);
+        c_k = fold_first_var(&c_k, r);
+        rounds.push(p);
+        r_k.push(r);
+    }
+
+    // Phase 3 (`j`-rounds, deg <= 3):
+    let mut full_x_pt = Vec::with_capacity(r_i.len() + r_b.len() + r_k.len());
+    full_x_pt.extend_from_slice(r_i);
+    full_x_pt.extend_from_slice(&r_b);
+    full_x_pt.extend_from_slice(&r_k);
+    let x_star = mle_eval(x_tbl, &full_x_pt);
+
+    let mut a_j: Vec<Goldilocks> = eq_j.iter().map(|&e| x_star.mul(e)).collect();
+    let mut b_j = b_k;
+    let mut c_j = fold_vars(s_tbl, &r_k);
+    let mut r_jp = Vec::with_capacity(log_j);
+    for _ in 0..log_j {
+        let p = cubic_triple_round_poly(&a_j, &b_j, &c_j);
+        tr.absorb_msg(SUMCHECK_ROUND_LABEL, &p.encode_transcript_msg());
+        let r = tr.squeeze_goldilocks();
+        a_j = fold_first_var(&a_j, r);
+        b_j = fold_first_var(&b_j, r);
+        c_j = fold_first_var(&c_j, r);
+        rounds.push(p);
+        r_jp.push(r);
+    }
+
+    (rounds, r_b, r_k, r_jp)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FoldLayerStep {
+    pub lo: Goldilocks,
+    pub hi: Goldilocks,
+    pub merkle_path: Vec<[u8; 32]>,
+}
+
+impl FoldLayerStep {
+    pub fn encode(&self) -> Vec<u8> {
+        let pair = encode_goldilocks_vec(&[self.lo, self.hi]);
+        let path = encode_digest32_list(&self.merkle_path);
+        encode_zkml_fields(&[&pair, &path])
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ZkmlGateRefusal> {
+        let fs = read_bounded_framed_fields(bytes, 2)?;
+        if fs.len() != 2 {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "FoldLayerStep must have 2 framed fields",
+            });
+        }
+        let pair = decode_goldilocks_vec_bounded(fs[0], 2)?;
+        if pair.len() != 2 {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "FoldLayerStep pair must have 2 Goldilocks elements",
+            });
+        }
+        Ok(Self {
+            lo: pair[0],
+            hi: pair[1],
+            merkle_path: decode_digest32_list(fs[1])?,
+        })
+    }
+}
+
+fn encode_fold_steps(steps: &[FoldLayerStep]) -> Vec<u8> {
+    let enc: Vec<Vec<u8>> = steps.iter().map(FoldLayerStep::encode).collect();
+    let refs: Vec<&[u8]> = enc.iter().map(Vec::as_slice).collect();
+    encode_zkml_fields(&refs)
+}
+
+fn decode_fold_steps(bytes: &[u8]) -> Result<Vec<FoldLayerStep>, ZkmlGateRefusal> {
+    let fs = read_bounded_framed_fields(bytes, MAX_ZKML_HYPERCUBE_VARS)?;
+    fs.into_iter().map(FoldLayerStep::decode).collect()
+}
+
+fn build_fold_layer_leaves(layer_idx: usize, rem: usize, tbl: &[Goldilocks]) -> Vec<[u8; 32]> {
+    let pairs = 1usize << rem;
+    (0..pairs)
+        .map(|p| {
+            let lo = tbl.get(2 * p).copied().unwrap_or(Goldilocks::ZERO);
+            let hi = tbl.get(2 * p + 1).copied().unwrap_or(Goldilocks::ZERO);
+            hash_fold_pair_leaf(layer_idx, p, lo, hi)
+        })
+        .collect()
+}
+
+struct PrecomputedFoldChain {
+    roots: Vec<[u8; 32]>,
+    layers: Vec<(Vec<Goldilocks>, CachedMerkleTree)>,
+}
+
+fn build_precomputed_fold_chain(
+    num_vars: usize,
+    tbl: &[Goldilocks],
+    chals: &[Goldilocks],
+) -> PrecomputedFoldChain {
+    let mut cur = tbl.to_vec();
+    let mut roots = Vec::with_capacity(num_vars);
+    let mut layers = Vec::with_capacity(num_vars);
+    for (layer_idx, &r) in chals.iter().take(num_vars).enumerate() {
+        let rem = num_vars - 1 - layer_idx;
+        let tree = CachedMerkleTree::build(build_fold_layer_leaves(layer_idx, rem, &cur));
+        roots.push(tree.root());
+        let next = fold_first_var(&cur, r);
+        layers.push((cur, tree));
+        cur = next;
+    }
+    PrecomputedFoldChain { roots, layers }
+}
+
+fn open_precomputed_fold_walk(chain: &PrecomputedFoldChain, mut idx: usize) -> Vec<FoldLayerStep> {
+    let mut steps = Vec::with_capacity(chain.layers.len());
+    for (cur, tree) in &chain.layers {
+        let pair_idx = idx / 2;
+        let lo = cur.get(2 * pair_idx).copied().unwrap_or(Goldilocks::ZERO);
+        let hi = cur
+            .get(2 * pair_idx + 1)
+            .copied()
+            .unwrap_or(Goldilocks::ZERO);
+        let merkle_path = tree.open_path(pair_idx);
+        steps.push(FoldLayerStep {
+            lo,
+            hi,
+            merkle_path,
+        });
+        idx = pair_idx;
+    }
+    steps
+}
+
+fn verify_fold_walk(
+    num_vars: usize,
+    mut idx: usize,
+    mut cur_val: Goldilocks,
+    expected_final: Goldilocks,
+    chals: &[Goldilocks],
+    roots: &[[u8; 32]],
+    steps: &[FoldLayerStep],
+) -> bool {
+    if chals.len() != num_vars || roots.len() != num_vars || steps.len() != num_vars {
+        return false;
+    }
+    for layer_idx in 0..num_vars {
+        let rem = num_vars - 1 - layer_idx;
+        let st = &steps[layer_idx];
+        if !st.lo.is_canonical() || !st.hi.is_canonical() {
+            return false;
+        }
+        let expected_side = if idx.is_multiple_of(2) { st.lo } else { st.hi };
+        if cur_val != expected_side {
+            return false;
+        }
+        let pair_idx = idx / 2;
+        let leaf = hash_fold_pair_leaf(layer_idx, pair_idx, st.lo, st.hi);
+        if climb_zkml_merkle(1usize << rem, pair_idx, leaf, &st.merkle_path)
+            != Some(roots[layer_idx])
+        {
+            return false;
+        }
+        let r = chals[layer_idx];
+        cur_val = st.lo.add(r.mul(st.hi.sub(st.lo)));
+        idx = pair_idx;
+    }
+    idx == 0 && cur_val == expected_final
+}
+
+// ---------------------------------------------------------------------------
+// 4. Succinct Wire Proof, Chunk Receipt, Windowed PoW Grinder & Verifiers
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Mxfp4QueryOpening {
+    pub d_val: Goldilocks,
+    pub d_path: Vec<[u8; 32]>,
+    pub d_fold_steps: Vec<FoldLayerStep>,
+    pub x_val: Goldilocks,
+    pub x_path: Vec<[u8; 32]>,
+    pub x_fold_steps: Vec<FoldLayerStep>,
+    pub q_mantissa: i64,
+    pub q_path: Vec<[u8; 32]>,
+    pub q_fold_steps: Vec<FoldLayerStep>,
+    pub s_shift: u32,
+    pub s_path: Vec<[u8; 32]>,
+    pub s_fold_steps: Vec<FoldLayerStep>,
+}
+
+impl Mxfp4QueryOpening {
+    pub fn encode(&self) -> Vec<u8> {
+        let dv = self.d_val.0.to_be_bytes();
+        let dp = encode_digest32_list(&self.d_path);
+        let df = encode_fold_steps(&self.d_fold_steps);
+        let xv = self.x_val.0.to_be_bytes();
+        let xp = encode_digest32_list(&self.x_path);
+        let xf = encode_fold_steps(&self.x_fold_steps);
+        let qm = encode_signed_int(self.q_mantissa);
+        let qp = encode_digest32_list(&self.q_path);
+        let qf = encode_fold_steps(&self.q_fold_steps);
+        let ss = leb128_vec(self.s_shift as u64);
+        let sp = encode_digest32_list(&self.s_path);
+        let sf = encode_fold_steps(&self.s_fold_steps);
+        encode_zkml_fields(&[&dv, &dp, &df, &xv, &xp, &xf, &qm, &qp, &qf, &ss, &sp, &sf])
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ZkmlGateRefusal> {
+        let fs = read_bounded_framed_fields(bytes, 12)?;
+        if fs.len() != 12 {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "Mxfp4QueryOpening must have 12 framed fields",
+            });
+        }
+        let mut s_cur = 0usize;
+        let s_u64 = decode_leb128(fs[9], &mut s_cur)?;
+        if s_cur != fs[9].len() {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "trailing bytes in Mxfp4QueryOpening s_shift",
+            });
+        }
+        let s_shift =
+            u32::try_from(s_u64).map_err(|_| ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "s_shift overflows u32",
+            })?;
+        Ok(Self {
+            d_val: decode_gl_be8(fs[0])?,
+            d_path: decode_digest32_list(fs[1])?,
+            d_fold_steps: decode_fold_steps(fs[2])?,
+            x_val: decode_gl_be8(fs[3])?,
+            x_path: decode_digest32_list(fs[4])?,
+            x_fold_steps: decode_fold_steps(fs[5])?,
+            q_mantissa: decode_signed_int(fs[6])?,
+            q_path: decode_digest32_list(fs[7])?,
+            q_fold_steps: decode_fold_steps(fs[8])?,
+            s_shift,
+            s_path: decode_digest32_list(fs[10])?,
+            s_fold_steps: decode_fold_steps(fs[11])?,
+        })
+    }
+}
+
+/// Transparent succinct Goldilocks `MXFP4` `EinSumcheck` + BCS-Merkle chunk IOP proof
+/// (zero per-chunk raw weights; round degrees `(2^logB, 3^logK, 3^logJ)`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SuccinctMxfp4IopProof {
+    pub log_i: usize,
+    pub log_j: usize,
+    pub log_k: usize,
+    pub log_b: usize,
+    pub d_claim: Goldilocks,
+    pub sumcheck_rounds: Vec<RoundPoly>,
+    pub x_claim: Goldilocks,
+    pub q_claim: Goldilocks,
+    pub s_claim: Goldilocks,
+    pub d_fold_roots: Vec<[u8; 32]>,
+    pub x_fold_roots: Vec<[u8; 32]>,
+    pub q_fold_roots: Vec<[u8; 32]>,
+    pub s_fold_roots: Vec<[u8; 32]>,
+    pub pow_nonce: u64,
+    pub query_openings: Vec<Mxfp4QueryOpening>,
+}
+
+impl SuccinctMxfp4IopProof {
+    pub fn encode(&self) -> Vec<u8> {
+        let li = leb128_vec(self.log_i as u64);
+        let lj = leb128_vec(self.log_j as u64);
+        let lk = leb128_vec(self.log_k as u64);
+        let lb = leb128_vec(self.log_b as u64);
+        let dc = self.d_claim.0.to_be_bytes();
+        let sr = encode_round_poly_list(&self.sumcheck_rounds);
+        let xc = self.x_claim.0.to_be_bytes();
+        let qc = self.q_claim.0.to_be_bytes();
+        let sc = self.s_claim.0.to_be_bytes();
+        let df = encode_digest32_list(&self.d_fold_roots);
+        let xf = encode_digest32_list(&self.x_fold_roots);
+        let qf = encode_digest32_list(&self.q_fold_roots);
+        let sf = encode_digest32_list(&self.s_fold_roots);
+        let pn = self.pow_nonce.to_be_bytes();
+        let qo_enc: Vec<Vec<u8>> = self
+            .query_openings
+            .iter()
+            .map(Mxfp4QueryOpening::encode)
+            .collect();
+        let qo_refs: Vec<&[u8]> = qo_enc.iter().map(Vec::as_slice).collect();
+        let qo = encode_zkml_fields(&qo_refs);
+        encode_zkml_fields(&[
+            &li, &lj, &lk, &lb, &dc, &sr, &xc, &qc, &sc, &df, &xf, &qf, &sf, &pn, &qo,
+        ])
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ZkmlGateRefusal> {
+        let fs = read_bounded_framed_fields(bytes, 15)?;
+        if fs.len() != 15 {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "SuccinctMxfp4IopProof must have 15 framed fields",
+            });
+        }
+        let parse_dim = |b: &[u8]| -> Result<usize, ZkmlGateRefusal> {
+            let mut c = 0usize;
+            let v = decode_leb128(b, &mut c)?;
+            if c != b.len() {
+                return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                    reason: "trailing bytes in dimension field",
+                });
+            }
+            usize::try_from(v).map_err(|_| ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "dimension overflows usize",
+            })
+        };
+        if fs[13].len() != 8 {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "pow_nonce must be 8 bytes",
+            });
+        }
+        let mut pn_buf = [0u8; 8];
+        pn_buf.copy_from_slice(fs[13]);
+        let qo_fs = read_bounded_framed_fields(fs[14], MAX_ZKML_NUM_QUERIES)?;
+        let mut query_openings = Vec::with_capacity(qo_fs.len());
+        for qf in qo_fs {
+            query_openings.push(Mxfp4QueryOpening::decode(qf)?);
+        }
+        Ok(Self {
+            log_i: parse_dim(fs[0])?,
+            log_j: parse_dim(fs[1])?,
+            log_k: parse_dim(fs[2])?,
+            log_b: parse_dim(fs[3])?,
+            d_claim: decode_gl_be8(fs[4])?,
+            sumcheck_rounds: decode_round_poly_list(fs[5])?,
+            x_claim: decode_gl_be8(fs[6])?,
+            q_claim: decode_gl_be8(fs[7])?,
+            s_claim: decode_gl_be8(fs[8])?,
+            d_fold_roots: decode_digest32_list(fs[9])?,
+            x_fold_roots: decode_digest32_list(fs[10])?,
+            q_fold_roots: decode_digest32_list(fs[11])?,
+            s_fold_roots: decode_digest32_list(fs[12])?,
+            pow_nonce: u64::from_be_bytes(pn_buf),
+            query_openings,
+        })
+    }
+
+    fn encode_post_fold_payload(&self) -> Vec<u8> {
+        let xc = self.x_claim.0.to_be_bytes();
+        let qc = self.q_claim.0.to_be_bytes();
+        let sc = self.s_claim.0.to_be_bytes();
+        let df = encode_digest32_list(&self.d_fold_roots);
+        let xf = encode_digest32_list(&self.x_fold_roots);
+        let qf = encode_digest32_list(&self.q_fold_roots);
+        let sf = encode_digest32_list(&self.s_fold_roots);
+        encode_zkml_fields(&[&xc, &qc, &sc, &df, &xf, &qf, &sf])
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ZkmlChunkReceipt {
     pub model_weights_root: [u8; 32],
     pub policy_floor_digest: [u8; 32],
     pub suite_digest: [u8; 32],
     pub chunk_idx: u64,
+    pub layer_idx: u64,
     pub state_in_commit: [u8; 32],
-    pub input_commit: [u8; 32],
     pub state_out_commit: [u8; 32],
-    pub output_commit: [u8; 32],
-    pub pow_nonce: u64,
+    pub q_merkle_root: [u8; 32],
+    pub s_merkle_root: [u8; 32],
+    pub iop_proof: SuccinctMxfp4IopProof,
     pub chunk_commitment: [u8; 32],
 }
 
-/// Encodes the exact 9-field LEB128-length-framed preimage committed under
-/// `OBEND.SHE.ZKML_CHUNK/v1`.
-///
-/// Field order (exact parity with `Obend.SymbolicZk.ProvenZkmlGate`):
-/// 1. `model_weights_root` (32 bytes)
-/// 2. `policy_floor_digest` (32 bytes)
-/// 3. `suite_digest` (32 bytes)
-/// 4. `chunk_idx` (8-byte big-endian)
-/// 5. `state_in_commit` (32 bytes)
-/// 6. `input_commit` (32 bytes)
-/// 7. `state_out_commit` (32 bytes)
-/// 8. `output_commit` (32 bytes)
-/// 9. `pow_nonce` (8-byte big-endian)
 #[allow(clippy::too_many_arguments)]
 pub fn encode_zkml_chunk_preimage(
     model_weights_root: &[u8; 32],
     policy_floor_digest: &[u8; 32],
     suite_digest: &[u8; 32],
     chunk_idx: u64,
+    layer_idx: u64,
     state_in_commit: &[u8; 32],
-    input_commit: &[u8; 32],
     state_out_commit: &[u8; 32],
-    output_commit: &[u8; 32],
-    pow_nonce: u64,
+    q_merkle_root: &[u8; 32],
+    s_merkle_root: &[u8; 32],
+    iop_proof: &SuccinctMxfp4IopProof,
 ) -> Vec<u8> {
-    // 7 * (1 + 32) + 2 * (1 + 8) = 231 + 18 = 249 bytes.
-    let mut preimage = Vec::with_capacity(249);
-    push_framed_field(&mut preimage, model_weights_root);
-    push_framed_field(&mut preimage, policy_floor_digest);
-    push_framed_field(&mut preimage, suite_digest);
-    push_framed_field(&mut preimage, &chunk_idx.to_be_bytes());
-    push_framed_field(&mut preimage, state_in_commit);
-    push_framed_field(&mut preimage, input_commit);
-    push_framed_field(&mut preimage, state_out_commit);
-    push_framed_field(&mut preimage, output_commit);
-    push_framed_field(&mut preimage, &pow_nonce.to_be_bytes());
-    preimage
+    let cidx = chunk_idx.to_be_bytes();
+    let lidx = layer_idx.to_be_bytes();
+    let iop_bytes = iop_proof.encode();
+    encode_zkml_fields(&[
+        model_weights_root,
+        policy_floor_digest,
+        suite_digest,
+        &cidx,
+        &lidx,
+        state_in_commit,
+        state_out_commit,
+        q_merkle_root,
+        s_merkle_root,
+        &iop_bytes,
+    ])
 }
 
-/// Computes the canonical 32-byte `OBEND.SHE.ZKML_CHUNK/v1` `cSHAKE256` commitment.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_zkml_chunk_commitment(
     model_weights_root: &[u8; 32],
     policy_floor_digest: &[u8; 32],
     suite_digest: &[u8; 32],
     chunk_idx: u64,
+    layer_idx: u64,
     state_in_commit: &[u8; 32],
-    input_commit: &[u8; 32],
     state_out_commit: &[u8; 32],
-    output_commit: &[u8; 32],
-    pow_nonce: u64,
+    q_merkle_root: &[u8; 32],
+    s_merkle_root: &[u8; 32],
+    iop_proof: &SuccinctMxfp4IopProof,
 ) -> [u8; 32] {
-    let preimage = encode_zkml_chunk_preimage(
+    let pre = encode_zkml_chunk_preimage(
         model_weights_root,
         policy_floor_digest,
         suite_digest,
         chunk_idx,
+        layer_idx,
         state_in_commit,
-        input_commit,
         state_out_commit,
-        output_commit,
-        pow_nonce,
+        q_merkle_root,
+        s_merkle_root,
+        iop_proof,
     );
-    cshake256_32(ZKML_CHUNK_DOMAIN_TAG, &preimage)
+    cshake256_32(ZKML_CHUNK_DOMAIN_TAG, &pre)
 }
 
 impl ZkmlChunkReceipt {
-    /// Encodes this receipt's 9-field LEB128-framed preimage.
     pub fn encode_preimage(&self) -> Vec<u8> {
         encode_zkml_chunk_preimage(
             &self.model_weights_root,
             &self.policy_floor_digest,
             &self.suite_digest,
             self.chunk_idx,
+            self.layer_idx,
             &self.state_in_commit,
-            &self.input_commit,
             &self.state_out_commit,
-            &self.output_commit,
-            self.pow_nonce,
+            &self.q_merkle_root,
+            &self.s_merkle_root,
+            &self.iop_proof,
         )
     }
 
-    /// Recomputes the canonical `OBEND.SHE.ZKML_CHUNK/v1` `cSHAKE256` commitment for this receipt.
     pub fn recompute_commitment(&self) -> [u8; 32] {
-        compute_zkml_chunk_commitment(
-            &self.model_weights_root,
-            &self.policy_floor_digest,
-            &self.suite_digest,
-            self.chunk_idx,
-            &self.state_in_commit,
-            &self.input_commit,
-            &self.state_out_commit,
-            &self.output_commit,
-            self.pow_nonce,
-        )
+        cshake256_32(ZKML_CHUNK_DOMAIN_TAG, &self.encode_preimage())
     }
 
-    /// Serializes this receipt into a fixed 272-byte big-endian record.
     pub fn encode_bytes(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.model_weights_root);
-        out.extend_from_slice(&self.policy_floor_digest);
-        out.extend_from_slice(&self.suite_digest);
-        out.extend_from_slice(&self.chunk_idx.to_be_bytes());
-        out.extend_from_slice(&self.state_in_commit);
-        out.extend_from_slice(&self.input_commit);
-        out.extend_from_slice(&self.state_out_commit);
-        out.extend_from_slice(&self.output_commit);
-        out.extend_from_slice(&self.pow_nonce.to_be_bytes());
-        out.extend_from_slice(&self.chunk_commitment);
+        let pre = self.encode_preimage();
+        let rec = encode_zkml_fields(&[&pre, &self.chunk_commitment]);
+        push_framed_field(out, &rec);
     }
 
-    /// Decodes a fixed 272-byte big-endian record into a [`ZkmlChunkReceipt`].
     pub fn decode_bytes(bytes: &[u8]) -> Result<Self, ZkmlGateRefusal> {
-        if bytes.len() != SERIALIZED_CHUNK_RECEIPT_BYTES {
+        let outer = read_bounded_framed_fields(bytes, 2)?;
+        if outer.len() != 2 || outer[1].len() != 32 {
             return Err(ZkmlGateRefusal::CandidateBindingMismatch {
-                reason: "chunk receipt byte length mismatch",
+                reason: "ZkmlChunkReceipt must wrap (preimage, 32-byte chunk_commitment)",
             });
         }
-        let mut cursor = 0usize;
-        let read32 = |c: &mut usize| -> [u8; 32] {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes[*c..*c + 32]);
-            *c += 32;
-            arr
+        let fs = read_bounded_framed_fields(outer[0], 10)?;
+        if fs.len() != 10 {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "ZkmlChunkReceipt preimage must have 10 framed fields",
+            });
+        }
+        let arr32 = |b: &[u8]| -> Result<[u8; 32], ZkmlGateRefusal> {
+            if b.len() != 32 {
+                return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                    reason: "chunk header digest must be 32 bytes",
+                });
+            }
+            let mut a = [0u8; 32];
+            a.copy_from_slice(b);
+            Ok(a)
         };
-        let read_u64 = |c: &mut usize| -> u64 {
-            let mut arr = [0u8; 8];
-            arr.copy_from_slice(&bytes[*c..*c + 8]);
-            *c += 8;
-            u64::from_be_bytes(arr)
+        let arr_u64 = |b: &[u8]| -> Result<u64, ZkmlGateRefusal> {
+            if b.len() != 8 {
+                return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                    reason: "chunk u64 index must be 8 bytes",
+                });
+            }
+            let mut a = [0u8; 8];
+            a.copy_from_slice(b);
+            Ok(u64::from_be_bytes(a))
         };
-
-        let model_weights_root = read32(&mut cursor);
-        let policy_floor_digest = read32(&mut cursor);
-        let suite_digest = read32(&mut cursor);
-        let chunk_idx = read_u64(&mut cursor);
-        let state_in_commit = read32(&mut cursor);
-        let input_commit = read32(&mut cursor);
-        let state_out_commit = read32(&mut cursor);
-        let output_commit = read32(&mut cursor);
-        let pow_nonce = read_u64(&mut cursor);
-        let chunk_commitment = read32(&mut cursor);
-
+        let mut chunk_commitment = [0u8; 32];
+        chunk_commitment.copy_from_slice(outer[1]);
         Ok(Self {
-            model_weights_root,
-            policy_floor_digest,
-            suite_digest,
-            chunk_idx,
-            state_in_commit,
-            input_commit,
-            state_out_commit,
-            output_commit,
-            pow_nonce,
+            model_weights_root: arr32(fs[0])?,
+            policy_floor_digest: arr32(fs[1])?,
+            suite_digest: arr32(fs[2])?,
+            chunk_idx: arr_u64(fs[3])?,
+            layer_idx: arr_u64(fs[4])?,
+            state_in_commit: arr32(fs[5])?,
+            state_out_commit: arr32(fs[6])?,
+            q_merkle_root: arr32(fs[7])?,
+            s_merkle_root: arr32(fs[8])?,
+            iop_proof: SuccinctMxfp4IopProof::decode(fs[9])?,
             chunk_commitment,
         })
     }
 }
 
-/// Deterministic folding root over a sequence of 32-byte chunk commitments (inputs or outputs).
+/// Service-enforced upper bound on per-job PoW grinder worker threads (`1..=MAX_DEFAULT_GRIND_THREADS`),
+/// preventing job-supplied `grind_threads` from exhausting host OS threads while preserving `1T == NT` parity.
+pub const MAX_ZKML_GRIND_THREADS: usize = MAX_DEFAULT_GRIND_THREADS;
+
+/// Deterministic `1T == NT` post-commit PoW grinder returning the exact lowest matching nonce `w`
+/// (matching `grindChunkPowWindowed` in `EinSumcheckMxfp4.lean`, where `w - 1` is provably invalid).
+pub fn grind_zkml_chunk_pow(
+    post_fold_state: &[u8; 32],
+    post_fold_step_count: u64,
+    grind_bits: u32,
+    span: u64,
+    threads: usize,
+    cancel: &CancelToken,
+) -> Option<u64> {
+    if span == 0 || grind_bits > 64 {
+        return None;
+    }
+    if grind_bits == 0 {
+        return (!cancel.is_cancelled()).then_some(0);
+    }
+    let window = default_grind_window(grind_bits as usize, 1);
+    let capped_threads = threads.clamp(1, MAX_ZKML_GRIND_THREADS);
+    let base_tr = FsTranscript {
+        state: *post_fold_state,
+        step_count: post_fold_step_count,
+    };
+    windowed_find_map_first_cancellable(span, window, capped_threads, cancel, |cand| {
+        let mut tr = base_tr.clone();
+        tr.absorb_msg(ZKML_POW_NONCE_LABEL, &cand.to_be_bytes());
+        digest_has_low_zero_bits(&tr.state, grind_bits).then_some(cand)
+    })
+    .map(|(_, nonce)| nonce)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mxfp4ChunkWitness {
+    model: Mxfp4ModelManifest,
+    layer_idx: u64,
+    log_i: usize,
+    log_j: usize,
+    log_k: usize,
+    log_b: usize,
+    x_tbl: Vec<Goldilocks>,
+    q_ints: Vec<i64>,
+    s_shifts: Vec<u32>,
+    d_tbl: Vec<Goldilocks>,
+}
+
+impl Mxfp4ChunkWitness {
+    #[allow(clippy::too_many_arguments)]
+    pub fn build(
+        model: Mxfp4ModelManifest,
+        layer_idx: u64,
+        log_i: usize,
+        log_j: usize,
+        log_k: usize,
+        log_b: usize,
+        x_tbl: Vec<Goldilocks>,
+        q_ints: Vec<i64>,
+        s_shifts: Vec<u32>,
+    ) -> Result<Self, &'static str> {
+        let ij = log_i.checked_add(log_j).ok_or("log_i + log_j overflow")?;
+        let ibk = log_i
+            .checked_add(log_b)
+            .and_then(|v| v.checked_add(log_k))
+            .ok_or("log_i + log_b + log_k overflow")?;
+        let bkj = log_b
+            .checked_add(log_k)
+            .and_then(|v| v.checked_add(log_j))
+            .ok_or("log_b + log_k + log_j overflow")?;
+        if log_i == 0
+            || log_j == 0
+            || log_k == 0
+            || log_b == 0
+            || ij >= MAX_ZKML_HYPERCUBE_VARS
+            || ibk >= MAX_ZKML_HYPERCUBE_VARS
+            || bkj >= MAX_ZKML_HYPERCUBE_VARS
+        {
+            return Err("invalid MXFP4 contraction hypercube dimensions");
+        }
+        if !model.valid() {
+            return Err("invalid Mxfp4ModelManifest");
+        }
+        let expected_x = 1usize << ibk;
+        let expected_q = 1usize << bkj;
+        let expected_s = 1usize << (log_k + log_j);
+        if x_tbl.len() != expected_x || !x_tbl.iter().all(|v| v.is_canonical()) {
+            return Err("x_tbl length or canonicality mismatch");
+        }
+        if q_ints.len() != expected_q || !q_ints.iter().all(|&q| is_valid_e2m1_mantissa(q)) {
+            return Err("q_ints length or E2M1 domain membership failure");
+        }
+        if s_shifts.len() != expected_s || !s_shifts.iter().all(|&sh| is_valid_mxfp4_shift(sh)) {
+            return Err("s_shifts length or max shift bound failure");
+        }
+        let q_root = mxfp4_mantissa_root(&q_ints);
+        let s_root = mxfp4_shift_root(&s_shifts);
+        let layer_usize = usize::try_from(layer_idx).map_err(|_| "layer_idx overflows usize")?;
+        let lk = model
+            .layers
+            .get(layer_usize)
+            .ok_or("layer_idx out of range in Mxfp4ModelManifest")?;
+        if lk.log_i != log_i
+            || lk.log_j != log_j
+            || lk.log_k != log_k
+            || lk.log_b != log_b
+            || lk.q_merkle_root != q_root
+            || lk.s_merkle_root != s_root
+        {
+            return Err("layer key in manifest disagrees with witness Q/S roots or dimensions");
+        }
+        let d_tbl = mxfp4_contract_table(log_i, log_j, log_k, log_b, &x_tbl, &q_ints, &s_shifts);
+        Ok(Self {
+            model,
+            layer_idx,
+            log_i,
+            log_j,
+            log_k,
+            log_b,
+            x_tbl,
+            q_ints,
+            s_shifts,
+            d_tbl,
+        })
+    }
+
+    pub fn model(&self) -> &Mxfp4ModelManifest {
+        &self.model
+    }
+
+    pub fn layer_idx(&self) -> u64 {
+        self.layer_idx
+    }
+
+    pub fn log_i(&self) -> usize {
+        self.log_i
+    }
+
+    pub fn log_j(&self) -> usize {
+        self.log_j
+    }
+
+    pub fn log_k(&self) -> usize {
+        self.log_k
+    }
+
+    pub fn log_b(&self) -> usize {
+        self.log_b
+    }
+
+    pub fn x_tbl(&self) -> &[Goldilocks] {
+        &self.x_tbl
+    }
+
+    pub fn q_ints(&self) -> &[i64] {
+        &self.q_ints
+    }
+
+    pub fn s_shifts(&self) -> &[u32] {
+        &self.s_shifts
+    }
+
+    pub fn d_tbl(&self) -> &[Goldilocks] {
+        &self.d_tbl
+    }
+
+    pub fn weights_root(&self) -> [u8; 32] {
+        self.model.root()
+    }
+
+    pub fn state_in_commit(&self) -> [u8; 32] {
+        mxfp4_tensor_root(&self.x_tbl)
+    }
+
+    pub fn state_out_commit(&self) -> [u8; 32] {
+        mxfp4_tensor_root(&self.d_tbl)
+    }
+
+    pub fn q_merkle_root(&self) -> [u8; 32] {
+        mxfp4_mantissa_root(&self.q_ints)
+    }
+
+    pub fn s_merkle_root(&self) -> [u8; 32] {
+        mxfp4_shift_root(&self.s_shifts)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn setup_mxfp4_transcript(
+    profile: &ZkmlSuiteProfile,
+    log_i: usize,
+    log_j: usize,
+    log_k: usize,
+    log_b: usize,
+    w_root: &[u8; 32],
+    pol: &[u8; 32],
+    suite_d: &[u8; 32],
+    chunk_idx: u64,
+    layer_idx: u64,
+    s_in: &[u8; 32],
+    s_out: &[u8; 32],
+    q_root: &[u8; 32],
+    s_root: &[u8; 32],
+    d_claim: Goldilocks,
+) -> (Vec<Goldilocks>, Vec<Goldilocks>, FsTranscript) {
+    let li = leb128_vec(log_i as u64);
+    let lj = leb128_vec(log_j as u64);
+    let lk = leb128_vec(log_k as u64);
+    let lb = leb128_vec(log_b as u64);
+    let fbits = leb128_vec(profile.field_modulus_bits as u64);
+    let edeg = leb128_vec(profile.ext_degree as u64);
+    let blow = leb128_vec(profile.log_blowup as u64);
+    let nq = leb128_vec(profile.num_queries as u64);
+    let gb = leb128_vec(profile.grind_bits as u64);
+    let lth = leb128_vec(profile.log_trace_height as u64);
+    let dbits = leb128_vec(profile.digest_bits as u64);
+    let la = leb128_vec(profile.log_arity as u64);
+    let rel_bytes = encode_zkml_fields(&[
+        &li, &lj, &lk, &lb, &fbits, &edeg, &blow, &nq, &gb, &lth, &dbits, &la,
+    ]);
+
+    let cidx = chunk_idx.to_be_bytes();
+    let lidx = layer_idx.to_be_bytes();
+    let pub_io = encode_zkml_fields(&[
+        w_root, pol, suite_d, &cidx, &lidx, s_in, s_out, q_root, s_root,
+    ]);
+
+    let mut tr = FsTranscript::new_instance_bound(ZKML_IOP_PROTOCOL_ID, &rel_bytes, &pub_io, s_out);
+    let r_i = tr.squeeze_goldilocks_vec(log_i);
+    let r_j = tr.squeeze_goldilocks_vec(log_j);
+    tr.absorb_msg(ZKML_D_CLAIM_LABEL, &d_claim.0.to_be_bytes());
+    (r_i, r_j, tr)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prove_mxfp4_chunk_iop(
+    profile: &ZkmlSuiteProfile,
+    policy_floor_digest: &[u8; 32],
+    suite_digest: &[u8; 32],
+    chunk_idx: u64,
+    w: &Mxfp4ChunkWitness,
+    grind_span: u64,
+    grind_threads: usize,
+    cancel: &CancelToken,
+) -> Result<ZkmlChunkReceipt, ZkmlGateRefusal> {
+    if cancel.is_cancelled() {
+        return Err(ZkmlGateRefusal::Cancelled);
+    }
+    if profile.num_queries == 0
+        || (profile.num_queries as usize) > MAX_ZKML_NUM_QUERIES
+        || profile.log_arity == 0
+    {
+        return Err(ZkmlGateRefusal::UnpinnedOrZeroAritySuite {
+            reason: "profile num_queries out of bounds 1..=MAX_ZKML_NUM_QUERIES or log_arity == 0",
+        });
+    }
+    let w_root = w.weights_root();
+    let s_in = w.state_in_commit();
+    let s_out = w.state_out_commit();
+    let q_root = w.q_merkle_root();
+    let s_root = w.s_merkle_root();
+    let q_tbl: Vec<Goldilocks> = w.q_ints.iter().map(|&q| int_to_goldilocks(q)).collect();
+    let s_tbl: Vec<Goldilocks> = w
+        .s_shifts
+        .iter()
+        .map(|&sh| shift_to_goldilocks(sh))
+        .collect();
+
+    // Squeeze `(r_i, r_j)` first to compute `d_claim = mle_eval(d_tbl, r_i ++ r_j)`:
+    let (r_i_pre, r_j_pre, _) = setup_mxfp4_transcript(
+        profile,
+        w.log_i,
+        w.log_j,
+        w.log_k,
+        w.log_b,
+        &w_root,
+        policy_floor_digest,
+        suite_digest,
+        chunk_idx,
+        w.layer_idx,
+        &s_in,
+        &s_out,
+        &q_root,
+        &s_root,
+        Goldilocks::ZERO,
+    );
+    let mut pt_d = Vec::with_capacity(w.log_i + w.log_j);
+    pt_d.extend_from_slice(&r_i_pre);
+    pt_d.extend_from_slice(&r_j_pre);
+    let d_claim = mle_eval(&w.d_tbl, &pt_d);
+
+    let (r_i, r_j, mut tr) = setup_mxfp4_transcript(
+        profile,
+        w.log_i,
+        w.log_j,
+        w.log_k,
+        w.log_b,
+        &w_root,
+        policy_floor_digest,
+        suite_digest,
+        chunk_idx,
+        w.layer_idx,
+        &s_in,
+        &s_out,
+        &q_root,
+        &s_root,
+        d_claim,
+    );
+    let (sumcheck_rounds, r_b, r_k, r_jp) = prove_mxfp4_sumcheck(
+        w.log_i, w.log_j, w.log_k, w.log_b, &w.x_tbl, &q_tbl, &s_tbl, &r_i, &r_j, &mut tr,
+    );
+
+    let mut pt_x = Vec::with_capacity(w.log_i + w.log_b + w.log_k);
+    pt_x.extend_from_slice(&r_i);
+    pt_x.extend_from_slice(&r_b);
+    pt_x.extend_from_slice(&r_k);
+    let mut pt_q = Vec::with_capacity(w.log_b + w.log_k + w.log_j);
+    pt_q.extend_from_slice(&r_b);
+    pt_q.extend_from_slice(&r_k);
+    pt_q.extend_from_slice(&r_jp);
+    let mut pt_s = Vec::with_capacity(w.log_k + w.log_j);
+    pt_s.extend_from_slice(&r_k);
+    pt_s.extend_from_slice(&r_jp);
+
+    let x_claim = mle_eval(&w.x_tbl, &pt_x);
+    let q_claim = mle_eval(&q_tbl, &pt_q);
+    let s_claim = mle_eval(&s_tbl, &pt_s);
+
+    let v_d = w.log_i + w.log_j;
+    let v_x = w.log_i + w.log_b + w.log_k;
+    let v_q = w.log_b + w.log_k + w.log_j;
+    let v_s = w.log_k + w.log_j;
+
+    let d_chain = build_precomputed_fold_chain(v_d, &w.d_tbl, &pt_d);
+    let x_chain = build_precomputed_fold_chain(v_x, &w.x_tbl, &pt_x);
+    let q_chain = build_precomputed_fold_chain(v_q, &q_tbl, &pt_q);
+    let s_chain = build_precomputed_fold_chain(v_s, &s_tbl, &pt_s);
+
+    let mut iop_proof = SuccinctMxfp4IopProof {
+        log_i: w.log_i,
+        log_j: w.log_j,
+        log_k: w.log_k,
+        log_b: w.log_b,
+        d_claim,
+        sumcheck_rounds,
+        x_claim,
+        q_claim,
+        s_claim,
+        d_fold_roots: d_chain.roots.clone(),
+        x_fold_roots: x_chain.roots.clone(),
+        q_fold_roots: q_chain.roots.clone(),
+        s_fold_roots: s_chain.roots.clone(),
+        pow_nonce: 0,
+        query_openings: Vec::new(),
+    };
+
+    if profile.num_queries == 0 || (profile.num_queries as usize) > MAX_ZKML_NUM_QUERIES {
+        return Err(ZkmlGateRefusal::UnpinnedOrZeroAritySuite {
+            reason: "profile num_queries out of bounds 1..=MAX_ZKML_NUM_QUERIES",
+        });
+    }
+
+    tr.absorb_msg(ZKML_FOLD_ROOTS_LABEL, &iop_proof.encode_post_fold_payload());
+    let pow_nonce = grind_zkml_chunk_pow(
+        &tr.state,
+        tr.step_count,
+        profile.grind_bits,
+        grind_span,
+        grind_threads,
+        cancel,
+    )
+    .ok_or_else(|| {
+        if cancel.is_cancelled() {
+            ZkmlGateRefusal::Cancelled
+        } else {
+            ZkmlGateRefusal::InvalidChunkPow {
+                chunk_idx,
+                required_bits: profile.grind_bits,
+                pow_nonce: u64::MAX,
+            }
+        }
+    })?;
+    iop_proof.pow_nonce = pow_nonce;
+
+    tr.absorb_msg(ZKML_POW_NONCE_LABEL, &pow_nonce.to_be_bytes());
+    let raw_queries = tr.squeeze_raw_queries(profile.num_queries as usize);
+
+    let d_tree = CachedMerkleTree::build(
+        w.d_tbl
+            .iter()
+            .enumerate()
+            .map(|(i, &d)| hash_tensor_leaf(i, d))
+            .collect(),
+    );
+    let x_tree = CachedMerkleTree::build(
+        w.x_tbl
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| hash_tensor_leaf(i, x))
+            .collect(),
+    );
+    let q_tree = CachedMerkleTree::build(
+        w.q_ints
+            .iter()
+            .enumerate()
+            .map(|(i, &q)| hash_mantissa_leaf(i, q))
+            .collect(),
+    );
+    let s_tree = CachedMerkleTree::build(
+        w.s_shifts
+            .iter()
+            .enumerate()
+            .map(|(i, &sh)| hash_shift_leaf(i, sh))
+            .collect(),
+    );
+
+    let n_d = 1usize << v_d;
+    let n_x = 1usize << v_x;
+    let n_q = 1usize << v_q;
+    let n_s = 1usize << v_s;
+
+    let mut openings = Vec::with_capacity(raw_queries.len());
+    for q_raw in raw_queries {
+        if cancel.is_cancelled() {
+            return Err(ZkmlGateRefusal::Cancelled);
+        }
+        let i_d = (q_raw % (n_d as u64)) as usize;
+        let i_x = (q_raw % (n_x as u64)) as usize;
+        let i_q = (q_raw % (n_q as u64)) as usize;
+        let i_s = (q_raw % (n_s as u64)) as usize;
+        openings.push(Mxfp4QueryOpening {
+            d_val: w.d_tbl[i_d],
+            d_path: d_tree.open_path(i_d),
+            d_fold_steps: open_precomputed_fold_walk(&d_chain, i_d),
+            x_val: w.x_tbl[i_x],
+            x_path: x_tree.open_path(i_x),
+            x_fold_steps: open_precomputed_fold_walk(&x_chain, i_x),
+            q_mantissa: w.q_ints[i_q],
+            q_path: q_tree.open_path(i_q),
+            q_fold_steps: open_precomputed_fold_walk(&q_chain, i_q),
+            s_shift: w.s_shifts[i_s],
+            s_path: s_tree.open_path(i_s),
+            s_fold_steps: open_precomputed_fold_walk(&s_chain, i_s),
+        });
+    }
+    iop_proof.query_openings = openings;
+
+    let chunk_commitment = compute_zkml_chunk_commitment(
+        &w_root,
+        policy_floor_digest,
+        suite_digest,
+        chunk_idx,
+        w.layer_idx,
+        &s_in,
+        &s_out,
+        &q_root,
+        &s_root,
+        &iop_proof,
+    );
+
+    Ok(ZkmlChunkReceipt {
+        model_weights_root: w_root,
+        policy_floor_digest: *policy_floor_digest,
+        suite_digest: *suite_digest,
+        chunk_idx,
+        layer_idx: w.layer_idx,
+        state_in_commit: s_in,
+        state_out_commit: s_out,
+        q_merkle_root: q_root,
+        s_merkle_root: s_root,
+        iop_proof,
+        chunk_commitment,
+    })
+}
+
+/// Verifies a succinct Goldilocks `MXFP4` `EinSumcheck` + BCS-Merkle chunk receipt byte-for-byte
+/// identically to `verifyMxfp4ChunkIop` in `ProvenZkmlGate.lean`.
+pub fn verify_mxfp4_chunk_iop(
+    profile: &ZkmlSuiteProfile,
+    model: &Mxfp4ModelManifest,
+    required_pow_bits: u32,
+    receipt: &ZkmlChunkReceipt,
+) -> Result<(), ZkmlGateRefusal> {
+    if !model.valid() {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: receipt.chunk_idx,
+            reason: "invalid Mxfp4ModelManifest",
+        });
+    }
+    let expected_w_root = model.root();
+    verify_mxfp4_chunk_iop_prevalidated(
+        profile,
+        model,
+        &expected_w_root,
+        required_pow_bits,
+        receipt,
+    )
+}
+
+fn verify_mxfp4_chunk_iop_prevalidated(
+    profile: &ZkmlSuiteProfile,
+    model: &Mxfp4ModelManifest,
+    expected_w_root: &[u8; 32],
+    required_pow_bits: u32,
+    receipt: &ZkmlChunkReceipt,
+) -> Result<(), ZkmlGateRefusal> {
+    let idx = receipt.chunk_idx;
+    let p = &receipt.iop_proof;
+
+    if profile.num_queries == 0
+        || (profile.num_queries as usize) > MAX_ZKML_NUM_QUERIES
+        || profile.log_arity == 0
+    {
+        return Err(ZkmlGateRefusal::UnpinnedOrZeroAritySuite {
+            reason: "profile num_queries out of bounds or log_arity == 0",
+        });
+    }
+    if p.query_openings.len() != profile.num_queries as usize {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "query_openings length != profile.num_queries",
+        });
+    }
+    if receipt.model_weights_root != *expected_w_root {
+        return Err(ZkmlGateRefusal::WeightRootMismatch {
+            chunk_idx: Some(idx),
+            expected: *expected_w_root,
+            actual: receipt.model_weights_root,
+        });
+    }
+    let layer_usize =
+        usize::try_from(receipt.layer_idx).map_err(|_| ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "layer_idx overflows usize",
+        })?;
+    let lk = model
+        .layers
+        .get(layer_usize)
+        .ok_or(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "layer_idx out of bounds in Mxfp4ModelManifest",
+        })?;
+    if lk.log_i != p.log_i
+        || lk.log_j != p.log_j
+        || lk.log_k != p.log_k
+        || lk.log_b != p.log_b
+        || lk.q_merkle_root != receipt.q_merkle_root
+        || lk.s_merkle_root != receipt.s_merkle_root
+    {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "chunk proof layer dimensions or Q/S roots disagree with manifest",
+        });
+    }
+
+    if !p.d_claim.is_canonical()
+        || !p.x_claim.is_canonical()
+        || !p.q_claim.is_canonical()
+        || !p.s_claim.is_canonical()
+    {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "non-canonical Goldilocks evaluation claim",
+        });
+    }
+
+    let v_d = p.log_i + p.log_j;
+    let v_x = p.log_i + p.log_b + p.log_k;
+    let v_q = p.log_b + p.log_k + p.log_j;
+    let v_s = p.log_k + p.log_j;
+    if p.d_fold_roots.len() != v_d
+        || p.x_fold_roots.len() != v_x
+        || p.q_fold_roots.len() != v_q
+        || p.s_fold_roots.len() != v_s
+    {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "fold_roots length mismatch against hypercube dimensions",
+        });
+    }
+
+    let (r_i, r_j, mut tr) = setup_mxfp4_transcript(
+        profile,
+        p.log_i,
+        p.log_j,
+        p.log_k,
+        p.log_b,
+        &receipt.model_weights_root,
+        &receipt.policy_floor_digest,
+        &receipt.suite_digest,
+        receipt.chunk_idx,
+        receipt.layer_idx,
+        &receipt.state_in_commit,
+        &receipt.state_out_commit,
+        &receipt.q_merkle_root,
+        &receipt.s_merkle_root,
+        p.d_claim,
+    );
+
+    let sched = mxfp4_deg_schedule(p.log_b, p.log_k, p.log_j);
+    let (all_chals, final_val) =
+        verify_scheduled_sumcheck(&sched, p.d_claim, &p.sumcheck_rounds, &mut tr).ok_or(
+            ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "MXFP4 (2^logB, 3^logK, 3^logJ) scheduled sumcheck verification failed",
+            },
+        )?;
+
+    let r_b = &all_chals[..p.log_b];
+    let r_k = &all_chals[p.log_b..p.log_b + p.log_k];
+    let r_jp = &all_chals[p.log_b + p.log_k..];
+
+    let expected_final = eq_poly_vec(&r_j, r_jp).mul(p.x_claim.mul(p.q_claim.mul(p.s_claim)));
+    if final_val != expected_final {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason:
+                "terminal EinSumcheck identity eq(r_j, r_j') * x_claim * q_claim * s_claim mismatch",
+        });
+    }
+
+    tr.absorb_msg(ZKML_FOLD_ROOTS_LABEL, &p.encode_post_fold_payload());
+    if profile.grind_bits > required_pow_bits
+        || required_pow_bits > 64
+        || (required_pow_bits == 0 && p.pow_nonce != 0)
+    {
+        return Err(ZkmlGateRefusal::InvalidChunkPow {
+            chunk_idx: idx,
+            required_bits: required_pow_bits,
+            pow_nonce: p.pow_nonce,
+        });
+    }
+    tr.absorb_msg(ZKML_POW_NONCE_LABEL, &p.pow_nonce.to_be_bytes());
+    if !digest_has_low_zero_bits(&tr.state, required_pow_bits) {
+        return Err(ZkmlGateRefusal::InvalidChunkPow {
+            chunk_idx: idx,
+            required_bits: required_pow_bits,
+            pow_nonce: p.pow_nonce,
+        });
+    }
+
+    let raw_queries = tr.squeeze_raw_queries(profile.num_queries as usize);
+    if p.query_openings.len() != raw_queries.len() {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "query_openings length != num_queries",
+        });
+    }
+
+    let mut pt_d = Vec::with_capacity(v_d);
+    pt_d.extend_from_slice(&r_i);
+    pt_d.extend_from_slice(&r_j);
+    let mut pt_x = Vec::with_capacity(v_x);
+    pt_x.extend_from_slice(&r_i);
+    pt_x.extend_from_slice(r_b);
+    pt_x.extend_from_slice(r_k);
+    let mut pt_q = Vec::with_capacity(v_q);
+    pt_q.extend_from_slice(r_b);
+    pt_q.extend_from_slice(r_k);
+    pt_q.extend_from_slice(r_jp);
+    let mut pt_s = Vec::with_capacity(v_s);
+    pt_s.extend_from_slice(r_k);
+    pt_s.extend_from_slice(r_jp);
+
+    let n_d = 1usize << v_d;
+    let n_x = 1usize << v_x;
+    let n_q = 1usize << v_q;
+    let n_s = 1usize << v_s;
+
+    for (q_raw, op) in raw_queries.into_iter().zip(p.query_openings.iter()) {
+        if !op.d_val.is_canonical() || !op.x_val.is_canonical() {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "non-canonical opened D or X tensor element",
+            });
+        }
+        if !is_valid_e2m1_mantissa(op.q_mantissa) {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "opened Q leaf violates signed E2M1 mantissa domain",
+            });
+        }
+        if !is_valid_mxfp4_shift(op.s_shift) {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "opened S leaf violates max MXFP4 power-of-two shift bound",
+            });
+        }
+
+        let i_d = (q_raw % (n_d as u64)) as usize;
+        let i_x = (q_raw % (n_x as u64)) as usize;
+        let i_q = (q_raw % (n_q as u64)) as usize;
+        let i_s = (q_raw % (n_s as u64)) as usize;
+
+        if climb_zkml_merkle(n_d, i_d, hash_tensor_leaf(i_d, op.d_val), &op.d_path)
+            != Some(receipt.state_out_commit)
+        {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "D output tensor Merkle opening failed",
+            });
+        }
+        if climb_zkml_merkle(n_x, i_x, hash_tensor_leaf(i_x, op.x_val), &op.x_path)
+            != Some(receipt.state_in_commit)
+        {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "X input activation Merkle opening failed",
+            });
+        }
+        if climb_zkml_merkle(n_q, i_q, hash_mantissa_leaf(i_q, op.q_mantissa), &op.q_path)
+            != Some(receipt.q_merkle_root)
+        {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "Q E2M1 mantissa Merkle opening failed",
+            });
+        }
+        if climb_zkml_merkle(n_s, i_s, hash_shift_leaf(i_s, op.s_shift), &op.s_path)
+            != Some(receipt.s_merkle_root)
+        {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "S block shift Merkle opening failed",
+            });
+        }
+
+        if !verify_fold_walk(
+            v_d,
+            i_d,
+            op.d_val,
+            p.d_claim,
+            &pt_d,
+            &p.d_fold_roots,
+            &op.d_fold_steps,
+        ) {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "D butterfly fold walk failed",
+            });
+        }
+        if !verify_fold_walk(
+            v_x,
+            i_x,
+            op.x_val,
+            p.x_claim,
+            &pt_x,
+            &p.x_fold_roots,
+            &op.x_fold_steps,
+        ) {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "X butterfly fold walk failed",
+            });
+        }
+        if !verify_fold_walk(
+            v_q,
+            i_q,
+            int_to_goldilocks(op.q_mantissa),
+            p.q_claim,
+            &pt_q,
+            &p.q_fold_roots,
+            &op.q_fold_steps,
+        ) {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "Q butterfly fold walk failed",
+            });
+        }
+        if !verify_fold_walk(
+            v_s,
+            i_s,
+            shift_to_goldilocks(op.s_shift),
+            p.s_claim,
+            &pt_s,
+            &p.s_fold_roots,
+            &op.s_fold_steps,
+        ) {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "S butterfly fold walk failed",
+            });
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 5. Streaming Chain Serialization, Verifiers & ProveService Backend
+// ---------------------------------------------------------------------------
+
 pub fn fold_chunk_roots(commits: &[[u8; 32]]) -> [u8; 32] {
     let mut pre = Vec::with_capacity(8 + commits.len() * 32);
     pre.extend_from_slice(&(commits.len() as u64).to_be_bytes());
@@ -1022,17 +3105,25 @@ pub fn fold_chunk_roots(commits: &[[u8; 32]]) -> [u8; 32] {
     sha256(&pre)
 }
 
-/// One chunk step supplied to [`StreamingZkmlJob`] for a streaming Gated-DeltaNet / SSM rollout.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamingChunkInput {
     pub chunk_idx: u64,
     pub state_in_commit: [u8; 32],
-    pub input_commit: [u8; 32],
     pub state_out_commit: [u8; 32],
-    pub output_commit: [u8; 32],
+    pub witness: Mxfp4ChunkWitness,
 }
 
-/// Proving job submitted to [`ProveService<StreamingZkmlJob, CandidateComputation>`].
+impl StreamingChunkInput {
+    pub fn from_witness(chunk_idx: u64, witness: Mxfp4ChunkWitness) -> Self {
+        Self {
+            chunk_idx,
+            state_in_commit: witness.state_in_commit(),
+            state_out_commit: witness.state_out_commit(),
+            witness,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamingZkmlJob {
     pub request_id: [u8; 32],
@@ -1041,18 +3132,13 @@ pub struct StreamingZkmlJob {
     pub policy_floor_digest: [u8; 32],
     pub suite: ZkmlSuiteArtifact,
     pub requested_regime: SecurityRegime,
+    pub pinned_num_queries: Option<u32>,
     pub initial_state_commit: [u8; 32],
     pub chunks: Vec<StreamingChunkInput>,
-    /// Number of worker threads for `windowed_find_map_first_cancellable` PoW grinding (`>= 1`).
     pub grind_threads: usize,
-    /// Upper nonce bound for PoW grinding (`0` uses [`DEFAULT_ZKML_GRIND_SPAN`]).
     pub grind_span: u64,
 }
 
-/// Native computation response matching `CROSS_REPO_CONTRACTS.md` §2 (`CandidateComputation`).
-///
-/// Native completion only means candidate bytes and chunk receipts were produced; final admission
-/// must always pass fail-closed [`verify_candidate_computation`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CandidateComputation {
     pub request_id: [u8; 32],
@@ -1066,14 +3152,53 @@ pub struct CandidateComputation {
     pub suite_id: String,
     pub suite_digest: [u8; 32],
     pub checker_id: String,
+    pub pinned_num_queries: Option<u32>,
     pub soundness_report: ZkmlSoundnessReport,
     pub chunk_receipts: Vec<ZkmlChunkReceipt>,
     pub proof_bytes: Vec<u8>,
 }
 
-/// Serializes a full chunk receipt chain with a leading 8-byte big-endian chunk count.
+impl CandidateComputation {
+    /// Domain-separated `OBEND.SHE.ZKML_CANDIDATE/v1` `cSHAKE256` statement digest binding the outer
+    /// `ZkmlSuiteArtifact::suite_digest()` (including `suite_id`, `checker_id`, and `checker_content_digest`)
+    /// together with `request_id`, `model_weights_root`, `policy_floor_digest`, boundary state commitments,
+    /// folded I/O roots, `pinned_num_queries`, and every chunk receipt's `OBEND.SHE.ZKML_CHUNK/v1` commitment.
+    pub fn outer_statement_digest(&self) -> [u8; 32] {
+        let pin_tag = match self.pinned_num_queries {
+            Some(q) => {
+                let mut v = vec![0x01u8];
+                encode_leb128(q as u64, &mut v);
+                v
+            }
+            None => vec![0x00u8],
+        };
+        let commits: Vec<&[u8]> = self
+            .chunk_receipts
+            .iter()
+            .map(|r| r.chunk_commitment.as_slice())
+            .collect();
+        let commits_enc = encode_zkml_fields(&commits);
+        let pre = encode_zkml_fields(&[
+            &self.request_id,
+            self.model_id.as_bytes(),
+            &self.model_weights_root,
+            &self.policy_floor_digest,
+            &self.initial_state_commit,
+            &self.final_state_commit,
+            &self.canonical_input_root,
+            &self.canonical_output_root,
+            self.suite_id.as_bytes(),
+            &self.suite_digest,
+            self.checker_id.as_bytes(),
+            &pin_tag,
+            &commits_enc,
+        ]);
+        cshake256_32(ZKML_CANDIDATE_DOMAIN_TAG, &pre)
+    }
+}
+
 pub fn encode_chunk_chain_bytes(receipts: &[ZkmlChunkReceipt]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + receipts.len() * SERIALIZED_CHUNK_RECEIPT_BYTES);
+    let mut out = Vec::with_capacity(8 + receipts.len() * 1024);
     out.extend_from_slice(&(receipts.len() as u64).to_be_bytes());
     for receipt in receipts {
         receipt.encode_bytes(&mut out);
@@ -1081,8 +3206,6 @@ pub fn encode_chunk_chain_bytes(receipts: &[ZkmlChunkReceipt]) -> Vec<u8> {
     out
 }
 
-/// Decodes `proof_bytes` back into a vector of [`ZkmlChunkReceipt`]s, failing closed on any
-/// truncation or trailing garbage.
 pub fn decode_chunk_chain_bytes(bytes: &[u8]) -> Result<Vec<ZkmlChunkReceipt>, ZkmlGateRefusal> {
     if bytes.len() < 8 {
         return Err(ZkmlGateRefusal::CandidateBindingMismatch {
@@ -1092,122 +3215,166 @@ pub fn decode_chunk_chain_bytes(bytes: &[u8]) -> Result<Vec<ZkmlChunkReceipt>, Z
     let count = u64::from_be_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]);
-    let count_usize = usize::try_from(count).map_err(|_| {
-        ZkmlGateRefusal::CandidateBindingMismatch {
+    let count_usize =
+        usize::try_from(count).map_err(|_| ZkmlGateRefusal::CandidateBindingMismatch {
             reason: "chunk count overflows usize",
-        }
-    })?;
-    let expected_len = count_usize
-        .checked_mul(SERIALIZED_CHUNK_RECEIPT_BYTES)
-        .and_then(|n| n.checked_add(8))
-        .ok_or(ZkmlGateRefusal::CandidateBindingMismatch {
-            reason: "proof_bytes length overflow",
         })?;
-    if bytes.len() != expected_len {
+    if count_usize > MAX_ZKML_MODEL_LAYERS {
         return Err(ZkmlGateRefusal::CandidateBindingMismatch {
-            reason: "proof_bytes length does not match declared chunk count",
+            reason: "chunk count exceeds MAX_ZKML_MODEL_LAYERS (1024)",
         });
     }
-
+    let remaining = bytes.len() - 8;
+    if count_usize > remaining / SERIALIZED_CHUNK_RECEIPT_BYTES {
+        return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "chunk count exceeds remaining payload capacity",
+        });
+    }
+    let mut cursor = 8usize;
     let mut receipts = Vec::with_capacity(count_usize);
-    for i in 0..count_usize {
-        let start = 8 + i * SERIALIZED_CHUNK_RECEIPT_BYTES;
-        let end = start + SERIALIZED_CHUNK_RECEIPT_BYTES;
-        receipts.push(ZkmlChunkReceipt::decode_bytes(&bytes[start..end])?);
+    for _ in 0..count_usize {
+        let rec_bytes = read_framed_field(bytes, &mut cursor)?;
+        receipts.push(ZkmlChunkReceipt::decode_bytes(rec_bytes)?);
+    }
+    if cursor != bytes.len() {
+        return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "trailing garbage after chunk receipt chain",
+        });
     }
     Ok(receipts)
 }
 
-/// Deterministically grinds the globally lowest `pow_nonce` in `0..span` such that
-/// `OBEND.SHE.ZKML_CHUNK/v1` `cSHAKE256` satisfies `grind_bits` low zero bits, using
-/// [`windowed_find_map_first_cancellable`] for exact `1T == NT` parity.
-#[allow(clippy::too_many_arguments)]
-pub fn grind_zkml_chunk_pow(
-    model_weights_root: &[u8; 32],
-    policy_floor_digest: &[u8; 32],
-    suite_digest: &[u8; 32],
-    chunk_idx: u64,
-    state_in_commit: &[u8; 32],
-    input_commit: &[u8; 32],
-    state_out_commit: &[u8; 32],
-    output_commit: &[u8; 32],
-    grind_bits: u32,
-    span: u64,
-    threads: usize,
-    cancel: &CancelToken,
-) -> Result<(u64, [u8; 32]), ZkmlGateRefusal> {
-    if cancel.is_cancelled() {
-        return Err(ZkmlGateRefusal::Cancelled);
-    }
-    if grind_bits > 64 {
-        return Err(ZkmlGateRefusal::InvalidChunkPow {
-            chunk_idx,
-            required_bits: grind_bits,
-            pow_nonce: 0,
+/// Bounded `O(q log^2 N)` structural validation of all proof vectors inside a typed
+/// [`ZkmlChunkReceipt`] BEFORE [`ZkmlChunkReceipt::recompute_commitment`] serializes or hashes
+/// (`model.valid()` is checked once at chain entry to avoid `O(L^2)` manifest walks).
+fn check_chunk_iop_bounded_shape_prevalidated(
+    profile: &ZkmlSuiteProfile,
+    model: &Mxfp4ModelManifest,
+    receipt: &ZkmlChunkReceipt,
+) -> Result<(), ZkmlGateRefusal> {
+    let idx = receipt.chunk_idx;
+    if profile.num_queries == 0
+        || (profile.num_queries as usize) > MAX_ZKML_NUM_QUERIES
+        || profile.log_arity == 0
+    {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "invalid suite query/arity bounds",
         });
     }
-    let effective_span = if span == 0 {
-        DEFAULT_ZKML_GRIND_SPAN
-    } else {
-        span
-    };
-
-    // Pre-build the fixed 240-byte prefix (fields 1..=8) + field-9 LEB128 length byte `0x08` once,
-    // so each candidate nonce only overwrites the final 8 bytes before hashing.
-    let mut base_preimage = Vec::with_capacity(249);
-    push_framed_field(&mut base_preimage, model_weights_root);
-    push_framed_field(&mut base_preimage, policy_floor_digest);
-    push_framed_field(&mut base_preimage, suite_digest);
-    push_framed_field(&mut base_preimage, &chunk_idx.to_be_bytes());
-    push_framed_field(&mut base_preimage, state_in_commit);
-    push_framed_field(&mut base_preimage, input_commit);
-    push_framed_field(&mut base_preimage, state_out_commit);
-    push_framed_field(&mut base_preimage, output_commit);
-    encode_leb128(8, &mut base_preimage);
-    debug_assert_eq!(base_preimage.len(), 241);
-
-    // Pre-absorb the domain customization and first full 136-byte Keccak rate block once.
-    let mut base_sponge = CshakeSponge::new(ZKML_CHUNK_DOMAIN_TAG);
-    base_sponge.absorb(&base_preimage[..KECCAK_RATE_BYTES]);
-    let tail_prefix = &base_preimage[KECCAK_RATE_BYTES..];
-
-    let window = default_grind_window(grind_bits as usize, 1);
-    let hit = windowed_find_map_first_cancellable(
-        effective_span,
-        window,
-        threads.max(1),
-        cancel,
-        |nonce| {
-            let mut sponge = base_sponge.clone();
-            sponge.absorb(tail_prefix);
-            sponge.absorb(&nonce.to_be_bytes());
-            let commit = sponge.finalize_32();
-            digest_has_low_zero_bits(&commit, grind_bits).then_some(commit)
-        },
-    );
-
-    if cancel.is_cancelled() {
-        return Err(ZkmlGateRefusal::Cancelled);
+    let layer_usize =
+        usize::try_from(receipt.layer_idx).map_err(|_| ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "layer_idx overflows usize",
+        })?;
+    let lk = model
+        .layers
+        .get(layer_usize)
+        .ok_or(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "layer_idx out of bounds in Mxfp4ModelManifest",
+        })?;
+    let p = &receipt.iop_proof;
+    if lk.log_i != p.log_i
+        || lk.log_j != p.log_j
+        || lk.log_k != p.log_k
+        || lk.log_b != p.log_b
+        || lk.q_merkle_root != receipt.q_merkle_root
+        || lk.s_merkle_root != receipt.s_merkle_root
+    {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "chunk proof layer dimensions or Q/S roots disagree with manifest",
+        });
     }
-
-    hit.ok_or(ZkmlGateRefusal::InvalidChunkPow {
-        chunk_idx,
-        required_bits: grind_bits,
-        pow_nonce: effective_span,
-    })
+    let v_d = p.log_i + p.log_j;
+    let v_x = p.log_i + p.log_b + p.log_k;
+    let v_q = p.log_b + p.log_k + p.log_j;
+    let v_s = p.log_k + p.log_j;
+    if p.sumcheck_rounds.len() != v_q
+        || p.sumcheck_rounds.iter().any(|r| r.coeffs.len() > 4)
+        || p.d_fold_roots.len() != v_d
+        || p.x_fold_roots.len() != v_x
+        || p.q_fold_roots.len() != v_q
+        || p.s_fold_roots.len() != v_s
+        || p.query_openings.len() != profile.num_queries as usize
+    {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: idx,
+            reason: "chunk proof vector length exceeds protocol dimension bounds",
+        });
+    }
+    let check_steps = |steps: &[FoldLayerStep], v: usize| -> bool {
+        steps.len() == v
+            && steps
+                .iter()
+                .all(|st| st.merkle_path.len() <= MAX_ZKML_HYPERCUBE_VARS)
+    };
+    for op in &p.query_openings {
+        if op.d_path.len() != v_d
+            || op.x_path.len() != v_x
+            || op.q_path.len() != v_q
+            || op.s_path.len() != v_s
+            || !check_steps(&op.d_fold_steps, v_d)
+            || !check_steps(&op.x_fold_steps, v_x)
+            || !check_steps(&op.q_fold_steps, v_q)
+            || !check_steps(&op.s_fold_steps, v_s)
+        {
+            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+                chunk_idx: idx,
+                reason: "query opening path or fold_steps length mismatch",
+            });
+        }
+    }
+    Ok(())
 }
 
-/// Fail-closed verifier for a multi-chunk recurrent [`ZkmlChunkReceipt`] chain.
+#[allow(clippy::too_many_arguments)]
 pub fn verify_zkml_chunk_chain(
+    profile: &ZkmlSuiteProfile,
+    expected_model: &Mxfp4ModelManifest,
     receipts: &[ZkmlChunkReceipt],
     expected_weights_root: &[u8; 32],
     expected_policy_floor_digest: &[u8; 32],
     expected_suite_digest: &[u8; 32],
     initial_state_commit: &[u8; 32],
     required_grind_bits: u32,
+    pinned_num_queries: Option<u32>,
 ) -> Result<[u8; 32], ZkmlGateRefusal> {
+    if pinned_num_queries != Some(profile.num_queries) {
+        return Err(ZkmlGateRefusal::UnpinnedOrZeroAritySuite {
+            reason: "pinned_num_queries missing or mismatches suite profile.num_queries",
+        });
+    }
+    let canonical_profile_digest = profile.profile_digest();
+    if *expected_suite_digest != canonical_profile_digest {
+        return Err(ZkmlGateRefusal::SuiteDigestMismatch {
+            chunk_idx: None,
+            expected: canonical_profile_digest,
+            actual: *expected_suite_digest,
+        });
+    }
     if receipts.is_empty() {
         return Err(ZkmlGateRefusal::EmptyChunkChain);
+    }
+    if !expected_model.valid() {
+        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
+            chunk_idx: 0,
+            reason: "invalid Mxfp4ModelManifest",
+        });
+    }
+    if receipts.len() != expected_model.layers.len() {
+        return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+            reason: "chunk receipt chain length must equal Mxfp4ModelManifest layer count",
+        });
+    }
+    let actual_model_root = expected_model.root();
+    if actual_model_root != *expected_weights_root {
+        return Err(ZkmlGateRefusal::WeightRootMismatch {
+            chunk_idx: None,
+            expected: *expected_weights_root,
+            actual: actual_model_root,
+        });
     }
 
     let mut expected_state_in = *initial_state_commit;
@@ -1217,6 +3384,11 @@ pub fn verify_zkml_chunk_chain(
             return Err(ZkmlGateRefusal::ChunkIndexMismatch {
                 expected: expected_idx,
                 actual: receipt.chunk_idx,
+            });
+        }
+        if receipt.layer_idx != expected_idx {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "chunk layer_idx must follow sequential manifest layer order 0..L",
             });
         }
         if receipt.model_weights_root != *expected_weights_root {
@@ -1248,6 +3420,8 @@ pub fn verify_zkml_chunk_chain(
             });
         }
 
+        check_chunk_iop_bounded_shape_prevalidated(profile, expected_model, receipt)?;
+
         let recomputed = receipt.recompute_commitment();
         if receipt.chunk_commitment != recomputed {
             return Err(ZkmlGateRefusal::ChunkCommitmentMismatch {
@@ -1257,35 +3431,60 @@ pub fn verify_zkml_chunk_chain(
             });
         }
 
-        if !digest_has_low_zero_bits(&receipt.chunk_commitment, required_grind_bits) {
-            return Err(ZkmlGateRefusal::InvalidChunkPow {
-                chunk_idx: expected_idx,
-                required_bits: required_grind_bits,
-                pow_nonce: receipt.pow_nonce,
-            });
-        }
-
+        verify_mxfp4_chunk_iop_prevalidated(
+            profile,
+            expected_model,
+            &actual_model_root,
+            required_grind_bits,
+            receipt,
+        )?;
         expected_state_in = receipt.state_out_commit;
     }
 
     Ok(expected_state_in)
 }
 
-/// Fail-closed end-to-end verification of a [`CandidateComputation`] against pinned request,
-/// model weight root, policy floor digest, suite artifact, and proven soundness regime.
+/// Fail-closed end-to-end verification of a [`CandidateComputation`]:
+/// 1. Evaluates the configured `UD-100` (`ProvenUdr100`) suite-parameter floor on
+///    `expected_suite` (returning the suite-parameter [`ZkmlSoundnessReport`]);
+/// 2. Checks outer [`CandidateComputation`] metadata equality (`suite_id`, `checker_id`, and
+///    `expected_suite.suite_digest()`) against the caller's pinned `expected_suite` (outer metadata
+///    check; use [`CandidateComputation::outer_statement_digest`] when signing/binding the outer
+///    artifact provenance and chunk commitment chain together), while the chunk PIOP transcripts and
+///    `OBEND.SHE.ZKML_CHUNK/v1` receipts cryptographically authenticate the canonical 8-field
+///    `OBEND.SHE.ZKML_SUITE/v1` `profile_digest()` (matching Lean `ValidZkmlChunkChainSpec`);
+/// 3. Executes the base-field `Goldilocks` `(2^logB, 3^logK, 3^logJ)` `EinSumcheck` + rate-1
+///    uncoded binary `OBEND.SHE.ZKML_MERKLE/v1` fold-walk chunk PIOP across all `0..L` model layers.
+#[allow(clippy::too_many_arguments)]
 pub fn verify_candidate_computation(
     candidate: &CandidateComputation,
     expected_request_id: &[u8; 32],
+    expected_initial_state_commit: &[u8; 32],
+    expected_model: &Mxfp4ModelManifest,
     expected_weights_root: &[u8; 32],
     expected_policy_floor_digest: &[u8; 32],
     expected_suite: &ZkmlSuiteArtifact,
     requested_regime: SecurityRegime,
 ) -> Result<ZkmlSoundnessReport, ZkmlGateRefusal> {
     let report = expected_suite.check_proven_floor(requested_regime)?;
+    if requested_regime != SecurityRegime::ProvenUdr100 {
+        return Err(ZkmlGateRefusal::InsufficientProvenBits {
+            regime: requested_regime,
+            achieved_milli_bits: expected_suite.profile.udr_milli_bits(),
+            required_milli_bits: PROVEN_MIN_MILLI_BITS,
+        });
+    }
 
     if candidate.request_id != *expected_request_id {
         return Err(ZkmlGateRefusal::CandidateBindingMismatch {
             reason: "request_id mismatch",
+        });
+    }
+    if candidate.initial_state_commit != *expected_initial_state_commit {
+        return Err(ZkmlGateRefusal::BrokenChunkCarry {
+            chunk_idx: 0,
+            expected_state_in: *expected_initial_state_commit,
+            actual_state_in: candidate.initial_state_commit,
         });
     }
     if candidate.model_weights_root != *expected_weights_root {
@@ -1322,13 +3521,17 @@ pub fn verify_candidate_computation(
         });
     }
 
+    let expected_profile_digest = expected_suite.profile.profile_digest();
     let final_state = verify_zkml_chunk_chain(
+        &expected_suite.profile,
+        expected_model,
         &decoded,
         expected_weights_root,
         expected_policy_floor_digest,
-        &expected_suite_digest,
+        &expected_profile_digest,
         &candidate.initial_state_commit,
         expected_suite.profile.grind_bits,
+        candidate.pinned_num_queries,
     )?;
 
     if candidate.final_state_commit != final_state {
@@ -1339,8 +3542,8 @@ pub fn verify_candidate_computation(
         });
     }
 
-    let inputs: Vec<[u8; 32]> = decoded.iter().map(|r| r.input_commit).collect();
-    let outputs: Vec<[u8; 32]> = decoded.iter().map(|r| r.output_commit).collect();
+    let inputs: Vec<[u8; 32]> = decoded.iter().map(|r| r.state_in_commit).collect();
+    let outputs: Vec<[u8; 32]> = decoded.iter().map(|r| r.state_out_commit).collect();
     if candidate.canonical_input_root != fold_chunk_roots(&inputs) {
         return Err(ZkmlGateRefusal::CandidateBindingMismatch {
             reason: "canonical_input_root mismatch",
@@ -1360,39 +3563,42 @@ pub fn verify_candidate_computation(
     Ok(report)
 }
 
-// ---------------------------------------------------------------------------
-// 3. StreamingZkmlBackend Wired to ProveService + CancellableBackend
-// ---------------------------------------------------------------------------
-
-/// Streaming recurrent Gated-DeltaNet / SSM proving backend for [`ProveService`].
-///
-/// Enforces the unconditional soundness floor gate before proving, verifies recurrent chunk-carry
-/// continuity across every chunk, grinds deterministic `1T == NT` `OBEND.SHE.ZKML_CHUNK/v1` PoW
-/// witnesses via [`windowed_find_map_first_cancellable`], and respects cooperative [`CancelToken`]
-/// invalidation for stale epochs.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct StreamingZkmlBackend {
     pinned_weights_root: Option<[u8; 32]>,
     pinned_policy_floor_digest: Option<[u8; 32]>,
+    max_grind_threads: usize,
+}
+
+impl Default for StreamingZkmlBackend {
+    fn default() -> Self {
+        Self {
+            pinned_weights_root: None,
+            pinned_policy_floor_digest: None,
+            max_grind_threads: MAX_ZKML_GRIND_THREADS,
+        }
+    }
 }
 
 impl StreamingZkmlBackend {
-    /// Creates a streaming zkML backend that pins roots per job.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Creates a streaming zkML backend pinned to a fixed `model_weights_root` and
-    /// `policy_floor_digest` (rejecting any job attempting weight or policy drift).
     pub fn pinned(model_weights_root: [u8; 32], policy_floor_digest: [u8; 32]) -> Self {
         Self {
             pinned_weights_root: Some(model_weights_root),
             pinned_policy_floor_digest: Some(policy_floor_digest),
+            max_grind_threads: MAX_ZKML_GRIND_THREADS,
         }
     }
 
-    /// Executes one streaming recurrent chunk-carry job synchronously with cooperative
-    /// cancellation.
+    /// Override the worker-enforced ceiling on per-job PoW grinder threads (`1..=MAX_ZKML_GRIND_THREADS`).
+    pub fn with_max_grind_threads(mut self, max_threads: usize) -> Self {
+        self.max_grind_threads = max_threads.clamp(1, MAX_ZKML_GRIND_THREADS);
+        self
+    }
+
     pub fn prove_job(
         &self,
         job: &StreamingZkmlJob,
@@ -1421,14 +3627,29 @@ impl StreamingZkmlBackend {
             }
         }
 
-        // 1. Enforce unconditional >= 100-bit proven soundness floor BEFORE grinding.
         let report = job.suite.check_proven_floor(job.requested_regime)?;
-
+        if job.requested_regime != SecurityRegime::ProvenUdr100 {
+            return Err(ZkmlGateRefusal::InsufficientProvenBits {
+                regime: job.requested_regime,
+                achieved_milli_bits: job.suite.profile.udr_milli_bits(),
+                required_milli_bits: PROVEN_MIN_MILLI_BITS,
+            });
+        }
+        if job.pinned_num_queries != Some(job.suite.profile.num_queries) {
+            return Err(ZkmlGateRefusal::UnpinnedOrZeroAritySuite {
+                reason: "job pinned_num_queries missing or mismatches suite profile.num_queries",
+            });
+        }
         if job.chunks.is_empty() {
             return Err(ZkmlGateRefusal::EmptyChunkChain);
         }
+        let expected_layers = job.chunks[0].witness.model().layers.len();
+        if job.chunks.len() != expected_layers {
+            return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                reason: "job chunk count must equal Mxfp4ModelManifest layer count",
+            });
+        }
 
-        // 2. Verify recurrent hidden-state carry before grinding so broken chains fail fast.
         let mut expected_state_in = job.initial_state_commit;
         for (idx, chunk) in job.chunks.iter().enumerate() {
             let expected_idx = idx as u64;
@@ -1438,6 +3659,12 @@ impl StreamingZkmlBackend {
                     actual: chunk.chunk_idx,
                 });
             }
+            if chunk.witness.layer_idx() != expected_idx {
+                return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                    reason:
+                        "chunk witness layer_idx must follow sequential manifest layer order 0..L",
+                });
+            }
             if chunk.state_in_commit != expected_state_in {
                 return Err(ZkmlGateRefusal::BrokenChunkCarry {
                     chunk_idx: expected_idx,
@@ -1445,47 +3672,52 @@ impl StreamingZkmlBackend {
                     actual_state_in: chunk.state_in_commit,
                 });
             }
+            if chunk.witness.weights_root() != job.model_weights_root {
+                return Err(ZkmlGateRefusal::WeightRootMismatch {
+                    chunk_idx: Some(expected_idx),
+                    expected: job.model_weights_root,
+                    actual: chunk.witness.weights_root(),
+                });
+            }
+            if chunk.witness.state_in_commit() != chunk.state_in_commit
+                || chunk.witness.state_out_commit() != chunk.state_out_commit
+            {
+                return Err(ZkmlGateRefusal::CandidateBindingMismatch {
+                    reason: "StreamingChunkInput commitments disagree with Mxfp4ChunkWitness",
+                });
+            }
             expected_state_in = chunk.state_out_commit;
         }
 
-        // 3. Grind deterministic 1T == NT cSHAKE256 PoW commitment for each chunk in sequence.
         let suite_digest = job.suite.suite_digest();
+        let profile_digest = job.suite.profile.profile_digest();
         let mut receipts = Vec::with_capacity(job.chunks.len());
         let mut input_commits = Vec::with_capacity(job.chunks.len());
         let mut output_commits = Vec::with_capacity(job.chunks.len());
 
+        let effective_span = if job.grind_span == 0 {
+            DEFAULT_ZKML_GRIND_SPAN
+        } else {
+            job.grind_span
+        };
+        let effective_threads = job.grind_threads.clamp(1, self.max_grind_threads);
         for chunk in &job.chunks {
             if cancel.is_cancelled() {
                 return Err(ZkmlGateRefusal::Cancelled);
             }
-            let (pow_nonce, chunk_commitment) = grind_zkml_chunk_pow(
-                &job.model_weights_root,
+            let receipt = prove_mxfp4_chunk_iop(
+                &job.suite.profile,
                 &job.policy_floor_digest,
-                &suite_digest,
+                &profile_digest,
                 chunk.chunk_idx,
-                &chunk.state_in_commit,
-                &chunk.input_commit,
-                &chunk.state_out_commit,
-                &chunk.output_commit,
-                job.suite.profile.grind_bits,
-                job.grind_span,
-                job.grind_threads,
+                &chunk.witness,
+                effective_span,
+                effective_threads,
                 cancel,
             )?;
-            receipts.push(ZkmlChunkReceipt {
-                model_weights_root: job.model_weights_root,
-                policy_floor_digest: job.policy_floor_digest,
-                suite_digest,
-                chunk_idx: chunk.chunk_idx,
-                state_in_commit: chunk.state_in_commit,
-                input_commit: chunk.input_commit,
-                state_out_commit: chunk.state_out_commit,
-                output_commit: chunk.output_commit,
-                pow_nonce,
-                chunk_commitment,
-            });
-            input_commits.push(chunk.input_commit);
-            output_commits.push(chunk.output_commit);
+            input_commits.push(receipt.state_in_commit);
+            output_commits.push(receipt.state_out_commit);
+            receipts.push(receipt);
         }
 
         let proof_bytes = encode_chunk_chain_bytes(&receipts);
@@ -1503,13 +3735,13 @@ impl StreamingZkmlBackend {
             suite_id: job.suite.suite_id.clone(),
             suite_digest,
             checker_id: job.suite.checker_id.clone(),
+            pinned_num_queries: job.pinned_num_queries,
             soundness_report: report,
             chunk_receipts: receipts,
             proof_bytes,
         })
     }
 
-    /// Wraps this backend as a [`CancellableBackend`] for [`ProveService::spawn_cancellable`].
     pub fn into_cancellable_backend(
         self,
     ) -> CancellableBackend<StreamingZkmlJob, CandidateComputation> {
@@ -1519,7 +3751,6 @@ impl StreamingZkmlBackend {
     }
 }
 
-/// Spawns a hardened [`ProveService`] backed by [`StreamingZkmlBackend`].
 pub fn spawn_streaming_zkml_service(
     backend: StreamingZkmlBackend,
     config: ProveServiceConfig,
