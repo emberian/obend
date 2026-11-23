@@ -749,5 +749,433 @@ theorem hypercubeSum_foldFirstVar {R : Type} [LawfulCommRing R]
           (hypercubeSum v (foldFirstVar tbl CommRingOps.zero)))) :=
   innerProd_foldFirstVar_linear r ((hypercube v).map fun _ => CommRingOps.one) tbl
 
+/-! ## 6. $O(2^v)$ Unboxed `Array` Multilinear, Fold & Hypercube-Sum Execution (`0` `hypercube` Allocation) -/
+
+private theorem innerProd_nil_right {R : Type} [CommRingOps R] :
+    ∀ (xs : List R), innerProd xs [] = CommRingOps.zero
+  | [] => rfl
+  | _ :: _ => rfl
+
+private theorem drop_eq_getElem_cons {α : Type} :
+    ∀ (xs : List α) (i : Nat) (h : i < xs.length),
+      xs.drop i = xs[i]'h :: xs.drop (i + 1)
+  | _ :: _, 0, _ => rfl
+  | _ :: xs, i + 1, h =>
+    drop_eq_getElem_cons xs i (Nat.lt_of_succ_lt_succ h)
+
+theorem mleEval_nil {R : Type} [LawfulCommRing R] (tbl : List R) :
+    mleEval tbl [] = tbl.headD CommRingOps.zero := by
+  cases tbl with
+  | nil => rfl
+  | cons x xs =>
+    change innerProd (x :: xs) [CommRingOps.one] = x
+    dsimp only [innerProd]
+    rw [innerProd_nil_right, LawfulCommRing.mul_one, LawfulCommRing.add_zero]
+
+private def foldTableExecGo {R : Type} [CommRingOps R]
+    (evals : Array R) (r₀ : R) (half j : Nat) (hHalf : half = (evals.size + 1) / 2)
+    (acc : Array R) : Array R :=
+  if hj : j < half then
+    let lo := evals[2 * j]'(by omega)
+    let hi := if h2 : 2 * j + 1 < evals.size then evals[2 * j + 1]'h2 else CommRingOps.zero
+    foldTableExecGo evals r₀ half (j + 1) hHalf
+      (acc.push (CommRingOps.add lo (CommRingOps.mul r₀ (CommRingOps.sub hi lo))))
+  else
+    acc
+termination_by half - j
+
+/-- Unboxed $O(|evals|/2)$ butterfly fold on `Array R` matching `foldFirstVar` without `List` allocation. -/
+def foldTableExec {R : Type} [CommRingOps R] (evals : Array R) (r₀ : R) : Array R :=
+  let half := (evals.size + 1) / 2
+  foldTableExecGo evals r₀ half 0 rfl (Array.emptyWithCapacity half)
+
+private theorem foldFirstVar_getElem {R : Type} [CommRingOps R] :
+    ∀ (tbl : List R) (r₀ : R) (j : Nat) (hj : j < (foldFirstVar tbl r₀).length),
+      (foldFirstVar tbl r₀)[j]'hj =
+        let lo := tbl[2 * j]'(by rw [foldFirstVar_length] at hj; omega)
+        let hi := if h2 : 2 * j + 1 < tbl.length then tbl[2 * j + 1]'h2 else CommRingOps.zero
+        CommRingOps.add lo (CommRingOps.mul r₀ (CommRingOps.sub hi lo))
+  | [], _, _, hj => by simp [foldFirstVar] at hj
+  | [lo], r₀, j, hj => by
+    simp only [foldFirstVar, List.length_singleton] at hj
+    have hj0 : j = 0 := by omega
+    subst hj0
+    simp [foldFirstVar]
+  | lo :: hi :: rest, r₀, 0, _ => by
+    simp [foldFirstVar]
+  | lo :: hi :: rest, r₀, j + 1, hj => by
+    have hj' : j < (foldFirstVar rest r₀).length := by
+      simp only [foldFirstVar, List.length_cons] at hj; omega
+    have hStep : (foldFirstVar (lo :: hi :: rest) r₀)[j + 1]'hj = (foldFirstVar rest r₀)[j]'hj' := rfl
+    rw [hStep, foldFirstVar_getElem rest r₀ j hj']
+    dsimp only
+    have hlo : (lo :: hi :: rest)[2 * (j + 1)]'(by rw [foldFirstVar_length] at hj'; simp; omega) =
+        rest[2 * j]'(by rw [foldFirstVar_length] at hj'; omega) := by
+      have heq : 2 * (j + 1) = (2 * j) + 2 := by omega
+      simp [heq]
+    have hhi : (if h2 : 2 * (j + 1) + 1 < (lo :: hi :: rest).length then
+          (lo :: hi :: rest)[2 * (j + 1) + 1]'h2 else CommRingOps.zero) =
+        (if h2 : 2 * j + 1 < rest.length then rest[2 * j + 1]'h2 else CommRingOps.zero) := by
+      by_cases h2 : 2 * j + 1 < rest.length
+      · have h2' : 2 * (j + 1) + 1 < (lo :: hi :: rest).length := by simp; omega
+        simp only [h2, h2', ↓reduceDIte]
+        have heq : 2 * (j + 1) + 1 = (2 * j + 1) + 2 := by omega
+        simp [heq]
+      · have h2' : ¬ (2 * (j + 1) + 1 < (lo :: hi :: rest).length) := by simp; omega
+        simp only [h2, h2', ↓reduceDIte]
+    rw [hlo, hhi]
+
+private theorem foldTableExecGo_toList {R : Type} [CommRingOps R]
+    (evals : Array R) (r₀ : R) (half j : Nat) (hHalf : half = (evals.size + 1) / 2)
+    (acc : Array R) (hjLe : j ≤ half)
+    (hAcc : acc.toList = (foldFirstVar evals.toList r₀).take j) :
+    (foldTableExecGo evals r₀ half j hHalf acc).toList = foldFirstVar evals.toList r₀ := by
+  unfold foldTableExecGo
+  if hj : j < half then
+    simp only [hj, ↓reduceDIte]
+    apply foldTableExecGo_toList evals r₀ half (j + 1) hHalf _ (by omega)
+    rw [Array.toList_push, hAcc]
+    have hLen : j < (foldFirstVar evals.toList r₀).length := by
+      rw [foldFirstVar_length, Array.length_toList]; omega
+    rw [List.take_add_one, List.getElem?_eq_getElem hLen, Option.toList_some,
+        foldFirstVar_getElem evals.toList r₀ j hLen]
+    simp only [Array.length_toList, Array.getElem_toList]
+  else
+    simp only [hj, ↓reduceDIte]
+    have hjEq : j = (evals.size + 1) / 2 := by omega
+    rw [hAcc, hjEq, List.take_of_length_le]
+    rw [foldFirstVar_length, Array.length_toList]
+    exact Nat.le_refl _
+termination_by half - j
+
+theorem foldTableExec_toList {R : Type} [CommRingOps R] (evals : Array R) (r₀ : R) :
+    (foldTableExec evals r₀).toList = foldFirstVar evals.toList r₀ :=
+  foldTableExecGo_toList evals r₀ _ 0 rfl (Array.emptyWithCapacity _) (Nat.zero_le _) rfl
+
+theorem foldTableExec_size {R : Type} [CommRingOps R] (evals : Array R) (r₀ : R) :
+    (foldTableExec evals r₀).size = (evals.size + 1) / 2 := by
+  rw [← Array.length_toList, foldTableExec_toList, foldFirstVar_length, Array.length_toList]
+
+private def foldInPlaceStepLoop {R : Type} [CommRingOps R]
+    (bufSize activeLen : Nat) (hAct : activeLen ≤ bufSize) (r₀ : R)
+    (half j : Nat) (hHalf : half = (activeLen + 1) / 2)
+    (cur : Array R) (hSz : cur.size = bufSize) :
+    { out : Array R // out.size = bufSize } :=
+  if hj : j < half then
+    let lo := cur[2 * j]'(by omega)
+    let hi := if h2 : 2 * j + 1 < activeLen then cur[2 * j + 1]'(by omega) else CommRingOps.zero
+    let val := CommRingOps.add lo (CommRingOps.mul r₀ (CommRingOps.sub hi lo))
+    foldInPlaceStepLoop bufSize activeLen hAct r₀ half (j + 1) hHalf
+      (cur.set j val (by omega)) (by rw [Array.size_set]; exact hSz)
+  else
+    ⟨cur, hSz⟩
+termination_by half - j
+
+/-- Single in-place butterfly halving pass on `buf[0 .. activeLen)` at coordinate `r₀`.
+    Since `j ≤ 2 * j` and every subsequent step `j' > j` reads `2 * j' > j`, `cur.set j`
+    mutates `cur` strictly in place (`0` heap allocations when unshared). -/
+def foldInPlaceStep {R : Type} [CommRingOps R]
+    (buf : Array R) (activeLen : Nat) (hAct : activeLen ≤ buf.size) (r₀ : R) :
+    { out : Array R // (activeLen + 1) / 2 ≤ out.size } :=
+  let ⟨res, hRes⟩ := foldInPlaceStepLoop buf.size activeLen hAct r₀ ((activeLen + 1) / 2) 0 rfl buf rfl
+  ⟨res, by omega⟩
+
+private theorem foldInPlaceStepLoop_inv {R : Type} [CommRingOps R]
+    (buf : Array R) (activeLen : Nat) (hAct : activeLen ≤ buf.size) (r₀ : R)
+    (half j : Nat) (hHalf : half = (activeLen + 1) / 2)
+    (cur : Array R) (hSz : cur.size = buf.size) (hjLe : j ≤ half)
+    (hPre : ∀ k (hk : k < j), cur[k]'(by omega) =
+      (foldFirstVar (buf.toList.take activeLen) r₀)[k]'(by
+        rw [foldFirstVar_length, List.length_take, Array.length_toList, Nat.min_eq_left hAct]; omega))
+    (hSuf : ∀ k (hk : k < buf.size), j ≤ k → cur[k]'(by omega) = buf[k]'hk) :
+    ∀ k (hk : k < half),
+      (foldInPlaceStepLoop buf.size activeLen hAct r₀ half j hHalf cur hSz).1[k]'(by
+        have := (foldInPlaceStepLoop buf.size activeLen hAct r₀ half j hHalf cur hSz).2; omega) =
+      (foldFirstVar (buf.toList.take activeLen) r₀)[k]'(by
+        rw [foldFirstVar_length, List.length_take, Array.length_toList, Nat.min_eq_left hAct]; omega) := by
+  unfold foldInPlaceStepLoop
+  if hj : j < half then
+    simp only [hj, ↓reduceDIte]
+    have h2j : 2 * j < buf.size := by omega
+    have hLoEq : cur[2 * j]'(by omega) = buf[2 * j]'h2j := hSuf (2 * j) h2j (by omega)
+    have hHiEq : (if h2 : 2 * j + 1 < activeLen then cur[2 * j + 1]'(by omega) else CommRingOps.zero) =
+        (if h2 : 2 * j + 1 < (buf.toList.take activeLen).length then
+          (buf.toList.take activeLen)[2 * j + 1]'h2 else CommRingOps.zero) := by
+      have hTakeLen : (buf.toList.take activeLen).length = activeLen := by
+        rw [List.length_take, Array.length_toList, Nat.min_eq_left hAct]
+      by_cases h2 : 2 * j + 1 < activeLen
+      · have h2L : 2 * j + 1 < (buf.toList.take activeLen).length := by omega
+        simp only [h2, h2L, ↓reduceDIte, List.getElem_take, Array.getElem_toList]
+        exact hSuf (2 * j + 1) (by omega) (by omega)
+      · have h2L : ¬ (2 * j + 1 < (buf.toList.take activeLen).length) := by omega
+        simp only [h2, h2L, ↓reduceDIte]
+    let val := CommRingOps.add (cur[2 * j]'(by omega))
+      (CommRingOps.mul r₀ (CommRingOps.sub
+        (if h2 : 2 * j + 1 < activeLen then cur[2 * j + 1]'(by omega) else CommRingOps.zero)
+        (cur[2 * j]'(by omega))))
+    have hValEq : val = (foldFirstVar (buf.toList.take activeLen) r₀)[j]'(by
+        rw [foldFirstVar_length, List.length_take, Array.length_toList, Nat.min_eq_left hAct]; omega) := by
+      rw [foldFirstVar_getElem]
+      dsimp only [val]
+      rw [hLoEq, hHiEq]
+      simp [List.getElem_take]
+    exact foldInPlaceStepLoop_inv buf activeLen hAct r₀ half (j + 1) hHalf
+      (cur.set j val (by omega)) (by rw [Array.size_set]; exact hSz) (by omega)
+      (fun k hk => by
+        by_cases hkj : k = j
+        · subst hkj; rw [Array.getElem_set_self]; exact hValEq
+        · rw [Array.getElem_set_ne (h := by omega)]; exact hPre k (by omega))
+      (fun k hk hjk => by
+        rw [Array.getElem_set_ne (h := by omega)]
+        exact hSuf k hk (by omega))
+  else
+    simp only [hj, ↓reduceDIte]
+    have hjEq : j = half := by omega
+    subst hjEq
+    exact hPre
+termination_by half - j
+
+private theorem foldInPlaceStep_take_eq {R : Type} [CommRingOps R]
+    (buf : Array R) (activeLen : Nat) (hAct : activeLen ≤ buf.size) (r₀ : R) :
+    (foldInPlaceStep buf activeLen hAct r₀).1.toList.take ((activeLen + 1) / 2) =
+      foldFirstVar (buf.toList.take activeLen) r₀ := by
+  have hInv := foldInPlaceStepLoop_inv buf activeLen hAct r₀ ((activeLen + 1) / 2) 0 rfl buf rfl
+    (Nat.zero_le _) (fun _ hk => by omega) (fun _ _ _ => rfl)
+  have hSz := (foldInPlaceStepLoop buf.size activeLen hAct r₀ ((activeLen + 1) / 2) 0 rfl buf rfl).2
+  have hFoldLen : (foldFirstVar (buf.toList.take activeLen) r₀).length = (activeLen + 1) / 2 := by
+    rw [foldFirstVar_length, List.length_take, Array.length_toList, Nat.min_eq_left hAct]
+  apply List.ext_getElem
+  · rw [List.length_take, Array.length_toList, hFoldLen]
+    exact Nat.min_eq_left (by change (activeLen + 1) / 2 ≤ (foldInPlaceStepLoop _ _ _ _ _ _ _ _ _).1.size; omega)
+  · intro k hk1 hk2
+    rw [List.getElem_take, Array.getElem_toList]
+    exact hInv k (by rw [hFoldLen] at hk2; exact hk2)
+
+private def mleEvalExecRoundLoop {R : Type} [CommRingOps R]
+    (rs : Array R) (idx : Nat) (buf : Array R) (activeLen : Nat) (hAct : activeLen ≤ buf.size) : R :=
+  if hIdx : idx < rs.size then
+    let r := rs[idx]'hIdx
+    let ⟨buf', hAct'⟩ := foldInPlaceStep buf activeLen hAct r
+    mleEvalExecRoundLoop rs (idx + 1) buf' ((activeLen + 1) / 2) hAct'
+  else
+    if _ : 0 < activeLen then
+      buf[0]'(by omega)
+    else
+      CommRingOps.zero
+termination_by rs.size - idx
+
+/-- **In-Place $O(2^v)$ Multilinear Evaluation (`mleEvalExec`)**:
+    Evaluates $\tilde{f}(\mathbf{r})$ over unboxed `Array R` via $v$ halving butterfly passes
+    in $2^{v-1} + 2^{v-2} + \dots + 1 = 2^v - 1$ operations (`0` `hypercube` or `List` allocations). -/
+def mleEvalExec {R : Type} [CommRingOps R] (evals : Array R) (rs : Array R) : R :=
+  mleEvalExecRoundLoop rs 0 evals evals.size (Nat.le_refl _)
+
+private theorem mleEvalExecRoundLoop_eq {R : Type} [LawfulCommRing R]
+    (rs : Array R) (idx : Nat) (buf : Array R) (activeLen : Nat)
+    (hAct : activeLen ≤ buf.size) (hLe : idx ≤ rs.size) :
+    mleEvalExecRoundLoop rs idx buf activeLen hAct =
+      mleEval (buf.toList.take activeLen) (rs.toList.drop idx) := by
+  unfold mleEvalExecRoundLoop
+  if hIdx : idx < rs.size then
+    simp only [hIdx, ↓reduceDIte]
+    rw [mleEvalExecRoundLoop_eq rs (idx + 1)
+          (foldInPlaceStep buf activeLen hAct rs[idx]).1
+          ((activeLen + 1) / 2)
+          (foldInPlaceStep buf activeLen hAct rs[idx]).2
+          (by omega)]
+    have hDrop : rs.toList.drop idx = rs[idx] :: rs.toList.drop (idx + 1) := by
+      have hIdxL : idx < rs.toList.length := by rw [Array.length_toList]; exact hIdx
+      exact drop_eq_getElem_cons rs.toList idx hIdxL
+    rw [foldInPlaceStep_take_eq, hDrop, mleEval_foldFirstVar]
+  else
+    simp only [hIdx, ↓reduceDIte]
+    have hEq : idx = rs.size := by omega
+    subst hEq
+    rw [show rs.toList.drop rs.size = [] by rw [← Array.length_toList]; exact List.drop_length,
+        mleEval_nil]
+    if hPos : 0 < activeLen then
+      simp only [hPos, ↓reduceDIte]
+      have hBufPos : 0 < buf.size := by omega
+      cases hList : buf.toList with
+      | nil =>
+        have hSz0 : buf.size = 0 := by rw [← Array.length_toList, hList]; rfl
+        omega
+      | cons hd tl =>
+        cases activeLen with
+        | zero => omega
+        | succ m =>
+          have h0 : buf[0]'hBufPos = hd := by
+            rw [← Array.getElem_toList (xs := buf) (i := 0) hBufPos]
+            simp [hList]
+          simp [List.take, h0]
+    else
+      have hAct0 : activeLen = 0 := by omega
+      subst hAct0
+      simp
+termination_by rs.size - idx
+
+/-- **Exact `Spec ↔ Exec` Equivalence for `mleEvalExec` (`mleEvalExec_eq_mleEval`)**:
+    For every `LawfulCommRing R`, table `evals : Array R`, and evaluation point `rs : Array R`,
+    in-place $O(2^v)$ `mleEvalExec` agrees identically with `mleEval`. -/
+theorem mleEvalExec_eq_mleEval {R : Type} [LawfulCommRing R]
+    (evals : Array R) (rs : Array R) :
+    mleEvalExec evals rs = mleEval evals.toList rs.toList := by
+  unfold mleEvalExec
+  rw [mleEvalExecRoundLoop_eq rs 0 evals evals.size (Nat.le_refl _) (Nat.zero_le _)]
+  rw [show evals.toList.take evals.size = evals.toList by
+        rw [← Array.length_toList]; exact List.take_length,
+      List.drop_zero]
+
+private theorem map_const_eq_replicate {α β : Type} (c : β) :
+    ∀ (xs : List α), xs.map (fun _ => c) = List.replicate xs.length c
+  | [] => rfl
+  | _ :: xs => by simp [List.replicate_succ, map_const_eq_replicate c xs]
+
+private theorem innerProd_replicate_one_go {R : Type} [LawfulCommRing R] :
+    ∀ (k : Nat) (xs : List R) (acc : R),
+      (xs.take k).foldl CommRingOps.add acc =
+        CommRingOps.add acc (innerProd xs (List.replicate k CommRingOps.one))
+  | 0, xs, acc => by
+    simp only [List.take_zero, List.foldl_nil, List.replicate_zero, innerProd_nil_right,
+      LawfulCommRing.add_zero]
+  | _ + 1, [], acc => by
+    simp only [List.take_nil, List.foldl_nil, innerProd, LawfulCommRing.add_zero]
+  | k + 1, x :: xs, acc => by
+    simp only [List.take_succ_cons, List.foldl_cons, List.replicate_succ, innerProd]
+    rw [innerProd_replicate_one_go k xs (CommRingOps.add acc x),
+        LawfulCommRing.mul_one, LawfulCommRing.add_assoc]
+
+theorem hypercubeSum_eq_foldl_take {R : Type} [LawfulCommRing R] (v : Nat) (tbl : List R) :
+    hypercubeSum v tbl = (tbl.take (2 ^ v)).foldl CommRingOps.add CommRingOps.zero := by
+  unfold hypercubeSum
+  rw [map_const_eq_replicate, hypercube_length]
+  have h := innerProd_replicate_one_go (2 ^ v) tbl CommRingOps.zero
+  rw [LawfulCommRing.zero_add] at h
+  exact h.symm
+
+private def hypercubeSumExecGo {R : Type} [CommRingOps R]
+    (evals : Array R) (limit : Nat) (hLim : limit ≤ evals.size) (i : Nat) (acc : R) : R :=
+  if hi : i < limit then
+    hypercubeSumExecGo evals limit hLim (i + 1) (CommRingOps.add acc (evals[i]'(by omega)))
+  else
+    acc
+termination_by limit - i
+
+/-- Unboxed $O(\min(|evals|, 2^v))$ prefix sum over `Array R` matching `hypercubeSum` without `hypercube`. -/
+def hypercubeSumExec {R : Type} [CommRingOps R] (v : Nat) (evals : Array R) : R :=
+  hypercubeSumExecGo evals (min evals.size (2 ^ v)) (Nat.min_le_left _ _) 0 CommRingOps.zero
+
+private theorem hypercubeSumExecGo_eq {R : Type} [CommRingOps R]
+    (evals : Array R) (limit : Nat) (hLim : limit ≤ evals.size)
+    (i : Nat) (acc : R) (hiLe : i ≤ limit) :
+    hypercubeSumExecGo evals limit hLim i acc =
+      ((evals.toList.take limit).drop i).foldl CommRingOps.add acc := by
+  unfold hypercubeSumExecGo
+  if hi : i < limit then
+    simp only [hi, ↓reduceDIte]
+    rw [hypercubeSumExecGo_eq evals limit hLim (i + 1) _ (by omega)]
+    have hiTake : i < (evals.toList.take limit).length := by
+      rw [List.length_take, Array.length_toList, Nat.min_eq_left hLim]; exact hi
+    rw [drop_eq_getElem_cons _ i hiTake, List.foldl_cons, List.getElem_take, Array.getElem_toList]
+  else
+    simp only [hi, ↓reduceDIte]
+    have hiEq : i = limit := by omega
+    subst hiEq
+    have hDropNil : (evals.toList.take i).drop i = [] := by simp
+    rw [hDropNil]
+    rfl
+termination_by limit - i
+
+theorem hypercubeSumExec_eq_hypercubeSum {R : Type} [LawfulCommRing R]
+    (v : Nat) (evals : Array R) :
+    hypercubeSumExec v evals = hypercubeSum v evals.toList := by
+  unfold hypercubeSumExec
+  rw [hypercubeSumExecGo_eq evals (min evals.size (2 ^ v)) (Nat.min_le_left _ _) 0
+        CommRingOps.zero (Nat.zero_le _),
+      List.drop_zero, hypercubeSum_eq_foldl_take]
+  congr 1
+  by_cases hle : evals.size ≤ 2 ^ v
+  · rw [Nat.min_eq_left hle]
+    have hLen : evals.toList.length = evals.size := Array.length_toList
+    rw [List.take_of_length_le (by omega), List.take_of_length_le (by omega)]
+  · rw [Nat.min_eq_right (Nat.le_of_not_le hle)]
+
+private def evenOddPrefixSumsExecGo {R : Type} [CommRingOps R]
+    (evals : Array R) (pairs : Nat) (hPairs : pairs ≤ (evals.size + 1) / 2)
+    (j : Nat) (s₀ s₁ : R) : R × R :=
+  if hj : j < pairs then
+    let lo := evals[2 * j]'(by omega)
+    let hi := if h2 : 2 * j + 1 < evals.size then evals[2 * j + 1]'h2 else CommRingOps.zero
+    evenOddPrefixSumsExecGo evals pairs hPairs (j + 1)
+      (CommRingOps.add s₀ lo) (CommRingOps.add s₁ hi)
+  else
+    (s₀, s₁)
+termination_by pairs - j
+
+/-- Single-pass $O(\min(|evals|/2, 2^v))$ even/odd pair sum over `Array R` computing `(s₀, s₁)`
+    for Sumcheck round polynomials with `0` `hypercube` or intermediate array allocations. -/
+def evenOddPrefixSumsExec {R : Type} [CommRingOps R] (v : Nat) (evals : Array R) : R × R :=
+  evenOddPrefixSumsExecGo evals (min ((evals.size + 1) / 2) (2 ^ v))
+    (Nat.min_le_left _ _) 0 CommRingOps.zero CommRingOps.zero
+
+private theorem evenOddPrefixSumsExecGo_eq {R : Type} [LawfulCommRing R]
+    (evals : Array R) (pairs : Nat) (hPairs : pairs ≤ (evals.size + 1) / 2)
+    (j : Nat) (s₀ s₁ : R) (hjLe : j ≤ pairs) :
+    evenOddPrefixSumsExecGo evals pairs hPairs j s₀ s₁ =
+      (((foldFirstVar evals.toList CommRingOps.zero).take pairs).drop j |>.foldl CommRingOps.add s₀,
+       ((foldFirstVar evals.toList CommRingOps.one).take pairs).drop j |>.foldl CommRingOps.add s₁) := by
+  unfold evenOddPrefixSumsExecGo
+  if hj : j < pairs then
+    simp only [hj, ↓reduceDIte]
+    rw [evenOddPrefixSumsExecGo_eq evals pairs hPairs (j + 1) _ _ (by omega)]
+    have hjHalf : j < (evals.size + 1) / 2 := Nat.lt_of_lt_of_le hj hPairs
+    have hLen0 : j < ((foldFirstVar evals.toList CommRingOps.zero).take pairs).length := by
+      rw [List.length_take, foldFirstVar_length, Array.length_toList, Nat.min_eq_left hPairs]
+      exact hj
+    have hLen1 : j < ((foldFirstVar evals.toList CommRingOps.one).take pairs).length := by
+      rw [List.length_take, foldFirstVar_length, Array.length_toList, Nat.min_eq_left hPairs]
+      exact hj
+    rw [drop_eq_getElem_cons _ j hLen0, drop_eq_getElem_cons _ j hLen1]
+    simp only [List.foldl_cons, List.getElem_take]
+    have hElem0 : (foldFirstVar evals.toList CommRingOps.zero)[j]'(by
+          rw [foldFirstVar_length, Array.length_toList]; exact hjHalf) =
+        evals[2 * j]'(by omega) := by
+      rw [foldFirstVar_getElem]; dsimp only
+      rw [LawfulCommRing.zero_mul, LawfulCommRing.add_zero]; rfl
+    have hElem1 : (foldFirstVar evals.toList CommRingOps.one)[j]'(by
+          rw [foldFirstVar_length, Array.length_toList]; exact hjHalf) =
+        (if h2 : 2 * j + 1 < evals.size then evals[2 * j + 1]'h2 else CommRingOps.zero) := by
+      rw [foldFirstVar_getElem]; dsimp only
+      rw [LawfulCommRing.one_mul, LawfulCommRing.add_sub_cancel_left]
+      simp [Array.length_toList, Array.getElem_toList]
+    rw [hElem0, hElem1]
+  else
+    simp only [hj, ↓reduceDIte]
+    have hjEq : j = pairs := by omega
+    subst hjEq
+    have hDrop0 : ((foldFirstVar evals.toList CommRingOps.zero).take j).drop j = [] := by simp
+    have hDrop1 : ((foldFirstVar evals.toList CommRingOps.one).take j).drop j = [] := by simp
+    rw [hDrop0, hDrop1]
+    rfl
+termination_by pairs - j
+
+theorem evenOddPrefixSumsExec_eq {R : Type} [LawfulCommRing R] (v : Nat) (evals : Array R) :
+    evenOddPrefixSumsExec v evals =
+      (hypercubeSum v (foldFirstVar evals.toList CommRingOps.zero),
+       hypercubeSum v (foldFirstVar evals.toList CommRingOps.one)) := by
+  unfold evenOddPrefixSumsExec
+  rw [evenOddPrefixSumsExecGo_eq evals (min ((evals.size + 1) / 2) (2 ^ v))
+        (Nat.min_le_left _ _) 0 CommRingOps.zero CommRingOps.zero (Nat.zero_le _),
+      List.drop_zero, List.drop_zero, hypercubeSum_eq_foldl_take, hypercubeSum_eq_foldl_take]
+  have hTakeEq : ∀ (r : R),
+      (foldFirstVar evals.toList r).take (min ((evals.size + 1) / 2) (2 ^ v)) =
+        (foldFirstVar evals.toList r).take (2 ^ v) := fun r => by
+    have hLen : (foldFirstVar evals.toList r).length = (evals.size + 1) / 2 := by
+      rw [foldFirstVar_length, Array.length_toList]
+    by_cases hle : (evals.size + 1) / 2 ≤ 2 ^ v
+    · rw [Nat.min_eq_left hle, List.take_of_length_le (by omega), List.take_of_length_le (by omega)]
+    · rw [Nat.min_eq_right (Nat.le_of_not_le hle)]
+  rw [hTakeEq, hTakeEq]
+
 end Obend.Crypto
 end

@@ -17,6 +17,7 @@ public import Obend.Crypto.SameOpening
 public import Obend.Logic.SeparationFrame
 import all Obend.Analysis.RealAnalysis
 import all Obend.Analysis.TaylorModel
+import all Obend.Judge.Clearing
 import all Obend.Crypto.FastRing
 import all Obend.Crypto.SameOpening
 public section
@@ -32,93 +33,70 @@ structure TraderUtilityCert where
   side : Side
   submittedTotal : Nat
   deriving DecidableEq, Repr
-/-- Executable `TaylorModel` point/range enclosure & conservative tick-scaled reservation checker. -/
+
 @[expose] def checkUtilityEnclosure (cert : TraderUtilityCert) : Bool :=
   let ptIv := Obend.Analysis.evalTaylorModelPoint cert.tm cert.feature
   let rngIv := Obend.Analysis.evalTaylorModelRange cert.tm
   let scaleRat : Obend.Analysis.CanonicalRat := cert.tickScale
   let subRat : Obend.Analysis.CanonicalRat := cert.submittedTotal
-  let sideBoundOk :=
-    match cert.side with
-    | .bid => decide (subRat ≤ scaleRat * ptIv.lo)
-    | .ask => decide (scaleRat * ptIv.hi ≤ subRat)
-  decide (0 < cert.tickScale) &&
-  cert.tm.domain.containsRat cert.feature &&
-  decide (ptIv.lo ≤ ptIv.hi) &&
-  decide (rngIv.lo ≤ rngIv.hi) &&
-  sideBoundOk
-/-- Semantic meaning of `TraderUtilityCert` with respect to the true nonlinear curve `u`. -/
+  let sideBoundOk := match cert.side with
+    | .bid => decide (subRat ≤ scaleRat * ptIv.lo) | .ask => decide (scaleRat * ptIv.hi ≤ subRat)
+  decide (0 < cert.tickScale) && cert.tm.domain.containsRat cert.feature &&
+  decide (ptIv.lo ≤ ptIv.hi) && decide (rngIv.lo ≤ rngIv.hi) && sideBoundOk
+
 def UtilityEnclosureHolds (u : Obend.Analysis.CanonicalRat → Obend.Analysis.CanonicalRat)
     (cert : TraderUtilityCert) : Prop :=
-  0 < cert.tickScale ∧
-  cert.feature ∈ cert.tm.domain ∧
+  0 < cert.tickScale ∧ cert.feature ∈ cert.tm.domain ∧
   u cert.feature ∈ Obend.Analysis.evalTaylorModelPoint cert.tm cert.feature ∧
   u cert.feature ∈ Obend.Analysis.evalTaylorModelRange cert.tm ∧
   match cert.side with
-  | .bid => (cert.submittedTotal : Obend.Analysis.CanonicalRat) ≤
-      (cert.tickScale : Obend.Analysis.CanonicalRat) * u cert.feature
-  | .ask => (cert.tickScale : Obend.Analysis.CanonicalRat) * u cert.feature ≤
-      (cert.submittedTotal : Obend.Analysis.CanonicalRat)
+  | .bid => (cert.submittedTotal : Obend.Analysis.CanonicalRat) ≤ (cert.tickScale : Obend.Analysis.CanonicalRat) * u cert.feature
+  | .ask => (cert.tickScale : Obend.Analysis.CanonicalRat) * u cert.feature ≤ (cert.submittedTotal : Obend.Analysis.CanonicalRat)
+
 theorem checkUtilityEnclosure_sound (cert : TraderUtilityCert)
     (u : Obend.Analysis.CanonicalRat → Obend.Analysis.CanonicalRat)
     (hModels : Obend.Analysis.TaylorModel.Models u cert.tm)
-    (hOk : checkUtilityEnclosure cert = true) :
-    UtilityEnclosureHolds u cert := by
-  unfold checkUtilityEnclosure at hOk
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
+    (hOk : checkUtilityEnclosure cert = true) : UtilityEnclosureHolds u cert := by
+  unfold checkUtilityEnclosure at hOk; simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
   rcases hOk with ⟨⟨⟨⟨hScalePos, hInDomB⟩, _⟩, _⟩, hSide⟩
-  have hx : cert.feature ∈ cert.tm.domain :=
-    (Obend.Analysis.Interval.containsRat_iff_mem cert.tm.domain cert.feature).1 hInDomB
+  have hx := (Obend.Analysis.Interval.containsRat_iff_mem cert.tm.domain cert.feature).1 hInDomB
   have hPt := Obend.Analysis.evalTaylorModelPoint_encloses hModels hx
   have hRng := Obend.Analysis.evalTaylorModelRange_encloses hModels hx
   have hPtBounds := (Obend.Analysis.Interval.mem_iff _ _).1 hPt
   have hScaleNonneg : (0 : Obend.Analysis.CanonicalRat) ≤ (cert.tickScale : Obend.Analysis.CanonicalRat) := by
     exact_mod_cast Nat.zero_le cert.tickScale
   refine ⟨hScalePos, hx, hPt, hRng, ?_⟩
-  cases hs : cert.side
-  · simp only [hs, decide_eq_true_eq] at hSide
-    have hMul := Rat.mul_le_mul_of_nonneg_left hPtBounds.1 hScaleNonneg
-    exact Rat.le_trans hSide hMul
-  · simp only [hs, decide_eq_true_eq] at hSide
-    have hMul := Rat.mul_le_mul_of_nonneg_left hPtBounds.2 hScaleNonneg
-    exact Rat.le_trans hMul hSide
-/-- Batch utility-enclosure alignment tying each trader's `TraderUtilityCert` to their `CommittedOrderSpec` and `OrderBitWitness`. -/
+  cases hs : cert.side <;> simp only [hs, decide_eq_true_eq] at hSide
+  · exact Rat.le_trans hSide (Rat.mul_le_mul_of_nonneg_left hPtBounds.1 hScaleNonneg)
+  · exact Rat.le_trans (Rat.mul_le_mul_of_nonneg_left hPtBounds.2 hScaleNonneg) hSide
+
 def checkUtilityBatch : List TraderUtilityCert → List CommittedOrderSpec → List OrderBitWitness → Bool
   | [], [], [] => true
   | c :: cs, s :: ss, w :: ws =>
-    checkUtilityEnclosure c &&
-    decide (c.side = s.side) &&
-    decide (c.submittedTotal = w.total) &&
-    checkUtilityBatch cs ss ws
+    checkUtilityEnclosure c && decide (c.side = s.side) && decide (c.submittedTotal = w.total) && checkUtilityBatch cs ss ws
   | _, _, _ => false
-/-- Batch semantic predicate for Stage 1 across all traders in the auction. -/
+
 def AllUtilityEnclosuresHold :
     List (Obend.Analysis.CanonicalRat → Obend.Analysis.CanonicalRat) →
     List TraderUtilityCert → List CommittedOrderSpec → List OrderBitWitness → Prop
   | [], [], [], [] => True
   | u :: us, c :: cs, s :: ss, w :: ws =>
-    UtilityEnclosureHolds u c ∧
-    c.side = s.side ∧
-    c.submittedTotal = w.total ∧
-    AllUtilityEnclosuresHold us cs ss ws
+    UtilityEnclosureHolds u c ∧ c.side = s.side ∧ c.submittedTotal = w.total ∧ AllUtilityEnclosuresHold us cs ss ws
   | _, _, _, _ => False
-/-- Pairwise `TaylorModel.Models` hypothesis across a trader curve list. -/
+
 def AllTaylorModelsHold :
-    List (Obend.Analysis.CanonicalRat → Obend.Analysis.CanonicalRat) →
-    List TraderUtilityCert → Prop
+    List (Obend.Analysis.CanonicalRat → Obend.Analysis.CanonicalRat) → List TraderUtilityCert → Prop
   | [], [] => True
   | u :: us, c :: cs => Obend.Analysis.TaylorModel.Models u c.tm ∧ AllTaylorModelsHold us cs
   | _, _ => False
+
 theorem checkUtilityBatch_sound
     (us : List (Obend.Analysis.CanonicalRat → Obend.Analysis.CanonicalRat))
     (certs : List TraderUtilityCert) (specs : List CommittedOrderSpec) (ws : List OrderBitWitness)
-    (hModels : AllTaylorModelsHold us certs)
-    (hBatch : checkUtilityBatch certs specs ws = true) :
+    (hModels : AllTaylorModelsHold us certs) (hBatch : checkUtilityBatch certs specs ws = true) :
     AllUtilityEnclosuresHold us certs specs ws := by
   induction us generalizing certs specs ws with
-  | nil =>
-    cases certs <;> cases specs <;> cases ws <;>
-      simp [AllTaylorModelsHold, AllUtilityEnclosuresHold, checkUtilityBatch] at hModels hBatch ⊢
+  | nil => cases certs <;> cases specs <;> cases ws <;> simp [AllTaylorModelsHold, AllUtilityEnclosuresHold, checkUtilityBatch] at hModels hBatch ⊢
   | cons u us ih =>
     cases certs with
     | nil => simp [AllTaylorModelsHold] at hModels
@@ -132,8 +110,7 @@ theorem checkUtilityBatch_sound
           simp only [AllTaylorModelsHold] at hModels
           simp only [checkUtilityBatch, Bool.and_eq_true, decide_eq_true_eq] at hBatch
           rcases hBatch with ⟨⟨⟨hEnc, hSide⟩, hTot⟩, hRest⟩
-          exact ⟨checkUtilityEnclosure_sound c u hModels.1 hEnc,
-                 hSide, hTot, ih cs ss ws' hModels.2 hRest⟩
+          exact ⟨checkUtilityEnclosure_sound c u hModels.1 hEnc, hSide, hTot, ih cs ss ws' hModels.2 hRest⟩
 theorem utilityBatch_inhabited (pp : AjtaiParams) (salt : GoldilocksExt2) :
     ∃ (u : Obend.Analysis.CanonicalRat → Obend.Analysis.CanonicalRat)
       (c : TraderUtilityCert) (s : CommittedOrderSpec) (w : OrderBitWitness),
@@ -229,112 +206,71 @@ def checkSableBatch {d : Nat} : List (SableLinearWitness d) → List OrderBitWit
   | [], [] => true
   | s :: ss, w :: ws =>
     checkSableDotNoWrap s.weights s.features s.bias &&
-    decide ((sableDotGoldilocks s.weights s.features s.bias).val = w.total) &&
-    checkSableBatch ss ws
+    decide ((sableDotGoldilocks s.weights s.features s.bias).val = w.total) && checkSableBatch ss ws
   | _, _ => false
 def AllSableInferencesExact {d : Nat} : List (SableLinearWitness d) → List OrderBitWitness → Prop
   | [], [] => True
   | s :: ss, w :: ws =>
-    0 ≤ sableDotInt s.weights s.features s.bias ∧
-    sableDotInt s.weights s.features s.bias < (goldilocksPrime : Int) ∧
-    ((sableDotGoldilocks s.weights s.features s.bias).val : Int) =
-      sableDotInt s.weights s.features s.bias ∧
-    sableDotInt s.weights s.features s.bias = (w.total : Int) ∧
-    AllSableInferencesExact ss ws
+    0 ≤ sableDotInt s.weights s.features s.bias ∧ sableDotInt s.weights s.features s.bias < (goldilocksPrime : Int) ∧
+    ((sableDotGoldilocks s.weights s.features s.bias).val : Int) = sableDotInt s.weights s.features s.bias ∧
+    sableDotInt s.weights s.features s.bias = (w.total : Int) ∧ AllSableInferencesExact ss ws
   | _, _ => False
 theorem checkSableBatch_sound {d : Nat}
     (sables : List (SableLinearWitness d)) (ws : List OrderBitWitness)
-    (hOk : checkSableBatch sables ws = true) :
-    AllSableInferencesExact sables ws := by
+    (hOk : checkSableBatch sables ws = true) : AllSableInferencesExact sables ws := by
   induction sables generalizing ws with
-  | nil =>
-    cases ws with
-    | nil => trivial
-    | cons _ _ => simp [checkSableBatch] at hOk
+  | nil => cases ws with | nil => trivial | cons _ _ => simp [checkSableBatch] at hOk
   | cons s ss ih =>
     cases ws with
     | nil => simp [checkSableBatch] at hOk
     | cons w ws' =>
       simp only [checkSableBatch, Bool.and_eq_true, decide_eq_true_eq] at hOk
       rcases hOk with ⟨⟨hNoWrap, hEqTot⟩, hRest⟩
-      obtain ⟨hNonneg, hLt, hExact⟩ :=
-        sableDot_goldilocks_exact_of_noWrap s.weights s.features s.bias hNoWrap
-      have hTotInt : sableDotInt s.weights s.features s.bias = (w.total : Int) := by
-        rw [← hExact, hEqTot]
-      exact ⟨hNonneg, hLt, hExact, hTotInt, ih ws' hRest⟩
+      obtain ⟨hNonneg, hLt, hExact⟩ := sableDot_goldilocks_exact_of_noWrap s.weights s.features s.bias hNoWrap
+      exact ⟨hNonneg, hLt, hExact, by rw [← hExact, hEqTot], ih ws' hRest⟩
 theorem sableBatch_inhabited (salt : GoldilocksExt2) :
-    ∃ (s : SableLinearWitness 1) (w : OrderBitWitness),
-      checkSableBatch [s] [w] = true := by
-  let s : SableLinearWitness 1 := ⟨zeroVec 1, zeroVec 1, 0⟩
-  let w : OrderBitWitness := ⟨[], [], salt⟩
-  have hNoWrap : checkSableDotNoWrap s.weights s.features s.bias = true := by decide
-  have hVal : (sableDotGoldilocks s.weights s.features s.bias).val = 0 := by decide
+    ∃ (s : SableLinearWitness 1) (w : OrderBitWitness), checkSableBatch [s] [w] = true := by
+  let s : SableLinearWitness 1 := ⟨zeroVec 1, zeroVec 1, 0⟩; let w : OrderBitWitness := ⟨[], [], salt⟩
   have hwTot : w.total = 0 := rfl
-  exact ⟨s, w, by simp [checkSableBatch, hNoWrap, hVal, hwTot]⟩
-/-- Direct bridge to `Obend.Core.RangeSafe` (`evaluates_goldilocks_exact_of_rangeSafe`) for arbitrary
-    Core4 quantized `Sable` terms compiled into `Goldilocks` arithmetic circuits. -/
-theorem sableCoreTerm_goldilocks_exact
-    (Γ : List Obend.Core.RangeSafe.Interval)
+  exact ⟨s, w, by simp [checkSableBatch, show checkSableDotNoWrap s.weights s.features s.bias = true by decide,
+                        show (sableDotGoldilocks s.weights s.features s.bias).val = 0 by decide, hwTot]⟩
+theorem sableCoreTerm_goldilocks_exact (Γ : List Obend.Core.RangeSafe.Interval)
     (env : List Obend.Core.Term.Term) (modVals : List Nat) (t : Obend.Core.Term.Term)
     (hSafe : Obend.Core.RangeSafe.checkRangeSafeMod goldilocksPrime Γ t = true)
     (hAgree : Obend.Core.RangeSafe.ModEnvAgrees goldilocksPrime Γ env modVals) :
     ∃ (I : Obend.Core.RangeSafe.Interval) (v : Obend.Core.Term.Term),
-      Obend.Core.RangeSafe.inferRange Γ t = some I ∧
-      Obend.Core.Term.Evaluates (Obend.Core.RangeSafe.closeTerm env t) v ∧
-      Obend.Core.RangeSafe.ValueInInterval I v ∧
-      Obend.Core.RangeSafe.scalarToNat v < goldilocksPrime ∧
-      Obend.Core.RangeSafe.evalMod goldilocksPrime modVals t =
-        some (Obend.Core.RangeSafe.scalarToNat v) :=
+      Obend.Core.RangeSafe.inferRange Γ t = some I ∧ Obend.Core.Term.Evaluates (Obend.Core.RangeSafe.closeTerm env t) v ∧
+      Obend.Core.RangeSafe.ValueInInterval I v ∧ Obend.Core.RangeSafe.scalarToNat v < goldilocksPrime ∧
+      Obend.Core.RangeSafe.evalMod goldilocksPrime modVals t = some (Obend.Core.RangeSafe.scalarToNat v) :=
   Obend.Core.RangeSafe.evaluates_goldilocks_exact_of_rangeSafe Γ env modVals t hSafe hAgree
 
 /-! ## 3. Stage 3 — Additive/Scalar RLWE Order Book Aggregation (`FastRing`) -/
-/-- Cyclotomic RLWE parameter bundle over $R_q = \mathbb{Z}_q[X]/(X^d + 1)$ with even plaintext modulus
-    $t = 2h$ and exact scaling factor $\Delta = q / t = 2 B$ ($B = \lfloor q / (2t) \rfloor$). -/
 structure RlweParams where
   d : Nat
   q : Nat
   t : Nat
   deriving DecidableEq, Repr
-/-- Parameter well-formedness: positive ring degree `d`, even plaintext modulus `t ≥ 2`, and exact
-    even scaling $q = 2 t B$ with positive noise cap $B = q / (2t) \ge 1$. -/
 def RlweParams.wfB (pp : RlweParams) : Bool :=
-  decide (0 < pp.d) &&
-  decide (2 ≤ pp.t) &&
-  decide (pp.t % 2 = 0) &&
-  decide (2 * pp.t ≤ pp.q) &&
-  decide (pp.q % (2 * pp.t) = 0)
+  decide (0 < pp.d) && decide (2 ≤ pp.t) && decide (pp.t % 2 = 0) && decide (2 * pp.t ≤ pp.q) && decide (pp.q % (2 * pp.t) = 0)
 def RlweParams.delta (pp : RlweParams) : Int := (pp.q / pp.t : Nat)
 def RlweParams.noiseCap (pp : RlweParams) : Nat := pp.q / (2 * pp.t)
 def RlweParams.halfT (pp : RlweParams) : Int := (pp.t / 2 : Nat)
 private theorem rlweParams_identities (pp : RlweParams) (hwf : pp.wfB = true) :
     0 < pp.d ∧ 2 ≤ pp.t ∧ pp.t % 2 = 0 ∧ 0 < pp.noiseCap ∧
     (pp.q : Int) = 2 * (pp.t : Int) * (pp.noiseCap : Int) ∧
-    pp.delta = 2 * (pp.noiseCap : Int) ∧
-    (pp.t : Int) = 2 * pp.halfT := by
-  unfold RlweParams.wfB at hwf
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at hwf
+    pp.delta = 2 * (pp.noiseCap : Int) ∧ (pp.t : Int) = 2 * pp.halfT := by
+  unfold RlweParams.wfB at hwf; simp only [Bool.and_eq_true, decide_eq_true_eq] at hwf
   rcases hwf with ⟨⟨⟨⟨hd, ht2⟩, htEven⟩, hqGe⟩, hqMod⟩
   unfold RlweParams.noiseCap RlweParams.delta RlweParams.halfT
   have hBPos : 0 < pp.q / (2 * pp.t) := Nat.div_pos hqGe (by omega)
-  have hqEqNat : pp.q = (2 * pp.t) * (pp.q / (2 * pp.t)) := by
-    have h := Nat.div_add_mod pp.q (2 * pp.t)
-    omega
+  have hqEqNat : pp.q = (2 * pp.t) * (pp.q / (2 * pp.t)) := by have := Nat.div_add_mod pp.q (2 * pp.t); omega
   have hDeltaNat : pp.q / pp.t = 2 * (pp.q / (2 * pp.t)) := by
-    have hq2 : pp.q = pp.t * (2 * (pp.q / (2 * pp.t))) := by
-      calc pp.q = (2 * pp.t) * (pp.q / (2 * pp.t)) := hqEqNat
-      _ = pp.t * (2 * (pp.q / (2 * pp.t))) := by
-        rw [Nat.mul_comm 2 pp.t, Nat.mul_assoc]
-    conv => lhs; rw [hq2]
-    exact Nat.mul_div_right _ (by omega)
-  have htNat : pp.t = 2 * (pp.t / 2) := by
-    have h := Nat.div_add_mod pp.t 2
-    omega
-  refine ⟨hd, ht2, htEven, hBPos, ?_, ?_, ?_⟩
-  · have hCast : (pp.q : Int) = (((2 * pp.t) * (pp.q / (2 * pp.t)) : Nat) : Int) :=
-      congrArg Int.ofNat hqEqNat
-    simpa [Int.natCast_mul, Int.mul_assoc] using hCast
-  · exact_mod_cast hDeltaNat
-  · exact_mod_cast htNat
+    generalize pp.q / (2 * pp.t) = k at hqEqNat ⊢
+    have hq2 : pp.q = (2 * k) * pp.t := by rw [hqEqNat]; ac_rfl
+    rw [hq2, Nat.mul_div_cancel _ (by omega)]
+  have htNat : pp.t = 2 * (pp.t / 2) := by have := Nat.div_add_mod pp.t 2; omega
+  refine ⟨hd, ht2, htEven, hBPos, ?_, by exact_mod_cast hDeltaNat, by exact_mod_cast htNat⟩
+  simpa [Int.natCast_mul, Int.mul_assoc] using congrArg Int.ofNat hqEqNat
 /-- Reduce every coefficient of `a : FastIntPoly d` canonically into `[0, q)`. -/
 def reducePolyMod {d : Nat} (q : Nat) (a : FastIntPoly d) : FastIntPoly d :=
   Sized.ofFn fun i => a.spec i % (q : Int)
@@ -395,68 +331,38 @@ def RlweEncryptsWithError (pp : RlweParams) (sk : FastIntPoly pp.d)
       (pp.delta * m.spec i + e.spec i) % (pp.q : Int)
 private theorem neg_mod_congr_int (a b q : Int) (h : a % q = b % q) : -a % q = -b % q := by
   have hh := congrArg (fun r : Int => (0 % q - r) % q) h
-  rw [← Int.sub_emod, ← Int.sub_emod] at hh
-  simpa only [Int.zero_sub] using hh
+  rw [← Int.sub_emod, ← Int.sub_emod] at hh; simpa only [Int.zero_sub] using hh
 private theorem sumInt_zero_const (n : Nat) : sumInt n (fun _ => (0 : Int)) = 0 := by
-  induction n with
-  | zero => rfl
-  | succ m ih => simp [sumInt, ih]
+  induction n with | zero => rfl | succ m ih => simp [sumInt, ih]
 private theorem negacyclicSpec_mod_right {d : Nat} (q : Int) (s a b : IntCycloSpec d)
     (h : ∀ j : Fin d, a j % q = b j % q) (k : Fin d) :
     negacyclicSpec s a k % q = negacyclicSpec s b k % q := by
-  unfold negacyclicSpec
-  conv => lhs; rw [← sumInt_mod]
+  unfold negacyclicSpec; conv => lhs; rw [← sumInt_mod]
   conv => rhs; rw [← sumInt_mod]
-  congr 1
-  apply sumInt_congr
-  intro i hi
-  simp only [hi, ↓reduceDIte, wrapSign]
+  congr 1; apply sumInt_congr; intro i hi; simp only [hi, ↓reduceDIte, wrapSign]
   let idx : Fin d := ⟨(k.val + d - i) % d, Nat.mod_lt _ (by omega)⟩
-  have hMulCong : (s ⟨i, hi⟩ * a idx) % q = (s ⟨i, hi⟩ * b idx) % q := by
-    rw [Int.mul_emod, h idx, ← Int.mul_emod]
-  split
-  · exact hMulCong
-  · exact neg_mod_congr_int _ _ _ hMulCong
+  have hMulCong : (s ⟨i, hi⟩ * a idx) % q = (s ⟨i, hi⟩ * b idx) % q := by rw [Int.mul_emod, h idx, ← Int.mul_emod]
+  split; exact hMulCong; exact neg_mod_congr_int _ _ _ hMulCong
 private theorem negacyclicSpec_zero_right {d : Nat} (s : IntCycloSpec d) (k : Fin d) :
     negacyclicSpec s (fun _ => 0) k = 0 := by
-  unfold negacyclicSpec
-  conv => rhs; rw [← sumInt_zero_const d]
-  apply sumInt_congr
-  intro i hi
-  simp [hi, wrapSign]
+  unfold negacyclicSpec; conv => rhs; rw [← sumInt_zero_const d]
+  apply sumInt_congr; intro i hi; simp [hi, wrapSign]
 private theorem negacyclicSpec_scale_right {d : Nat} (kScalar : Int) (s a : IntCycloSpec d) (idx : Fin d) :
     negacyclicSpec s (fun j => kScalar * a j) idx = kScalar * negacyclicSpec s a idx := by
-  unfold negacyclicSpec
-  rw [← sumInt_mul]
-  apply sumInt_congr
-  intro i hi
-  simp only [hi, ↓reduceDIte, wrapSign]
+  unfold negacyclicSpec; rw [← sumInt_mul]; apply sumInt_congr; intro i hi; simp only [hi, ↓reduceDIte, wrapSign]
   let bIdx : Fin d := ⟨(idx.val + d - i) % d, Nat.mod_lt _ (by omega)⟩
-  have hMul : s ⟨i, hi⟩ * (kScalar * a bIdx) = kScalar * (s ⟨i, hi⟩ * a bIdx) := by
-    rw [← Int.mul_assoc, Int.mul_comm (s ⟨i, hi⟩) kScalar, Int.mul_assoc]
-  rw [hMul]
-  split
-  · rfl
-  · exact (Int.mul_neg kScalar _).symm
+  rw [show s ⟨i, hi⟩ * (kScalar * a bIdx) = kScalar * (s ⟨i, hi⟩ * a bIdx) by rw [← Int.mul_assoc, Int.mul_comm (s ⟨i, hi⟩) kScalar, Int.mul_assoc]]
+  split; rfl; exact (Int.mul_neg kScalar _).symm
 theorem rlweEncrypt_encryptsWithError (pp : RlweParams) (sk a m e : FastIntPoly pp.d) :
     RlweEncryptsWithError pp sk (rlweEncrypt pp sk a m e) m e := by
-  intro i
-  unfold rlweEncrypt
-  dsimp only
-  rw [reducePolyMod_spec]
-  simp only [addFast_eq_spec, subFast_eq_spec, scaleFast_eq_spec]
-  rw [Int.emod_add_emod]
-  congr 1
-  omega
+  intro i; unfold rlweEncrypt; dsimp only; rw [reducePolyMod_spec]
+  simp only [addFast_eq_spec, subFast_eq_spec, scaleFast_eq_spec]; rw [Int.emod_add_emod]; congr 1; omega
 theorem rlweAdd_encrypts_sum (pp : RlweParams) (sk : FastIntPoly pp.d)
     (ct1 ct2 : RlweCiphertext pp.d) (m1 e1 m2 e2 : FastIntPoly pp.d)
     (h1 : RlweEncryptsWithError pp sk ct1 m1 e1)
     (h2 : RlweEncryptsWithError pp sk ct2 m2 e2) :
     RlweEncryptsWithError pp sk (rlweAdd pp ct1 ct2) (intAdd m1 m2) (intAdd e1 e2) := by
-  intro i
-  unfold rlweAdd
-  dsimp only
-  rw [reducePolyMod_spec, addFast_eq_spec]
+  intro i; unfold rlweAdd; dsimp only; rw [reducePolyMod_spec, addFast_eq_spec]
   have hMulMod : (negacyclicMulFast sk (reducePolyMod pp.q (intAdd ct1.c1 ct2.c1))).spec i % (pp.q : Int) =
       ((negacyclicMulFast sk ct1.c1).spec i + (negacyclicMulFast sk ct2.c1).spec i) % (pp.q : Int) := by
     rw [negacyclicMulFast_eq_spec, negacyclicMulFast_eq_spec, negacyclicMulFast_eq_spec]
@@ -464,24 +370,15 @@ theorem rlweAdd_encrypts_sum (pp : RlweParams) (sk : FastIntPoly pp.d)
       (reducePolyMod pp.q (intAdd ct1.c1 ct2.c1)).spec (intAdd ct1.c1 ct2.c1).spec
       (fun j => by rw [reducePolyMod_spec, Int.emod_emod]) i
     rw [hRed, addFast_eq_spec, negacyclicMul_left_distrib]
-  rw [Int.add_emod, Int.emod_emod, ← Int.add_emod]
-  rw [Int.add_emod, hMulMod, ← Int.add_emod]
-  have hRearr : ct1.c0.spec i + ct2.c0.spec i +
-      ((negacyclicMulFast sk ct1.c1).spec i + (negacyclicMulFast sk ct2.c1).spec i) =
-      (ct1.c0.spec i + (negacyclicMulFast sk ct1.c1).spec i) +
-      (ct2.c0.spec i + (negacyclicMulFast sk ct2.c1).spec i) := by omega
-  rw [hRearr, Int.add_emod, h1 i, h2 i, ← Int.add_emod]
-  simp only [addFast_eq_spec, Int.mul_add]
-  congr 1
-  omega
+  rw [Int.add_emod, Int.emod_emod, ← Int.add_emod, Int.add_emod, hMulMod, ← Int.add_emod]
+  have hRearr : ct1.c0.spec i + ct2.c0.spec i + ((negacyclicMulFast sk ct1.c1).spec i + (negacyclicMulFast sk ct2.c1).spec i) =
+      (ct1.c0.spec i + (negacyclicMulFast sk ct1.c1).spec i) + (ct2.c0.spec i + (negacyclicMulFast sk ct2.c1).spec i) := by omega
+  rw [hRearr, Int.add_emod, h1 i, h2 i, ← Int.add_emod]; simp only [addFast_eq_spec, Int.mul_add]; congr 1; omega
 theorem rlweScale_encrypts_scaled (pp : RlweParams) (k : Int) (sk : FastIntPoly pp.d)
     (ct : RlweCiphertext pp.d) (m e : FastIntPoly pp.d)
     (h : RlweEncryptsWithError pp sk ct m e) :
     RlweEncryptsWithError pp sk (rlweScale pp k ct) (intScale k m) (intScale k e) := by
-  intro i
-  unfold rlweScale
-  dsimp only
-  rw [reducePolyMod_spec, scaleFast_eq_spec]
+  intro i; unfold rlweScale; dsimp only; rw [reducePolyMod_spec, scaleFast_eq_spec]
   have hMulMod : (negacyclicMulFast sk (reducePolyMod pp.q (intScale k ct.c1))).spec i % (pp.q : Int) =
       (k * (negacyclicMulFast sk ct.c1).spec i) % (pp.q : Int) := by
     rw [negacyclicMulFast_eq_spec, negacyclicMulFast_eq_spec]
@@ -489,92 +386,58 @@ theorem rlweScale_encrypts_scaled (pp : RlweParams) (k : Int) (sk : FastIntPoly 
       (reducePolyMod pp.q (intScale k ct.c1)).spec (intScale k ct.c1).spec
       (fun j => by rw [reducePolyMod_spec, Int.emod_emod]) i
     rw [hRed, scaleFast_eq_spec, negacyclicSpec_scale_right]
-  rw [Int.add_emod, Int.emod_emod, ← Int.add_emod, Int.add_emod, hMulMod, ← Int.add_emod]
-  rw [← Int.mul_add, Int.mul_emod, h i, ← Int.mul_emod]
+  rw [Int.add_emod, Int.emod_emod, ← Int.add_emod, Int.add_emod, hMulMod, ← Int.add_emod,
+      ← Int.mul_add, Int.mul_emod, h i, ← Int.mul_emod]
   simp only [scaleFast_eq_spec, Int.mul_add]
-  have hAssoc : pp.delta * (k * m.spec i) = k * (pp.delta * m.spec i) := by
-    rw [← Int.mul_assoc, Int.mul_comm pp.delta k, Int.mul_assoc]
-  rw [hAssoc]
+  rw [show pp.delta * (k * m.spec i) = k * (pp.delta * m.spec i) by ac_rfl]
 theorem rlweZero_encrypts_zero (pp : RlweParams) (sk : FastIntPoly pp.d) :
     RlweEncryptsWithError pp sk (rlweZero pp) (zeroVec pp.d) (zeroVec pp.d) := by
-  intro i
-  unfold rlweZero
-  dsimp only
-  rw [negacyclicMulFast_eq_spec]
+  intro i; unfold rlweZero; dsimp only; rw [negacyclicMulFast_eq_spec]
   have hz : (zeroVec pp.d).spec = fun _ => (0 : Int) := Sized.spec_ofFn _
-  rw [hz, negacyclicSpec_zero_right]
-  simp
+  rw [hz, negacyclicSpec_zero_right]; simp
 /-- Exact rounding & signed centering theorem: whenever $-t/2 \le m < t/2$ and $|e| < \lfloor q / (2t) \rfloor$,
     `rlweDecodeSignedCoeff` recovers `m` **exactly** from any $\phi \equiv \Delta \cdot m + e \pmod q$. -/
 theorem rlweDecodeSignedCoeff_exact (pp : RlweParams) (phi m e : Int)
-    (hwf : pp.wfB = true)
-    (hCong : phi % (pp.q : Int) = (pp.delta * m + e) % (pp.q : Int))
-    (hmLo : -pp.halfT ≤ m) (hmHi : m < pp.halfT)
-    (heLt : e.natAbs < pp.noiseCap) :
+    (hwf : pp.wfB = true) (hCong : phi % (pp.q : Int) = (pp.delta * m + e) % (pp.q : Int))
+    (hmLo : -pp.halfT ≤ m) (hmHi : m < pp.halfT) (heLt : e.natAbs < pp.noiseCap) :
     rlweDecodeSignedCoeff pp phi = m := by
   obtain ⟨_, _, _, hBPos, hqEq, hDeltaEq, htEq⟩ := rlweParams_identities pp hwf
-  unfold rlweDecodeSignedCoeff
-  dsimp only
+  unfold rlweDecodeSignedCoeff; dsimp only
   let B : Int := pp.noiseCap
   have hBIntPos : 0 < B := Int.ofNat_lt.2 hBPos
   have htPos : 0 < (pp.t : Int) := by omega
-  have hqPos : 0 < (pp.q : Int) := by
-    rw [hqEq]
-    exact Int.mul_pos (by omega) hBIntPos
+  have hqPos : 0 < (pp.q : Int) := by rw [hqEq]; exact Int.mul_pos (by omega) hBIntPos
   have heBounds : -B < e ∧ e < B := by omega
   let u : Int := m % (pp.t : Int)
   have huNonneg : 0 ≤ u := Int.emod_nonneg m (by omega)
   have huLtT : u < (pp.t : Int) := Int.emod_lt_of_pos m htPos
   have hmDecomp : m = (pp.t : Int) * (m / (pp.t : Int)) + u := by
-    have h := Int.emod_def m (pp.t : Int)
-    dsimp only [u]
-    omega
+    have h := Int.emod_def m (pp.t : Int); dsimp only [u]; omega
   have hDeltaMul : pp.delta * m = (pp.q : Int) * (m / (pp.t : Int)) + pp.delta * u := by
     conv => lhs; rw [hmDecomp]
-    rw [Int.mul_add, ← Int.mul_assoc, hDeltaEq]
-    have hqComm : 2 * B * (pp.t : Int) = (pp.q : Int) := by
-      rw [hqEq]
-      have hc : 2 * B * (pp.t : Int) = 2 * (pp.t : Int) * B := by
-        rw [Int.mul_assoc, Int.mul_comm B (pp.t : Int), ← Int.mul_assoc]
-      exact hc
-    rw [hqComm]
+    rw [Int.mul_add, ← Int.mul_assoc, hDeltaEq, show 2 * B * (pp.t : Int) = (pp.q : Int) by rw [hqEq]; ac_rfl]
   have hPhiMod : (phi + B) % (pp.q : Int) = 2 * B * u + (e + B) := by
-    rw [Int.add_emod, hCong, ← Int.add_emod]
-    have hShift : pp.delta * m + e + B = (pp.delta * u + (e + B)) + (pp.q : Int) * (m / (pp.t : Int)) := by
-      rw [hDeltaMul]; omega
-    rw [hShift, Int.add_mul_emod_self_left, hDeltaEq]
-    have hNonnegVal : 0 ≤ 2 * B * u + (e + B) := by
-      have h2Bu : 0 ≤ 2 * B * u := Int.mul_nonneg (by omega) huNonneg
-      omega
+    rw [Int.add_emod, hCong, ← Int.add_emod,
+        show pp.delta * m + e + B = (pp.delta * u + (e + B)) + (pp.q : Int) * (m / (pp.t : Int)) by rw [hDeltaMul]; omega,
+        Int.add_mul_emod_self_left, hDeltaEq]
+    have hNonnegVal : 0 ≤ 2 * B * u + (e + B) := by have := Int.mul_nonneg (by omega : 0 ≤ 2 * B) huNonneg; omega
     have hUpperVal : 2 * B * u + (e + B) < (pp.q : Int) := by
-      have huLe : u ≤ (pp.t : Int) - 1 := by omega
-      have hMulLe : 2 * B * u ≤ 2 * B * ((pp.t : Int) - 1) :=
-        Int.mul_le_mul_of_nonneg_left huLe (by omega)
+      have hMulLe : 2 * B * u ≤ 2 * B * ((pp.t : Int) - 1) := Int.mul_le_mul_of_nonneg_left (by omega) (by omega)
       have hExpand : 2 * B * ((pp.t : Int) - 1) = (pp.q : Int) - 2 * B := by
-        rw [Int.mul_sub, Int.mul_one, hqEq]
-        have hc : 2 * B * (pp.t : Int) = 2 * (pp.t : Int) * B := by
-          rw [Int.mul_assoc, Int.mul_comm B (pp.t : Int), ← Int.mul_assoc]
-        rw [hc]
+        rw [Int.mul_sub, Int.mul_one, hqEq, show 2 * B * (pp.t : Int) = 2 * (pp.t : Int) * B by ac_rfl]
       omega
     exact Int.emod_eq_of_lt hNonnegVal hUpperVal
   have hDivU : (2 * B * u + (e + B)) / pp.delta = u := by
-    rw [hDeltaEq]
-    have hComm : 2 * B * u + (e + B) = (e + B) + (2 * B) * u := by omega
-    rw [hComm, Int.add_mul_ediv_left _ _ (by omega)]
-    have hSmallDiv : (e + B) / (2 * B) = 0 :=
-      Int.ediv_eq_zero_of_lt (by omega) (by omega)
+    rw [hDeltaEq, show 2 * B * u + (e + B) = (e + B) + (2 * B) * u by omega, Int.add_mul_ediv_left _ _ (by omega)]
+    have hSmallDiv : (e + B) / (2 * B) = 0 := Int.ediv_eq_zero_of_lt (by omega) (by omega)
     omega
   rw [hPhiMod, hDivU]
   if hmNonneg : 0 ≤ m then
-    have huEqM : u = m := Int.emod_eq_of_lt hmNonneg (by omega)
-    rw [huEqM]; split <;> omega
+    rw [show u = m from Int.emod_eq_of_lt hmNonneg (by omega)]; split <;> omega
   else
-    have hmPlusNonneg : 0 ≤ m + (pp.t : Int) := by omega
-    have hmPlusLt : m + (pp.t : Int) < (pp.t : Int) := by omega
     have huEqMPlus : u = m + (pp.t : Int) := by
       change m % (pp.t : Int) = m + (pp.t : Int)
-      rw [← Int.add_emod_right m (pp.t : Int)]
-      exact Int.emod_eq_of_lt hmPlusNonneg hmPlusLt
+      rw [← Int.add_emod_right m (pp.t : Int)]; exact Int.emod_eq_of_lt (by omega) (by omega)
     rw [huEqMPlus]; split <;> omega
 /-- Signed plaintext range predicate: every coefficient lies in $[-t/2, t/2)$. -/
 def SignedPlainInRange (pp : RlweParams) (m : FastIntPoly pp.d) : Prop :=
@@ -687,21 +550,14 @@ theorem firstDupNat?_none_iff (xs : List Nat) :
   | cons x xs ih =>
     simp only [firstDupNat?, List.nodup_cons]
     constructor
-    · intro h
-      split at h
+    · intro h; split at h
       · cases h
       · rename_i hAny
-        refine ⟨?_, ih.1 h⟩
-        intro hMem
-        apply hAny
-        exact List.any_eq_true.2 ⟨x, hMem, beq_self_eq_true x⟩
-    · rintro ⟨hNotMem, hNd⟩
-      split
+        exact ⟨fun hMem => hAny (List.any_eq_true.2 ⟨x, hMem, beq_self_eq_true x⟩), ih.1 h⟩
+    · rintro ⟨hNotMem, hNd⟩; split
       · rename_i hAny
         obtain ⟨y, hyMem, hyEq⟩ := List.any_eq_true.1 hAny
-        have hxy : y = x := eq_of_beq hyEq
-        subst hxy
-        exact absurd hyMem hNotMem
+        exact absurd (eq_of_beq hyEq ▸ hyMem) hNotMem
       · exact ih.2 hNd
 def findNonCanonicalShare? {d : Nat} (q : Nat) :
     List (PartialDecryptionShare d) → Option Nat
@@ -753,40 +609,25 @@ def ValidThresholdShares (pp : RlweParams) (c1 : FastIntPoly pp.d) (smudgeBound 
     ValidThresholdShares pp c1 smudgeBound shs sks ess
   | _, _, _ => False
 private theorem negacyclicSpec_add_left {d : Nat} (s1 s2 a : IntCycloSpec d) (k : Fin d) :
-    negacyclicSpec (fun i => s1 i + s2 i) a k =
-      negacyclicSpec s1 a k + negacyclicSpec s2 a k := by
-  unfold negacyclicSpec
-  rw [← sumInt_add]
-  apply sumInt_congr
-  intro i hi
-  simp only [hi, ↓reduceDIte, Int.add_mul, wrapSign]
-  split <;> omega
+    negacyclicSpec (fun i => s1 i + s2 i) a k = negacyclicSpec s1 a k + negacyclicSpec s2 a k := by
+  unfold negacyclicSpec; rw [← sumInt_add]; apply sumInt_congr; intro i hi
+  simp only [hi, ↓reduceDIte, Int.add_mul, wrapSign]; split <;> omega
 private theorem negacyclicSpec_zero_left {d : Nat} (a : IntCycloSpec d) (k : Fin d) :
     negacyclicSpec (fun _ => 0) a k = 0 := by
-  unfold negacyclicSpec
-  conv => rhs; rw [← sumInt_zero_const d]
-  apply sumInt_congr
-  intro i hi
-  simp [hi, wrapSign]
-private theorem combineSharePolys_phase_mod (pp : RlweParams) (c1 : FastIntPoly pp.d)
-    (smudgeBound : Nat)
-    (shares : List (PartialDecryptionShare pp.d))
-    (skShares smudgeNoises : List (FastIntPoly pp.d))
+  unfold negacyclicSpec; conv => rhs; rw [← sumInt_zero_const d]
+  apply sumInt_congr; intro i hi; simp [hi, wrapSign]
+private theorem combineSharePolys_phase_mod (pp : RlweParams) (c1 : FastIntPoly pp.d) (smudgeBound : Nat)
+    (shares : List (PartialDecryptionShare pp.d)) (skShares smudgeNoises : List (FastIntPoly pp.d))
     (hValid : ValidThresholdShares pp c1 smudgeBound shares skShares smudgeNoises) :
-    (∀ i : Fin pp.d,
-      (combineSharePolys pp shares).spec i % (pp.q : Int) =
-        ((negacyclicMulFast (sumPlainBatch pp.d skShares) c1).spec i +
-         (sumPlainBatch pp.d smudgeNoises).spec i) % (pp.q : Int)) ∧
+    (∀ i : Fin pp.d, (combineSharePolys pp shares).spec i % (pp.q : Int) =
+      ((negacyclicMulFast (sumPlainBatch pp.d skShares) c1).spec i + (sumPlainBatch pp.d smudgeNoises).spec i) % (pp.q : Int)) ∧
     normInfFast (sumPlainBatch pp.d smudgeNoises).coeffs ≤ shares.length * smudgeBound := by
   induction shares generalizing skShares smudgeNoises with
   | nil =>
     cases skShares <;> cases smudgeNoises <;> try (simp [ValidThresholdShares] at hValid; done)
-    refine ⟨fun i => ?_, ?_⟩
-    · simp only [combineSharePolys, sumPlainBatch, negacyclicMulFast_eq_spec]
-      have hz : (zeroVec pp.d).spec = fun _ => (0 : Int) := Sized.spec_ofFn _
-      rw [hz, negacyclicSpec_zero_left]
-      simp
-    · simpa [sumPlainBatch] using norm_le (zeroVec pp.d) 0 (fun _ => by simp [zeroVec])
+    refine ⟨fun i => ?_, by simpa [sumPlainBatch] using norm_le (zeroVec pp.d) 0 (fun _ => by simp [zeroVec])⟩
+    simp only [combineSharePolys, sumPlainBatch, negacyclicMulFast_eq_spec]
+    rw [show (zeroVec pp.d).spec = fun _ => (0 : Int) from Sized.spec_ofFn _, negacyclicSpec_zero_left]; simp
   | cons sh shs ih =>
     cases skShares with
     | nil => simp [ValidThresholdShares] at hValid
@@ -794,23 +635,17 @@ private theorem combineSharePolys_phase_mod (pp : RlweParams) (c1 : FastIntPoly 
       cases smudgeNoises with
       | nil => simp [ValidThresholdShares] at hValid
       | cons es ess =>
-        rcases hValid with ⟨hShMod, hEsNorm, hRest⟩
-        obtain ⟨ihMod, ihNorm⟩ := ih sks ess hRest
+        rcases hValid with ⟨hShMod, hEsNorm, hRest⟩; obtain ⟨ihMod, ihNorm⟩ := ih sks ess hRest
         refine ⟨fun i => ?_, ?_⟩
         · simp only [combineSharePolys, sumPlainBatch, reducePolyMod_spec, addFast_eq_spec]
           rw [Int.emod_emod, Int.add_emod, hShMod i, ihMod i, ← Int.add_emod]
           have hSkAdd : (negacyclicMulFast (intAdd sk (sumPlainBatch pp.d sks)) c1).spec i =
-              (negacyclicMulFast sk c1).spec i +
-              (negacyclicMulFast (sumPlainBatch pp.d sks) c1).spec i := by
-            rw [negacyclicMulFast_eq_spec, negacyclicMulFast_eq_spec, negacyclicMulFast_eq_spec,
-                addFast_eq_spec, negacyclicSpec_add_left]
-          rw [hSkAdd]
-          congr 1
-          omega
+              (negacyclicMulFast sk c1).spec i + (negacyclicMulFast (sumPlainBatch pp.d sks) c1).spec i := by
+            rw [negacyclicMulFast_eq_spec, negacyclicMulFast_eq_spec, negacyclicMulFast_eq_spec, addFast_eq_spec, negacyclicSpec_add_left]
+          rw [hSkAdd]; congr 1; omega
         · simp only [sumPlainBatch, List.length_cons]
           apply Nat.le_trans (normInfFast_add_le es (sumPlainBatch pp.d ess))
-          rw [Nat.succ_mul, Nat.add_comm (shs.length * smudgeBound) smudgeBound]
-          exact Nat.add_le_add hEsNorm ihNorm
+          rw [Nat.succ_mul, Nat.add_comm (shs.length * smudgeBound) smudgeBound]; exact Nat.add_le_add hEsNorm ihNorm
 /-- **Threshold Decryption Exactness Under Smudging Noise Cap (`thresholdDecrypt_exact_under_noise_cap`)**:
     Whenever `thresholdDecryptChecked cfg ct shares = .ok mOut`, if `ct` encrypts `m` under aggregate
     secret key `sumPlainBatch d skShares` with bounded encryption error `‖eEnc‖_∞ ≤ cfg.encNoiseBound`
@@ -857,56 +692,39 @@ theorem thresholdDecrypt_exact_under_noise_cap (cfg : ThresholdDecryptConfig)
             of_decide_eq_true hCapB
           obtain ⟨hCombMod, hSmudgeNorm⟩ :=
             combineSharePolys_phase_mod cfg.params ct.c1 cfg.smudgeBound shares skShares smudgeNoises hShares
-          refine ⟨?_, (checkSmudgeSafe_iff _ _ _).1 hSm, by omega,
-                  (firstDupNat?_none_iff _).1 hDup, hCapLt⟩
-          rw [← hDec]
-          apply Sized.ext
-          funext i
+          refine ⟨?_, (checkSmudgeSafe_iff _ _ _).1 hSm, by omega, (firstDupNat?_none_iff _).1 hDup, hCapLt⟩
+          rw [← hDec]; apply Sized.ext; funext i
           simp only [Sized.spec_ofFn, reducePolyMod_spec, addFast_eq_spec]
           let eTot := eEnc.spec i + (sumPlainBatch cfg.params.d smudgeNoises).spec i
-          have hPhaseCong :
-              (ct.c0.spec i + (combineSharePolys cfg.params shares).spec i) %
+          have hPhaseCong : (ct.c0.spec i + (combineSharePolys cfg.params shares).spec i) %
                 (cfg.params.q : Int) % (cfg.params.q : Int) =
               (cfg.params.delta * m.spec i + eTot) % (cfg.params.q : Int) := by
             rw [Int.emod_emod, Int.add_emod, hCombMod i, ← Int.add_emod]
-            have hRearr : ct.c0.spec i +
-                ((negacyclicMulFast (sumPlainBatch cfg.params.d skShares) ct.c1).spec i +
+            have hRearr : ct.c0.spec i + ((negacyclicMulFast (sumPlainBatch cfg.params.d skShares) ct.c1).spec i +
                  (sumPlainBatch cfg.params.d smudgeNoises).spec i) =
                 (ct.c0.spec i + (negacyclicMulFast (sumPlainBatch cfg.params.d skShares) ct.c1).spec i) +
                 (sumPlainBatch cfg.params.d smudgeNoises).spec i := by omega
-            rw [hRearr, Int.add_emod, hEnc i, ← Int.add_emod]
-            congr 1
-            dsimp only [eTot]
-            omega
+            rw [hRearr, Int.add_emod, hEnc i, ← Int.add_emod]; congr 1; dsimp only [eTot]; omega
           have heTotLt : eTot.natAbs < cfg.params.noiseCap := by
-            have h1 := coeff_le_norm eEnc i
-            have h2 := coeff_le_norm (sumPlainBatch cfg.params.d smudgeNoises) i
-            have hTri := Int.natAbs_add_le (eEnc.spec i) ((sumPlainBatch cfg.params.d smudgeNoises).spec i)
-            omega
+            have := coeff_le_norm eEnc i; have := coeff_le_norm (sumPlainBatch cfg.params.d smudgeNoises) i
+            have := Int.natAbs_add_le (eEnc.spec i) ((sumPlainBatch cfg.params.d smudgeNoises).spec i); omega
           obtain ⟨hmLo, hmHi⟩ := hmRange i
-          exact rlweDecodeSignedCoeff_exact cfg.params _ (m.spec i) eTot
-            hWf hPhaseCong hmLo hmHi heTotLt
+          exact rlweDecodeSignedCoeff_exact cfg.params _ (m.spec i) eTot hWf hPhaseCong hmLo hmHi heTotLt
   · have hQCheckTrue : (shares.length < cfg.quorum || cfg.quorum == 0) = true := hQuorum
     simp [hQCheckTrue] at hDec
-/-- Deterministic refusal when cumulative noise meets or exceeds $\lfloor q / (2t) \rfloor$. -/
 theorem thresholdDecrypt_refuses_noise_overflow (cfg : ThresholdDecryptConfig)
     (ct : RlweCiphertext cfg.params.d) (shares : List (PartialDecryptionShare cfg.params.d))
-    (hwf : cfg.params.wfB = true)
-    (hSm : checkSmudgeSafe cfg.encNoiseBound cfg.smudgeBound cfg.secBits = true)
+    (hwf : cfg.params.wfB = true) (hSm : checkSmudgeSafe cfg.encNoiseBound cfg.smudgeBound cfg.secBits = true)
     (hQuorumPos : 0 < cfg.quorum) (hQuorumLe : cfg.quorum ≤ shares.length)
-    (hNodup : (shares.map (·.guardianId)).Nodup)
-    (hCanon : findNonCanonicalShare? cfg.params.q shares = none)
+    (hNodup : (shares.map (·.guardianId)).Nodup) (hCanon : findNonCanonicalShare? cfg.params.q shares = none)
     (hOverflow : cfg.params.noiseCap ≤ cfg.encNoiseBound + shares.length * cfg.smudgeBound) :
     thresholdDecryptChecked cfg ct shares =
       .error (.noiseBudgetExceeded (cfg.encNoiseBound + shares.length * cfg.smudgeBound) cfg.params.noiseCap) := by
   unfold thresholdDecryptChecked
-  have hQFalse : (shares.length < cfg.quorum || cfg.quorum == 0) = false := by
-    simp [Nat.not_lt.2 hQuorumLe, Nat.ne_of_gt hQuorumPos]
+  have hQFalse : (shares.length < cfg.quorum || cfg.quorum == 0) = false := by simp [Nat.not_lt.2 hQuorumLe, Nat.ne_of_gt hQuorumPos]
   have hDupNone := (firstDupNat?_none_iff (shares.map (·.guardianId))).2 hNodup
-  have hCapFalse : decide (cfg.encNoiseBound + shares.length * cfg.smudgeBound < cfg.params.noiseCap) = false :=
-    decide_eq_false (by omega)
-  simp [hwf, hSm, hQFalse, hDupNone, hCanon, hCapFalse]
-/-- Deterministic refusal when `smudgeBound = 0` (`Choe–Kang–Stehlé` defense). -/
+  simp [hwf, hSm, hQFalse, hDupNone, hCanon, decide_eq_false (by omega : ¬ (cfg.encNoiseBound + shares.length * cfg.smudgeBound < cfg.params.noiseCap))]
+
 theorem thresholdDecrypt_refuses_unsmudged (cfg : ThresholdDecryptConfig)
     (ct : RlweCiphertext cfg.params.d) (shares : List (PartialDecryptionShare cfg.params.d))
     (hwf : cfg.params.wfB = true) (hZeroSmudge : cfg.smudgeBound = 0) :
@@ -915,46 +733,26 @@ theorem thresholdDecrypt_refuses_unsmudged (cfg : ThresholdDecryptConfig)
   have hSmFalse : checkSmudgeSafe cfg.encNoiseBound cfg.smudgeBound cfg.secBits = false := by
     cases hb : checkSmudgeSafe cfg.encNoiseBound cfg.smudgeBound cfg.secBits
     · rfl
-    · exact False.elim (smudgeSafe_refuses_unsmudged cfg.encNoiseBound cfg.secBits
-        (hZeroSmudge ▸ (checkSmudgeSafe_iff _ _ _).1 hb))
+    · exact False.elim (smudgeSafe_refuses_unsmudged cfg.encNoiseBound cfg.secBits (hZeroSmudge ▸ (checkSmudgeSafe_iff _ _ _).1 hb))
   simp [hwf, hSmFalse]
-/-- Deterministic refusal when a guardian submits a non-canonical share outside `[0, q)`. -/
+
 theorem thresholdDecrypt_refuses_malformed_share (cfg : ThresholdDecryptConfig)
     (ct : RlweCiphertext cfg.params.d) (shares : List (PartialDecryptionShare cfg.params.d)) (gid : Nat)
-    (hwf : cfg.params.wfB = true)
-    (hSm : checkSmudgeSafe cfg.encNoiseBound cfg.smudgeBound cfg.secBits = true)
+    (hwf : cfg.params.wfB = true) (hSm : checkSmudgeSafe cfg.encNoiseBound cfg.smudgeBound cfg.secBits = true)
     (hQuorumPos : 0 < cfg.quorum) (hQuorumLe : cfg.quorum ≤ shares.length)
-    (hNodup : (shares.map (·.guardianId)).Nodup)
-    (hBad : findNonCanonicalShare? cfg.params.q shares = some gid) :
+    (hNodup : (shares.map (·.guardianId)).Nodup) (hBad : findNonCanonicalShare? cfg.params.q shares = some gid) :
     thresholdDecryptChecked cfg ct shares = .error (.nonCanonicalShare gid) := by
   unfold thresholdDecryptChecked
-  have hQFalse : (shares.length < cfg.quorum || cfg.quorum == 0) = false := by
-    simp [Nat.not_lt.2 hQuorumLe, Nat.ne_of_gt hQuorumPos]
-  have hDupNone := (firstDupNat?_none_iff (shares.map (·.guardianId))).2 hNodup
-  simp [hwf, hSm, hQFalse, hDupNone, hBad]
+  have hQFalse : (shares.length < cfg.quorum || cfg.quorum == 0) = false := by simp [Nat.not_lt.2 hQuorumLe, Nat.ne_of_gt hQuorumPos]
+  simp [hwf, hSm, hQFalse, (firstDupNat?_none_iff (shares.map (·.guardianId))).2 hNodup, hBad]
 
-/-! ## 4b. What smudging hides: the statistical bound on one clearing seat
-
-A guardian's share reveals a seat quantity `q` only through `q + e` with `e` uniform on `[-B, B]`,
-`B = cfg.smudgeBound`. For two candidate quantities at distance `|q₁ - q₂| ≤ seatSensitivity`, the transcripts
-`q₁ + e₁` and `q₂ + e₂` are both uniform on `2B + 1` points and their supports overlap in
-`2B + 1 - |q₁ - q₂|` points. On the overlap the two distributions are identical point for point (so every Rényi
-divergence between them, conditioned on the overlap, is `0`), and a transcript leaves the overlap with
-probability `|q₁ - q₂| / (2B + 1)`, which is the statistical distance. -/
-
-/-- Number of smudged transcripts both seat quantities can produce under noise bound `B`. -/
+/-! ## 4b. Statistical Smudging Bound on One Clearing Seat -/
 def smudgedOverlapMass (B : Nat) (q₁ q₂ : Int) : Nat := 2 * B + 1 - (q₁ - q₂).natAbs
-/-- The smudging range is `2^secBits` times the seat sensitivity: `seatSensitivity · 2^secBits ≤ 2B + 1`. -/
 def checkRenyiSmudgeSecurity (cfg : ThresholdDecryptConfig) (seatSensitivity : Nat) : Bool :=
   decide (seatSensitivity * 2 ^ cfg.secBits ≤ 2 * cfg.smudgeBound + 1)
 example : checkRenyiSmudgeSecurity
-    { params := ⟨4, 2 ^ 54, 256⟩, quorum := 3, encNoiseBound := 8, smudgeBound := 2 ^ 43, secBits := 40 } 16 = true := by
-  decide
-/-- **Statistical smudging bound.** For seat quantities within `seatSensitivity` under an accepted configuration:
-1. every transcript `y` in the overlap of the two noise ranges is produced by both, each by exactly one in-range
-   mask (so both give it mass `1 / (2B + 1)`);
-2. the overlap has exactly `smudgedOverlapMass` points;
-3. the mass outside the overlap, `(2B + 1 - overlap) / (2B + 1) = |q₁ - q₂| / (2B + 1)`, is at most `2^-secBits`. -/
+    { params := ⟨4, 2 ^ 54, 256⟩, quorum := 3, encNoiseBound := 8, smudgeBound := 2 ^ 43, secBits := 40 } 16 = true := by decide
+
 theorem renyiSmudgingBound_sound (cfg : ThresholdDecryptConfig) (seatSensitivity : Nat) (q₁ q₂ : Int)
     (hChk : checkRenyiSmudgeSecurity cfg seatSensitivity = true) (hSens : (q₁ - q₂).natAbs ≤ seatSensitivity) :
     (∀ y : Int, max (q₁ - cfg.smudgeBound) (q₂ - cfg.smudgeBound) ≤ y →
@@ -963,24 +761,19 @@ theorem renyiSmudgingBound_sound (cfg : ThresholdDecryptConfig) (seatSensitivity
         ∀ e : Int, (q₁ + e = y → e = e₁) ∧ (q₂ + e = y → e = e₂)) ∧
     min (q₁ + cfg.smudgeBound) (q₂ + cfg.smudgeBound) - max (q₁ - cfg.smudgeBound) (q₂ - cfg.smudgeBound) + 1 =
       (smudgedOverlapMass cfg.smudgeBound q₁ q₂ : Int) ∧
-    (2 * cfg.smudgeBound + 1 - smudgedOverlapMass cfg.smudgeBound q₁ q₂) * 2 ^ cfg.secBits ≤
-      2 * cfg.smudgeBound + 1 := by
+    (2 * cfg.smudgeBound + 1 - smudgedOverlapMass cfg.smudgeBound q₁ q₂) * 2 ^ cfg.secBits ≤ 2 * cfg.smudgeBound + 1 := by
   simp only [checkRenyiSmudgeSecurity, decide_eq_true_eq] at hChk
-  have hMul : (q₁ - q₂).natAbs * 2 ^ cfg.secBits ≤ seatSensitivity * 2 ^ cfg.secBits :=
-    Nat.mul_le_mul_right _ hSens
-  have hD : (q₁ - q₂).natAbs ≤ 2 * cfg.smudgeBound + 1 :=
-    Nat.le_trans (Nat.le_mul_of_pos_right _ (Nat.two_pow_pos _)) (Nat.le_trans hMul hChk)
-  have e : 2 * cfg.smudgeBound + 1 - smudgedOverlapMass cfg.smudgeBound q₁ q₂ = (q₁ - q₂).natAbs := by
-    unfold smudgedOverlapMass; omega
-  refine ⟨fun y hLo hHi => ⟨y - q₁, y - q₂, by omega, by omega, by omega, by omega, fun e => ⟨by omega, by omega⟩⟩,
+  have hMul := Nat.mul_le_mul_right (2 ^ cfg.secBits) hSens
+  have hD := Nat.le_trans (Nat.le_mul_of_pos_right _ (Nat.two_pow_pos _)) (Nat.le_trans hMul hChk)
+  refine ⟨fun y _ _ => ⟨y - q₁, y - q₂, by omega, by omega, by omega, by omega, fun _ => ⟨by omega, by omega⟩⟩,
     by unfold smudgedOverlapMass; omega, ?_⟩
-  rw [e]; exact Nat.le_trans hMul hChk
-/-- A `SmudgeSafe` configuration hides seat differences up to its encryption noise bound. -/
+  rw [show 2 * cfg.smudgeBound + 1 - smudgedOverlapMass cfg.smudgeBound q₁ q₂ = (q₁ - q₂).natAbs by unfold smudgedOverlapMass; omega]
+  exact Nat.le_trans hMul hChk
+
 theorem smudgeSafe_checkRenyiSmudgeSecurity (cfg : ThresholdDecryptConfig)
     (h : SmudgeSafe cfg.encNoiseBound cfg.smudgeBound cfg.secBits) :
     checkRenyiSmudgeSecurity cfg cfg.encNoiseBound = true := by
-  have := h.2.2
-  simp only [checkRenyiSmudgeSecurity, decide_eq_true_eq]; omega
+  have := h.2.2; simp only [checkRenyiSmudgeSecurity, decide_eq_true_eq]; omega
 
 /-! ## 5. Stage 5 — `SameOpening` Salted KKT Clearing, `ConservedValue` Settlement & Multi-Epoch Trace -/
 def postingToConservedForAsset (ast : AssetId) (p : ResourcePosting) : ConservedValue :=
@@ -1043,22 +836,15 @@ def expectedAggregateOrderBook (d : Nat) :
     intAdd (orderSignedPlainVec d s.side w.qty w.total) (expectedAggregateOrderBook d ss ws)
   | _, _ => zeroVec d
 theorem expectedAggregateOrderBook_eq_sumPlainBatch (d : Nat)
-    (specs : List CommittedOrderSpec) (ws : List OrderBitWitness)
-    (hLen : specs.length = ws.length) :
+    (specs : List CommittedOrderSpec) (ws : List OrderBitWitness) (hLen : specs.length = ws.length) :
     expectedAggregateOrderBook d specs ws =
       sumPlainBatch d ((specs.zip ws).map fun (s, w) => orderSignedPlainVec d s.side w.qty w.total) := by
   induction specs generalizing ws with
-  | nil =>
-    cases ws with
-    | nil => rfl
-    | cons _ _ => simp at hLen
+  | nil => cases ws with | nil => rfl | cons _ _ => simp at hLen
   | cons s ss ih =>
     cases ws with
     | nil => simp at hLen
-    | cons w ws' =>
-      simp only [List.length_cons, Nat.succ.injEq] at hLen
-      simp [expectedAggregateOrderBook, sumPlainBatch, ih ws' hLen]
-/-- Complete single-epoch `DarkBazaar` private clearing bundle across all 5 stages. -/
+    | cons w ws' => simp [expectedAggregateOrderBook, sumPlainBatch, ih ws' (Nat.succ.inj hLen)]
 structure DarkBazaarEpochBatch (sableDim : Nat) (cfg : ThresholdDecryptConfig) where
   epochNullifier : Nat
   utilityCerts : List TraderUtilityCert
@@ -1067,18 +853,15 @@ structure DarkBazaarEpochBatch (sableDim : Nat) (cfg : ThresholdDecryptConfig) w
   thresholdShares : List (PartialDecryptionShare cfg.params.d)
   openingQuery : SameOpeningQuery
   openingWitness : SameOpeningWitness
-/-- Verified settlement outcome produced by `verifyAndClearDarkBazaarEpoch`. -/
 structure DarkBazaarClearedOutcome (d : Nat) where
   decryptedBook : FastIntPoly d
   currencySettlement : ConservedValue
   goodsSettlement : ConservedValue
-/-- Unified refusal sum for `verifyAndClearDarkBazaarEpoch`. -/
 inductive DarkBazaarRefusal where
   | smudgeParamMismatch | utilityBatchInvalid | sableBatchInvalid | ciphertextCountMismatch
   | thresholdFailed (reason : ThresholdRefusal) | aggregateBookMismatch
   | sameOpeningFailed (reason : SameOpeningRefusal) | sameOpeningUncovered
   deriving DecidableEq, Repr
-/-- **Executable 5-Stage `DarkBazaar` Epoch Verifier & Settlement Engine (`verifyAndClearDarkBazaarEpoch`)**. -/
 @[expose] def verifyAndClearDarkBazaarEpoch {sableDim : Nat} (cfg : ThresholdDecryptConfig)
     (batch : DarkBazaarEpochBatch sableDim cfg) :
     Except DarkBazaarRefusal (DarkBazaarClearedOutcome cfg.params.d) :=
@@ -1090,13 +873,11 @@ inductive DarkBazaarRefusal where
   else if !@checkSableBatch sableDim batch.sableWitnesses batch.openingWitness.orderWitnesses then .error .sableBatchInvalid
   else if batch.encryptedOrders.length != batch.openingQuery.committedOrders.length then .error .ciphertextCountMismatch
   else
-    let aggCt := rlweAggregateBatch cfg.params batch.encryptedOrders
-    match thresholdDecryptChecked cfg aggCt batch.thresholdShares with
+    match thresholdDecryptChecked cfg (rlweAggregateBatch cfg.params batch.encryptedOrders) batch.thresholdShares with
     | .error r => .error (.thresholdFailed r)
     | .ok decBook =>
-      let expBook := expectedAggregateOrderBook cfg.params.d
-        batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses
-      if decBook != expBook then .error .aggregateBookMismatch
+      if decBook != expectedAggregateOrderBook cfg.params.d batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses then
+        .error .aggregateBookMismatch
       else
         match verifySameOpening batch.openingQuery batch.openingWitness with
         | .refused r _ => .error (.sameOpeningFailed r)
@@ -1105,58 +886,40 @@ inductive DarkBazaarRefusal where
           .ok { decryptedBook := decBook
               , currencySettlement := settleAssetConserved batch.openingQuery.market.currency batch.openingWitness.transfers
               , goodsSettlement := settleAssetConserved batch.openingQuery.market.goods batch.openingWitness.transfers }
-/-- **Grand Pillar-4 Theorem (`darkBazaar_sable_rlwe_smudge_clearing_conserves`)**:
-    Welds `TaylorModel` enclosure, `Sable` `Goldilocks` exactness, homomorphic RLWE aggregation,
-    smudged $k$-of-$n$ threshold decryption, `SameOpening` KKT zero-gap clearing, and `ConservedValue`. -/
 theorem darkBazaar_sable_rlwe_smudge_clearing_conserves
-    {sableDim : Nat} (cfg : ThresholdDecryptConfig)
-    (batch : DarkBazaarEpochBatch sableDim cfg)
+    {sableDim : Nat} (cfg : ThresholdDecryptConfig) (batch : DarkBazaarEpochBatch sableDim cfg)
     (us : List (Obend.Analysis.CanonicalRat → Obend.Analysis.CanonicalRat))
     (skShares smudgeNoises orderNoises : List (FastIntPoly cfg.params.d))
-    (out : DarkBazaarClearedOutcome cfg.params.d)
-    (hClear : verifyAndClearDarkBazaarEpoch cfg batch = .ok out)
+    (out : DarkBazaarClearedOutcome cfg.params.d) (hClear : verifyAndClearDarkBazaarEpoch cfg batch = .ok out)
     (hTM : AllTaylorModelsHold us batch.utilityCerts)
-    (hEncBatch : BatchEncryptsWithErrors cfg.params (sumPlainBatch cfg.params.d skShares)
-      batch.encryptedOrders
+    (hEncBatch : BatchEncryptsWithErrors cfg.params (sumPlainBatch cfg.params.d skShares) batch.encryptedOrders
       ((batch.openingQuery.committedOrders.zip batch.openingWitness.orderWitnesses).map
-        fun (s, w) => orderSignedPlainVec cfg.params.d s.side w.qty w.total)
-      orderNoises)
+        fun (s, w) => orderSignedPlainVec cfg.params.d s.side w.qty w.total) orderNoises)
     (hEncNorm : normInfFast (sumPlainBatch cfg.params.d orderNoises).coeffs ≤ cfg.encNoiseBound)
-    (hShares : ValidThresholdShares cfg.params
-      (rlweAggregateBatch cfg.params batch.encryptedOrders).c1
+    (hShares : ValidThresholdShares cfg.params (rlweAggregateBatch cfg.params batch.encryptedOrders).c1
       cfg.smudgeBound batch.thresholdShares skShares smudgeNoises)
-    (hPlainRange : SignedPlainInRange cfg.params
-      (sumPlainBatch cfg.params.d
-        ((batch.openingQuery.committedOrders.zip batch.openingWitness.orderWitnesses).map
-          fun (s, w) => orderSignedPlainVec cfg.params.d s.side w.qty w.total))) :
-    AllUtilityEnclosuresHold us batch.utilityCerts
-      batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses ∧
+    (hPlainRange : SignedPlainInRange cfg.params (sumPlainBatch cfg.params.d
+      ((batch.openingQuery.committedOrders.zip batch.openingWitness.orderWitnesses).map
+        fun (s, w) => orderSignedPlainVec cfg.params.d s.side w.qty w.total))) :
+    AllUtilityEnclosuresHold us batch.utilityCerts batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses ∧
     AllSableInferencesExact batch.sableWitnesses batch.openingWitness.orderWitnesses ∧
     SmudgeSafe cfg.encNoiseBound cfg.smudgeBound cfg.secBits ∧
     cfg.encNoiseBound + batch.thresholdShares.length * cfg.smudgeBound < cfg.params.noiseCap ∧
-    out.decryptedBook =
-      sumPlainBatch cfg.params.d
-        ((batch.openingQuery.committedOrders.zip batch.openingWitness.orderWitnesses).map
-          fun (s, w) => orderSignedPlainVec cfg.params.d s.side w.qty w.total) ∧
-    out.decryptedBook =
-      expectedAggregateOrderBook cfg.params.d
-        batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses ∧
+    out.decryptedBook = sumPlainBatch cfg.params.d
+      ((batch.openingQuery.committedOrders.zip batch.openingWitness.orderWitnesses).map
+        fun (s, w) => orderSignedPlainVec cfg.params.d s.side w.qty w.total) ∧
+    out.decryptedBook = expectedAggregateOrderBook cfg.params.d batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses ∧
     SameOpeningMeaning batch.openingQuery batch.openingWitness ∧
-    sumDeltas out.currencySettlement.entries = 0 ∧
-    sumDeltas out.goodsSettlement.entries = 0 ∧
+    sumDeltas out.currencySettlement.entries = 0 ∧ sumDeltas out.goodsSettlement.entries = 0 ∧
     (∀ acc : AccountId,
-      deltaAt out.currencySettlement.entries acc =
-        netFlow batch.openingWitness.transfers acc batch.openingQuery.market.currency ∧
-      deltaAt out.goodsSettlement.entries acc =
-        netFlow batch.openingWitness.transfers acc batch.openingQuery.market.goods) := by
+      deltaAt out.currencySettlement.entries acc = netFlow batch.openingWitness.transfers acc batch.openingQuery.market.currency ∧
+      deltaAt out.goodsSettlement.entries acc = netFlow batch.openingWitness.transfers acc batch.openingQuery.market.goods) := by
   unfold verifyAndClearDarkBazaarEpoch at hClear
   cases hSmAlign : (decide (batch.openingQuery.noiseBound = cfg.encNoiseBound) &&
-      decide (batch.openingQuery.smudgeBound = cfg.smudgeBound) &&
-      decide (batch.openingQuery.secBits = cfg.secBits))
+      decide (batch.openingQuery.smudgeBound = cfg.smudgeBound) && decide (batch.openingQuery.secBits = cfg.secBits))
   · simp [hSmAlign] at hClear
   simp only [hSmAlign, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hClear
-  cases hUtil : checkUtilityBatch batch.utilityCerts
-      batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses
+  cases hUtil : checkUtilityBatch batch.utilityCerts batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses
   · simp [hUtil] at hClear
   simp only [hUtil, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hClear
   cases hSable : checkSableBatch batch.sableWitnesses batch.openingWitness.orderWitnesses
@@ -1164,39 +927,29 @@ theorem darkBazaar_sable_rlwe_smudge_clearing_conserves
   simp only [hSable, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hClear
   cases hCtLen : (batch.encryptedOrders.length != batch.openingQuery.committedOrders.length)
   · simp only [hCtLen, Bool.false_eq_true, ↓reduceIte] at hClear
-    cases hDec : thresholdDecryptChecked cfg
-        (rlweAggregateBatch cfg.params batch.encryptedOrders) batch.thresholdShares with
+    cases hDec : thresholdDecryptChecked cfg (rlweAggregateBatch cfg.params batch.encryptedOrders) batch.thresholdShares with
     | error r => simp [hDec] at hClear
     | ok decBook =>
       simp only [hDec] at hClear
-      let expBook := expectedAggregateOrderBook cfg.params.d
-        batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses
+      let expBook := expectedAggregateOrderBook cfg.params.d batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses
       cases hBookNe : (decBook != expBook)
       · simp only [expBook, hBookNe, Bool.false_eq_true, ↓reduceIte] at hClear
-        have hBookEq : decBook = expBook := bne_eq_false_iff_eq.1 hBookNe
         cases hSO : verifySameOpening batch.openingQuery batch.openingWitness with
-        | refused r p => simp [hSO] at hClear
+        | refused _ _ => simp [hSO] at hClear
         | uncovered => simp [hSO] at hClear
         | ok =>
           simp only [hSO, Except.ok.injEq] at hClear
-          have hAggEnc := rlweAggregateBatch_encrypts_sum cfg.params
-            (sumPlainBatch cfg.params.d skShares)
-            batch.encryptedOrders _ orderNoises hEncBatch
-          obtain ⟨hDecExact, hSmSafe, _, _, hCapLt⟩ :=
-            thresholdDecrypt_exact_under_noise_cap cfg
-              (rlweAggregateBatch cfg.params batch.encryptedOrders)
-              batch.thresholdShares skShares smudgeNoises _
-              (sumPlainBatch cfg.params.d orderNoises) decBook
-              hDec hAggEnc hEncNorm hShares hPlainRange
+          have hAggEnc := rlweAggregateBatch_encrypts_sum cfg.params (sumPlainBatch cfg.params.d skShares) batch.encryptedOrders _ orderNoises hEncBatch
+          obtain ⟨hDecExact, hSmSafe, _, _, hCapLt⟩ := thresholdDecrypt_exact_under_noise_cap cfg
+            (rlweAggregateBatch cfg.params batch.encryptedOrders) batch.thresholdShares skShares smudgeNoises _
+            (sumPlainBatch cfg.params.d orderNoises) decBook hDec hAggEnc hEncNorm hShares hPlainRange
           subst hClear
-          refine ⟨checkUtilityBatch_sound us batch.utilityCerts _ _ hTM hUtil,
-                  checkSableBatch_sound batch.sableWitnesses _ hSable,
-                  hSmSafe, hCapLt, hDecExact, hBookEq,
-                  verifySameOpening_sound hSO,
-                  (settleAssetConserved _ _).conserved,
-                  (settleAssetConserved _ _).conserved,
-                  fun acc => ⟨(settleAssetConserved_deltaAt_eq_netFlow _ _ acc).1,
-                              (settleAssetConserved_deltaAt_eq_netFlow _ _ acc).1⟩⟩
+          exact ⟨checkUtilityBatch_sound us batch.utilityCerts _ _ hTM hUtil,
+                 checkSableBatch_sound batch.sableWitnesses _ hSable, hSmSafe, hCapLt, hDecExact,
+                 bne_eq_false_iff_eq.1 hBookNe, verifySameOpening_sound hSO,
+                 (settleAssetConserved _ _).conserved, (settleAssetConserved _ _).conserved,
+                 fun acc => ⟨(settleAssetConserved_deltaAt_eq_netFlow _ _ acc).1,
+                             (settleAssetConserved_deltaAt_eq_netFlow _ _ acc).1⟩⟩
       · simp [expBook, hBookNe] at hClear
   · simp [hCtLen] at hClear
 
@@ -1299,13 +1052,11 @@ theorem validDarkBazaarTrace_conserves_and_safe {sableDim : Nat} (cfg : Threshol
               | @step sa sb sc hd tl out' hSt' _ ihTr =>
                 intro hm
                 rcases List.mem_cons.1 hm with hEqHd | hmTl
-                · rw [hEqHd]
-                  unfold stepDarkBazaarEpoch at hSt'
-                  cases hc : nullifierContainsB sa.spentNullifiers hd.epochNullifier
-                  · rfl
-                  · simp [hc] at hSt'
-                · have hNotInSb := ihTr hmTl
-                  unfold stepDarkBazaarEpoch at hSt'
+                · rw [hEqHd]; unfold stepDarkBazaarEpoch at hSt'
+                  cases hc : nullifierContainsB sa.spentNullifiers hd.epochNullifier with
+                  | false => rfl
+                  | true => simp [hc] at hSt'
+                · have hNotInSb := ihTr hmTl; unfold stepDarkBazaarEpoch at hSt'
                   cases hc : nullifierContainsB sa.spentNullifiers hd.epochNullifier
                   · simp only [hc, Bool.false_eq_true, ↓reduceIte] at hSt'
                     by_cases hBl : sa.remainingDecryptionBudget < hd.thresholdShares.length
@@ -1316,24 +1067,15 @@ theorem validDarkBazaarTrace_conserves_and_safe {sableDim : Nat} (cfg : Threshol
                       | ok _ =>
                         simp only [hCl, Except.ok.injEq, Prod.mk.injEq] at hSt'
                         have hSubSaSb : sa.spentNullifiers.subsetB sb.spentNullifiers = true := by
-                          rw [← hSt'.1]
-                          exact subsetB_insert_self _ _
+                          rw [← hSt'.1]; exact subsetB_insert_self _ _
                         cases hInSa : nullifierContainsB sa.spentNullifiers b2.epochNullifier
                         · rfl
-                        · exfalso
-                          have hMemSb := NullifierSet.subsetB_iff.1 hSubSaSb _
-                            ((nullifierContainsB_iff _ _).1 hInSa)
-                          rw [(nullifierContainsB_iff _ _).2 hMemSb] at hNotInSb
-                          cases hNotInSb
+                        · have hMemSb := NullifierSet.subsetB_iff.1 hSubSaSb _ ((nullifierContainsB_iff _ _).1 hInSa)
+                          rw [(nullifierContainsB_iff _ _).2 hMemSb] at hNotInSb; cases hNotInSb
                   · simp [hc] at hSt'
             have hFalse := hSubFirst hTail hb2Mem
-            have hInMidB : nullifierContainsB mid.spentNullifiers batch.epochNullifier = true :=
-              (nullifierContainsB_iff _ _).2 hBatchInMid
-            rw [hb2Eq, hInMidB] at hFalse
-            cases hFalse
-      · have hLt : st.remainingDecryptionBudget < batch.thresholdShares.length :=
-          of_decide_eq_true hBud
-        simp [hLt] at hStep
+            rw [hb2Eq, (nullifierContainsB_iff _ _).2 hBatchInMid] at hFalse; cases hFalse
+      · simp [of_decide_eq_true hBud] at hStep
     · simp [hSpent] at hStep
 /-- Every accepted epoch step induces a genuine `AuthCamera` frame-preserving update (`spend_nullifier_fpu`). -/
 theorem stepDarkBazaarEpoch_authCamera_fpu {sableDim : Nat} (cfg : ThresholdDecryptConfig)
@@ -1490,5 +1232,259 @@ theorem stepDarkBazaarEpochAuth_refuses_order_replay {sableDim : Nat} (cfg : Thr
         cases checkAuthorizedCommittee st₂.committee b₂.thresholdShares <;> simp [hMem₂]
       · unfold stepDarkBazaarEpochAuth; rw [hComm₂, hMkt, hSpecs, hCts]; simp [hMem₂]
   · rw [hSpent₁] at hStep₁; cases hStep₁
+
+/-! ## 8. Witness-Free Zero-Knowledge `DarkBazaar` Clearing (`verifyAndClearDarkBazaarZkEpoch`) -/
+
+/-- Public BDLOP-committed order entry carrying a witness-free `MaskedSameOpeningProof`
+    (`0` `OrderBitWitness`, `qtyBits`, `totalBits`, or `salt` fields!). -/
+structure CommittedZkOrderSpec (rows cols : Nat) where
+  account : AccountId
+  side : Side
+  bdlopComm : FastIntPoly rows
+  zkProof : MaskedSameOpeningProof rows cols
+  deriving DecidableEq
+def zkOrderStmtContext {rows cols : Nat} (market : Market) (s : CommittedZkOrderSpec rows cols) : ByteArray :=
+  Obend.Digest.Cshake256.Native.bytesOfList
+    (dbFrameBytes (reprStr market).toUTF8.toList ++ dbFrameBytes (reprStr s.account).toUTF8.toList ++
+     [match s.side with | .bid => (0 : UInt8) | .ask => (1 : UInt8)])
+def verifyZkOrderProofBatch {rows cols : Nat} (pp : BdlopParams rows cols) (market : Market)
+    (zs : List (CommittedZkOrderSpec rows cols)) : Bool :=
+  zs.all fun s => @verifyMaskedSameOpening rows cols pp (zkOrderStmtContext market s) s.bdlopComm s.zkProof
+def expectedClearedOrderBook (d : Nat) : List Order → FastIntPoly d
+  | [] => zeroVec d
+  | o :: os => intAdd (orderSignedPlainVec d o.side o.qty o.total) (expectedClearedOrderBook d os)
+/-- **Witness-Free Zero-Knowledge `DarkBazaar` Epoch Batch (`DarkBazaarZkEpochBatch`)**:
+    Replaces plaintext `SameOpeningWitness` (`OrderBitWitness`) with Schnorr/BDLOP `MaskedSameOpeningProof`s. -/
+structure DarkBazaarZkEpochBatch (rows cols : Nat) (cfg : ThresholdDecryptConfig) where
+  epochNullifier : Nat
+  bdlopParams : BdlopParams rows cols
+  market : Market
+  zkOrders : List (CommittedZkOrderSpec rows cols)
+  encryptedOrders : List (RlweCiphertext cfg.params.d)
+  thresholdShares : List (PartialDecryptionShare cfg.params.d)
+  clearedOrders : List Order
+  transfers : List ResourcePosting
+  kktCert : Certificate
+inductive DarkBazaarZkRefusal where
+  | malformedMarketAssets | bdlopParamsUnsafe | zkOpeningProofFailed | orderCountMismatch
+  | thresholdFailed (reason : ThresholdRefusal) | aggregateBookMismatch
+  | clearingFailed (reason : ClearingRefusal) | nonzeroPrimalDualGap
+  deriving DecidableEq, Repr
+private def clearDarkBazaarZkPostProof (cfg : ThresholdDecryptConfig) (market : Market)
+    (nZk : Nat) (encryptedOrders : List (RlweCiphertext cfg.params.d))
+    (thresholdShares : List (PartialDecryptionShare cfg.params.d))
+    (clearedOrders : List Order) (transfers : List ResourcePosting) (kktCert : Certificate) :
+    Except DarkBazaarZkRefusal (DarkBazaarClearedOutcome cfg.params.d) :=
+  if encryptedOrders.length != nZk || clearedOrders.length != nZk then .error .orderCountMismatch
+  else
+    match thresholdDecryptChecked cfg (rlweAggregateBatch cfg.params encryptedOrders) thresholdShares with
+    | .error r => .error (.thresholdFailed r)
+    | .ok decBook =>
+      if decBook != expectedClearedOrderBook cfg.params.d clearedOrders then .error .aggregateBookMismatch
+      else
+        match Obend.Judge.judge { market with epsilon := 0 } clearedOrders transfers kktCert with
+        | .error r => .error (.clearingFailed r)
+        | .ok () =>
+          if !kktPrimalDualGapZero market clearedOrders transfers kktCert then .error .nonzeroPrimalDualGap
+          else .ok { decryptedBook := decBook, currencySettlement := settleAssetConserved market.currency transfers
+                   , goodsSettlement := settleAssetConserved market.goods transfers }
+
+/-- **Witness-Free ZK `DarkBazaar` Verifier (`verifyAndClearDarkBazaarZkEpoch`)**:
+    Verifies BDLOP parameters, every trader's witness-free `MaskedSameOpeningProof`, smudged
+    threshold RLWE decryption, aggregate order-book equality, KKT zero-gap optimality, and `ConservedValue`. -/
+def verifyAndClearDarkBazaarZkEpoch {rows cols : Nat} (cfg : ThresholdDecryptConfig)
+    (batch : DarkBazaarZkEpochBatch rows cols cfg) :
+    Except DarkBazaarZkRefusal (DarkBazaarClearedOutcome cfg.params.d) :=
+  if batch.market.currency = batch.market.goods then .error .malformedMarketAssets
+  else if !@checkBdlopSafeParams rows cols batch.bdlopParams then .error .bdlopParamsUnsafe
+  else if !@verifyZkOrderProofBatch rows cols batch.bdlopParams batch.market batch.zkOrders then
+    .error .zkOpeningProofFailed
+  else
+    clearDarkBazaarZkPostProof cfg batch.market batch.zkOrders.length
+      batch.encryptedOrders batch.thresholdShares batch.clearedOrders batch.transfers batch.kktCert
+
+theorem verifyZkOrderProofBatch_sound {rows cols : Nat} (pp : BdlopParams rows cols) (market : Market)
+    (zs : List (CommittedZkOrderSpec rows cols)) (hOk : verifyZkOrderProofBatch pp market zs = true) :
+    ∀ s ∈ zs, verifyMaskedSameOpening pp (zkOrderStmtContext market s) s.bdlopComm s.zkProof = true :=
+  List.all_eq_true.1 hOk
+
+/-- **Soundness of Witness-Free `verifyAndClearDarkBazaarZkEpoch` (`verifyAndClearDarkBazaarZkEpoch_sound`)**:
+    Establishes BDLOP parameter safety, validity of every trader's `MaskedSameOpeningProof`,
+    `SmudgeSafe` threshold decryption, KKT zero-gap optimality, and exact `MintSafe` settlement conservation! -/
+theorem verifyAndClearDarkBazaarZkEpoch_sound {rows cols : Nat} (cfg : ThresholdDecryptConfig)
+    (batch : DarkBazaarZkEpochBatch rows cols cfg) (out : DarkBazaarClearedOutcome cfg.params.d)
+    (hOk : verifyAndClearDarkBazaarZkEpoch cfg batch = .ok out) :
+    batch.market.currency ≠ batch.market.goods ∧ checkBdlopSafeParams batch.bdlopParams = true ∧
+    (∀ s : CommittedZkOrderSpec rows cols, s ∈ batch.zkOrders →
+      verifyMaskedSameOpening batch.bdlopParams (zkOrderStmtContext batch.market s) s.bdlopComm s.zkProof = true) ∧
+    out.decryptedBook = expectedClearedOrderBook cfg.params.d batch.clearedOrders ∧
+    dualObjective batch.clearedOrders batch.kktCert =
+      primalObjective batch.market batch.clearedOrders batch.transfers ∧
+    sumDeltas out.currencySettlement.entries = 0 ∧ sumDeltas out.goodsSettlement.entries = 0 ∧
+    (∀ acc : AccountId,
+      deltaAt out.currencySettlement.entries acc = netFlow batch.transfers acc batch.market.currency ∧
+      deltaAt out.goodsSettlement.entries acc = netFlow batch.transfers acc batch.market.goods) := by
+  unfold verifyAndClearDarkBazaarZkEpoch clearDarkBazaarZkPostProof at hOk
+  if hEqAst : batch.market.currency = batch.market.goods then simp [hEqAst] at hOk
+  else
+    simp only [hEqAst, ↓reduceIte] at hOk
+    cases hBd : checkBdlopSafeParams batch.bdlopParams
+    · simp [hBd] at hOk
+    simp only [hBd, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+    cases hZk : verifyZkOrderProofBatch batch.bdlopParams batch.market batch.zkOrders
+    · simp [hZk] at hOk
+    simp only [hZk, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+    cases hCnt : (batch.encryptedOrders.length != batch.zkOrders.length ||
+                  batch.clearedOrders.length != batch.zkOrders.length)
+    · simp only [hCnt, Bool.false_eq_true, ↓reduceIte] at hOk
+      cases hDec : thresholdDecryptChecked cfg
+          (rlweAggregateBatch cfg.params batch.encryptedOrders) batch.thresholdShares with
+      | error _ => simp [hDec] at hOk
+      | ok decBook =>
+        simp only [hDec] at hOk
+        cases hBook : (decBook != expectedClearedOrderBook cfg.params.d batch.clearedOrders)
+        · simp only [hBook, Bool.false_eq_true, ↓reduceIte] at hOk
+          cases hJ : Obend.Judge.judge { batch.market with epsilon := 0 }
+              batch.clearedOrders batch.transfers batch.kktCert with
+          | error _ => simp [hJ] at hOk
+          | ok _ =>
+            simp only [hJ] at hOk
+            cases hGap : kktPrimalDualGapZero batch.market batch.clearedOrders batch.transfers batch.kktCert
+            · simp [hGap] at hOk
+            · simp only [hGap, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Except.ok.injEq] at hOk; subst hOk
+              exact ⟨hEqAst, rfl, verifyZkOrderProofBatch_sound _ _ _ hZk, bne_eq_false_iff_eq.1 hBook,
+                     (kktPrimalDualGapZero_iff _ _ _ _).1 hGap, (settleAssetConserved _ _).conserved,
+                     (settleAssetConserved _ _).conserved, fun acc =>
+                     ⟨(settleAssetConserved_deltaAt_eq_netFlow _ _ acc).1,
+                      (settleAssetConserved_deltaAt_eq_netFlow _ _ acc).1⟩⟩
+        · simp [hBook] at hOk
+    · simp [hCnt] at hOk
+
+private abbrev zkHabRlwe : RlweParams := { d := 2, q := 2 ^ 54, t := 256 }
+private abbrev zkHabCfg : ThresholdDecryptConfig := { params := zkHabRlwe, quorum := 1, encNoiseBound := 8, smudgeBound := 8 * (2 ^ 40), secBits := 40 }
+private def zkHabBdlop : BdlopParams 1 1 := { matrix := Sized.ofFn fun _ => ⟨#[5], rfl⟩, q := 97, bWit := 1, bChal := 1, bMask := 3, bResp := 2 }
+private abbrev zkHabMkt : Market := { currency := 1, goods := 2, epsilon := 0 }
+private def zkHabCt : RlweCiphertext 2 := rlweZero zkHabRlwe
+private def zkHabSh : PartialDecryptionShare 2 := { guardianId := 1, sharePoly := zeroVec 2 }
+private def zkHabOrdList : List Order := [{ account := 77, side := .bid, qty := 0, total := 0 }]
+private def zkHabCert : Certificate := { price := 1, potentials := (0, 0), slacks := [1] }
+
+theorem zkEpochClearing_inhabited (nf : Nat) :
+    ∃ (cfg : ThresholdDecryptConfig) (batch : DarkBazaarZkEpochBatch 1 1 cfg)
+      (out : DarkBazaarClearedOutcome cfg.params.d),
+      batch.epochNullifier = nf ∧ 0 < batch.zkOrders.length ∧
+      verifyZkOrderProofBatch batch.bdlopParams batch.market batch.zkOrders = true ∧
+      verifyAndClearDarkBazaarZkEpoch cfg batch = .ok out := by
+  have hAssets : zkHabMkt.currency ≠ zkHabMkt.goods := by clear nf; decide
+  have hBdOk : checkBdlopSafeParams zkHabBdlop = true := by clear hAssets nf; decide
+  have hNorm0 : normInfFast (zeroVec 1).coeffs ≤ zkHabBdlop.bResp := by clear hBdOk hAssets nf; decide
+  have hWf : zkHabCfg.params.wfB = true := by clear hNorm0 hBdOk hAssets nf; decide
+  have hSm : checkSmudgeSafe zkHabCfg.encNoiseBound zkHabCfg.smudgeBound zkHabCfg.secBits = true := by clear hWf hNorm0 hBdOk hAssets nf; decide
+  have hCap : decide (zkHabCfg.encNoiseBound + 1 * zkHabCfg.smudgeBound < zkHabCfg.params.noiseCap) = true := by clear hSm hWf hNorm0 hBdOk hAssets nf; decide
+  have hDec0 : rlweDecodeSignedCoeff zkHabRlwe 0 = 0 := by clear hCap hSm hWf hNorm0 hBdOk hAssets nf; decide
+  have hJudgeB : (match Obend.Judge.judge { zkHabMkt with epsilon := 0 } zkHabOrdList [] zkHabCert with
+      | .ok () => true | .error _ => false) = true := by clear hDec0 hCap hSm hWf hNorm0 hBdOk hAssets nf; decide
+  have hGap : kktPrimalDualGapZero zkHabMkt zkHabOrdList [] zkHabCert = true := by clear hJudgeB hDec0 hCap hSm hWf hNorm0 hBdOk hAssets nf; decide
+  have hJudge : Obend.Judge.judge { zkHabMkt with epsilon := 0 } zkHabOrdList [] zkHabCert = .ok () := by
+    cases hJ : Obend.Judge.judge { zkHabMkt with epsilon := 0 } zkHabOrdList [] zkHabCert with
+    | error _ => rw [hJ] at hJudgeB; cases hJudgeB | ok u => cases u; rfl
+  have hCanon : checkCanonicalModPoly zkHabCfg.params.q (zeroVec 2) = true :=
+    (checkCanonicalModPoly_iff _ _).2 fun _ => by simp [zeroVec]
+  have hThresh : thresholdDecryptChecked zkHabCfg (rlweAggregateBatch zkHabCfg.params [zkHabCt]) [zkHabSh] = .ok (zeroVec 2) := by
+    unfold thresholdDecryptChecked; dsimp only
+    have hQ : (decide ([zkHabSh].length < zkHabCfg.quorum) || zkHabCfg.quorum == 0) = false := rfl
+    have hD : firstDupNat? ([zkHabSh].map (·.guardianId)) = none := rfl
+    have hN : findNonCanonicalShare? zkHabCfg.params.q [zkHabSh] = none := by simp [findNonCanonicalShare?, zkHabSh, hCanon]
+    rw [ite_eq_right_of_eq_false _ _ (eq_false (by rw [hWf]; decide)),
+        ite_eq_right_of_eq_false _ _ (eq_false (by rw [hSm]; decide)),
+        ite_eq_right_of_eq_false _ _ (eq_false (by rw [hQ]; decide)), hD]; dsimp only
+    rw [hN]; dsimp only; rw [ite_eq_right_of_eq_false _ _ (eq_false (by rw [List.length_singleton, hCap]; decide)), Except.ok.injEq]
+    apply Sized.ext; funext i; rw [congrFun (Sized.spec_ofFn _) i]
+    have hz : (zeroVec 2).spec i = 0 := congrFun (Sized.spec_ofFn _) i
+    have hc0 : (rlweAggregateBatch zkHabCfg.params [zkHabCt]).c0.spec i = 0 := by
+      simp [rlweAggregateBatch, rlweAdd, rlweZero, zkHabCt, addFast_eq_spec, hz]
+    have hcs : (combineSharePolys zkHabCfg.params [zkHabSh]).spec i = 0 := by
+      simp [combineSharePolys, zkHabSh, addFast_eq_spec, hz]
+    simp [reducePolyMod_spec, addFast_eq_spec, hc0, hcs, hz, hDec0]
+  have hBookEq : expectedClearedOrderBook zkHabCfg.params.d zkHabOrdList = zeroVec 2 := by
+    apply Sized.ext; funext i
+    have hz : (zeroVec 2).spec i = 0 := congrFun (Sized.spec_ofFn _) i
+    have ho : (orderSignedPlainVec 2 .bid 0 0).spec i = 0 := by
+      unfold orderSignedPlainVec; rw [congrFun (Sized.spec_ofFn _) i]; split <;> try split <;> rfl
+    simp only [expectedClearedOrderBook, zkHabOrdList, addFast_eq_spec, hz, ho, Int.add_zero]
+  let spec0 : CommittedZkOrderSpec 1 1 := { account := 77, side := .bid, bdlopComm := bdlopCommit zkHabBdlop (zeroVec 1), zkProof := ⟨zeroVec 1, zeroVec 1⟩ }
+  have hFold0 : ∀ c : Int, foldWitness c (zeroVec 1) (zeroVec 1) = zeroVec 1 := fun c => by apply Sized.ext; funext i; simp [foldWitness, zeroVec]
+  have hNorm : normInfFast (foldWitness (deriveMaskedSameOpeningChal zkHabBdlop (zkOrderStmtContext zkHabMkt spec0)
+      (bdlopCommit zkHabBdlop (zeroVec 1)) (bdlopCommit zkHabBdlop (zeroVec 1))) (zeroVec 1) (zeroVec 1)).coeffs ≤ zkHabBdlop.bResp := by rw [hFold0]; exact hNorm0
+  obtain ⟨prf, _, hVerPrf⟩ := verifyMaskedSameOpening_complete zkHabBdlop (zkOrderStmtContext zkHabMkt spec0) (zeroVec 1) (zeroVec 1) hBdOk hNorm
+  let ord : CommittedZkOrderSpec 1 1 := { spec0 with zkProof := prf }
+  have hZk : verifyZkOrderProofBatch zkHabBdlop zkHabMkt [ord] = true := by
+    simp only [verifyZkOrderProofBatch, List.all_cons, List.all_nil, Bool.and_true]; exact hVerPrf
+  refine ⟨zkHabCfg,
+    { epochNullifier := nf, bdlopParams := zkHabBdlop, market := zkHabMkt, zkOrders := [ord], encryptedOrders := [zkHabCt]
+      thresholdShares := [zkHabSh], clearedOrders := zkHabOrdList, transfers := [], kktCert := zkHabCert },
+    { decryptedBook := zeroVec 2, currencySettlement := .zero, goodsSettlement := .zero }, rfl, Nat.zero_lt_one, hZk, ?_⟩
+  unfold verifyAndClearDarkBazaarZkEpoch clearDarkBazaarZkPostProof; dsimp only
+  have hCnt : ([zkHabCt].length != [ord].length || zkHabOrdList.length != [ord].length) = false := rfl
+  have hBne0 : (zeroVec 2 != zeroVec 2) = false := bne_self_eq_false _
+  rw [ite_eq_right_of_eq_false _ _ (eq_false hAssets),
+      ite_eq_right_of_eq_false _ _ (eq_false (by rw [hBdOk]; decide)),
+      ite_eq_right_of_eq_false _ _ (eq_false (by rw [hZk]; decide)),
+      ite_eq_right_of_eq_false _ _ (eq_false (by rw [hCnt]; decide))]
+  rw [hThresh]; dsimp only; rw [ite_eq_right_of_eq_false _ _ (eq_false (by rw [hBookEq, hBne0]; decide))]
+  rw [hJudge]; dsimp only
+  rw [ite_eq_right_of_eq_false _ _ (eq_false (by rw [hGap]; decide))]; rfl
+
+inductive DarkBazaarZkTraceError where
+  | nullifierAlreadySpent (nf : Nat) | decryptionBudgetExhausted (needed available : Nat) | epochClearingFailed (reason : DarkBazaarZkRefusal)
+  deriving DecidableEq, Repr
+def stepDarkBazaarZkEpoch {rows cols : Nat} (cfg : ThresholdDecryptConfig)
+    (st : DarkBazaarState) (batch : DarkBazaarZkEpochBatch rows cols cfg) :
+    Except DarkBazaarZkTraceError (DarkBazaarState × DarkBazaarClearedOutcome cfg.params.d) :=
+  if nullifierContainsB st.spentNullifiers batch.epochNullifier then .error (.nullifierAlreadySpent batch.epochNullifier)
+  else if st.remainingDecryptionBudget < batch.thresholdShares.length then
+    .error (.decryptionBudgetExhausted batch.thresholdShares.length st.remainingDecryptionBudget)
+  else
+    match verifyAndClearDarkBazaarZkEpoch cfg batch with
+    | .error r => .error (.epochClearingFailed r)
+    | .ok out =>
+      .ok ({ epoch := st.epoch + 1, spentNullifiers := st.spentNullifiers.insert batch.epochNullifier
+           , cumulativeCurrency := ConservedValue.add st.cumulativeCurrency out.currencySettlement
+           , cumulativeGoods := ConservedValue.add st.cumulativeGoods out.goodsSettlement
+           , remainingDecryptionBudget := st.remainingDecryptionBudget - batch.thresholdShares.length }, out)
+inductive ValidDarkBazaarZkTrace {rows cols : Nat} (cfg : ThresholdDecryptConfig) :
+    DarkBazaarState → List (DarkBazaarZkEpochBatch rows cols cfg) → DarkBazaarState → Prop where
+  | nil (st : DarkBazaarState) : ValidDarkBazaarZkTrace cfg st [] st
+  | step {st mid final : DarkBazaarState} {batch : DarkBazaarZkEpochBatch rows cols cfg}
+      {rest : List (DarkBazaarZkEpochBatch rows cols cfg)} {out : DarkBazaarClearedOutcome cfg.params.d}
+      (hStep : stepDarkBazaarZkEpoch cfg st batch = .ok (mid, out))
+      (hTail : ValidDarkBazaarZkTrace cfg mid rest final) : ValidDarkBazaarZkTrace cfg st (batch :: rest) final
+theorem validDarkBazaarZkTrace_conserves_and_safe {rows cols : Nat} (cfg : ThresholdDecryptConfig)
+    (init final : DarkBazaarState) (batches : List (DarkBazaarZkEpochBatch rows cols cfg))
+    (hTrace : ValidDarkBazaarZkTrace cfg init batches final) :
+    final.epoch = init.epoch + batches.length ∧ sumDeltas final.cumulativeCurrency.entries = 0 ∧
+    sumDeltas final.cumulativeGoods.entries = 0 ∧ init.spentNullifiers.subsetB final.spentNullifiers = true ∧
+    final.remainingDecryptionBudget ≤ init.remainingDecryptionBudget := by
+  induction hTrace with
+  | nil st =>
+    exact ⟨by simp, st.cumulativeCurrency.conserved, st.cumulativeGoods.conserved,
+           NullifierSet.subsetB_iff.2 (fun _ hx => hx), Nat.le_refl _⟩
+  | @step st mid fin batch rest out hStep _ ih =>
+    unfold stepDarkBazaarZkEpoch at hStep
+    cases hSp : nullifierContainsB st.spentNullifiers batch.epochNullifier
+    · simp only [hSp, Bool.false_eq_true, ↓reduceIte] at hStep
+      by_cases hBud : st.remainingDecryptionBudget < batch.thresholdShares.length
+      · simp [hBud] at hStep
+      · simp only [hBud, ↓reduceIte] at hStep
+        cases hCl : verifyAndClearDarkBazaarZkEpoch cfg batch with
+        | error _ => simp [hCl] at hStep
+        | ok _ =>
+          simp only [hCl, Except.ok.injEq, Prod.mk.injEq] at hStep
+          rcases hStep with ⟨hMid, _⟩; rcases ih with ⟨hEp, hC, hG, hSub, hBd⟩
+          refine ⟨by rw [← hMid] at hEp; simp [List.length_cons, hEp]; omega, hC, hG,
+                  subsetB_trans_nullifiers (by rw [← hMid]; exact subsetB_insert_self _ _) hSub,
+                  Nat.le_trans hBd (by rw [← hMid]; dsimp only; omega)⟩
+    · simp [hSp] at hStep
+
 end Obend.Crypto
 end

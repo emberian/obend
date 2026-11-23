@@ -10,6 +10,7 @@ public import Obend.Crypto.Transcript
 public import Obend.Crypto.Sumcheck
 public import Obend.Crypto.PCS
 public import Obend.Crypto.DualSpine
+public import Obend.Crypto.PikkuFoldLayered
 public import Obend.Crypto.GameSoundness
 import all Obend.Judge.Class
 import all Obend.Judge.Clearing
@@ -18,11 +19,12 @@ import all Obend.Crypto.Transcript
 import all Obend.Crypto.Sumcheck
 import all Obend.Crypto.PCS
 import all Obend.Crypto.DualSpine
+import all Obend.Crypto.PikkuFoldLayered
 import all Obend.Crypto.GameSoundness
 
 public section
 namespace Obend.Crypto
-open Obend.Ledger Obend.Judge Obend.Apps.ZkNtt Obend.Digest.HashBytes
+open Obend.Ledger Obend.Judge Obend.Apps.ZkNtt Obend.Digest.HashBytes Obend.Crypto.Fast
 open Obend.Judge.Computational (HashCollisionWitness SISShortVecWitness)
 set_option autoImplicit false
 
@@ -296,14 +298,10 @@ private def extractDualCommitCollisionWithFrames (H : Hash32) (pp : AjtaiParams)
     exact ⟨List.mem_flatMap.2 ⟨⟨diff.1, hIn₁⟩, List.mem_finRange _, hMem.1⟩,
            List.mem_flatMap.2 ⟨⟨diff.1, hIn₂⟩, List.mem_finRange _, hMem.2⟩⟩⟩
 
-/-- **Constructive Salted-vs-Unsalted Dictionary Collision Extractor (`extractSaltedDictionaryCollisionBoth`, `0 Classical`)**:
-    If a salted order (`salt ≠ 0`) and an unsalted dictionary candidate (`salt = 0`) produce identical
-    `canopyAjtaiDualPCS` commitments at `pp.cols = 32`, constructively extracts **both** a concrete
-    `HashCollisionWitness` (whose frames belong to `canopyTableFrames`) AND a `SISShortVecWitness`! -/
+/-- **Constructive Salted-vs-Unsalted Dictionary Collision Extractor (`extractSaltedDictionaryCollisionBoth`, `0 Classical`)**. -/
 def extractSaltedDictionaryCollisionBoth
     (pp : AjtaiParams) (hCols : pp.cols = 32)
-    {account : AccountId} {side : Side} {maxBits : Nat}
-    {salt : GoldilocksExt2} {w : OrderBitWitness}
+    {account : AccountId} {side : Side} {maxBits : Nat} {salt : GoldilocksExt2} {w : OrderBitWitness}
     (hAcc : CanonicalLift account) (hQty : CanonicalLift w.qty) (hTot : CanonicalLift w.total)
     (hSalt : salt ≠ GoldilocksExt2.zero)
     (candAcc : AccountId) (candSide : Side) (candMaxBits : Nat) (candW : OrderBitWitness)
@@ -316,53 +314,31 @@ def extractSaltedDictionaryCollisionBoth
       p.1.msgB ∈ canopyTableFrames deployedCanopyHash32 3 (canonicalSaltedOrderTable candAcc candSide GoldilocksExt2.zero candW) } :=
   let tbl₁ := canonicalSaltedOrderTable account side salt w
   let tbl₂ := canonicalSaltedOrderTable candAcc candSide GoldilocksExt2.zero candW
-  have hFacts :
-      tbl₁ ≠ tbl₂ ∧
+  have hFacts : tbl₁ ≠ tbl₂ ∧
       (canopyAjtaiDualPCS deployedCanopyHash32 pp).commit ((), ()) 3 tbl₁ =
       (canopyAjtaiDualPCS deployedCanopyHash32 pp).commit ((), ()) 3 tbl₂ := by
     let w₁ : OrderBitWitness := { w with salt := salt }
     let w₂ : OrderBitWitness := { candW with salt := GoldilocksExt2.zero }
     let p₁ : CommittedOrderSpec :=
-      { account := account, side := side, maxBits := maxBits,
-        dualComm := (canopyCommit deployedCanopyHash32 3 [], ajtaiLatticeCommit pp 3 []) }
+      { account, side, maxBits, dualComm := (canopyCommit deployedCanopyHash32 3 [], ajtaiLatticeCommit pp 3 []) }
     let p₂ : CommittedOrderSpec :=
       { account := candAcc, side := candSide, maxBits := candMaxBits,
         dualComm := (canopyCommit deployedCanopyHash32 3 [], ajtaiLatticeCommit pp 3 []) }
-    have hQty' : CanonicalLift (bitsToNat w.qtyBits) := hQty
-    have hTot' : CanonicalLift (bitsToNat w.totalBits) := hTot
-    have hcQty' : CanonicalLift (bitsToNat candW.qtyBits) := hcQty
-    have hcTot' : CanonicalLift (bitsToNat candW.totalBits) := hcTot
+    dsimp only [OrderBitWitness.qty, OrderBitWitness.total] at hQty hTot hcQty hcTot
     have ht₁ : orderWitnessTable? p₁ w₁ = some tbl₁ := by
-      dsimp only [orderWitnessTable?, OrderBitWitness.qty, OrderBitWitness.total,
-                  p₁, w₁, tbl₁, canonicalSaltedOrderTable]
-      rw [canonicalLift?_eq_some_ofNat hAcc,
-          canonicalLift?_eq_some_ofNat hQty',
-          canonicalLift?_eq_some_ofNat hTot']
+      dsimp only [orderWitnessTable?, OrderBitWitness.qty, OrderBitWitness.total, p₁, w₁, tbl₁, canonicalSaltedOrderTable]
+      rw [canonicalLift?_eq_some_ofNat hAcc, canonicalLift?_eq_some_ofNat hQty, canonicalLift?_eq_some_ofNat hTot]
     have ht₂ : orderWitnessTable? p₂ w₂ = some tbl₂ := by
-      dsimp only [orderWitnessTable?, OrderBitWitness.qty, OrderBitWitness.total,
-                  p₂, w₂, tbl₂, canonicalSaltedOrderTable]
-      rw [canonicalLift?_eq_some_ofNat hcAcc,
-          canonicalLift?_eq_some_ofNat hcQty',
-          canonicalLift?_eq_some_ofNat hcTot']
-    refine ⟨?_, ?_⟩
-    · intro hEq
-      have ht₂' : orderWitnessTable? p₂ w₂ = some tbl₁ := by rw [ht₂, hEq]
-      exact hSalt (orderWitnessTable?_injective ht₁ ht₂').2.2.2.2
-    · dsimp only [commitPrivateOrder, p₁, p₂, w₁, w₂] at hCommEq
-      rw [ht₁, ht₂] at hCommEq
-      exact hCommEq
+      dsimp only [orderWitnessTable?, OrderBitWitness.qty, OrderBitWitness.total, p₂, w₂, tbl₂, canonicalSaltedOrderTable]
+      rw [canonicalLift?_eq_some_ofNat hcAcc, canonicalLift?_eq_some_ofNat hcQty, canonicalLift?_eq_some_ofNat hcTot]
+    refine ⟨fun hEq => hSalt (orderWitnessTable?_injective ht₁ (hEq ▸ ht₂)).2.2.2.2, ?_⟩
+    dsimp only [commitPrivateOrder, p₁, p₂, w₁, w₂] at hCommEq; rw [ht₁, ht₂] at hCommEq; exact hCommEq
   extractDualCommitCollisionWithFrames deployedCanopyHash32 pp tbl₁ tbl₂ rfl rfl hCols hFacts.1 hFacts.2
 
-/-- **Non-Vacuous `LazyRO`-or-`ModuleSIS` Salted Dictionary Resistance (`unsaltedCommitDictionary_miss_of_roLog_or_sis`, `0 Classical`)**:
-    Under `pp.cols = 32` and **either** collision-freeness on the finite 32-byte `Digest32` `canopyTableFrames`
-    recorded in `log : GameSoundness.ROLog` **or** `ModuleSISHard pp 131070` (provably inhabited via
-    `inhabitedAjtaiParams_sisHard 3`), NO salted private order (`salt ≠ 0`) can ever collide with
-    the `canopyAjtaiDualPCS` commitment of ANY unsalted (`salt = 0`) dictionary entry! -/
+/-- **Non-Vacuous `LazyRO`-or-`ModuleSIS` Salted Dictionary Resistance (`unsaltedCommitDictionary_miss_of_roLog_or_sis`)**. -/
 theorem unsaltedCommitDictionary_miss_of_roLog_or_sis
-    (pp : AjtaiParams) (hCols : pp.cols = 32)
-    (log : GameSoundness.ROLog (List UInt8) Digest32)
-    {account : AccountId} {side : Side} {maxBits : Nat}
-    {salt : GoldilocksExt2} {w : OrderBitWitness}
+    (pp : AjtaiParams) (hCols : pp.cols = 32) (log : GameSoundness.ROLog (List UInt8) Digest32)
+    {account : AccountId} {side : Side} {maxBits : Nat} {salt : GoldilocksExt2} {w : OrderBitWitness}
     (hAcc : CanonicalLift account) (hQty : CanonicalLift w.qty) (hTot : CanonicalLift w.total)
     (hSalt : salt ≠ GoldilocksExt2.zero)
     (candAcc : AccountId) (candSide : Side) (candMaxBits : Nat) (candW : OrderBitWitness)
@@ -371,21 +347,18 @@ theorem unsaltedCommitDictionary_miss_of_roLog_or_sis
             (∀ m ∈ canopyTableFrames deployedCanopyHash32 3 (canonicalSaltedOrderTable account side salt w),
               (m, evalDigest32 deployedCanopyHash32 m) ∈ log) ∧
             (∀ m ∈ canopyTableFrames deployedCanopyHash32 3 (canonicalSaltedOrderTable candAcc candSide GoldilocksExt2.zero candW),
-              (m, evalDigest32 deployedCanopyHash32 m) ∈ log)) ∨
-           ModuleSISHard pp 131070) :
+              (m, evalDigest32 deployedCanopyHash32 m) ∈ log)) ∨ ModuleSISHard pp 131070) :
     (commitPrivateOrder pp account side maxBits salt w).dualComm ≠
     (commitPrivateOrder pp candAcc candSide candMaxBits GoldilocksExt2.zero candW).dualComm := by
   intro hCommEq
   obtain ⟨⟨wHash, wSIS⟩, hMemA, hMemB⟩ := extractSaltedDictionaryCollisionBoth pp hCols hAcc hQty hTot hSalt
     candAcc candSide candMaxBits candW hcAcc hcQty hcTot hCommEq
   rcases hOr with ⟨hNoCol, hLog₁, hLog₂⟩ | hSIS
-  · have hCol : GameSoundness.hasLogCollision log = true :=
-      (GameSoundness.hasLogCollision_iff log).2
-        ⟨(wHash.msgA, evalDigest32 deployedCanopyHash32 wHash.msgA), hLog₁ wHash.msgA hMemA,
-         (wHash.msgB, evalDigest32 deployedCanopyHash32 wHash.msgB), hLog₂ wHash.msgB hMemB,
-         wHash.distinct, evalDigest32_eq_of_sameDigest deployedCanopyHash32 wHash.sameDigest⟩
-    rw [hNoCol] at hCol
-    cases hCol
+  · have hCol : GameSoundness.hasLogCollision log = true := (GameSoundness.hasLogCollision_iff log).2
+      ⟨(wHash.msgA, evalDigest32 deployedCanopyHash32 wHash.msgA), hLog₁ wHash.msgA hMemA,
+       (wHash.msgB, evalDigest32 deployedCanopyHash32 wHash.msgB), hLog₂ wHash.msgB hMemB,
+       wHash.distinct, evalDigest32_eq_of_sameDigest deployedCanopyHash32 wHash.sameDigest⟩
+    rw [hNoCol] at hCol; cases hCol
   · exact hSIS ⟨wSIS⟩
 
 /-- Unconditionally inhabited instance of `unsaltedCommitDictionary_miss_of_roLog_or_sis` on `inhabitedAjtaiParams 3`. -/
@@ -652,31 +625,19 @@ theorem kktPrimalDualGapZero_iff (m : Market) (orders : List Order)
 
 /-- Refusal vocabulary of `privateConvexSameOpeningJudge`. -/
 inductive SameOpeningRefusal where
-  | unsmudgedThresholdNoise
-  | modulusWraparoundUnsafe
-  | malformedMarketAssets
-  | invalidLatticeDimension
-  | witnessCountMismatch (expected actual : Nat)
-  | bitzRangeExceeded (orderIdx : Nat)
-  | nonCanonicalFieldLift (orderIdx : Nat)
-  | dualCommitmentMismatch (orderIdx : Nat)
-  | clearingRefused (reason : ClearingRefusal)
-  | nonzeroPrimalDualGap (dualVal primalVal : Int)
+  | unsmudgedThresholdNoise | modulusWraparoundUnsafe | malformedMarketAssets | invalidLatticeDimension
+  | witnessCountMismatch (expected actual : Nat) | bitzRangeExceeded (orderIdx : Nat)
+  | nonCanonicalFieldLift (orderIdx : Nat) | dualCommitmentMismatch (orderIdx : Nat)
+  | clearingRefused (reason : ClearingRefusal) | nonzeroPrimalDualGap (dualVal primalVal : Int)
   deriving DecidableEq, Repr
 
-/-- Semantic proposition that every committed order was opened to a canonical (`< goldilocksPrime`),
-    `BitZ` $2^B$-bounded salted witness matching its `canopyAjtaiDualPCS` commitment. -/
-def AllOrdersOpenedAndBounded (pp : AjtaiParams) :
-    List CommittedOrderSpec → List OrderBitWitness → Prop
+/-- Semantic proposition that every committed order was opened to a canonical, `BitZ`-bounded witness. -/
+def AllOrdersOpenedAndBounded (pp : AjtaiParams) : List CommittedOrderSpec → List OrderBitWitness → Prop
   | [], [] => True
   | s :: ss, w :: ws =>
-    CanonicalLift s.account ∧
-    CanonicalLift w.qty ∧
-    CanonicalLift w.total ∧
-    w.qty < 2 ^ s.maxBits ∧
-    w.total < 2 ^ s.maxBits ∧
-    (∃ tbl : List Goldilocks,
-      orderWitnessTable? s w = some tbl ∧
+    CanonicalLift s.account ∧ CanonicalLift w.qty ∧ CanonicalLift w.total ∧
+    w.qty < 2 ^ s.maxBits ∧ w.total < 2 ^ s.maxBits ∧
+    (∃ tbl : List Goldilocks, orderWitnessTable? s w = some tbl ∧
       (canopyAjtaiDualPCS deployedCanopyHash32 pp).commit ((), ()) 3 tbl = s.dualComm) ∧
     AllOrdersOpenedAndBounded pp ss ws
   | _, _ => False
@@ -688,15 +649,13 @@ theorem allOrdersOpened_le_orderBookMsgBound (pp : AjtaiParams) :
   | [], [], _, _, hw => by cases hw
   | _ :: _, [], h, _, _ => False.elim h
   | [], _ :: _, h, _, _ => False.elim h
-  | _ :: ss, _ :: ws, ⟨_, _, _, hQty, hTot, _, hRest⟩, w, hw => by
+  | _ :: ss, _ :: ws, ⟨_, _, _, _, _, _, hRest⟩, w, hw => by
     simp only [orderBookMsgBound, List.mem_cons] at hw ⊢
     rcases hw with rfl | hTl
     · omega
-    · obtain ⟨hq, ht⟩ := allOrdersOpened_le_orderBookMsgBound pp ss ws hRest w hTl
-      omega
+    · obtain ⟨hq, ht⟩ := allOrdersOpened_le_orderBookMsgBound pp ss ws hRest w hTl; omega
 
-/-- Executable per-order `BitZ` bit-length, canonical `< goldilocksPrime` field lift, and
-    `canopyAjtaiDualPCS` commitment checker. -/
+/-- Executable per-order `BitZ` bit-length, canonical `< goldilocksPrime` field lift, and dual-PCS checker. -/
 def checkOrderWitnessList (pp : AjtaiParams) :
     Nat → List CommittedOrderSpec → List OrderBitWitness → Option SameOpeningRefusal
   | _, [], [] => none
@@ -711,13 +670,11 @@ def checkOrderWitnessList (pp : AjtaiParams) :
       | some tbl =>
         if s.dualComm != (canopyAjtaiDualPCS deployedCanopyHash32 pp).commit ((), ()) 3 tbl then
           some (.dualCommitmentMismatch idx)
-        else
-          checkOrderWitnessList pp (idx + 1) ss ws
+        else checkOrderWitnessList pp (idx + 1) ss ws
 
 theorem checkOrderWitnessList_sound (pp : AjtaiParams) :
     ∀ (idx : Nat) (specs : List CommittedOrderSpec) (ws : List OrderBitWitness),
-      checkOrderWitnessList pp idx specs ws = none →
-      AllOrdersOpenedAndBounded pp specs ws
+      checkOrderWitnessList pp idx specs ws = none → AllOrdersOpenedAndBounded pp specs ws
   | _, [], [], _ => trivial
   | _, [], _ :: _, h => by simp [checkOrderWitnessList] at h
   | _, _ :: _, [], h => by simp [checkOrderWitnessList] at h
@@ -729,49 +686,33 @@ theorem checkOrderWitnessList_sound (pp : AjtaiParams) :
     cases hTbl : orderWitnessTable? s w with
     | none => simp [hTbl] at h
     | some tbl =>
-      simp only [hTbl] at h
-      split at h
+      simp only [hTbl] at h; split at h
       · cases h
       rename_i hComm
       have hRange' : w.qtyBits.length ≤ s.maxBits ∧ w.totalBits.length ≤ s.maxBits := by
         cases hq : decide (w.qtyBits.length ≤ s.maxBits) <;>
-          cases ht : decide (w.totalBits.length ≤ s.maxBits)
-        · simp [hq, ht] at hRange
-        · simp [hq, ht] at hRange
-        · simp [hq, ht] at hRange
-        · exact ⟨of_decide_eq_true hq, of_decide_eq_true ht⟩
+          cases ht : decide (w.totalBits.length ≤ s.maxBits) <;>
+          first | (simp [hq, ht] at hRange; done) | exact ⟨of_decide_eq_true hq, of_decide_eq_true ht⟩
       have hCommEq : (canopyAjtaiDualPCS deployedCanopyHash32 pp).commit ((), ()) 3 tbl = s.dualComm := by
         cases hc : (s.dualComm != (canopyAjtaiDualPCS deployedCanopyHash32 pp).commit ((), ()) 3 tbl)
         · dsimp only [canopyAjtaiDualPCS, DualPCS, canopyMerklePCS, ajtaiLatticePCS] at hc ⊢
-          rw [bne_eq_false_iff_eq] at hc
-          exact hc.symm
+          exact (bne_eq_false_iff_eq.1 hc).symm
         · exact absurd hc hComm
       obtain ⟨cAcc, cQty, cTot⟩ := orderWitnessTable?_canonical hTbl
-      exact ⟨cAcc, cQty, cTot,
-             bitsToNat_lt_two_pow w.qtyBits hRange'.1,
-             bitsToNat_lt_two_pow w.totalBits hRange'.2,
-             ⟨tbl, hTbl, hCommEq⟩,
+      exact ⟨cAcc, cQty, cTot, bitsToNat_lt_two_pow w.qtyBits hRange'.1,
+             bitsToNat_lt_two_pow w.totalBits hRange'.2, ⟨tbl, hTbl, hCommEq⟩,
              checkOrderWitnessList_sound pp (idx + 1) ss ws h⟩
 
 /-! ## 5. Non-Tautological Semantic Meaning & Lawful `privateConvexSameOpeningJudge` -/
 
-/-- Incidence sign ($+1$ for bid, $-1$ for ask) in flow conservation. -/
-def orderSideSign (o : Order) : Int :=
-  match o.side with
-  | .bid => 1
-  | .ask => -1
+def orderSideSign (o : Order) : Int := match o.side with | .bid => 1 | .ask => -1
+def orderCrossingCap (price : Nat) (o : Order) : Int := if o.crosses price then (o.qty : Int) else 0
 
-/-- Crossing capacity $u_i(p)$ of order `o` at uniform clearing price `price`. -/
-def orderCrossingCap (price : Nat) (o : Order) : Int :=
-  if o.crosses price then (o.qty : Int) else 0
-
-/-- Primal feasibility (`flowConserving` + `fillsFeasible`) extracted from `Obend.Judge.judge = .ok ()`. -/
 theorem judge_ok_primal_feasible (m : Market) (orders : List Order)
     (transfers : List ResourcePosting) (c : Certificate)
     (h : Obend.Judge.judge m orders transfers c = .ok ()) :
     finSum orders.length (fun i => orderSideSign (orders.get i) * (orders.get i).fill m transfers) = 0 ∧
-    ∀ i : Fin orders.length,
-      0 ≤ (orders.get i).fill m transfers ∧
+    ∀ i : Fin orders.length, 0 ≤ (orders.get i).fill m transfers ∧
       (orders.get i).fill m transfers ≤ orderCrossingCap c.price (orders.get i) := by
   unfold Obend.Judge.judge at h
   split at h <;> try contradiction
@@ -787,29 +728,17 @@ theorem judge_ok_primal_feasible (m : Market) (orders : List Order)
     split at h
     · contradiction
     · rename_i h_prim_none
-      refine ⟨?_, ?_⟩
-      · have hZ : finSum orders.length (fun i =>
-            match (orders.get i).side with
-            | .bid => (orders.get i).fill m transfers
-            | .ask => - (orders.get i).fill m transfers) = 0 := Decidable.of_not_not h_cons_not_ne
+      refine ⟨?_, fun i => ?_⟩
+      · have hZ := Decidable.of_not_not h_cons_not_ne
         have hFn : (fun i : Fin orders.length => orderSideSign (orders.get i) * (orders.get i).fill m transfers) =
-            (fun i : Fin orders.length =>
-              match (orders.get i).side with
-              | .bid => (orders.get i).fill m transfers
-              | .ask => - (orders.get i).fill m transfers) := by
+            (fun i => match (orders.get i).side with
+              | .bid => (orders.get i).fill m transfers | .ask => -(orders.get i).fill m transfers) := by
           funext i; unfold orderSideSign; cases (orders.get i).side <;> simp
         rw [hFn]; exact hZ
-      · intro i
-        have hnone := List.find?_eq_none.mp h_prim_none i (List.mem_finRange i)
-        dsimp only at hnone
-        have ⟨hneg, hcap⟩ := not_or_of_decide hnone
-        unfold orderCrossingCap
-        omega
+      · have ⟨hneg, hcap⟩ := not_or_of_decide (List.find?_eq_none.mp h_prim_none i (List.mem_finRange i))
+        unfold orderCrossingCap; omega
 
-/-- **Non-Tautological Semantic Meaning of `privateConvexSameOpeningJudge` (`SameOpeningMeaning`)**:
-    Establishes simultaneously smudging safety, operational modulus no-wraparound over `effectiveMsgBound`,
-    distinct assets, exact 32-column Ajtai dimension, canonical `BitZ` $2^B$ range-bounded openings,
-    `accountsNodup`, primal `flowConserving` + `fillsFeasible`, zero KKT gap, and global welfare optimality. -/
+/-- **Non-Tautological Semantic Meaning of `privateConvexSameOpeningJudge` (`SameOpeningMeaning`)**. -/
 structure SameOpeningMeaning (q : SameOpeningQuery) (c : SameOpeningWitness) : Prop where
   smudgeSafe : SmudgeSafe q.noiseBound q.smudgeBound q.secBits
   modulusNoWrap : ModulusNoWrapSafe q.effectiveMsgBound q.noiseBound q.smudgeBound q.qModulus
@@ -822,8 +751,7 @@ structure SameOpeningMeaning (q : SameOpeningQuery) (c : SameOpeningWitness) : P
     finSum orders.length (fun i => orderSideSign (orders.get i) * (orders.get i).fill q.market c.transfers) = 0
   fillsFeasible :
     let orders := materializeOrders q.committedOrders c.orderWitnesses
-    ∀ i : Fin orders.length,
-      0 ≤ (orders.get i).fill q.market c.transfers ∧
+    ∀ i : Fin orders.length, 0 ≤ (orders.get i).fill q.market c.transfers ∧
       (orders.get i).fill q.market c.transfers ≤ orderCrossingCap c.kktCert.price (orders.get i)
   zeroDualityGap :
     let orders := materializeOrders q.committedOrders c.orderWitnesses
@@ -832,14 +760,9 @@ structure SameOpeningMeaning (q : SameOpeningQuery) (c : SameOpeningWitness) : P
     let orders := materializeOrders q.committedOrders c.orderWitnesses
     ∀ (f' : Fin orders.length → Int),
       finSum orders.length (fun i => orderSideSign (orders.get i) * f' i) = 0 →
-      (∀ i, 0 ≤ f' i) →
-      (∀ i, f' i ≤ orderCrossingCap c.kktCert.price (orders.get i)) →
+      (∀ i, 0 ≤ f' i) → (∀ i, f' i ≤ orderCrossingCap c.kktCert.price (orders.get i)) →
       finSum orders.length f' ≤ primalObjective q.market orders c.transfers
 
-/-- **Operational Per-Order No-Wraparound Decoding (`acceptedOrder_noWrap_decode`)**:
-    Under `SameOpeningMeaning q c`, every opened order witness `w ∈ c.orderWitnesses` satisfies
-    `w.qty ≤ q.effectiveMsgBound` and `w.total ≤ q.effectiveMsgBound`, so adding bounded encryption
-    error `e` and smudging noise `u` NEVER wraps modulo `q.qModulus`! -/
 theorem acceptedOrder_noWrap_decode {q : SameOpeningQuery} {c : SameOpeningWitness}
     (hMean : SameOpeningMeaning q c) {w : OrderBitWitness} (hw : w ∈ c.orderWitnesses)
     (e u : Int) (he : e.natAbs ≤ q.noiseBound) (hu : u.natAbs ≤ q.smudgeBound) :
@@ -851,73 +774,46 @@ theorem acceptedOrder_noWrap_decode {q : SameOpeningQuery} {c : SameOpeningWitne
          (centeredModDecode_exact_of_noWrap hMean.modulusNoWrap (w.total : Int) e u (by omega) he hu).2⟩
 
 /-- Kernel checker for `privateConvexSameOpeningJudge`: runs in $O(N)$ over opened witnesses. -/
-def verifySameOpening (q : SameOpeningQuery) (c : SameOpeningWitness) :
-    Judge.Verdict SameOpeningRefusal :=
-  if !checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits then
-    .refused .unsmudgedThresholdNoise []
+def verifySameOpening (q : SameOpeningQuery) (c : SameOpeningWitness) : Judge.Verdict SameOpeningRefusal :=
+  if !checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits then .refused .unsmudgedThresholdNoise []
   else if !checkModulusNoWrap q.effectiveMsgBound q.noiseBound q.smudgeBound q.qModulus then
     .refused .modulusWraparoundUnsafe []
-  else if q.market.currency = q.market.goods then
-    .refused .malformedMarketAssets []
-  else if q.ajtaiParams.cols != 32 then
-    .refused .invalidLatticeDimension []
+  else if q.market.currency = q.market.goods then .refused .malformedMarketAssets []
+  else if q.ajtaiParams.cols != 32 then .refused .invalidLatticeDimension []
   else
     match checkOrderWitnessList q.ajtaiParams 0 q.committedOrders c.orderWitnesses with
     | some err => .refused err []
     | none =>
       let orders := materializeOrders q.committedOrders c.orderWitnesses
-      let zeroEpsMarket : Market := { q.market with epsilon := 0 }
-      match Obend.Judge.judge zeroEpsMarket orders c.transfers c.kktCert with
+      match Obend.Judge.judge { q.market with epsilon := 0 } orders c.transfers c.kktCert with
       | .error reason => .refused (.clearingRefused reason) []
       | .ok () =>
-        if kktPrimalDualGapZero q.market orders c.transfers c.kktCert then
-          .ok
-        else
-          .refused
-            (.nonzeroPrimalDualGap
-              (dualObjective orders c.kktCert)
-              (primalObjective q.market orders c.transfers))
-            []
+        if kktPrimalDualGapZero q.market orders c.transfers c.kktCert then .ok
+        else .refused (.nonzeroPrimalDualGap (dualObjective orders c.kktCert) (primalObjective q.market orders c.transfers)) []
 
-/-- Query-level clauses whose refusal refutes the existence of **any** valid certificate. -/
 def sameOpeningRefutes : SameOpeningRefusal → Bool
-  | .unsmudgedThresholdNoise => true
-  | .modulusWraparoundUnsafe => true
-  | .malformedMarketAssets => true
-  | .invalidLatticeDimension => true
+  | .unsmudgedThresholdNoise | .modulusWraparoundUnsafe | .malformedMarketAssets | .invalidLatticeDimension => true
   | _ => false
 
 theorem checkOrderWitnessList_not_refutes (pp : AjtaiParams) :
-    ∀ (idx : Nat) (specs : List CommittedOrderSpec) (ws : List OrderBitWitness)
-      (err : SameOpeningRefusal),
-      checkOrderWitnessList pp idx specs ws = some err →
-      sameOpeningRefutes err = false
+    ∀ (idx : Nat) (specs : List CommittedOrderSpec) (ws : List OrderBitWitness) (err : SameOpeningRefusal),
+      checkOrderWitnessList pp idx specs ws = some err → sameOpeningRefutes err = false
   | _, [], [], _, h => by simp [checkOrderWitnessList] at h
-  | _, [], _ :: _, _, h => by
-    simp only [checkOrderWitnessList, Option.some.injEq] at h
-    subst h; rfl
-  | _, _ :: _, [], _, h => by
-    simp only [checkOrderWitnessList, Option.some.injEq] at h
-    subst h; rfl
+  | _, [], _ :: _, _, h => by simp only [checkOrderWitnessList, Option.some.injEq] at h; subst h; rfl
+  | _, _ :: _, [], _, h => by simp only [checkOrderWitnessList, Option.some.injEq] at h; subst h; rfl
   | idx, s :: ss, w :: ws, err, h => by
-    simp only [checkOrderWitnessList] at h
-    split at h
+    simp only [checkOrderWitnessList] at h; split at h
     · simp only [Option.some.injEq] at h; subst h; rfl
     · cases hTbl : orderWitnessTable? s w with
-      | none =>
-        simp only [hTbl, Option.some.injEq] at h
-        subst h; rfl
+      | none => simp only [hTbl, Option.some.injEq] at h; subst h; rfl
       | some tbl =>
-        simp only [hTbl] at h
-        split at h
+        simp only [hTbl] at h; split at h
         · simp only [Option.some.injEq] at h; subst h; rfl
         · exact checkOrderWitnessList_not_refutes pp (idx + 1) ss ws err h
 
-/-- **Universal Soundness of `verifySameOpening` (`verifySameOpening_sound`)**:
-    Any witness accepted by `verifySameOpening` establishes `SameOpeningMeaning q c`. -/
+/-- **Universal Soundness of `verifySameOpening` (`verifySameOpening_sound`)**. -/
 theorem verifySameOpening_sound {q : SameOpeningQuery} {c : SameOpeningWitness}
-    (h : verifySameOpening q c = .ok) :
-    SameOpeningMeaning q c := by
+    (h : verifySameOpening q c = .ok) : SameOpeningMeaning q c := by
   unfold verifySameOpening at h
   cases hSm : checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits
   · simp [hSm] at h
@@ -925,8 +821,7 @@ theorem verifySameOpening_sound {q : SameOpeningQuery} {c : SameOpeningWitness}
   cases hNoWrap : checkModulusNoWrap q.effectiveMsgBound q.noiseBound q.smudgeBound q.qModulus
   · simp [hNoWrap] at h
   simp only [hNoWrap, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-  if hEqAsset : q.market.currency = q.market.goods then
-    simp [hEqAsset] at h
+  if hEqAsset : q.market.currency = q.market.goods then simp [hEqAsset] at h
   else
     simp only [hEqAsset, ↓reduceIte] at h
     cases hColsBne : (q.ajtaiParams.cols != 32)
@@ -940,62 +835,34 @@ theorem verifySameOpening_sound {q : SameOpeningQuery} {c : SameOpeningWitness}
         let zeroEpsMarket : Market := { q.market with epsilon := 0 }
         cases hJ : Obend.Judge.judge zeroEpsMarket orders c.transfers c.kktCert with
         | error reason => simp [orders, zeroEpsMarket, hJ] at h
-        | ok u =>
+        | ok _ =>
           simp only [orders, zeroEpsMarket, hJ] at h
           cases hGap : kktPrimalDualGapZero q.market orders c.transfers c.kktCert
           · simp [orders, hGap] at h
           · obtain ⟨hCons0, hFeas0⟩ := judge_ok_primal_feasible zeroEpsMarket orders c.transfers c.kktCert hJ
-            refine
-              { smudgeSafe := (checkSmudgeSafe_iff _ _ _).1 hSm
-                modulusNoWrap := (checkModulusNoWrap_iff _ _ _ _).1 hNoWrap
-                assetsDistinct := hEqAsset
-                exactLatticeCols := hColsEq
-                ordersOpenedAndBounded := checkOrderWitnessList_sound q.ajtaiParams 0 _ _ hOrd
-                accountsNodup := judge_ok_accounts_nodup zeroEpsMarket orders c.transfers c.kktCert hJ
-                flowConserving := hCons0
-                fillsFeasible := hFeas0
-                zeroDualityGap := (kktPrimalDualGapZero_iff _ _ _ _).1 hGap
-                globallyOptimal := ?_ }
-            dsimp only
-            intro f' hCons hNonneg hCap
-            have hOpt := judge_certifies_epsilon_optimal zeroEpsMarket orders c.transfers c.kktCert hJ
-              f' hCons hNonneg hCap
-            have hFillEq : finSum orders.length (fun i => (orders.get i).fill zeroEpsMarket c.transfers) =
-                primalObjective q.market orders c.transfers := rfl
-            have hEpsZero : (zeroEpsMarket.epsilon : Int) = 0 := rfl
-            rw [hFillEq, hEpsZero, Int.add_zero] at hOpt
-            exact hOpt
+            refine ⟨(checkSmudgeSafe_iff _ _ _).1 hSm, (checkModulusNoWrap_iff _ _ _ _).1 hNoWrap,
+                    hEqAsset, hColsEq, checkOrderWitnessList_sound q.ajtaiParams 0 _ _ hOrd,
+                    judge_ok_accounts_nodup zeroEpsMarket orders c.transfers c.kktCert hJ,
+                    hCons0, hFeas0, (kktPrimalDualGapZero_iff _ _ _ _).1 hGap, ?_⟩
+            dsimp only; intro f' hCons hNonneg hCap
+            have hOpt := judge_certifies_epsilon_optimal zeroEpsMarket orders c.transfers c.kktCert hJ f' hCons hNonneg hCap
+            change _ ≤ finSum orders.length (fun i => (orders.get i).fill zeroEpsMarket c.transfers)
+            simpa [zeroEpsMarket] using hOpt
     · simp [hColsBne] at h
 
 private def emptyClearingAjtaiParams : AjtaiParams where
-  rows := 8
-  cols := 32
-  rows_pos := by decide
-  modulus := 2
-  modulus_pos := by decide
-  matrix := List.replicate 8 (List.replicate 32 0)
-  matrix_rows := by decide
-  matrix_cols := by
-    intro row hmem
-    rw [List.mem_replicate] at hmem
-    rw [hmem.2]
-    decide
+  rows := 8; cols := 32; rows_pos := (by decide); modulus := 2; modulus_pos := (by decide)
+  matrix := List.replicate 8 (List.replicate 32 0); matrix_rows := (by decide)
+  matrix_cols := by intro row hmem; rw [List.mem_replicate] at hmem; rw [hmem.2]; decide
 
 /-- Inhabitedness witness for `verifySameOpening = .ok` (ensures non-vacuous premise coverage). -/
 example :
     let q : SameOpeningQuery :=
-      { market := { currency := 1, goods := 2, epsilon := 0 }
-        ajtaiParams := emptyClearingAjtaiParams
-        noiseBound := 1
-        smudgeBound := 2 ^ 40
-        secBits := 40
-        committedOrders := [] }
+      { market := { currency := 1, goods := 2, epsilon := 0 }, ajtaiParams := emptyClearingAjtaiParams
+        noiseBound := 1, smudgeBound := 2 ^ 40, secBits := 40, committedOrders := [] }
     let w : SameOpeningWitness :=
-      { orderWitnesses := []
-        transfers := []
-        kktCert := { price := 1, potentials := (0, 0), slacks := [] } }
-    verifySameOpening q w = .ok := by
-  decide
+      { orderWitnesses := [], transfers := [], kktCert := { price := 1, potentials := (0, 0), slacks := [] } }
+    verifySameOpening q w = .ok := by decide
 
 /-- **Refutation Soundness of `verifySameOpening` (`verifySameOpening_refuted`)**:
     Refusal by `.unsmudgedThresholdNoise`, `.modulusWraparoundUnsafe`, `.malformedMarketAssets`, or
@@ -1009,67 +876,53 @@ theorem verifySameOpening_refuted {q : SameOpeningQuery} {c : SameOpeningWitness
   refine ⟨hMarks, ?_, ?_⟩
   · unfold verifySameOpening at hRef
     cases hSm : checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits
-    · simp only [hSm, Bool.not_false, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef
-      exact hRef.2.symm
+    · simp only [hSm, Bool.not_false, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef; exact hRef.2.symm
     · simp only [hSm, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
       cases hNoWrap : checkModulusNoWrap q.effectiveMsgBound q.noiseBound q.smudgeBound q.qModulus
-      · simp only [hNoWrap, Bool.not_false, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef
-        exact hRef.2.symm
+      · simp only [hNoWrap, Bool.not_false, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef; exact hRef.2.symm
       · simp only [hNoWrap, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
         if hEqAsset : q.market.currency = q.market.goods then
-          simp only [hEqAsset, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef
-          exact hRef.2.symm
+          simp only [hEqAsset, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef; exact hRef.2.symm
         else
           simp only [hEqAsset, ↓reduceIte] at hRef
           cases hCols : (q.ajtaiParams.cols != 32)
           · simp only [hCols, Bool.false_eq_true, ↓reduceIte] at hRef
             cases hOrd : checkOrderWitnessList q.ajtaiParams 0 q.committedOrders c.orderWitnesses with
-            | some err =>
-              simp only [hOrd, Judge.Verdict.refused.injEq] at hRef; exact hRef.2.symm
+            | some err => simp only [hOrd, Judge.Verdict.refused.injEq] at hRef; exact hRef.2.symm
             | none =>
               simp only [hOrd] at hRef
               cases hJ : Obend.Judge.judge { q.market with epsilon := 0 }
                   (materializeOrders q.committedOrders c.orderWitnesses) c.transfers c.kktCert with
-              | error _ =>
-                simp only [hJ, Judge.Verdict.refused.injEq] at hRef; exact hRef.2.symm
+              | error _ => simp only [hJ, Judge.Verdict.refused.injEq] at hRef; exact hRef.2.symm
               | ok _ =>
                 simp only [hJ] at hRef
                 cases hGap : kktPrimalDualGapZero q.market
                     (materializeOrders q.committedOrders c.orderWitnesses) c.transfers c.kktCert
-                · simp only [hGap, Bool.false_eq_true, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef
-                  exact hRef.2.symm
+                · simp only [hGap, Bool.false_eq_true, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef; exact hRef.2.symm
                 · simp [hGap] at hRef
-          · simp only [hCols, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef
-            exact hRef.2.symm
+          · simp only [hCols, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef; exact hRef.2.symm
   · intro c' hMean
     unfold verifySameOpening at hRef
     cases hSm : checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits
-    · have ht := (checkSmudgeSafe_iff _ _ _).2 hMean.smudgeSafe
-      rw [hSm] at ht; cases ht
+    · have ht := (checkSmudgeSafe_iff _ _ _).2 hMean.smudgeSafe; rw [hSm] at ht; cases ht
     · simp only [hSm, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
       cases hNoWrap : checkModulusNoWrap q.effectiveMsgBound q.noiseBound q.smudgeBound q.qModulus
-      · have hw := (checkModulusNoWrap_iff _ _ _ _).2 hMean.modulusNoWrap
-        rw [hNoWrap] at hw; cases hw
+      · have hw := (checkModulusNoWrap_iff _ _ _ _).2 hMean.modulusNoWrap; rw [hNoWrap] at hw; cases hw
       · simp only [hNoWrap, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
-        if hEqAsset : q.market.currency = q.market.goods then
-          exact hMean.assetsDistinct hEqAsset
+        if hEqAsset : q.market.currency = q.market.goods then exact hMean.assetsDistinct hEqAsset
         else
           simp only [hEqAsset, ↓reduceIte] at hRef
           cases hCols : (q.ajtaiParams.cols != 32)
           · simp only [hCols, Bool.false_eq_true, ↓reduceIte] at hRef
             cases hOrd : checkOrderWitnessList q.ajtaiParams 0 q.committedOrders c.orderWitnesses with
             | some err =>
-              simp only [hOrd, Judge.Verdict.refused.injEq] at hRef
-              rcases hRef with ⟨rfl, _⟩
-              have hf := checkOrderWitnessList_not_refutes q.ajtaiParams 0 _ _ err hOrd
-              rw [hf] at hMarks; cases hMarks
+              simp only [hOrd, Judge.Verdict.refused.injEq] at hRef; rcases hRef with ⟨rfl, _⟩
+              have hf := checkOrderWitnessList_not_refutes q.ajtaiParams 0 _ _ err hOrd; rw [hf] at hMarks; cases hMarks
             | none =>
               simp only [hOrd] at hRef
               cases hJ : Obend.Judge.judge { q.market with epsilon := 0 }
                   (materializeOrders q.committedOrders c.orderWitnesses) c.transfers c.kktCert with
-              | error _ =>
-                simp only [hJ, Judge.Verdict.refused.injEq] at hRef
-                rcases hRef with ⟨rfl, _⟩; cases hMarks
+              | error _ => simp only [hJ, Judge.Verdict.refused.injEq] at hRef; rcases hRef with ⟨rfl, _⟩; cases hMarks
               | ok _ =>
                 simp only [hJ] at hRef
                 cases hGap : kktPrimalDualGapZero q.market
@@ -1077,48 +930,30 @@ theorem verifySameOpening_refuted {q : SameOpeningQuery} {c : SameOpeningWitness
                 · simp only [hGap, Bool.false_eq_true, ↓reduceIte, Judge.Verdict.refused.injEq] at hRef
                   rcases hRef with ⟨rfl, _⟩; cases hMarks
                 · simp [hGap] at hRef
-          · have hNeCols : q.ajtaiParams.cols ≠ 32 := by simpa [bne] using hCols
-            exact hNeCols hMean.exactLatticeCols
+          · exact (by simpa [bne] using hCols : q.ajtaiParams.cols ≠ 32) hMean.exactLatticeCols
 
-/-- Canonical zero-quantity (`qty = 0, total = 0, salt = 0`) witness for quiescent committed orders. -/
-def zeroOrderBitWitness : OrderBitWitness :=
-  { qtyBits := [], totalBits := [], salt := GoldilocksExt2.zero }
+def zeroOrderBitWitness : OrderBitWitness := { qtyBits := [], totalBits := [], salt := GoldilocksExt2.zero }
 
-/-- Independent semantic input-domain specification for empty-book clearing queries
-    (defined purely over query fields with ZERO reference to `verifySameOpening` or `SameOpeningMeaning`!). -/
 def WellFormedEmptyBookQuery (q : SameOpeningQuery) : Prop :=
   0 < q.noiseBound ∧ 40 ≤ q.secBits ∧ q.noiseBound * (2 ^ q.secBits) ≤ q.smudgeBound ∧
   2 * (q.msgBound + q.noiseBound + q.smudgeBound) < q.qModulus ∧
-  q.market.currency ≠ q.market.goods ∧
-  q.ajtaiParams.cols = 32 ∧
-  q.committedOrders = []
+  q.market.currency ≠ q.market.goods ∧ q.ajtaiParams.cols = 32 ∧ q.committedOrders = []
 
 theorem wellFormedEmptyBookQuery_inhabited (msgBound : Nat) :
     ∃ q : SameOpeningQuery, q.msgBound = msgBound ∧ WellFormedEmptyBookQuery q := by
-  refine ⟨{ market := { currency := 1, goods := 2, epsilon := 0 }
-            ajtaiParams := emptyClearingAjtaiParams
-            msgBound := msgBound
-            noiseBound := 1
-            smudgeBound := 2 ^ 40
-            secBits := 40
-            qModulus := 2 * msgBound + 2 ^ 62
-            committedOrders := [] },
+  refine ⟨{ market := { currency := 1, goods := 2, epsilon := 0 }, ajtaiParams := emptyClearingAjtaiParams
+            msgBound := msgBound, noiseBound := 1, smudgeBound := 2 ^ 40, secBits := 40
+            qModulus := 2 * msgBound + 2 ^ 62, committedOrders := [] },
           rfl, Nat.zero_lt_one, Nat.le_refl 40, Nat.le_of_eq (Nat.one_mul _), ?_, by dsimp only; decide, rfl, rfl⟩
-  dsimp only
-  rw [Nat.add_assoc, Nat.mul_add]
+  dsimp only; rw [Nat.add_assoc, Nat.mul_add]
   exact Nat.add_lt_add_left (by decide : 2 * (1 + 2 ^ 40) < 2 ^ 62) (2 * msgBound)
 
-/-- Independent semantic input-domain specification for quiescent / zero-quantity order books of
-    **arbitrary length** (`0, 1, 2, ...` orders, defined purely over query fields with ZERO reference
-    to `verifySameOpening` or `SameOpeningMeaning`!). -/
 def WellFormedZeroBookQuery (q : SameOpeningQuery) : Prop :=
   0 < q.noiseBound ∧ 40 ≤ q.secBits ∧ q.noiseBound * (2 ^ q.secBits) ≤ q.smudgeBound ∧
   2 * (q.effectiveMsgBound + q.noiseBound + q.smudgeBound) < q.qModulus ∧
-  q.market.currency ≠ q.market.goods ∧
-  q.ajtaiParams.cols = 32 ∧
+  q.market.currency ≠ q.market.goods ∧ q.ajtaiParams.cols = 32 ∧
   (q.committedOrders.map (·.account)).Nodup ∧
-  (∀ s ∈ q.committedOrders,
-    s.account < goldilocksPrime ∧
+  (∀ s ∈ q.committedOrders, s.account < goldilocksPrime ∧
     s.dualComm = (commitPrivateOrder q.ajtaiParams s.account s.side s.maxBits
       GoldilocksExt2.zero zeroOrderBitWitness).dualComm)
 
@@ -1128,38 +963,24 @@ theorem wellFormedZeroBookQuery_of_emptyBook {q : SameOpeningQuery}
   refine ⟨hPos, hSec, hDrown, ?_, hAssets, hCols, by simp [hEmpty], by intro _ hs; rw [hEmpty] at hs; cases hs⟩
   simpa [SameOpeningQuery.effectiveMsgBound, hEmpty, orderBookMsgBound] using hNoWrap
 
-/-- Explicit **non-empty 2-order (`[bid, ask]`)** inhabitedness witness for `WellFormedZeroBookQuery`. -/
 theorem wellFormedZeroBookQuery_twoOrders_inhabited
     (acc₁ acc₂ : AccountId) (hNe : acc₁ ≠ acc₂)
     (h₁ : acc₁ < goldilocksPrime) (h₂ : acc₂ < goldilocksPrime) :
-    ∃ q : SameOpeningQuery,
-      q.committedOrders.length = 2 ∧ WellFormedZeroBookQuery q := by
+    ∃ q : SameOpeningQuery, q.committedOrders.length = 2 ∧ WellFormedZeroBookQuery q := by
   let s₁ := commitPrivateOrder emptyClearingAjtaiParams acc₁ .bid 8 GoldilocksExt2.zero zeroOrderBitWitness
   let s₂ := commitPrivateOrder emptyClearingAjtaiParams acc₂ .ask 8 GoldilocksExt2.zero zeroOrderBitWitness
-  refine ⟨{ market := { currency := 1, goods := 2, epsilon := 0 }
-            ajtaiParams := emptyClearingAjtaiParams
-            noiseBound := 1
-            smudgeBound := 2 ^ 40
-            secBits := 40
-            qModulus := 2 ^ 62
-            committedOrders := [s₁, s₂] },
+  refine ⟨{ market := { currency := 1, goods := 2, epsilon := 0 }, ajtaiParams := emptyClearingAjtaiParams
+            noiseBound := 1, smudgeBound := 2 ^ 40, secBits := 40, qModulus := 2 ^ 62, committedOrders := [s₁, s₂] },
           rfl, Nat.zero_lt_one, Nat.le_refl 40, Nat.le_of_eq (Nat.one_mul _),
-          by change 2 * (512 + 1 + 2 ^ 40) < 2 ^ 62; decide,
-          by dsimp only; decide, rfl, ?_, ?_⟩
-  · dsimp only [s₁, s₂, commitPrivateOrder, List.map]; simp [hNe]
-  · intro s hs; simp only [List.mem_cons] at hs
-    rcases hs with rfl | rfl | hsNil
-    · exact ⟨h₁, rfl⟩
-    · exact ⟨h₂, rfl⟩
-    · cases hsNil
+          by change 2 * (512 + 1 + 2 ^ 40) < 2 ^ 62; decide, by dsimp only; decide, rfl,
+          by dsimp only [s₁, s₂, commitPrivateOrder, List.map]; simp [hNe], ?_⟩
+  intro s hs; simp only [List.mem_cons] at hs
+  rcases hs with rfl | rfl | hsNil; exact ⟨h₁, rfl⟩; exact ⟨h₂, rfl⟩; cases hsNil
 
-/-- Canonical zero-flow KKT witness synthesized for `numOrders` quiescent committed orders. -/
-def zeroBookClearingWitness (numOrders : Nat) : SameOpeningWitness where
-  orderWitnesses := List.replicate numOrders zeroOrderBitWitness
-  transfers := []
-  kktCert := { price := 1, potentials := (0, 0), slacks := List.replicate numOrders 1 }
+def zeroBookClearingWitness (numOrders : Nat) : SameOpeningWitness :=
+  { orderWitnesses := List.replicate numOrders zeroOrderBitWitness, transfers := []
+    kktCert := { price := 1, potentials := (0, 0), slacks := List.replicate numOrders 1 } }
 
-/-- Canonical zero-flow KKT witness synthesized for any `WellFormedEmptyBookQuery`. -/
 def emptyBookClearingWitness : SameOpeningWitness := zeroBookClearingWitness 0
 
 private theorem checkOrderWitnessList_zeroBook (pp : AjtaiParams) :
@@ -1170,168 +991,101 @@ private theorem checkOrderWitnessList_zeroBook (pp : AjtaiParams) :
   | _, [], _ => rfl
   | idx, s :: ss, hAll => by
     obtain ⟨hsAcc, hsComm⟩ := hAll s List.mem_cons_self
-    have hAccSome : canonicalLift? s.account = some (Goldilocks.ofNat s.account) :=
-      canonicalLift?_eq_some_ofNat hsAcc
-    have hZSome : canonicalLift? 0 = some (Goldilocks.ofNat 0) :=
-      canonicalLift?_eq_some_ofNat (by unfold CanonicalLift goldilocksPrime; omega)
-    let tbl := [Goldilocks.ofNat s.account, Goldilocks.ofNat (sideTag s.side),
-                Goldilocks.ofNat 0, Goldilocks.ofNat 0,
-                Goldilocks.zero, Goldilocks.zero, Goldilocks.zero, Goldilocks.zero]
+    have hAccSome := canonicalLift?_eq_some_ofNat hsAcc
+    have hZSome := canonicalLift?_eq_some_ofNat (by unfold CanonicalLift goldilocksPrime; omega : CanonicalLift 0)
+    let tbl := [Goldilocks.ofNat s.account, Goldilocks.ofNat (sideTag s.side), Goldilocks.ofNat 0,
+                Goldilocks.ofNat 0, Goldilocks.zero, Goldilocks.zero, Goldilocks.zero, Goldilocks.zero]
     have hTblS : orderWitnessTable? s zeroOrderBitWitness = some tbl := by
       dsimp only [orderWitnessTable?, zeroOrderBitWitness, OrderBitWitness.qty, OrderBitWitness.total, bitsToNat, GoldilocksExt2.zero]
       rw [hAccSome, hZSome]; rfl
     have hCommEq : s.dualComm = (canopyAjtaiDualPCS deployedCanopyHash32 pp).commit ((), ()) 3 tbl := by
-      rw [hsComm]
-      dsimp only [commitPrivateOrder, zeroOrderBitWitness, OrderBitWitness.qty, OrderBitWitness.total, bitsToNat, orderWitnessTable?, GoldilocksExt2.zero]
+      rw [hsComm]; dsimp only [commitPrivateOrder, zeroOrderBitWitness, OrderBitWitness.qty, OrderBitWitness.total, bitsToNat, orderWitnessTable?, GoldilocksExt2.zero]
       rw [hAccSome, hZSome]; rfl
-    simp only [List.length_cons, List.replicate_succ, checkOrderWitnessList, hTblS]
-    have hRange : (!(decide (zeroOrderBitWitness.qtyBits.length ≤ s.maxBits) &&
-        decide (zeroOrderBitWitness.totalBits.length ≤ s.maxBits))) = false := by
-      simp [zeroOrderBitWitness]
-    have hBne : (s.dualComm != (canopyAjtaiDualPCS deployedCanopyHash32 pp).commit ((), ()) 3 tbl) = false := by
-      rw [hCommEq]; simp
-    simp only [hRange, hBne, Bool.false_eq_true, ↓reduceIte]
+    have hLen0 : zeroOrderBitWitness.qtyBits.length = 0 ∧ zeroOrderBitWitness.totalBits.length = 0 := ⟨rfl, rfl⟩
+    simp only [List.length_cons, List.replicate_succ, checkOrderWitnessList, hLen0.1, hLen0.2,
+      Nat.zero_le, decide_true, Bool.and_self, Bool.not_true, Bool.false_eq_true, ↓reduceIte,
+      hTblS, hCommEq, bne_self_eq_false]
     exact checkOrderWitnessList_zeroBook pp (idx + 1) ss (fun s' hs' => hAll s' (List.mem_cons_of_mem _ hs'))
 
-private theorem materializeOrders_zero_accounts :
-    ∀ (specs : List CommittedOrderSpec),
-      (materializeOrders specs (List.replicate specs.length zeroOrderBitWitness)).map (·.account) =
-        specs.map (·.account)
-  | [] => rfl
-  | _ :: ss => by simp [List.replicate_succ, materializeOrders, materializeOrder, materializeOrders_zero_accounts ss]
+private theorem materializeOrders_zero_accounts : ∀ (specs : List CommittedOrderSpec),
+    (materializeOrders specs (List.replicate specs.length zeroOrderBitWitness)).map (·.account) = specs.map (·.account)
+  | [] => rfl | _ :: ss => by simp [List.replicate_succ, materializeOrders, materializeOrder, materializeOrders_zero_accounts ss]
 
-private theorem materializeOrders_zero_qty :
-    ∀ (specs : List CommittedOrderSpec) (o : Order),
-      o ∈ materializeOrders specs (List.replicate specs.length zeroOrderBitWitness) → o.qty = 0
+private theorem materializeOrders_zero_qty : ∀ (specs : List CommittedOrderSpec) (o : Order),
+    o ∈ materializeOrders specs (List.replicate specs.length zeroOrderBitWitness) → o.qty = 0
   | [], _, ho => by cases ho
   | _ :: ss, o, ho => by
     simp only [List.length_cons, List.replicate_succ, materializeOrders, List.mem_cons] at ho
-    rcases ho with rfl | hTl
-    · rfl
-    · exact materializeOrders_zero_qty ss o hTl
+    rcases ho with rfl | hTl; rfl; exact materializeOrders_zero_qty ss o hTl
 
 private theorem finSum_const_zero : ∀ (n : Nat), finSum n (fun _ => 0) = 0
-  | 0 => rfl
-  | n + 1 => by simp [finSum, finSum_const_zero n]
+  | 0 => rfl | n + 1 => by simp [finSum, finSum_const_zero n]
 
-private theorem replicate_one_getD :
-    ∀ (n idx : Nat), idx < n → (List.replicate n (1 : Int)).getD idx 0 = 1
-  | 0, _, h => by omega
-  | _ + 1, 0, _ => rfl
-  | n + 1, k + 1, h => replicate_one_getD n k (by omega)
+private theorem replicate_one_getD : ∀ (n idx : Nat), idx < n → (List.replicate n (1 : Int)).getD idx 0 = 1
+  | 0, _, h => by omega | _ + 1, 0, _ => rfl | n + 1, k + 1, h => replicate_one_getD n k (by omega)
 
-theorem verifySameOpening_zeroBook_complete {q : SameOpeningQuery}
-    (hq : WellFormedZeroBookQuery q) :
+theorem verifySameOpening_zeroBook_complete {q : SameOpeningQuery} (hq : WellFormedZeroBookQuery q) :
     verifySameOpening q (zeroBookClearingWitness q.committedOrders.length) = .ok := by
   rcases hq with ⟨hPos, hSec, hDrown, hNoWrap, hAssets, hCols, hNodup, hOrders⟩
-  have hSmB : checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits = true :=
-    (checkSmudgeSafe_iff _ _ _).2 ⟨hPos, hSec, hDrown⟩
-  have hNwB : checkModulusNoWrap q.effectiveMsgBound q.noiseBound q.smudgeBound q.qModulus = true :=
-    (checkModulusNoWrap_iff _ _ _ _).2 hNoWrap
+  have hSmB := (checkSmudgeSafe_iff _ _ _).2 ⟨hPos, hSec, hDrown⟩
+  have hNwB := (checkModulusNoWrap_iff _ _ _ _).2 hNoWrap
   have hColsB : (q.ajtaiParams.cols != 32) = false := by simp [hCols]
   have hChkOrd := checkOrderWitnessList_zeroBook q.ajtaiParams 0 q.committedOrders hOrders
   unfold verifySameOpening
-  simp only [hSmB, hNwB, hAssets, hColsB, zeroBookClearingWitness, hChkOrd,
-             Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+  simp only [hSmB, hNwB, hAssets, hColsB, zeroBookClearingWitness, hChkOrd, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
   let orders := materializeOrders q.committedOrders (List.replicate q.committedOrders.length zeroOrderBitWitness)
   let zeroEpsMarket : Market := { q.market with epsilon := 0 }
   let cert : Certificate := { price := 1, potentials := (0, 0), slacks := List.replicate q.committedOrders.length 1 }
-  have hOrdLen : orders.length = q.committedOrders.length :=
-    materializeOrders_length _ _ (by simp)
+  have hOrdLen : orders.length = q.committedOrders.length := materializeOrders_length _ _ (by simp)
   have hZeroQty : ∀ o ∈ orders, o.qty = 0 := materializeOrders_zero_qty q.committedOrders
-  have hFill0 : ∀ (m : Market) (o : Order), o.fill m [] = 0 := fun m o => by
-    unfold Order.fill netFlow; cases o.side <;> rfl
-  have hPaid0 : ∀ (m : Market) (o : Order), o.paid m [] = 0 := fun m o => by
-    unfold Order.paid netFlow; cases o.side <;> rfl
-  have hDupNone : firstDuplicateAccount? orders = none :=
-    (firstDuplicateAccount?_none_iff orders).2 (by dsimp [orders]; rw [materializeOrders_zero_accounts]; exact hNodup)
-  have hFiltNil : ∀ (os : List Order) (sd : Side), (∀ o ∈ os, o.qty = 0) →
-      os.filter (fun o => o.side == sd && o.qty > 0) = [] := by
+  have hFill0 : ∀ (m : Market) (o : Order), o.fill m [] = 0 := fun _ o => by unfold Order.fill netFlow; cases o.side <;> rfl
+  have hPaid0 : ∀ (m : Market) (o : Order), o.paid m [] = 0 := fun _ o => by unfold Order.paid netFlow; cases o.side <;> rfl
+  have hDupNone := (firstDuplicateAccount?_none_iff orders).2 (by dsimp [orders]; rw [materializeOrders_zero_accounts]; exact hNodup)
+  have hFiltNil : ∀ (os : List Order) (sd : Side), (∀ o ∈ os, o.qty = 0) → os.filter (fun o => o.side == sd && o.qty > 0) = [] := by
     intro os sd hz; induction os with
-    | nil => rfl
-    | cons o os ih =>
-      have ho : o.qty = 0 := hz o List.mem_cons_self
-      simp [List.filter, ho, ih (fun o' hm => hz o' (List.mem_cons_of_mem _ hm))]
+    | nil => rfl | cons o os ih => simp [List.filter, hz o List.mem_cons_self, ih (fun o' hm => hz o' (List.mem_cons_of_mem _ hm))]
   have hCrossInt : priceInCrossingInterval orders 1 = true := by
-    unfold priceInCrossingInterval highestBid? lowestAsk?
-    rw [hFiltNil orders .bid hZeroQty, hFiltNil orders .ask hZeroQty]
+    unfold priceInCrossingInterval highestBid? lowestAsk?; rw [hFiltNil orders .bid hZeroQty, hFiltNil orders .ask hZeroQty]
   have hNoCrossPair : hasCrossingPair orders = false := by
-    unfold hasCrossingPair highestBid? lowestAsk?
-    rw [hFiltNil orders .bid hZeroQty, hFiltNil orders .ask hZeroQty]
+    unfold hasCrossingPair highestBid? lowestAsk?; rw [hFiltNil orders .bid hZeroQty, hFiltNil orders .ask hZeroQty]
   have hUnifNone : orders.find? (fun o => o.paid zeroEpsMarket [] ≠ (cert.price : Int) * o.fill zeroEpsMarket []) = none :=
-    List.find?_eq_none.2 (fun o _ => by simp [hPaid0, hFill0])
+    List.find?_eq_none.2 (fun _ _ => by simp [hPaid0, hFill0])
   have hObj0 : ∀ m : Market, finSum orders.length (fun i => (orders.get i).fill m []) = 0 := fun m => by
-    have hFn : (fun i : Fin orders.length => (orders.get i).fill m []) = (fun _ => 0) := by funext i; exact hFill0 m _
-    rw [hFn, finSum_const_zero]
+    rw [show (fun i : Fin orders.length => (orders.get i).fill m []) = (fun _ => 0) by funext i; exact hFill0 m _, finSum_const_zero]
   have hDualCap0 : finSum orders.length (fun i =>
       (if (orders.get i).crosses cert.price then ((orders.get i).qty : Int) else 0) * (cert.slacks.getD i.val 0)) = 0 := by
-    have hFn : (fun i : Fin orders.length =>
-        (if (orders.get i).crosses cert.price then ((orders.get i).qty : Int) else 0) * (cert.slacks.getD i.val 0)) = (fun _ => 0) := by
-      funext i
-      have hq0 : (orders.get i).qty = 0 := hZeroQty (orders.get i) (List.get_mem orders i)
-      rw [hq0]; simp
-    rw [hFn, finSum_const_zero]
+    rw [show (fun i : Fin orders.length => (if (orders.get i).crosses cert.price then ((orders.get i).qty : Int) else 0) * (cert.slacks.getD i.val 0)) =
+      (fun _ => 0) by funext i; rw [hZeroQty (orders.get i) (List.get_mem orders i)]; simp, finSum_const_zero]
   have hJudgeOk : Obend.Judge.judge zeroEpsMarket orders [] cert = .ok () := by
     have hAssetM : zeroEpsMarket.currency ≠ zeroEpsMarket.goods := hAssets
     have hSlLen : cert.slacks.length = orders.length := by simp [cert, hOrdLen]
     have hCrossCert : priceInCrossingInterval orders cert.price = true := hCrossInt
-    unfold Obend.Judge.judge
-    simp only [hAssetM, ↓reduceIte, List.find?]
-    rw [hDupNone]; dsimp only
-    rw [hCrossCert]; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte]
-    simp only [hSlLen, ne_eq, not_true_eq_false, ↓reduceIte]
+    unfold Obend.Judge.judge; simp only [hAssetM, ↓reduceIte, List.find?]
+    rw [hDupNone]; dsimp only; rw [hCrossCert]; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte, hSlLen, ne_eq, not_true_eq_false]
     rw [hUnifNone]; dsimp only
     split
-    · rename_i hNe
-      refine False.elim (hNe ?_)
-      rw [← finSum_const_zero orders.length]; congr 1; funext i
-      cases (orders.get i).side <;> simp [hFill0]
+    · rename_i hNe; refine False.elim (hNe ?_); rw [← finSum_const_zero orders.length]; congr 1; funext i; cases (orders.get i).side <;> simp [hFill0]
     · split
-      · rename_i i hi
-        exfalso
-        have hp := (List.find?_eq_some_iff_append.1 hi).1
-        rw [hFill0] at hp
-        simp only [Bool.or_eq_true, decide_eq_true_eq] at hp
-        rcases hp with hLt | hCap
-        · omega
-        · split at hCap <;> omega
+      · rename_i i hi; have hp := (List.find?_eq_some_iff_append.1 hi).1; rw [hFill0] at hp
+        simp only [Bool.or_eq_true, decide_eq_true_eq] at hp; rcases hp with hLt | hCap; omega; split at hCap <;> omega
       · split
-        · rename_i i hi
-          exfalso
-          have hd := (List.find?_eq_some_iff_append.1 hi).1
-          have hSl : cert.slacks.getD i.val 0 = 1 := replicate_one_getD q.committedOrders.length i.val (by omega)
-          dsimp only [cert] at hSl hd
-          rw [hSl] at hd
-          simp at hd
-          split at hd <;> cases hd
-        · rw [hObj0 zeroEpsMarket, hDualCap0, hNoCrossPair]
-          simp [zeroEpsMarket]
+        · rename_i i hi; have hd := (List.find?_eq_some_iff_append.1 hi).1
+          have hSl := replicate_one_getD q.committedOrders.length i.val (by omega)
+          dsimp only [cert] at hSl hd; rw [hSl] at hd; simp at hd; split at hd <;> cases hd
+        · rw [hObj0 zeroEpsMarket, hDualCap0, hNoCrossPair]; simp [zeroEpsMarket]
   change (match Obend.Judge.judge zeroEpsMarket orders [] cert with
           | .error r => Judge.Verdict.refused (SameOpeningRefusal.clearingRefused r) []
-          | .ok () =>
-            if kktPrimalDualGapZero q.market orders [] cert then Judge.Verdict.ok
-            else Judge.Verdict.refused
-              (SameOpeningRefusal.nonzeroPrimalDualGap (dualObjective orders cert) (primalObjective q.market orders [])) []) =
-        Judge.Verdict.ok
+          | .ok () => if kktPrimalDualGapZero q.market orders [] cert then Judge.Verdict.ok
+            else Judge.Verdict.refused (SameOpeningRefusal.nonzeroPrimalDualGap (dualObjective orders cert) (primalObjective q.market orders [])) []) = Judge.Verdict.ok
   rw [hJudgeOk]; dsimp only
   have hGapB : kktPrimalDualGapZero q.market orders [] cert = true := by
-    unfold kktPrimalDualGapZero dualObjective primalObjective
-    dsimp only
-    rw [hDualCap0, hObj0 q.market]
-    decide
+    unfold kktPrimalDualGapZero dualObjective primalObjective; dsimp only; rw [hDualCap0, hObj0 q.market]; decide
   rw [hGapB]; rfl
 
-theorem verifySameOpening_emptyBook_complete {q : SameOpeningQuery}
-    (hq : WellFormedEmptyBookQuery q) :
+theorem verifySameOpening_emptyBook_complete {q : SameOpeningQuery} (hq : WellFormedEmptyBookQuery q) :
     verifySameOpening q emptyBookClearingWitness = .ok := by
-  have hZ := verifySameOpening_zeroBook_complete (wellFormedZeroBookQuery_of_emptyBook hq)
-  simpa [hq.2.2.2.2.2.2, emptyBookClearingWitness] using hZ
+  simpa [hq.2.2.2.2.2.2, emptyBookClearingWitness] using verifySameOpening_zeroBook_complete (wellFormedZeroBookQuery_of_emptyBook hq)
 
-/-- **Lawful `Obend.Judge` for Private-Input Convex Clearing (`privateConvexSameOpeningJudge`)**:
-    Combines `Choe–Kang–Stehlé (2026/2546)` smudging enforcement, operational `effectiveMsgBound`
-    no-wraparound verification, canonical `< goldilocksPrime` field lifts, salted `DarkBazaar`
-    `canopyAjtaiDualPCS` commitment verification, `BitZ (2026/2141)` $B$-bit range witnesses, and
-    $O(N)$ KKT exact optimality certification over quiescent books of arbitrary length (`WellFormedZeroBookQuery`). -/
 instance privateConvexSameOpeningJudge : Judge SameOpeningQuery SameOpeningWitness where
   Clause := SameOpeningRefusal
   Meaning := SameOpeningMeaning
@@ -1347,84 +1101,8 @@ instance privateConvexSameOpeningJudge : Judge SameOpeningQuery SameOpeningWitne
     intro _ _ _ _ _ _
     rfl
 
-/-! ## 6. Witness-Independent Public ZK Verdict Collapse (`PublicSameOpeningVerdict`) -/
+/-! ## 6. Witness-Free Masked Schnorr/BDLOP Commitment-Opening, Exact HVZK & 2-Transcript `PSum` Soundness -/
 
-/-- Public on-chain verdict vocabulary collapsing all private-witness refusal indices and dual values
-    (`.bitzRangeExceeded idx`, `.dualCommitmentMismatch idx`, `.nonzeroPrimalDualGap d p`, etc.)
-    into a single constant `.privateWitnessRejected` tag so refusal leaks **zero** bits of private order state! -/
-inductive PublicSameOpeningVerdict where
-  | accepted
-  | unsmudgedThresholdNoise
-  | modulusWraparoundUnsafe
-  | malformedMarketAssets
-  | invalidLatticeDimension
-  | privateWitnessRejected
-  deriving DecidableEq, Repr
-
-/-- Project a detailed `Judge.Verdict SameOpeningRefusal` to its zero-leakage `PublicSameOpeningVerdict`. -/
-def toPublicZkVerdict : Judge.Verdict SameOpeningRefusal → PublicSameOpeningVerdict
-  | .ok => .accepted
-  | .refused .unsmudgedThresholdNoise _ => .unsmudgedThresholdNoise
-  | .refused .modulusWraparoundUnsafe _ => .modulusWraparoundUnsafe
-  | .refused .malformedMarketAssets _ => .malformedMarketAssets
-  | .refused .invalidLatticeDimension _ => .invalidLatticeDimension
-  | .refused _ _ => .privateWitnessRejected
-  | .uncovered => .privateWitnessRejected
-
-/-- **Private-Index Leakage-Freeness (`toPublicZkVerdict_hides_private_index`)**:
-    For any well-formed public query `q` (passing smudging, modulus no-wraparound, asset, and lattice
-    dimension guards), ANY two rejected private witnesses `c₁, c₂` (regardless of which trader's
-    `orderIdx` failed `BitZ`, `CanonicalLift`, commitment equality, or KKT gap!) produce the exact
-    same `.privateWitnessRejected` public verdict. -/
-theorem toPublicZkVerdict_hides_private_index (q : SameOpeningQuery) (c₁ c₂ : SameOpeningWitness)
-    (hSm : checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits = true)
-    (hNw : checkModulusNoWrap q.effectiveMsgBound q.noiseBound q.smudgeBound q.qModulus = true)
-    (hAssets : q.market.currency ≠ q.market.goods)
-    (hCols : q.ajtaiParams.cols = 32)
-    (hRej₁ : verifySameOpening q c₁ ≠ .ok)
-    (hRej₂ : verifySameOpening q c₂ ≠ .ok) :
-    toPublicZkVerdict (verifySameOpening q c₁) = .privateWitnessRejected ∧
-    toPublicZkVerdict (verifySameOpening q c₂) = .privateWitnessRejected := by
-  have oneSide : ∀ c : SameOpeningWitness, verifySameOpening q c ≠ .ok →
-      toPublicZkVerdict (verifySameOpening q c) = .privateWitnessRejected := by
-    intro c hRej
-    have hColsB : (q.ajtaiParams.cols != 32) = false := by simp [hCols]
-    unfold verifySameOpening at hRej ⊢
-    simp only [hSm, hNw, hAssets, hColsB, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRej ⊢
-    cases hOrd : checkOrderWitnessList q.ajtaiParams 0 q.committedOrders c.orderWitnesses with
-    | some err =>
-      have hNotRef := checkOrderWitnessList_not_refutes q.ajtaiParams 0 _ _ err hOrd
-      cases err <;> first | rfl | (simp [sameOpeningRefutes] at hNotRef)
-    | none =>
-      simp only [hOrd] at hRej
-      cases hJ : Obend.Judge.judge { q.market with epsilon := 0 }
-          (materializeOrders q.committedOrders c.orderWitnesses) c.transfers c.kktCert with
-      | error _ => simp [toPublicZkVerdict]
-      | ok _ =>
-        simp only [hJ] at hRej
-        cases hGap : kktPrimalDualGapZero q.market
-            (materializeOrders q.committedOrders c.orderWitnesses) c.transfers c.kktCert
-        · simp [toPublicZkVerdict]
-        · exfalso; simp [hGap] at hRej
-  exact ⟨oneSide c₁ hRej₁, oneSide c₂ hRej₂⟩
-
-/-- **Exact Binary Public Verdict Characterization (`toPublicZkVerdict_eq_ite`)**:
-    For every public-guard-passing query `q`, `toPublicZkVerdict (verifySameOpening q c)` is completely
-    determined by the boolean acceptance bit `verifySameOpening q c == .ok` (leaking zero refusal metadata). -/
-theorem toPublicZkVerdict_eq_ite (q : SameOpeningQuery) (c : SameOpeningWitness)
-    (hSm : checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits = true)
-    (hNw : checkModulusNoWrap q.effectiveMsgBound q.noiseBound q.smudgeBound q.qModulus = true)
-    (hAssets : q.market.currency ≠ q.market.goods)
-    (hCols : q.ajtaiParams.cols = 32) :
-    toPublicZkVerdict (verifySameOpening q c) =
-      if verifySameOpening q c == .ok then .accepted else .privateWitnessRejected := by
-  by_cases hOk : verifySameOpening q c = .ok
-  · rw [hOk]; rfl
-  · rw [beq_eq_false_iff_ne.2 hOk]
-    exact (toPublicZkVerdict_hides_private_index q c c hSm hNw hAssets hCols hOk hOk).1
-
-/-- Explicit `2026/2546` Judge Refutation Corollary: any query with `smudgeBound = 0` is
-    refuted by `privateConvexSameOpeningJudge` at every grade `r` and for every candidate `c`. -/
 theorem unsmudged_query_refuted_by_judge (r : Nat) (q : SameOpeningQuery) (c : SameOpeningWitness)
     (hZero : q.smudgeBound = 0) :
     privateConvexSameOpeningJudge.check r q c = .refused .unsmudgedThresholdNoise [] ∧
@@ -1432,15 +1110,380 @@ theorem unsmudged_query_refuted_by_judge (r : Nat) (q : SameOpeningQuery) (c : S
   have hCheckFalse : checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits = false := by
     cases hb : checkSmudgeSafe q.noiseBound q.smudgeBound q.secBits
     · rfl
-    · exfalso
-      have hs := (checkSmudgeSafe_iff _ _ _).1 hb
-      rw [hZero] at hs
-      exact smudgeSafe_refuses_unsmudged q.noiseBound q.secBits hs
+    · exact False.elim (smudgeSafe_refuses_unsmudged q.noiseBound q.secBits (hZero ▸ (checkSmudgeSafe_iff _ _ _).1 hb))
   have hVer : privateConvexSameOpeningJudge.check r q c = .refused .unsmudgedThresholdNoise [] := by
-    change verifySameOpening q c = .refused .unsmudgedThresholdNoise []
-    unfold verifySameOpening
-    simp [hCheckFalse]
+    change verifySameOpening q c = .refused .unsmudgedThresholdNoise []; unfold verifySameOpening; simp [hCheckFalse]
   exact ⟨hVer, privateConvexSameOpeningJudge.refuted hVer rfl⟩
+
+structure BdlopParams (rows cols : Nat) where
+  matrix : IntMatrix rows cols
+  q : Nat
+  bWit : Nat
+  bChal : Nat
+  bMask : Nat
+  bResp : Nat
+  deriving DecidableEq
+
+def checkBdlopSafeParams {rows cols : Nat} (pp : BdlopParams rows cols) : Bool :=
+  decide (1 < pp.q) && decide (0 < pp.bChal) && decide (pp.bResp + pp.bChal * pp.bWit ≤ pp.bMask) && decide (2 * pp.bResp < pp.q)
+
+def bdlopCommit {rows cols : Nat} (pp : BdlopParams rows cols) (v : FastIntPoly cols) : FastIntPoly rows :=
+  matVecModQ pp.matrix pp.q v
+
+def bdlopCombine {rows cols : Nat} (pp : BdlopParams rows cols) (tY : FastIntPoly rows) (c : Int) (tW : FastIntPoly rows) : FastIntPoly rows :=
+  foldModQ pp.q c tY tW
+
+def bdlopSimMaskCommit {rows cols : Nat} (pp : BdlopParams rows cols) (z : FastIntPoly cols) (c : Int) (tW : FastIntPoly rows) : FastIntPoly rows :=
+  Sized.ofFn fun i => ((bdlopCommit pp z).spec i - c * tW.spec i) % (pp.q : Int)
+
+theorem bdlopCommit_homomorphic {rows cols : Nat} (pp : BdlopParams rows cols) (c : Int) (y w : FastIntPoly cols) :
+    bdlopCommit pp (foldWitness c y w) = bdlopCombine pp (bdlopCommit pp y) c (bdlopCommit pp w) :=
+  matVecModQ_foldWitness pp.matrix pp.q c y w
+
+theorem bdlopSimMaskCommit_eq_commit {rows cols : Nat} (pp : BdlopParams rows cols) (c : Int) (y w : FastIntPoly cols) :
+    bdlopSimMaskCommit pp (foldWitness c y w) c (bdlopCommit pp w) = bdlopCommit pp y := by
+  apply Sized.ext; funext i
+  simp only [bdlopSimMaskCommit, bdlopCommit, matVecModQ, matVec, foldWitness, Sized.spec_ofFn, dot_add, dot_scale]
+  let dy := dot (pp.matrix.spec i) y; let dw := dot (pp.matrix.spec i) w; let q := (pp.q : Int)
+  calc ((dy + c * dw) % q - c * (dw % q)) % q
+    _ = ((dy + c * dw) % q % q - (c * (dw % q)) % q) % q := by rw [Int.sub_emod]
+    _ = ((dy + c * dw) % q - (c * dw) % q) % q := by
+      rw [Int.emod_emod, Int.mul_emod c (dw % q), Int.emod_emod, ← Int.mul_emod]
+    _ = (dy + c * dw - c * dw) % q := by rw [← Int.sub_emod]
+    _ = dy % q := by rw [show dy + c * dw - c * dw = dy by omega]
+
+theorem bdlopCombine_simMaskCommit {rows cols : Nat} (pp : BdlopParams rows cols) (z : FastIntPoly cols) (c : Int) (tW : FastIntPoly rows) :
+    bdlopCombine pp (bdlopSimMaskCommit pp z c tW) c tW = bdlopCommit pp z := by
+  apply Sized.ext; funext i
+  simp only [bdlopCombine, foldModQ, bdlopSimMaskCommit, bdlopCommit, matVecModQ, Sized.spec_ofFn]
+  rw [Int.add_emod, Int.emod_emod, ← Int.add_emod]
+  rw [show (matVec pp.matrix z).spec i % (pp.q : Int) - c * tW.spec i + c * tW.spec i = (matVec pp.matrix z).spec i % (pp.q : Int) by omega, Int.emod_emod]
+
+/-- **Witness-Free Masked Schnorr/BDLOP Proof (`MaskedSameOpeningProof`)**: zero `qtyBits`, `totalBits`, or `salt` fields! -/
+structure MaskedSameOpeningProof (rows cols : Nat) where
+  tY : FastIntPoly rows
+  z : FastIntPoly cols
+  deriving DecidableEq
+
+def deriveMaskedSameOpeningChal {rows cols : Nat} (pp : BdlopParams rows cols)
+    (stmtContext : ByteArray) (tW tY : FastIntPoly rows) : Int :=
+  let paramBytes := Obend.Digest.Cshake256.Native.bytesOfList
+    (leb128 rows ++ leb128 cols ++ leb128 pp.q ++ leb128 pp.bWit ++ leb128 pp.bChal ++
+     leb128 pp.bMask ++ leb128 pp.bResp ++ pp.matrix.coeffs.toList.flatMap fun row => (encodeInts row).data.toList)
+  let trRel := bindRelation "OBEND.SAMEOPENING.BDLOP.ZK/v1" paramBytes stmtContext (Transcript.newUnseeded ByteArray.empty)
+  (squeezeBoundedSignedChal pp.bChal (bindInstance (encodeFrame (encodeInts tW) (encodeInts tY) ByteArray.empty) trRel).transcript).1
+
+theorem deriveMaskedSameOpeningChal_abs_le {rows cols : Nat} (pp : BdlopParams rows cols)
+    (stmtContext : ByteArray) (tW tY : FastIntPoly rows) :
+    (deriveMaskedSameOpeningChal pp stmtContext tW tY).natAbs ≤ pp.bChal :=
+  squeezeBoundedSignedChal_abs_le pp.bChal _
+
+def verifyMaskedSameOpeningCore {rows cols : Nat} (pp : BdlopParams rows cols)
+    (tW : FastIntPoly rows) (prf : MaskedSameOpeningProof rows cols) (c : Int) : Bool :=
+  @checkBdlopSafeParams rows cols pp && decide (normInfFast prf.z.coeffs ≤ pp.bResp) &&
+  decide (bdlopCommit pp prf.z = bdlopCombine pp prf.tY c tW)
+
+def verifyMaskedSameOpening {rows cols : Nat} (pp : BdlopParams rows cols)
+    (stmtContext : ByteArray) (tW : FastIntPoly rows) (prf : MaskedSameOpeningProof rows cols) : Bool :=
+  @verifyMaskedSameOpeningCore rows cols pp tW prf (deriveMaskedSameOpeningChal pp stmtContext tW prf.tY)
+
+def proveMaskedSameOpening? {rows cols : Nat} (pp : BdlopParams rows cols)
+    (stmtContext : ByteArray) (w y : FastIntPoly cols) : Option (MaskedSameOpeningProof rows cols) :=
+  let tW := bdlopCommit pp w; let tY := bdlopCommit pp y
+  let z := foldWitness (deriveMaskedSameOpeningChal pp stmtContext tW tY) y w
+  if normInfFast z.coeffs ≤ pp.bResp then some ⟨tY, z⟩ else none
+
+theorem verifyMaskedSameOpening_complete {rows cols : Nat} (pp : BdlopParams rows cols)
+    (stmtContext : ByteArray) (w y : FastIntPoly cols)
+    (hSafe : checkBdlopSafeParams pp = true)
+    (hNorm : normInfFast (foldWitness (deriveMaskedSameOpeningChal pp stmtContext (bdlopCommit pp w) (bdlopCommit pp y)) y w).coeffs ≤ pp.bResp) :
+    ∃ prf : MaskedSameOpeningProof rows cols,
+      proveMaskedSameOpening? pp stmtContext w y = some prf ∧
+      @verifyMaskedSameOpening rows cols pp stmtContext (bdlopCommit pp w) prf = true := by
+  refine ⟨⟨bdlopCommit pp y, foldWitness (deriveMaskedSameOpeningChal pp stmtContext (bdlopCommit pp w) (bdlopCommit pp y)) y w⟩, ?_, ?_⟩
+  · unfold proveMaskedSameOpening?; simp [hNorm]
+  · unfold verifyMaskedSameOpening verifyMaskedSameOpeningCore
+    simp only [hSafe, hNorm, decide_true, Bool.true_and, bdlopCommit_homomorphic]
+
+def unshiftMask {cols : Nat} (c : Int) (z w : FastIntPoly cols) : FastIntPoly cols := intSub z (intScale c w)
+
+theorem unshiftMask_foldWitness {cols : Nat} (c : Int) (y w : FastIntPoly cols) :
+    unshiftMask c (foldWitness c y w) w = y := by apply Sized.ext; funext i; simp [unshiftMask, foldWitness]
+
+theorem foldWitness_unshiftMask {cols : Nat} (c : Int) (z w : FastIntPoly cols) :
+    foldWitness c (unshiftMask c z w) w = z := by apply Sized.ext; funext i; simp [unshiftMask, foldWitness]
+
+theorem unshiftMask_norm_le_bMask {rows cols : Nat} (pp : BdlopParams rows cols) {c : Int} {z w : FastIntPoly cols}
+    (hBox : pp.bResp + pp.bChal * pp.bWit ≤ pp.bMask) (hc : c.natAbs ≤ pp.bChal)
+    (hw : normInfFast w.coeffs ≤ pp.bWit) (hz : normInfFast z.coeffs ≤ pp.bResp) :
+    normInfFast (unshiftMask c z w).coeffs ≤ pp.bMask :=
+  Nat.le_trans (normInfFast_sub_le z (intScale c w))
+    (Nat.le_trans (Nat.add_le_add hz (Nat.le_trans (normInfFast_scale_le c w) (Nat.mul_le_mul hc hw))) hBox)
+
+private def intIntervalList (B : Nat) : List Int := (List.range (2 * B + 1)).map (fun k : Nat => (k : Int) - (B : Int))
+
+private theorem mem_intIntervalList_iff (B : Nat) (x : Int) : x ∈ intIntervalList B ↔ x.natAbs ≤ B := by
+  unfold intIntervalList
+  exact ⟨fun h => by rcases List.mem_map.1 h with ⟨k, hk, rfl⟩; have := List.mem_range.1 hk; omega,
+         fun hx => List.mem_map.2 ⟨(x + (B : Int)).toNat, List.mem_range.2 (by omega), by omega⟩⟩
+
+private theorem nodup_map_of_inj {α β : Type} {f : α → β} {xs : List α}
+    (hInj : ∀ a b, f a = f b → a = b) (hNd : xs.Nodup) : (xs.map f).Nodup := by
+  induction xs with
+  | nil => exact .nil
+  | cons x xs ih =>
+    rcases hNd with _ | ⟨hNot, hNdR⟩
+    exact .cons (fun b hb hEq => by rcases List.mem_map.1 hb with ⟨a, ha, rfl⟩; exact hNot a ha (hInj x a hEq)) (ih hNdR)
+
+private def polyHead {n : Nat} (p : FastIntPoly (n + 1)) : Int := p.spec ⟨0, by omega⟩
+private def polyTail {n : Nat} (p : FastIntPoly (n + 1)) : FastIntPoly n := Sized.ofFn fun i => p.spec ⟨i.val + 1, by omega⟩
+private def polyCons {n : Nat} (x : Int) (p : FastIntPoly n) : FastIntPoly (n + 1) :=
+  Sized.ofFn fun i => if _ : i.val = 0 then x else p.spec ⟨i.val - 1, by omega⟩
+
+private theorem polyCons_head_tail {n : Nat} (p : FastIntPoly (n + 1)) : polyCons (polyHead p) (polyTail p) = p := by
+  apply Sized.ext; funext i; simp only [polyCons, polyHead, polyTail, Sized.spec_ofFn]
+  if h0 : i.val = 0 then
+    simp only [h0, ↓reduceDIte]; exact congrArg p.spec (Fin.ext h0.symm)
+  else
+    simp only [h0, ↓reduceDIte]; exact congrArg p.spec (Fin.ext (by dsimp only; omega))
+
+private theorem polyCons_inj {n : Nat} {x₁ x₂ : Int} {p₁ p₂ : FastIntPoly n}
+    (h : polyCons x₁ p₁ = polyCons x₂ p₂) : x₁ = x₂ ∧ p₁ = p₂ := by
+  refine ⟨?_, Sized.ext (funext fun i => ?_)⟩
+  · have h0 := congrArg (fun q => q.spec ⟨0, by omega⟩) h
+    simpa only [polyCons, Sized.spec_ofFn, ↓reduceDIte] using h0
+  · have hi := congrArg (fun q => q.spec ⟨i.val + 1, by omega⟩) h
+    have hNe0 : i.val + 1 ≠ 0 := by omega
+    simpa only [polyCons, Sized.spec_ofFn, hNe0, ↓reduceDIte, Nat.add_sub_cancel] using hi
+
+def polyBox (B : Nat) : (n : Nat) → List (FastIntPoly n)
+  | 0 => [⟨#[], rfl⟩]
+  | n + 1 => (intIntervalList B).flatMap fun x => (polyBox B n).map (polyCons x)
+
+theorem mem_polyBox_iff (B : Nat) : ∀ (n : Nat) (v : FastIntPoly n), v ∈ polyBox B n ↔ normInfFast v.coeffs ≤ B
+  | 0, v => by
+    have hv : v = ⟨#[], rfl⟩ := Sized.ext (funext fun i => Fin.elim0 i); subst hv
+    exact ⟨fun _ => norm_le _ B (fun i => Fin.elim0 i), fun _ => List.Mem.head _⟩
+  | n + 1, v => by
+    unfold polyBox; constructor
+    · intro hm; rcases List.mem_flatMap.1 hm with ⟨x, hx, hm2⟩; rcases List.mem_map.1 hm2 with ⟨p, hp, rfl⟩
+      have hxB := (mem_intIntervalList_iff B x).1 hx; have hpB := (mem_polyBox_iff B n p).1 hp
+      refine norm_le (polyCons x p) B (fun i => ?_)
+      simp only [polyCons, Sized.spec_ofFn]
+      if h0 : i.val = 0 then simp only [h0, ↓reduceDIte]; exact hxB
+      else simp only [h0, ↓reduceDIte]; exact Nat.le_trans (coeff_le_norm p ⟨i.val - 1, by omega⟩) hpB
+    · intro hB; rw [← polyCons_head_tail v]
+      refine List.mem_flatMap.2 ⟨polyHead v, (mem_intIntervalList_iff B _).2 (Nat.le_trans (coeff_le_norm v ⟨0, by omega⟩) hB), ?_⟩
+      exact List.mem_map.2 ⟨polyTail v, (mem_polyBox_iff B n _).2
+        (norm_le (polyTail v) B (fun i => by simpa only [polyTail, Sized.spec_ofFn] using Nat.le_trans (coeff_le_norm v ⟨i.val + 1, by omega⟩) hB)), rfl⟩
+
+private theorem nodup_flatMap_disjoint {α β : Type} {xs : List α} {f : α → List β}
+    (hXs : xs.Nodup) (hF : ∀ a ∈ xs, (f a).Nodup)
+    (hDisj : ∀ a₁ a₂ b, a₁ ∈ xs → a₂ ∈ xs → b ∈ f a₁ → b ∈ f a₂ → a₁ = a₂) : (xs.flatMap f).Nodup := by
+  induction xs with
+  | nil => exact .nil
+  | cons x xs ih =>
+    rcases hXs with _ | ⟨hNot, hNdR⟩; simp only [List.flatMap_cons]
+    refine GameSoundness.nodup_append_disjoint (hF x List.mem_cons_self)
+      (ih hNdR (fun a ha => hF a (List.mem_cons_of_mem _ ha))
+        (fun a₁ a₂ b ha₁ ha₂ => hDisj a₁ a₂ b (List.mem_cons_of_mem _ ha₁) (List.mem_cons_of_mem _ ha₂)))
+      (fun b hbX hbXs => by rcases List.mem_flatMap.1 hbXs with ⟨x', hx', hbX'⟩
+                            exact hNot x' hx' (hDisj x x' b List.mem_cons_self (List.mem_cons_of_mem _ hx') hbX hbX'))
+
+theorem polyBox_nodup (B : Nat) : ∀ (n : Nat), (polyBox B n).Nodup
+  | 0 => by simp [polyBox]
+  | n + 1 => nodup_flatMap_disjoint (nodup_map_of_inj (fun _ _ h => by omega) List.nodup_range)
+      (fun _ _ => nodup_map_of_inj (fun _ _ h => (polyCons_inj h).2) (polyBox_nodup B n))
+      (fun _ _ _ _ _ hb₁ hb₂ => by rcases List.mem_map.1 hb₁ with ⟨_, _, rfl⟩
+                                   rcases List.mem_map.1 hb₂ with ⟨_, _, hEq⟩; exact (polyCons_inj hEq.symm).1)
+
+theorem polyBox_ne_nil (B n : Nat) : polyBox B n ≠ [] := fun hNil => by
+  have hZ := (mem_polyBox_iff B n (zeroVec n)).2 (norm_le (zeroVec n) B (fun _ => by simp [zeroVec]))
+  rw [hNil] at hZ; cases hZ
+
+def safeMasks {rows cols : Nat} (pp : BdlopParams rows cols) (c : Int) (w : FastIntPoly cols) : List (FastIntPoly cols) :=
+  (polyBox pp.bMask cols).filter (fun y => decide (normInfFast (foldWitness c y w).coeffs ≤ pp.bResp))
+
+theorem safeMasks_ne_nil {rows cols : Nat} (pp : BdlopParams rows cols) {c : Int} {w : FastIntPoly cols}
+    (hBox : pp.bResp + pp.bChal * pp.bWit ≤ pp.bMask) (hc : c.natAbs ≤ pp.bChal) (hw : normInfFast w.coeffs ≤ pp.bWit) :
+    safeMasks pp c w ≠ [] := fun hNil => by
+  have hz0 : normInfFast (zeroVec cols).coeffs ≤ pp.bResp := norm_le (zeroVec cols) pp.bResp (fun _ => by simp [zeroVec])
+  have hy0 : unshiftMask c (zeroVec cols) w ∈ safeMasks pp c w := List.mem_filter.2
+    ⟨(mem_polyBox_iff pp.bMask cols _).2 (unshiftMask_norm_le_bMask pp hBox hc hw hz0),
+     decide_eq_true (by rw [foldWitness_unshiftMask]; exact hz0)⟩
+  rw [hNil] at hy0; cases hy0
+
+private def removeOne {α : Type} [DecidableEq α] (a : α) : List α → List α
+  | [] => [] | y :: ys => if y = a then ys else y :: removeOne a ys
+
+private theorem removeOne_length {α : Type} [DecidableEq α] {a : α} : ∀ {ys : List α}, a ∈ ys → ys.length = (removeOne a ys).length + 1
+  | [], h => by cases h
+  | y :: ys, h => by
+    simp only [removeOne]; if hy : y = a then simp [hy]
+    else rcases List.mem_cons.1 h with rfl | hTl; exact False.elim (hy rfl); simp [hy, removeOne_length hTl]
+
+private theorem mem_removeOne {α : Type} [DecidableEq α] {a x : α} (hNe : x ≠ a) : ∀ {ys : List α}, x ∈ ys → x ∈ removeOne a ys
+  | [], h => by cases h
+  | y :: ys, h => by
+    unfold removeOne
+    if hy : y = a then
+      simp only [hy, ↓reduceIte]; rcases List.mem_cons.1 h with rfl | hTl; exact False.elim (hNe hy); exact hTl
+    else
+      simp only [hy, ↓reduceIte]; rcases List.mem_cons.1 h with rfl | hTl; exact List.Mem.head _; exact List.Mem.tail _ (mem_removeOne hNe hTl)
+
+private theorem nodup_length_le_of_subset {α : Type} [DecidableEq α] :
+    ∀ {xs ys : List α}, xs.Nodup → (∀ x ∈ xs, x ∈ ys) → xs.length ≤ ys.length
+  | [], _, _, _ => Nat.zero_le _
+  | a :: xs, ys, hNd, hSub => by
+    rcases hNd with _ | ⟨hNot, hNdR⟩
+    have hLen := removeOne_length (hSub a List.mem_cons_self)
+    have ih := nodup_length_le_of_subset (ys := removeOne a ys) hNdR
+      (fun x hx => mem_removeOne (fun hxa => hNot x hx hxa.symm) (hSub x (List.mem_cons_of_mem _ hx)))
+    simp only [List.length_cons] at hLen ⊢; omega
+
+private theorem nodup_filter {α : Type} (p : α → Bool) : ∀ {xs : List α}, xs.Nodup → (xs.filter p).Nodup
+  | [], _ => .nil
+  | x :: xs, hNd => by
+    rcases hNd with _ | ⟨hNot, hNdR⟩; simp only [List.filter]; cases p x
+    · exact nodup_filter p hNdR
+    · exact .cons (fun y hy => hNot y (List.mem_filter.1 hy).1) (nodup_filter p hNdR)
+
+private theorem uniform_bijection_equiv {α β : Type} [DecidableEq β]
+    {S₁ : List α} {S₂ : List β} (h₁ : S₁ ≠ []) (h₂ : S₂ ≠ []) (hNd₁ : S₁.Nodup) (hNd₂ : S₂.Nodup)
+    (f : α → β) (g : β → α) (hFwd : ∀ x ∈ S₁, f x ∈ S₂) (hBwd : ∀ y ∈ S₂, g y ∈ S₁)
+    (hLeft : ∀ x ∈ S₁, g (f x) = x) (hRight : ∀ y ∈ S₂, f (g y) = y) :
+    GameSoundness.FinDist.Equiv ((GameSoundness.FinDist.uniform S₁ h₁).map f) (GameSoundness.FinDist.uniform S₂ h₂) := by
+  have hFiltEq : ∀ (P : β → Bool), (S₁.filter (P ∘ f)).length = (S₂.filter P).length := fun P => by
+    have hMapNd : ((S₁.filter (P ∘ f)).map f).Nodup := by
+      have aux : ∀ (xs : List α), xs.Nodup → (∀ x ∈ xs, x ∈ S₁) → (xs.map f).Nodup := by
+        intro xs; induction xs with
+        | nil => intros; exact .nil
+        | cons x xs ih =>
+          intro hN hIn; rcases hN with _ | ⟨hNt, hNR⟩
+          refine .cons (fun b hb hEq => ?_) (ih hNR (fun z hz => hIn z (List.mem_cons_of_mem _ hz)))
+          rcases List.mem_map.1 hb with ⟨x', hx', rfl⟩
+          exact hNt x' hx' (by rw [← hLeft x (hIn x List.mem_cons_self), ← hLeft x' (hIn x' (List.mem_cons_of_mem _ hx')), hEq])
+      exact aux (S₁.filter (P ∘ f)) (nodup_filter _ hNd₁) (fun _ hx => (List.mem_filter.1 hx).1)
+    have hLe1 : (S₁.filter (P ∘ f)).length ≤ (S₂.filter P).length := by
+      simpa using nodup_length_le_of_subset (xs := (S₁.filter (P ∘ f)).map f) (ys := S₂.filter P) hMapNd (fun b hb => by
+        rcases List.mem_map.1 hb with ⟨x, hx, rfl⟩; obtain ⟨hxS, hxP⟩ := List.mem_filter.1 hx
+        exact List.mem_filter.2 ⟨hFwd x hxS, hxP⟩)
+    have hLe2 : (S₂.filter P).length ≤ (S₁.filter (P ∘ f)).length := by
+      have hSub := nodup_length_le_of_subset (xs := S₂.filter P) (ys := (S₁.filter (P ∘ f)).map f) (nodup_filter P hNd₂) (fun y hy => by
+        obtain ⟨hyS, hyP⟩ := List.mem_filter.1 hy
+        have hPf : (P ∘ f) (g y) = true := by dsimp only [Function.comp_def]; rw [hRight y hyS]; exact hyP
+        exact List.mem_map.2 ⟨g y, List.mem_filter.2 ⟨hBwd y hyS, hPf⟩, hRight y hyS⟩)
+      simpa using hSub
+    omega
+  have hFiltTrue : ∀ {γ : Type} (zs : List γ), zs.filter (fun _ => true) = zs := fun zs => by
+    induction zs with | nil => rfl | cons _ _ ih => simp [List.filter, ih]
+  intro P; rw [GameSoundness.FinDist.probEvent_map]
+  unfold GameSoundness.FinDist.uniform GameSoundness.FinDist.probEvent GameSoundness.FinDist.totalWeight GameSoundness.RatProb.eqv
+  dsimp only; rw [GameSoundness.uniform_eventMass, GameSoundness.uniform_eventMass,
+    GameSoundness.uniform_weightSum, GameSoundness.uniform_weightSum, hFiltEq P]
+  have hAll := hFiltEq (fun _ => true); dsimp only [Function.comp_def] at hAll; rw [hFiltTrue, hFiltTrue] at hAll; rw [hAll]
+
+def realMaskedSameOpeningDist {rows cols : Nat} (pp : BdlopParams rows cols) (c : Int) (w : FastIntPoly cols)
+    (hSafeNe : safeMasks pp c w ≠ []) : GameSoundness.FinDist (MaskedSameOpeningProof rows cols) :=
+  (GameSoundness.FinDist.uniform (safeMasks pp c w) hSafeNe).map (fun y => ⟨bdlopCommit pp y, foldWitness c y w⟩)
+
+def simMaskedSameOpeningDist {rows cols : Nat} (pp : BdlopParams rows cols) (tW : FastIntPoly rows) (c : Int) :
+    GameSoundness.FinDist (MaskedSameOpeningProof rows cols) :=
+  (GameSoundness.FinDist.uniform (polyBox pp.bResp cols) (polyBox_ne_nil pp.bResp cols)).map
+    (fun z => ⟨bdlopSimMaskCommit pp z c tW, z⟩)
+
+private theorem tvDist_le_zero_of_equiv {α : Type} [DecidableEq α] {d₁ d₂ : GameSoundness.FinDist α}
+    (hEqv : GameSoundness.FinDist.Equiv d₁ d₂) : GameSoundness.RatProb.le (GameSoundness.tvDist d₁ d₂) GameSoundness.RatProb.zero := by
+  let E := GameSoundness.optEvent d₁ d₂
+  have hDiff0 : GameSoundness.RatProb.le (GameSoundness.RatProb.absDiff (d₁.probEvent E) (d₂.probEvent E)) GameSoundness.RatProb.zero := by
+    have hE := hEqv E; unfold GameSoundness.RatProb.eqv at hE
+    unfold GameSoundness.RatProb.le GameSoundness.RatProb.absDiff GameSoundness.RatProb.zero; dsimp only; omega
+  exact GameSoundness.RatProb.le_congr (GameSoundness.RatProb.eqv_symm (GameSoundness.tvDist_eq_optEvent d₁ d₂))
+    (GameSoundness.RatProb.eqv_refl _) hDiff0
+
+/-- **Honest-Verifier Zero-Knowledge (`maskedSameOpening_honestVerifierZK`)**:
+    Proves exact safe-box bijection (`y ↦ y + c · w`, `z ↦ z - c · w`) AND `tvDist ≤ RatProb.zero`! -/
+theorem maskedSameOpening_honestVerifierZK {rows cols : Nat} (pp : BdlopParams rows cols)
+    (tW : FastIntPoly rows) (c : Int) (w : FastIntPoly cols)
+    (hSafe : checkBdlopSafeParams pp = true) (hc : c.natAbs ≤ pp.bChal)
+    (hw : normInfFast w.coeffs ≤ pp.bWit) (htW : tW = bdlopCommit pp w) :
+    let hNe := safeMasks_ne_nil pp
+      (by simp only [checkBdlopSafeParams, Bool.and_eq_true, decide_eq_true_eq] at hSafe; exact hSafe.1.2) hc hw
+    (∀ y ∈ safeMasks pp c w, foldWitness c y w ∈ polyBox pp.bResp cols ∧ unshiftMask c (foldWitness c y w) w = y) ∧
+    (∀ z ∈ polyBox pp.bResp cols, unshiftMask c z w ∈ safeMasks pp c w ∧ foldWitness c (unshiftMask c z w) w = z) ∧
+    GameSoundness.FinDist.Equiv (realMaskedSameOpeningDist pp c w hNe) (simMaskedSameOpeningDist pp tW c) ∧
+    GameSoundness.RatProb.le
+      (GameSoundness.tvDist (realMaskedSameOpeningDist pp c w hNe) (simMaskedSameOpeningDist pp tW c))
+      GameSoundness.RatProb.zero := by
+  have hBox : pp.bResp + pp.bChal * pp.bWit ≤ pp.bMask := by
+    simp only [checkBdlopSafeParams, Bool.and_eq_true, decide_eq_true_eq] at hSafe; exact hSafe.1.2
+  let hNe := safeMasks_ne_nil pp hBox hc hw
+  have hFwd : ∀ y ∈ safeMasks pp c w, foldWitness c y w ∈ polyBox pp.bResp cols := fun _ hy =>
+    (mem_polyBox_iff pp.bResp cols _).2 (of_decide_eq_true (List.mem_filter.1 hy).2)
+  have hBwd : ∀ z ∈ polyBox pp.bResp cols, unshiftMask c z w ∈ safeMasks pp c w := fun z hz => by
+    have hzB := (mem_polyBox_iff pp.bResp cols z).1 hz
+    exact List.mem_filter.2 ⟨(mem_polyBox_iff pp.bMask cols _).2 (unshiftMask_norm_le_bMask pp hBox hc hw hzB),
+      decide_eq_true (by rw [foldWitness_unshiftMask]; exact hzB)⟩
+  have hBaseEqv := uniform_bijection_equiv hNe (polyBox_ne_nil pp.bResp cols)
+    (nodup_filter _ (polyBox_nodup pp.bMask cols)) (polyBox_nodup pp.bResp cols)
+    (fun y => foldWitness c y w) (fun z => unshiftMask c z w) hFwd hBwd
+    (fun y _ => unshiftMask_foldWitness c y w) (fun z _ => foldWitness_unshiftMask c z w)
+  have hViewEqv : GameSoundness.FinDist.Equiv (realMaskedSameOpeningDist pp c w hNe) (simMaskedSameOpeningDist pp tW c) := by
+    intro P; unfold realMaskedSameOpeningDist simMaskedSameOpeningDist
+    rw [GameSoundness.FinDist.probEvent_map, GameSoundness.FinDist.probEvent_map]
+    have hCompEq : (P ∘ fun y => (⟨bdlopCommit pp y, foldWitness c y w⟩ : MaskedSameOpeningProof rows cols)) =
+        ((P ∘ fun z => (⟨bdlopSimMaskCommit pp z c tW, z⟩ : MaskedSameOpeningProof rows cols)) ∘ fun y => foldWitness c y w) := by
+      funext y; dsimp only [Function.comp_def]; rw [htW, bdlopSimMaskCommit_eq_commit]
+    rw [hCompEq, ← GameSoundness.FinDist.probEvent_map]; exact hBaseEqv _
+  exact ⟨fun y hy => ⟨hFwd y hy, unshiftMask_foldWitness c y w⟩,
+         fun z hz => ⟨hBwd z hz, foldWitness_unshiftMask c z w⟩, hViewEqv, tvDist_le_zero_of_equiv hViewEqv⟩
+
+def recoverWitnessFrom2Transcripts {cols : Nat} (c₁ c₂ : Int) (z₁ z₂ : FastIntPoly cols) : FastIntPoly cols :=
+  Sized.ofFn fun j => (intSub z₁ z₂).spec j / (c₁ - c₂)
+
+/-- **2-Transcript Special Soundness (`extractMaskedSameOpening_2transcript`, `PSum`, `0 Classical.choice`)**. -/
+def extractMaskedSameOpening_2transcript {rows cols : Nat} (pp : BdlopParams rows cols)
+    (tW tY : FastIntPoly rows) (w : FastIntPoly cols) (c₁ c₂ : Int) (z₁ z₂ : FastIntPoly cols)
+    (hcNe : c₁ ≠ c₂) (hc₁ : c₁.natAbs ≤ pp.bChal) (hc₂ : c₂.natAbs ≤ pp.bChal)
+    (hw : normInfFast w.coeffs ≤ pp.bWit) (htW : tW = bdlopCommit pp w)
+    (hAcc₁ : verifyMaskedSameOpeningCore pp tW ⟨tY, z₁⟩ c₁ = true)
+    (hAcc₂ : verifyMaskedSameOpeningCore pp tW ⟨tY, z₂⟩ c₂ = true) :
+    PSum
+      (intSub z₁ z₂ = intScale (c₁ - c₂) w ∧ recoverWitnessFrom2Transcripts c₁ c₂ z₁ z₂ = w)
+      (MSISBreakWitness pp.matrix pp.q (2 * pp.bResp + 2 * pp.bChal * pp.bWit)) :=
+  if hEq : intSub z₁ z₂ = intScale (c₁ - c₂) w then
+    .inl ⟨hEq, Sized.ext (funext fun j => by
+      simp only [recoverWitnessFrom2Transcripts, Sized.spec_ofFn, congrArg (fun v => v.spec j) hEq, scaleFast_eq_spec]
+      exact Int.mul_ediv_cancel_left (w.spec j) (by omega))⟩
+  else
+    .inr
+      { z := intSub (intSub z₁ z₂) (intScale (c₁ - c₂) w)
+        nonzero := fun hZero => hEq (Sized.ext (funext fun j => by
+          have hj := congrArg (fun v => v.spec j) hZero; simp [zeroVec] at hj ⊢; omega))
+        kernel := by
+          simp only [verifyMaskedSameOpeningCore, Bool.and_eq_true, decide_eq_true_eq] at hAcc₁ hAcc₂
+          apply Sized.ext; funext i
+          have h₁ := congrArg (fun v => v.spec i) hAcc₁.2; have h₂ := congrArg (fun v => v.spec i) hAcc₂.2
+          simp only [bdlopCommit, bdlopCombine, foldModQ, matVecModQ, matVec, Sized.spec_ofFn, htW] at h₁ h₂
+          simp only [matVecModQ, matVec, zeroVec, Sized.spec_ofFn, dot_sub, dot_scale]
+          have hDiffMod : (dot (pp.matrix.spec i) z₁ - dot (pp.matrix.spec i) z₂) % (pp.q : Int) =
+              ((tY.spec i + c₁ * (dot (pp.matrix.spec i) w % (pp.q : Int))) -
+               (tY.spec i + c₂ * (dot (pp.matrix.spec i) w % (pp.q : Int)))) % (pp.q : Int) := by
+            rw [Int.sub_emod, h₁, h₂, ← Int.sub_emod]
+          have hRhsEq : ((tY.spec i + c₁ * (dot (pp.matrix.spec i) w % (pp.q : Int))) -
+               (tY.spec i + c₂ * (dot (pp.matrix.spec i) w % (pp.q : Int)))) % (pp.q : Int) =
+              ((c₁ - c₂) * dot (pp.matrix.spec i) w) % (pp.q : Int) := by
+            rw [show (tY.spec i + c₁ * (dot (pp.matrix.spec i) w % (pp.q : Int))) -
+                (tY.spec i + c₂ * (dot (pp.matrix.spec i) w % (pp.q : Int))) =
+                (c₁ - c₂) * (dot (pp.matrix.spec i) w % (pp.q : Int)) by rw [Int.sub_mul]; omega,
+                Int.mul_emod, Int.emod_emod, ← Int.mul_emod]
+          rw [Int.sub_emod, hDiffMod, hRhsEq, Int.sub_self, Int.zero_emod]
+        short := by
+          simp only [verifyMaskedSameOpeningCore, Bool.and_eq_true, decide_eq_true_eq] at hAcc₁ hAcc₂
+          have hSubZ : normInfFast (intSub z₁ z₂).coeffs ≤ 2 * pp.bResp := Nat.le_trans (normInfFast_sub_le z₁ z₂) (by omega)
+          have hScaleW : normInfFast (intScale (c₁ - c₂) w).coeffs ≤ 2 * pp.bChal * pp.bWit :=
+            Nat.le_trans (normInfFast_scale_le _ w) (Nat.mul_le_mul (by omega) hw)
+          exact Nat.le_trans (normInfFast_sub_le _ _) (Nat.add_le_add hSubZ hScaleW) }
 
 end Obend.Crypto
 end

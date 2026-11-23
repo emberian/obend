@@ -501,6 +501,22 @@ def suboptimalKktWitness : SameOpeningWitness :=
 #tooth Obend.Crypto.verifySameOpening_sound by mutation
   Obend.Crypto.kktPrimalDualGapZero := fun _ _ _ _ => true
 
+-- Unboxed $O(2^v)$ `Array` Multilinear & Sumcheck Execution (`mleEvalExec`, `honestRoundPolyExec`, `honestSumcheckProverExec`)
+def sampleArr3 : Array Goldilocks := sampleTable3.toArray
+def samplePtArr3 : Array Goldilocks := [Goldilocks.ofNat 5, Goldilocks.ofNat 9, Goldilocks.ofNat 13].toArray
+
+#guard mleEvalExec sampleArr3 samplePtArr3 == mleEval sampleTable3 samplePtArr3.toList
+#guard hypercubeSumExec 3 sampleArr3 == hypercubeSum 3 sampleTable3
+#guard honestRoundPolyExec 2 sampleArr3 == honestRoundPoly 2 sampleTable3
+#guard honestSumcheckProverExec 3 sampleArr3 instTrA ==
+         honestSumcheckProver 3 sampleTable3 instTrA
+
+#tooth Obend.Crypto.mleEvalExec_eq_mleEval by mutation
+  Obend.Crypto.mleEvalExec := fun {_} [_] _ _ => CommRingOps.zero
+
+#tooth Obend.Crypto.honestRoundPolyExec_eq_honestRoundPoly by mutation
+  Obend.Crypto.honestRoundPolyExec := fun {_} [_] _ _ => ⟨[]⟩
+
 -- ============================================================================
 -- 6. Zero-`Classical` Check (`dualExtract`), Axiom Census & 0-Closed-Theorem Check
 -- ============================================================================

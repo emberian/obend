@@ -206,6 +206,41 @@ private theorem dual_double_opening_kernel {m : Nat} (cfg : Config) (β : Nat)
 #tooth ifold_iacc by mutation ifold := fun _ _ => Sized.ofFn fun _ => Goldilocks.one
 #tooth verifyCanopyCommitAndReduce_complete by mutation verifyCanopyCommitAndReduce := fun _ _ _ _ _ _ _ _ _ => false
 
+-- Sublinear Query-Sampled `CanopySuccinctOpening` & `PcsSoundnessRegime` checks
+def succinctPcsParams : Canopy.PcsCodeParams :=
+  ⟨.primeField, 2, 4, 2, .uniqueDecodingRadius, 1, 1, 4⟩
+
+#guard Canopy.checkPcsSoundnessRegime succinctPcsParams == true
+#guard Canopy.checkPcsSoundnessRegime Canopy.defaultCanopy128Params == true
+#guard Canopy.checkPcsSoundnessRegime ⟨.binaryAdditive, 2, 4, 2, .johnsonBound, 1, 1, 4⟩ == false
+#guard Canopy.checkPcsSoundnessRegime ⟨.primeField, 2, 4, 2, .uniqueDecodingRadius, 10, 1, 4⟩ == false
+
+def succinctCfg : Canopy.SuccinctCanopyConfig :=
+  { cfg := ⟨1, 1, by decide, 4, .primeField, .uniqueDecodingRadius, .primeUDR⟩
+    pcsParams := succinctPcsParams
+    rowVars := 1
+    colVars := 1
+    hWidth := rfl
+    hLogDom := rfl
+    hDomainEq := rfl
+    hRegimeEq := rfl }
+
+def succinctMat : Sized (Sized Goldilocks 2) 2 :=
+  Sized.ofFn fun r => Sized.ofFn fun c => Goldilocks.ofNat (10 * r.val + c.val + 3)
+
+def succinctTable := Canopy.encodeCanopyMatrix succinctCfg succinctMat
+def succinctComm := Canopy.commit succinctCfg.cfg succinctTable
+def succinctOut := Canopy.proveCanopySuccinctOpening succinctCfg succinctMat
+  [Goldilocks.ofNat 5, Goldilocks.ofNat 9] rfl
+
+#guard (Canopy.verifyCanopySuccinctOpening succinctCfg succinctComm succinctOut.1 succinctOut.2).1 == true
+#guard (Canopy.verifyCanopySuccinctOpening succinctCfg succinctComm
+         ⟨succinctOut.1.point, succinctOut.1.point_len, Goldilocks.add succinctOut.1.expectedVal Goldilocks.one⟩
+         succinctOut.2).1 == false
+
+#tooth Canopy.checkPcsSoundnessRegime_refuses_binary_non_udr by mutation
+  Canopy.checkPcsSoundnessRegime := fun _ => true
+
 #print axioms foldTwoInstances_binding_reduction
 #print axioms akitaSplitFold_extract_sis
 #print axioms akitaTwoChallenge_extract_sis
@@ -223,7 +258,8 @@ private theorem dual_double_opening_kernel {m : Nat} (cfg : Config) (β : Nat)
 run_cmd do
   for n in [``foldTwoInstances_binding_reduction, ``akitaSplitFold_extract_sis,
       ``akitaTwoChallenge_extract_sis, ``verifyBatchCanopy_binding_collision,
-      ``verifyCanopyCommitAndReduce_binding, ``extractDualDoubleOpening, ``extractDualDiscrepancy] do
+      ``verifyCanopyCommitAndReduce_binding, ``extractDualDoubleOpening, ``extractDualDiscrepancy,
+      ``Canopy.extractBatchQueryCollision] do
     let axioms ← Lean.collectAxioms n
     for ax in axioms do
       unless ax == ``propext || ax == ``Quot.sound do
