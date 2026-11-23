@@ -680,6 +680,11 @@ def referencePlacedChannels : List PlacedChannel :=
   , { name := "adj_tile_hop", src := ⟨0, 0, 0⟩, dst := ⟨0, 0, 1⟩, bitWidth := 64, regStages := 1 }
   , { name := "slr_laguna",   src := ⟨0, 0, 1⟩, dst := ⟨1, 0, 1⟩, bitWidth := 64, regStages := 2 } ]
 
+private theorem checkAllChannelHops_inhabited :
+    ∃ channels : List PlacedChannel,
+      0 < channels.length ∧ checkAllChannelHops channels = true :=
+  ⟨referencePlacedChannels, by decide, by decide⟩
+
 /-! ## 6. Hierarchical Hard-IP Macro SystemVerilog Emission (`emitHierarchicalSV`) -/
 
 /-- Emit hierarchical SystemVerilog-2012 containing all hard-IP macro modules

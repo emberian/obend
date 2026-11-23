@@ -1220,4 +1220,40 @@ theorem verifiableCredentialInnerVerifier_inhabited (P : ReceiptParams) (policyD
     ∃ statement proof, verifiableCredentialInnerVerifier P pol policyDigest vk statement proof = true :=
   ⟨_, _, verifiableCredentialInnerVerifier_complete P policyDigest vk pol pub w h⟩
 
+private theorem verifyDualSumcheckPIOP_receiptTranscript_inhabited :
+    ∃ (vk : ByteArray) (s : CredentialStatement) (rounds : List (RoundPoly Goldilocks))
+      (opening : CanopyOpeningProof × AjtaiOpeningProof),
+      0 < rounds.length ∧
+      verifyDualSumcheckPIOP (canopyMerklePCS deployedReceiptParams.hash)
+        (ajtaiLatticePCS deployedReceiptParams.lattice) ((), ()) 1 5
+        s.tableCommitment Goldilocks.zero rounds opening (receiptTranscript vk s) = true := by
+  let P := deployedReceiptParams
+  let tbl : List Goldilocks :=
+    [Goldilocks.one, Goldilocks.neg Goldilocks.one] ++ List.replicate 30 Goldilocks.zero
+  have hLen : tbl.length = 2 ^ 5 := by decide
+  have hSum : hypercubeSum 5 tbl = Goldilocks.zero := by
+    rw [cubeSum_ringSum 5 tbl (Nat.le_of_eq hLen)]
+    simp only [tbl, ringSum_append, ringSum_zeros, ringSum, LawfulCommRing.add_zero]
+    decide
+  let comm := commitTable P tbl
+  let s : CredentialStatement :=
+    ⟨"pol".toUTF8, "cred".toUTF8, "rev".toUTF8, "graph".toUTF8, "disc".toUTF8, comm⟩
+  let vk : ByteArray := "vk".toUTF8
+  let tr := receiptTranscript vk s
+  let res := honestBoundSumcheckProver comm 5 tbl tr
+  let tr₁ := absorbMsg dualTrack1Label ByteArray.empty res.2.2
+  let tr₂ := absorbMsg dualTrack2Label ByteArray.empty res.2.2
+  let opening : CanopyOpeningProof × AjtaiOpeningProof :=
+    ((canopyMerklePCS P.hash).openEval () 5 tbl res.2.1 tr₁ |>.1,
+     (ajtaiLatticePCS P.lattice).openEval () 5 tbl res.2.1 tr₂ |>.1)
+  have hComp := verifyDualSumcheckPIOP_completeness (canopyMerklePCS P.hash)
+    (ajtaiLatticePCS P.lattice) ((), ()) (Nat.le_refl 1) 5 tbl tr ⟨trivial, P.cols_eq⟩ hLen
+  dsimp only at hComp
+  rw [hSum] at hComp
+  have hRounds : 0 < res.1.length := by
+    dsimp only [res]
+    unfold honestBoundSumcheckProver honestSumcheckProver
+    simp
+  exact ⟨vk, s, res.1, opening, hRounds, hComp⟩
+
 end Obend.Polis.VerifiableCredentials

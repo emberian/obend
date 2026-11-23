@@ -102,6 +102,13 @@ theorem optTermNatBeq_sound {o1 o2 : Option (Term × Nat)} (h : optTermNatBeq o1
       simp only [optTermNatBeq, Bool.and_eq_true, beq_iff_eq] at h
       rw [termBeq_sound h.1, h.2]
 
+private theorem optTermNatBeq_inhabited :
+    ∃ (fs : List (String × Term)) (k : Nat),
+      0 < fs.length ∧ 0 < k ∧
+      optTermNatBeq (some (.record fs, k)) (some (.record fs, k)) = true :=
+  ⟨[("a", .nat 7), ("b", .nat 11)], 3, by decide, by decide, by
+    simp [optTermNatBeq, termBeq_refl]⟩
+
 /-! ## `CostWithin` composes -/
 
 theorem CostWithin.refl (t : Term) : CostWithin 1 t t := fun _ _ v k h =>

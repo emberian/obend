@@ -935,5 +935,10 @@ example :
 #tooth permuteEulerVec_inv_left by mutation eulerVarPerm := fun _ i => i
 #tooth quadInvariant_equitable_quotient_intertwining by mutation quadOrbitQuotient := fun _ _ => 0
 
+private theorem isPolyFluxSsaDag_inhabited :
+    ∃ (numVars : Nat) (dag : FluxSsaDag),
+      0 < dag.nodes.length ∧ isPolyFluxSsaDag numVars dag = true :=
+  ⟨3, momentumNormSqDag, by decide +kernel, by decide +kernel⟩
+
 end Obend.Hardware.PdeHypergraphSymmetry
 end

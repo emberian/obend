@@ -2003,6 +2003,65 @@ theorem wrongSuperProvider_refused :
       .refused (.rewrite .stepMismatch) [0] := by
   decide +kernel
 
+private theorem supportsHoldB_and_bisim_inhabited :
+    ∃ (k : Nat) (o : ClaimObj) (steps : List RStep) (sups : List Support) (lhs' : Term),
+      0 < steps.length ∧ 0 < sups.length ∧
+      supportsHoldB o sups = true ∧
+      verifyByBisimRefinement k o steps lhs' = .ok := by
+  let o : ClaimObj :=
+    { verticalLimitClaimObj with
+      claim := .lam (.lam (.binary .equal (.get (.bound 1) "limit") (.nat 20))) }
+  let steps : List RStep := [.lateBinding "limit" "Refined"]
+  let sups : List Support :=
+    [⟨"limit", some ("Refined", .nat 20)⟩, ⟨"scale", some ("Refined", .nat 3)⟩]
+  let lhs' : Term := .app (.lam (.bound 0)) (.get (.bound 1) "limit")
+  exact ⟨10, o, steps, sups, lhs', by decide, by decide, by decide +kernel, by decide +kernel⟩
+
+private theorem optTermEqB_inhabited :
+    ∃ t : Term, optTermEqB (some t) (some t) = true :=
+  ⟨.binary .subtract (.nat 20) (.nat 10), by decide +kernel⟩
+
+private theorem checkFormatBytes_inhabited :
+    ∃ (F : Judge.Format) (r : Nat) (objStr certStr : String),
+      0 < r ∧ checkFormatBytes F r objStr certStr = .ok := by
+  let J : Judge (Nat × Nat) Nat :=
+    { Clause := Bool
+    , Meaning := fun p _ => p.1 < p.2
+    , check := fun _ p k =>
+        if p.1 + k + 1 = p.2 then .ok
+        else if p.2 ≤ p.1 then .refused true [0]
+        else .refused false [1]
+    , sound := fun {r o c} h => (by
+        split at h
+        · omega
+        · split at h <;> cases h)
+    , refutes := id
+    , refuted := fun {r o c k p} h href => (by
+        split at h
+        · cases h
+        · split at h
+          · omega
+          · cases h; cases href)
+    , Fragment := fun p => p.1 < p.2
+    , complete := fun {o} hF _ =>
+        ⟨o.2 - o.1 - 1, 1, by
+          have hEq : o.1 + (o.2 - o.1 - 1) + 1 = o.2 := by omega
+          simp [hEq]⟩
+    , mono := fun _ _ => rfl }
+  let F : Judge.Format :=
+    { name := "nat_gap_witness"
+    , version := "1"
+    , Obj := Nat × Nat
+    , Cert := Nat
+    , judge := J
+    , decodeObj := fun s => if s == "2<5" then .ok (2, 5) else .error "bad"
+    , decodeCert := fun s => if s == "2" then .ok 2 else .error "bad"
+    , trust := .kernel
+    , regime := .decidable
+    , bad := ((5, 2), 0)
+    , badGrade := 0
+    , bad_refused := ⟨true, [0], rfl⟩ }
+  exact ⟨F, 1, "2<5", "2", by decide, rfl⟩
 
 end Obend.Logic
 end

@@ -666,6 +666,10 @@ private theorem nodupNatB_sound : ∀ {xs : List Nat}, nodupNatB xs = true → x
       simp only [nodupNatB, Bool.and_eq_true, Bool.not_eq_true', List.contains_eq_mem, decide_eq_false_iff_not] at h
       exact List.nodup_cons.mpr ⟨h.1, nodupNatB_sound h.2⟩
 
+private theorem nodupNatB_inhabited :
+    ∃ xs : List Nat, 0 < xs.length ∧ nodupNatB xs = true ∧ xs.Nodup :=
+  ⟨[7, 2, 11], by decide, by decide, nodupNatB_sound (by decide)⟩
+
 private theorem acyclic_lookup_vars {freeRigids : List Nat} :
     ∀ {bounds : Bounds}, AcyclicBoundsList freeRigids bounds = true →
       ∀ {idx : Nat} {b : Ty}, bounds.lookup idx = some b →

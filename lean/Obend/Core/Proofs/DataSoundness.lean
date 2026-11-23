@@ -516,5 +516,57 @@ theorem sampleRecord_data {policy : State → Bool} {limits : Limits} {budget : 
     execution.extraction.result.value = .record [("answer",.natural 42)] :=
   ((execution_source_semantics sampleRecord_closed execution).2 _).1 sampleRecord_deepEvaluates |>.symm
 
+private theorem settled_inhabited :
+    ∃ (meaning : AddressMeaning) (state : State),
+      0 < state.heap.size ∧ Settled meaning state := by
+  let expr : Term := .binary .multiply (.nat 6) (.nat 7)
+  let state : State :=
+    { heap := #[.suspended ⟨expr, []⟩]
+    , control := .complete (.record [("answer", 0)])
+    , stack := [] }
+  let meaning : AddressMeaning := fun _ => expr
+  have hClosed : Scoped 0 expr := .binary (.natural 6) (.natural 7)
+  refine ⟨meaning, state, by decide, ?_, ?_, rfl, ?_, ?_⟩
+  · refine ⟨?_, ?_, ?_⟩
+    · intro addr cell hCell
+      cases addr with
+      | zero =>
+        simp only [state, Array.getElem?_eq_getElem (by decide : 0 < (#[Cell.suspended ⟨expr, []⟩]).size),
+          Option.some.injEq] at hCell
+        subst hCell
+        exact ⟨hClosed, fun _ h => by cases h⟩
+      | succ k =>
+        have hNone : state.heap[k + 1]? = none := Array.getElem?_eq_none (by simp [state])
+        rw [hNone] at hCell
+        cases hCell
+    · intro field hField
+      simp only [List.mem_singleton] at hField
+      subst hField
+      decide
+    · intro frame hFrame
+      cases hFrame
+  · refine ⟨List.nodup_nil, fun addr => ⟨(fun h => by cases h), ?_⟩⟩
+    rintro ⟨origin, hCell⟩
+    cases addr with
+    | zero =>
+      simp only [state, Array.getElem?_eq_getElem (by decide : 0 < (#[Cell.suspended ⟨expr, []⟩]).size)] at hCell
+      cases hCell
+    | succ k =>
+      have hNone : state.heap[k + 1]? = none := Array.getElem?_eq_none (by simp [state])
+      rw [hNone] at hCell
+      cases hCell
+  · intro addr _
+    exact hClosed
+  · intro addr cell hCell
+    cases addr with
+    | zero =>
+      simp only [state, Array.getElem?_eq_getElem (by decide : 0 < (#[Cell.suspended ⟨expr, []⟩]).size),
+        Option.some.injEq] at hCell
+      subst hCell
+      exact ⟨Steps.refl _, trivial⟩
+    | succ k =>
+      have hNone : state.heap[k + 1]? = none := Array.getElem?_eq_none (by simp [state])
+      rw [hNone] at hCell
+      cases hCell
 
 end Obend.Core.Proofs.DataSoundness

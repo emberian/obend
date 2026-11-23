@@ -1,5 +1,8 @@
 module
 import all Obend.Hardware.ArrayKernel
+import all Obend.Hardware.ArrayKernelUnique
+import all Init.Data.Range.Basic
+import all Init.Data.Range.Lemmas
 public import Obend.Hardware.Gpu.ArraySourceCore
 public import Obend.Hardware.ArrayKernel
 public import Obend.Hardware.Gpu.PhaseSemantics
@@ -830,6 +833,116 @@ theorem source_sound (p : Program) (state : Term) (mem : Memory)
     (hm : Denotes state mem) (hgood : Obend.Hardware.Gpu.BlockLower.Good p mem)
     (hc : p.check = .ok ()) : Denotes (.app (source p) state) (evalProgram p mem) :=
   denotes_steps _ _ _ (source_apply p state) (program_sound p state mem hm hgood hc)
+
+private def witnessPhase : Phase :=
+  { lanes := 2
+  , reads := [⟨0, 0, .lane⟩]
+  , code := [⟨.scalar (.scale 2), [0], 1⟩, ⟨.scalar (.scale 3), [1], 2⟩]
+  , writes := [⟨1, .lane, 2⟩] }
+
+private def witnessProgram : Program :=
+  { buffers := [⟨2, .device, []⟩, ⟨2, .device, []⟩]
+  , inputs := [0]
+  , outputs := [1]
+  , dispatches := [⟨1, [witnessPhase]⟩] }
+
+private theorem forIn'_range_0_1 {β : Type} (init : β)
+    (f : (a : Nat) → a ∈ [:1] → β → Except String (ForInStep β)) :
+    [:1].forIn' init f = (do
+      match ← f 0 ⟨Nat.zero_le 0, Nat.zero_lt_one, by decide⟩ init with
+      | .done b => pure b
+      | .yield b => pure b) := by
+  simp [Std.Legacy.Range.forIn', Std.Legacy.Range.forIn'.loop]; rfl
+
+private theorem forIn'_range_0_2 {β : Type} (init : β)
+    (f : (a : Nat) → a ∈ [:2] → β → Except String (ForInStep β)) :
+    [:2].forIn' init f = (do
+      match ← f 0 ⟨Nat.zero_le 0, by decide, by decide⟩ init with
+      | .done b => pure b
+      | .yield b =>
+        match ← f 1 ⟨Nat.zero_le 1, by decide, by decide⟩ b with
+        | .done b2 => pure b2
+        | .yield b2 => pure b2) := by
+  simp [Std.Legacy.Range.forIn', Std.Legacy.Range.forIn'.loop]; rfl
+
+private theorem forIn_except_devOnly_loop (bs : Array Buffer)
+    (hNoShared : ∀ i : Nat, (bs[i]!.storage == Storage.shared) = false)
+    (l : List (Nat × Nat)) (init : Std.HashSet (Nat × Nat)) :
+    forIn (m := Except String) l init (fun loc __s =>
+      if (bs[loc.1]!.storage == Storage.shared) = true then
+        pure (ForInStep.yield (__s.insert loc))
+      else pure (ForInStep.yield __s)) = .ok init := by
+  have hLoop : ∀ (xs : List (Nat × Nat)) (h : ∃ ps, ps ++ xs = l),
+      List.forIn'.loop (m := Except String) l
+        (fun loc _ __s =>
+          if (bs[loc.1]!.storage == Storage.shared) = true then
+            pure (ForInStep.yield (__s.insert loc))
+          else pure (ForInStep.yield __s)) xs init h = .ok init := by
+    intro xs
+    induction xs with
+    | nil => intro _; rfl
+    | cons x xs ih =>
+      intro ⟨ps, hps⟩
+      unfold List.forIn'.loop
+      dsimp only
+      rw [hNoShared x.1]
+      exact ih ⟨ps ++ [x], by simpa using hps⟩
+  exact hLoop l ⟨[], rfl⟩
+
+attribute [local cbv_eval] forIn'_range_0_1 forIn'_range_0_2
+
+private theorem witnessProgram_check : witnessProgram.check = .ok () := by
+  have hGeom : witnessProgram.geometrySafe = true := by cbv
+  have hBounds : witnessProgram.boundsSafe = true := by cbv
+  have hOwn : witnessProgram.ownershipSafe = true := by cbv
+  have hNoConst : witnessProgram.noConstantWrites = true := by cbv
+  have hShared : witnessProgram.sharedInitSafe = true := by cbv
+  unfold Program.check
+  rw [hGeom, hBounds, hOwn, hNoConst, hShared]
+  simp only [↓reduceIte]
+  unfold Program.checkInitialization
+  have hNoShared : ∀ i : Nat, (witnessProgram.buffers.toArray[i]!.storage == Storage.shared) = false := by
+    intro i; cases i with | zero => rfl | succ k => cases k <;> rfl
+  simp only [forIn_except_devOnly_loop witnessProgram.buffers.toArray hNoShared]
+  set_option cbv.maxSteps 500000 in
+  cbv
+
+private theorem denotes_registers_and_memory_inhabited :
+    ∃ (p : Program) (ph : Phase) (regTerm : Term) (rho : Nat → Word) (mem : Memory),
+      p.dispatches = [⟨1, [ph]⟩] ∧
+      2 ≤ ph.code.length ∧
+      0 < mem.size ∧
+      p.check = .ok () ∧
+      Obend.Hardware.Gpu.BlockLower.Good p mem ∧
+      rho 0 = 7#64 ∧
+      rho 1 = 11#64 ∧
+      (mem.getD 1 #[]).getD 0 0#64 = 13#64 ∧
+      BlockCoreRegisters.Denotes regTerm rho ∧
+      BlockCoreMemory.Denotes (BlockCoreEncoding.memory mem) mem ∧
+      BlockCoreMemory.Denotes (.app (source p) (BlockCoreEncoding.memory mem)) (evalProgram p mem) := by
+  let mem : Memory := #[#[7#64, 11#64], #[13#64, 17#64]]
+  let reg1 := BlockCoreRegisters.update BlockCoreMemory.zeroRegisters 0 (.nat 7)
+  let reg2 := BlockCoreRegisters.update reg1 1 (.nat 11)
+  let rho1 : Nat → Word := fun i => if i = 0 then 7#64 else 0#64
+  let rho2 : Nat → Word := fun i => if i = 1 then 11#64 else rho1 i
+  have hReg1 : BlockCoreRegisters.Denotes reg1 rho1 :=
+    BlockCoreRegisters.update_sound BlockCoreMemory.zeroRegisters (.nat 7) (fun _ => 0#64) 0 7#64
+      BlockCoreMemory.zeroRegisters_sound (.refl _)
+  have hReg2 : BlockCoreRegisters.Denotes reg2 rho2 :=
+    BlockCoreRegisters.update_sound reg1 (.nat 11) rho1 1 11#64 hReg1 (.refl _)
+  have hMem : BlockCoreMemory.Denotes (BlockCoreEncoding.memory mem) mem :=
+    BlockCoreEncoding.memory_sound mem
+  have hGood : Obend.Hardware.Gpu.BlockLower.Good witnessProgram mem := by
+    refine ⟨rfl, fun a ha => ?_⟩
+    cases a with
+    | zero => rfl
+    | succ k =>
+      cases k with
+      | zero => rfl
+      | succ _ => simp [witnessProgram] at ha; omega
+  exact ⟨witnessProgram, witnessPhase, reg2, rho2, mem, rfl, by decide, by decide, witnessProgram_check,
+    hGood, rfl, rfl, rfl, hReg2, hMem,
+    source_sound witnessProgram (BlockCoreEncoding.memory mem) mem hMem hGood witnessProgram_check⟩
 
 end Obend.Hardware.Gpu.BlockCoreProgram
 end

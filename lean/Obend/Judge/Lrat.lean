@@ -24,6 +24,19 @@ association list from ids, so the kernel and compiled code run the same function
 RAT steps (negative hints) are refused as `ratHint`: CaDiCaL's LRAT is RUP-only.
 -/
 public import Obend.Judge.Class
+import all Obend.Judge.Class
+import all Init.Data.String.Basic
+import all Init.Data.String.Defs
+import all Init.Data.String.Slice
+import all Init.Data.String.Extra
+import all Init.Data.String.Iterate
+import all Init.Data.String.Legacy
+import all Init.Data.String.Lemmas
+import all Init.Data.String.Search
+import all Init.Data.String.ToSlice
+import all Init.Data.String.TakeDrop
+import all Init.Data.List.SplitOn
+import Init.Data.List.Sublist
 
 public section
 namespace Obend.Judge.Lrat
@@ -511,6 +524,90 @@ def checkText (r : Nat) (cnf proof : String) : Verdict (FormatClause Refusal) :=
 theorem checkText_sound {r : Nat} {cnf proof : String} (h : checkText r cnf proof = .ok) :
     ∃ F c, parseDimacs cnf = .ok F ∧ parseCert proof = .ok c ∧ Unsat F :=
   format.checkBytes_sound h
+
+private theorem propagate_and_run_inhabited :
+    ∃ (db : Db) (c : Clause) (hints : List Int) (steps : List Step),
+      0 < db.length ∧ 0 < steps.length ∧
+      propagate db (negation c) hints = .ok () ∧
+      run db steps 0 = .ok () ∧
+      check 2 ⟨2, [[1], [-1, 2], [-2]]⟩ (.refutation steps) = .ok :=
+  ⟨[(1, [1]), (2, [-1, 2]), (3, [-2])], [2], [1, 2],
+    [.add 4 [2] [1, 2], .add 5 [] [4, 3]],
+    by decide, by decide, rfl, rfl, rfl⟩
+
+private theorem splitOnP_nil_cbv {α : Type} (p : α → Bool) :
+    List.splitOnP p [] = [[]] := List.splitOnP_nil
+
+private theorem splitOnP_cons_cbv {α : Type} (p : α → Bool) (x : α) (xs : List α) :
+    List.splitOnP p (x :: xs) =
+      if p x then [] :: List.splitOnP p xs
+      else match List.splitOnP p xs with
+        | [] => [[x]]
+        | h :: t => (x :: h) :: t := by
+  rw [List.splitOnP_cons_eq_ite_modifyHead]
+  split
+  · rfl
+  · cases h : List.splitOnP p xs with
+    | nil => exact absurd h (List.splitOnP_ne_nil p xs)
+    | cons a as => rfl
+
+private theorem split_toString_eq (s : String) (p : Char → Bool) :
+    (s.split p).toList.map (·.toString) = (s.toList.splitOnP p).map String.ofList := by
+  have h := String.toList_split_bool (s := s) (p := p)
+  simpa [String.Slice.toString_eq] using h
+
+private theorem startsWith_cbv (s p : String) :
+    s.startsWith p = decide (p.toList <+: s.toList) := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [String.startsWith_string_iff, decide_eq_true_eq]
+
+private theorem foldl_cbv {α : Type} (f : α → Char → α) (init : α) (s : String) :
+    s.foldl f init = s.toList.foldl f init :=
+  String.foldl_eq_foldl_toList
+
+private theorem tokens_eq (line : String) :
+    tokens line = ((line.toList.splitOnP fun c => c == ' ' || c == '\t' || c == '\r').map String.ofList).filter (· ≠ "") := by
+  unfold tokens
+  rw [split_toString_eq]
+
+private theorem parseCert_eq (text : String) :
+    parseCert text =
+      if (((text.toList.splitOnP (· == '\n')).map String.ofList).any fun l => (tokens l).head? == some "v")
+      then parseModel text else parseLrat text := by
+  unfold parseCert
+  have h : ((text.split (· == '\n')).toList.any fun l => (tokens l.toString).head? == some "v") =
+      (((text.split (· == '\n')).toList.map (·.toString)).any fun l => (tokens l).head? == some "v") := by
+    rw [List.any_map]; rfl
+  rw [h, split_toString_eq]
+
+attribute [local cbv_eval] splitOnP_nil_cbv splitOnP_cons_cbv split_toString_eq startsWith_cbv
+  foldl_cbv tokens_eq parseCert_eq
+
+set_option maxRecDepth 50000 in
+private theorem checkText_inhabited :
+    ∃ (r : Nat) (cnf proof : String),
+      0 < r ∧ checkText r cnf proof = .ok := by
+  refine ⟨2, "p cnf 2 3\n1 0\n-1 2 0\n-2 0\n", "4 2 0 1 2 0\n5 0 4 3 0\n", by decide, ?_⟩
+  have hDimacs : parseDimacs "p cnf 2 3\n1 0\n-1 2 0\n-2 0\n" = .ok ⟨2, [[1], [-1, 2], [-2]]⟩ := by
+    unfold parseDimacs
+    rw [split_toString_eq]
+    set_option cbv.maxSteps 500000 in
+    cbv
+  have hCert : parseCert "4 2 0 1 2 0\n5 0 4 3 0\n" =
+      .ok (.refutation [.add 4 [2] [1, 2], .add 5 [] [4, 3]]) := by
+    rw [parseCert_eq]
+    have hLrat : parseLrat "4 2 0 1 2 0\n5 0 4 3 0\n" =
+        .ok (.refutation [.add 4 [2] [1, 2], .add 5 [] [4, 3]]) := by
+      unfold parseLrat
+      rw [split_toString_eq]
+      set_option cbv.maxSteps 500000 in
+      cbv
+    rw [hLrat]
+    set_option cbv.maxSteps 500000 in
+    cbv
+  unfold checkText Judge.Format.checkBytes format
+  simp only [hDimacs, hCert]
+  rfl
 
 end Obend.Judge.Lrat
 end

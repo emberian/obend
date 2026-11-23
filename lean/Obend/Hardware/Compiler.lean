@@ -3209,5 +3209,53 @@ theorem compileRichTerm_struct_union_and_stateful_verified (x y : BitVec 64) :
   all_goals simp [Bool.and_eq_true, beq_iff_eq]
   repeat' first | apply And.intro | rfl | simp only [BitVec.zero_add]
 
+private theorem compilePrim_and_sat_inhabited :
+    ∃ (op : Primitive) (l r e eSat : RtlExpr),
+      compilePrim op l r = some e ∧
+      compilePrimSat op l r = some eSat ∧
+      evalRtlExpr (fun i => if i == 0 then 3#64 else 5#64) (fun _ => 0#64) (fun _ => 0#64) eSat = 0#64 :=
+  ⟨.subtract, .inputPort 0, .inputPort 1,
+    .alu .sub (.inputPort 0) (.inputPort 1),
+    .mux (.alu .ult (.inputPort 0) (.inputPort 1)) (.const 0#64) (.alu .sub (.inputPort 0) (.inputPort 1)),
+    rfl, rfl, rfl⟩
+
+private theorem compileTerm_and_sat_inhabited :
+    ∃ (slots : List String) (slotBodies : List RtlExpr) (selfDepth : Nat)
+      (varEnv : List RtlExpr) (t : Term) (e eSat : RtlExpr),
+      0 < varEnv.length ∧
+      compileTerm slots slotBodies selfDepth varEnv t = some e ∧
+      compileTermSat slots slotBodies selfDepth varEnv t = some eSat := by
+  let t : Term := .binary .add (.binary .subtract (.bound 0) (.bound 1)) (.nat 7)
+  let varEnv : List RtlExpr := [.inputPort 0, .inputPort 1]
+  exact ⟨[], [], 2, varEnv, t,
+    .alu .add (.alu .sub (.inputPort 0) (.inputPort 1)) (.const 7#64),
+    .alu .add (.mux (.alu .ult (.inputPort 0) (.inputPort 1)) (.const 0#64)
+      (.alu .sub (.inputPort 0) (.inputPort 1))) (.const 7#64),
+    by decide, rfl, rfl⟩
+
+private theorem compileMultiArgTerm_and_peel_inhabited :
+    ∃ (arity : Nat) (selfBody innerBody : Term) (e : RtlExpr),
+      0 < arity ∧
+      peelMultiArgLambdas arity selfBody = some innerBody ∧
+      compileMultiArgTerm [] [] arity (mkMultiArgPortEnv arity) innerBody = some e := by
+  let inner : Term := .binary .add (.binary .multiply (.bound 2) (.bound 1)) (.bound 0)
+  exact ⟨3, .lam (.lam (.lam inner)), inner,
+    .alu .add (.alu .mul (.inputPort 0) (.inputPort 1)) (.inputPort 2),
+    by decide, rfl, rfl⟩
+
+private theorem compileTermPipelined_and_leaf_inhabited :
+    ∃ (slots : List String) (slotBodies : List RtlExpr) (d : LeafDef) (body : Term) (e : RtlExpr),
+      0 < slots.length ∧
+      d.code = .lam (.lam body) ∧
+      compileTermPipelined slots slotBodies 1 [.inputPort 0] body = some e ∧
+      compileLeafDefPipelined slots slotBodies d = some e := by
+  let body : Term := .binary .multiply (.app (.get (.bound 1) "inc") (.bound 0)) (.nat 2)
+  let d : LeafDef :=
+    { member := "doubleInc", slot := 1, kind := .method, code := .lam (.lam body), reads := [0] }
+  let slots : List String := ["inc", "doubleInc"]
+  let slotBodies : List RtlExpr := [.alu .add (.inputPort 0) (.const 1#64)]
+  exact ⟨slots, slotBodies, d, body, .alu .mul (.regRead 0) (.const 2#64),
+    by decide, rfl, rfl, rfl⟩
+
 end Obend.Hardware.Compiler
 end
