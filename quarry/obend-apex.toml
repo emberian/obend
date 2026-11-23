@@ -2248,6 +2248,13 @@ module = "Obend.Crypto.Tower256TracePack"
 theorem = "zk_single_mask_completeness"
 description = "Frigo-shelat (`ePrint 2026/2770`) trace-duality 256-bit bijective `BinaryTower256` packing (`traceExec_refines`, `dual_basis_biorthogonal`), Vandermonde power-batching (`power_batching_roots_le`), and constructive additive Hilbert-90 single-mask ZK (`zk_single_mask_completeness`), bridged into `EinSumcheckMxfp4` (`einSumcheck_tower256_single_mask_zk_sound`)."
 
+[[apex]]
+id = "lower-pancake-belt-latch-correct"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.BeltLatch"
+theorem = "pancakeBeltLatch_correct"
+description = "Serialized Pancake custody belt-latch kernel (`pancakeBeltLatch_correct`, `pancakeBeltLatch_frame`, `accepted_parent_consumed`) proving exact memory/return refinement and fork refusal across arbitrarily many intervening transitions."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

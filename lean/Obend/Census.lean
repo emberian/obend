@@ -472,6 +472,7 @@ import Obend.Lower.Inductive
 import Obend.Lower.Judge
 import Obend.Lower.LCNF
 import Obend.Lower.Pancake
+import Obend.Lower.Pancake.BeltLatch
 import Obend.Lower.Pancake.ByteMemory
 import Obend.Lower.Pancake.CondSClk
 import Obend.Lower.Pancake.EmitPnk
