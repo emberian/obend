@@ -359,6 +359,7 @@ public import Obend.SymbolicZk.SemiringDatalog
 public import Obend.SymbolicZk.RankedFixpointArith
 public import Obend.SymbolicZk.CamUnifyArith
 public import Obend.SymbolicZk.LinMem
+public import Obend.SymbolicZk.EinSumcheckMxfp4
 public import Obend.SymbolicZk.ProvenZkmlGate
 public import Obend.SymbolicZk.CompileToPiopCore
 public import Obend.SymbolicZk.CompileToPiop
