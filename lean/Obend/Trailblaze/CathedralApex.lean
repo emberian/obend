@@ -4584,7 +4584,9 @@ private theorem step0_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
                (Obend.Hardware.Gpu.Rdna2.Dom.add (Obend.Hardware.Gpu.Rdna2.src0 src) (Obend.Hardware.Gpu.Rdna2.src1 src))
                (Obend.Hardware.Gpu.Rdna2.readVgpr s1' 0 l)).map fun v => (l, v)) = some rs := by
         rw [← hm]; apply list_mapM_congr_mem; intro l _; rw [Obend.Hardware.Gpu.Rdna2.laneStep_eq]
-        split <;> simp [Option.map_map, Function.comp]
+        split
+        · rfl
+        · cases Obend.Hardware.Gpu.Rdna2.laneSources rdnaAddInst s1' 2 l <;> rfl
       exact list_mapM_fst_lt (fun x hx => by unfold Obend.Hardware.Gpu.Rdna2.lanes at hx; exact List.mem_range.mp hx) hm'
     exact writeLanes0_vgpr128Sim rs hrs h'
 
