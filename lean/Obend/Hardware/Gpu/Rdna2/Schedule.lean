@@ -642,11 +642,17 @@ private theorem opEqb_eq {a b : Operand} (h : opEqb a b = true) : a = b := by
 private def fldEqb (a b : String × Nat) : Bool := a.1.toList == b.1.toList && a.2 == b.2
 private theorem fldEqb_eq {a b : String × Nat} (h : fldEqb a b = true) : a = b := by
   cases a; cases b; simp only [fldEqb, Bool.and_eq_true, beq_iff_eq] at h; cases String.ext h.1; cases h.2; rfl
-private theorem list_beq_eq {α : Type} {eqb : α → α → Bool} (heq : ∀ {x y}, eqb x y = true → x = y) :
-    ∀ {xs ys : List α}, List.beq eqb xs ys = true → xs = ys
+private def listBeq {α : Type} (eqb : α → α → Bool) : List α → List α → Bool
+  | [], [] => true
+  | x :: xs, y :: ys => eqb x y && listBeq eqb xs ys
+  | _, _ => false
+private theorem listBeq_eq {α : Type} {eqb : α → α → Bool} (heq : ∀ {x y}, eqb x y = true → x = y) :
+    ∀ {xs ys : List α}, listBeq eqb xs ys = true → xs = ys
   | [], [], _ => rfl
-  | _ :: _, [], h | [], _ :: _, h => by simp [List.beq] at h
-  | x :: xs, y :: ys, h => by simp only [List.beq, Bool.and_eq_true] at h; rw [heq h.1, list_beq_eq heq h.2]
+  | _ :: _, [], h | [], _ :: _, h => by cases h
+  | x :: xs, y :: ys, h => by simp only [listBeq, Bool.and_eq_true] at h; rw [heq h.1, listBeq_eq heq h.2]
+private def optBeq {α : Type} (eqb : α → α → Bool) : Option α → Option α → Bool
+  | none, none => true | some x, some y => eqb x y | _, _ => false
 private def compactInstEqb (a b : Inst) : Bool :=
   a.inst.name.toList == b.inst.name.toList && a.inst.isBranch == b.inst.isBranch &&
   a.inst.isConditionalBranch == b.inst.isConditionalBranch && a.inst.isTerminator == b.inst.isTerminator &&
@@ -656,18 +662,20 @@ private def compactInstEqb (a b : Inst) : Bool :=
   a.enc.identifiers.isEmpty && b.enc.identifiers.isEmpty && a.enc.conditions.isEmpty && b.enc.conditions.isEmpty &&
   a.enc.fields.isEmpty && b.enc.fields.isEmpty && a.ie.encoding.toList.isEmpty && b.ie.encoding.toList.isEmpty &&
   a.ie.condition.toList.isEmpty && b.ie.condition.toList.isEmpty && a.ie.opcode == 0 && b.ie.opcode == 0 &&
-  List.beq opEqb a.ie.operands b.ie.operands && List.beq fldEqb a.fields b.fields && a.words == b.words
+  listBeq opEqb a.ie.operands b.ie.operands && listBeq fldEqb a.fields b.fields && a.words == b.words
 private theorem compactInstEqb_eq {a b : Inst} (h : compactInstEqb a b = true) : a = b := by
   rcases a with ⟨⟨in1, ib1, ic1, it1, ii1, ies1⟩, ⟨en1, eo1, eb1, em1, eid1, ec1, ef1⟩, ⟨ien1, icd1, iop1, iops1⟩, fs1, ws1⟩
   rcases b with ⟨⟨in2, ib2, ic2, it2, ii2, ies2⟩, ⟨en2, eo2, eb2, em2, eid2, ec2, ef2⟩, ⟨ien2, icd2, iop2, iops2⟩, fs2, ws2⟩
   simp only [compactInstEqb, Bool.and_eq_true, beq_iff_eq, List.isEmpty_iff] at h
   rcases h with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨h1, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, h2⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, h3⟩, h4⟩, h5⟩, h6⟩, rfl⟩, rfl⟩, hops⟩, hfs⟩, rfl⟩
   cases String.ext h1; cases String.ext h2; cases String.ext (h3.trans h4.symm); cases String.ext (h5.trans h6.symm)
-  cases list_beq_eq opEqb_eq hops; cases list_beq_eq fldEqb_eq hfs; rfl
-private theorem optInstEqb_eq {a b : Option Inst} (h : Option.beq compactInstEqb a b = true) : a = b := by
-  cases a <;> cases b <;> simp [Option.beq] at h; exact compactInstEqb_eq h
+  cases listBeq_eq opEqb_eq hops; cases listBeq_eq fldEqb_eq hfs; rfl
+private theorem optInstEqb_eq {a b : Option Inst} (h : optBeq compactInstEqb a b = true) : a = b := by
+  cases a <;> cases b <;> try cases h
+  · rfl
+  · exact congrArg some (compactInstEqb_eq h)
 private theorem storeConst7Prog_strip : storeConst7Prog.map (Option.map stripInst) = sc7Compact := by
-  apply Array.ext'; rw [Array.toList_map]; exact list_beq_eq optInstEqb_eq (by decide +kernel)
+  apply Array.ext'; rw [Array.toList_map]; exact listBeq_eq optInstEqb_eq (by decide +kernel)
 
 private theorem list_mapM_eq_some {α β : Type} (f : α → Option β) (g : α → β) (xs : List α)
     (h : ∀ x ∈ xs, f x = some (g x)) : xs.mapM f = some (xs.map g) := by

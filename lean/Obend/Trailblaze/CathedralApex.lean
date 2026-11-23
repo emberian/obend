@@ -4525,8 +4525,9 @@ private theorem step0_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
   have hPc1 : s1.pc + rdnaAddInst.words.length = 1 := by rw [hpc]; rfl
   have hPc2 : s2.pc + rdnaAddInst.words.length = 1 := by rw [hpc2]; rfl
   rw [Obend.Hardware.Gpu.Rdna2.step_eq, Obend.Hardware.Gpu.Rdna2.step_eq,
-      hCond1, hCond2, hProg1, hProg2, hPc1, hPc2]
+      hCond1, hCond2, hProg1, hProg2]
   simp only [Bool.false_eq_true, ↓reduceIte]
+  rw [hPc1, hPc2]
   rw [Obend.Hardware.Gpu.Rdna2.execInst_eq, Obend.Hardware.Gpu.Rdna2.execInst_eq]
   simp only [hmA, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hoA]
   rw [Obend.Hardware.Gpu.Rdna2.valuLanes_eq, Obend.Hardware.Gpu.Rdna2.valuLanes_eq]
@@ -4602,8 +4603,9 @@ private theorem step1_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
   have hPc1 : s1.pc + rdnaEndInst.words.length = 2 := by rw [hpc1]; rfl
   have hPc2 : s2.pc + rdnaEndInst.words.length = 2 := by rw [hpc2]; rfl
   rw [Obend.Hardware.Gpu.Rdna2.step_eq, Obend.Hardware.Gpu.Rdna2.step_eq,
-      hCond1, hCond2, hProg1, hProg2, hPc1, hPc2]
+      hCond1, hCond2, hProg1, hProg2]
   simp only [Bool.false_eq_true, ↓reduceIte]
+  rw [hPc1, hPc2]
   rw [Obend.Hardware.Gpu.Rdna2.execInst_eq, Obend.Hardware.Gpu.Rdna2.execInst_eq]
   simp only [hmE, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hoE]
   exact ⟨h.1, rfl, rfl, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2⟩
