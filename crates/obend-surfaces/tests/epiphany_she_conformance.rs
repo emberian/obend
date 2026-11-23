@@ -845,3 +845,267 @@ fn end_to_end_multi_frame_sealer_and_compositor_pipeline() {
 
     SensorFrameSealer::verify_sealed_trace(&sealed_trace).expect("trace valid");
 }
+
+#[test]
+fn fpga_inline_scanline_mux_and_roi_zeroer_rtl_parity() {
+    use obend_surfaces::epiphany::{
+        pack_rgba32, unpack_rgba32, CameraScanlineRoiZeroerRtlModel, ScanlineConsentMuxRtlModel,
+    };
+
+    // Packed RGBA32 words locked bit-for-bit with `EpiphanyCompositorTest.lean`.
+    let chrome_word = pack_rgba32(Rgba::CHROME_SLATE);
+    let red_word = pack_rgba32(Rgba::new(255, 0, 0, 255));
+    let px0_word = pack_rgba32(Rgba::new(10, 20, 30, 255));
+    assert_eq!(chrome_word, 0xFF26_1812);
+    assert_eq!(red_word, 0xFF00_00FF);
+    assert_eq!(px0_word, 0xFF1E_140A);
+    assert_eq!(unpack_rgba32(chrome_word), Rgba::CHROME_SLATE);
+    assert_eq!(pack_rgba32(Rgba::TRANSPARENT), 0);
+
+    // 1. Scanline consent mux RTL: py < consent_height ALWAYS selects chrome_pixel over any belief_pixel.
+    assert_eq!(
+        ScanlineConsentMuxRtlModel::eval_comb(2, 4, chrome_word as u32, red_word as u32),
+        0xFF26_1812
+    );
+    let mut mux = ScanlineConsentMuxRtlModel::new();
+    for py in 0u16..16 {
+        for belief in [0u32, red_word as u32, 0xFFFF_FFFFu32, 0x1234_5678u32] {
+            mux.step_clock(false, py, 4, chrome_word as u32, belief);
+            if py < 4 {
+                assert_eq!(mux.out_pixel_q, chrome_word);
+                assert_eq!(mux.in_band_q, 1);
+            } else {
+                assert_eq!(mux.out_pixel_q, belief as u64);
+                assert_eq!(mux.in_band_q, 0);
+            }
+        }
+    }
+    // Signed-vs-unsigned bit-15 boundary (0x7FFF < 0x8000) & bit-31 pixel word parity with Lean.
+    mux.step_clock(false, 0x7FFF, 0x8000, chrome_word as u32, 0x8000_0001);
+    assert_eq!((mux.out_pixel_q, mux.in_band_q), (chrome_word, 1));
+    mux.step_clock(false, 0x8000, 0x7FFF, chrome_word as u32, 0x8000_0001);
+    assert_eq!((mux.out_pixel_q, mux.in_band_q), (0x8000_0001, 0));
+    // Synchronous reset clears both registers to 0.
+    mux.step_clock(true, 2, 4, chrome_word as u32, red_word as u32);
+    assert_eq!((mux.out_pixel_q, mux.in_band_q), (0, 0));
+
+    // 2. Camera scanline ROI zeroer RTL: ROI [1, 3) x [0, 1) zeroes secret words and passes outside + y1 boundary.
+    let mut roi_a = CameraScanlineRoiZeroerRtlModel::new();
+    let mut roi_b = CameraScanlineRoiZeroerRtlModel::new();
+    let secrets_a = [0xFF1E_140Au32, 0xFF63_6363, 0xFF42_4D58, 0xFF3C_3228];
+    let secrets_b = [0xFF1E_140Au32, 0xFF80_00FF, 0x0403_0201, 0xFF3C_3228];
+    for (px, (&wa, &wb)) in secrets_a.iter().zip(secrets_b.iter()).enumerate() {
+        let px16 = px as u16;
+        assert_eq!(
+            CameraScanlineRoiZeroerRtlModel::eval_comb(px16, 0, 1, 3, 0, 1, wa),
+            CameraScanlineRoiZeroerRtlModel::eval_comb(px16, 0, 1, 3, 0, 1, wb)
+        );
+        roi_a.step_clock(false, px16, 0, 1, 3, 0, 1, wa);
+        roi_b.step_clock(false, px16, 0, 1, 3, 0, 1, wb);
+        assert_eq!(roi_a, roi_b);
+        if (1..3).contains(&px16) {
+            assert_eq!(roi_a.cap_pixel_q, 0);
+            assert_eq!(roi_a.redacted_q, 1);
+        } else {
+            assert_eq!(roi_a.cap_pixel_q, wa as u64);
+            assert_eq!(roi_a.redacted_q, 0);
+        }
+    }
+    // y1 boundary (px = 1, py = 1) is outside [0, 1), so bit-31 raw pixel passes unchanged!
+    roi_a.step_clock(false, 1, 1, 1, 3, 0, 1, 0x8000_0001);
+    assert_eq!((roi_a.cap_pixel_q, roi_a.redacted_q), (0x8000_0001, 0));
+    roi_a.step_clock(true, 0, 0, 1, 3, 0, 1, 0xFFFF_FFFF);
+    assert_eq!((roi_a.cap_pixel_q, roi_a.redacted_q), (0, 0));
+}
+
+#[test]
+fn software_scanline_stream_sealer_zero_leakage_completeness_and_u64_max_guard() {
+    use obend_surfaces::epiphany::{
+        verify_sealed_frame_against_policy, ScanlinePacket, ScanlineStreamConfig,
+        ScanlineStreamSealer,
+    };
+
+    // 1. u64::MAX wraparound guard: first-frame MAX and (MAX-1 -> MAX) strictly refused.
+    let mut sealer = SensorFrameSealer::new();
+    let max_frame = RawSensorFrame::from_full_frame(
+        7,
+        u64::MAX,
+        2,
+        1,
+        vec![Rgba::BLACK, Rgba::WHITE],
+        vec![],
+    );
+    assert_eq!(
+        sealer.seal_frame(&max_frame),
+        Err(EpiphanyRefusal::SensorSeqOverflow {
+            sensor_id: 7,
+            attempted_seq: u64::MAX,
+        })
+    );
+    let penult = RawSensorFrame::from_full_frame(
+        7,
+        u64::MAX - 1,
+        2,
+        1,
+        vec![Rgba::BLACK, Rgba::WHITE],
+        vec![],
+    );
+    let sealed_penult = sealer.seal_frame(&penult).expect("MAX-1 succeeds");
+    verify_sealed_frame(&sealed_penult, None).expect("MAX-1 verifies");
+    assert_eq!(
+        sealer.seal_frame(&max_frame),
+        Err(EpiphanyRefusal::SensorSeqOverflow {
+            sensor_id: 7,
+            attempted_seq: u64::MAX,
+        })
+    );
+    let mut forged_max = sealed_penult.clone();
+    forged_max.mono_seq = u64::MAX;
+    assert_eq!(
+        verify_sealed_frame(&forged_max, Some(u64::MAX - 1)),
+        Err(EpiphanyRefusal::SensorSeqOverflow {
+            sensor_id: 7,
+            attempted_seq: u64::MAX,
+        })
+    );
+
+    // 2. Pure software streaming scanline non-interference (pinned config, untrusted I/O stream).
+    let cfg = ScanlineStreamConfig {
+        sensor_id: 7,
+        mono_seq: 42,
+        frame_width: 4,
+        frame_height: 2,
+        redact_boxes: vec![Rect::new(1, 0, 2, 1)],
+    };
+    let mut stream_max = ScanlineStreamSealer::new();
+    assert!(matches!(
+        stream_max.begin_frame(ScanlineStreamConfig { mono_seq: u64::MAX, ..cfg.clone() }),
+        Err(EpiphanyRefusal::SensorSeqOverflow { .. })
+    ));
+
+    let stream_a = vec![
+        ScanlinePacket {
+            line_y: 0,
+            start_x: 0,
+            width: 4,
+            raw_pixels: vec![
+                Rgba::new(10, 20, 30, 255),
+                Rgba::new(99, 99, 99, 255),
+                Rgba::new(88, 77, 66, 255),
+                Rgba::new(40, 50, 60, 255),
+            ],
+        },
+        ScanlinePacket {
+            line_y: 1,
+            start_x: 0,
+            width: 4,
+            raw_pixels: vec![
+                Rgba::new(70, 80, 90, 255),
+                Rgba::new(100, 110, 120, 255),
+                Rgba::new(130, 140, 150, 255),
+                Rgba::new(160, 170, 180, 255),
+            ],
+        },
+    ];
+    let stream_b = vec![
+        ScanlinePacket {
+            line_y: 0,
+            start_x: 0,
+            width: 4,
+            raw_pixels: vec![
+                Rgba::new(10, 20, 30, 255),
+                Rgba::new(255, 0, 128, 255),
+                Rgba::new(1, 2, 3, 4),
+                Rgba::new(40, 50, 60, 255),
+            ],
+        },
+        stream_a[1].clone(),
+    ];
+
+    let mut s_a = ScanlineStreamSealer::new();
+    let mut s_b = ScanlineStreamSealer::new();
+    s_a.begin_frame(cfg.clone()).expect("begin a");
+    s_b.begin_frame(cfg.clone()).expect("begin b");
+    for (pa, pb) in stream_a.iter().zip(stream_b.iter()) {
+        s_a.step_scanline(pa).expect("step a");
+        s_b.step_scanline(pb).expect("step b");
+        assert_eq!(s_a.assembled_tiles(), s_b.assembled_tiles());
+    }
+
+    // Duplicate line_y and unfinished-frame seq reuse with stripped redact_boxes are refused!
+    assert!(matches!(
+        s_a.step_scanline(&stream_a[0]),
+        Err(EpiphanyRefusal::ScanlineStreamViolation { .. })
+    ));
+    assert!(matches!(
+        s_a.begin_frame(ScanlineStreamConfig { redact_boxes: vec![], ..cfg.clone() }),
+        Err(EpiphanyRefusal::SensorSeqRollback { .. })
+    ));
+
+    let sealed_a = s_a.finalize_and_seal().expect("seal a");
+    let sealed_b = s_b.finalize_and_seal().expect("seal b");
+    assert_eq!(sealed_a, sealed_b);
+    assert_eq!(
+        hex_encode(&sealed_a.seal_digest),
+        "913c6cc5a2e60b791214628216c1bee161fc628a061ec5c413c239abdff33243"
+    );
+    verify_sealed_frame(&sealed_a, Some(41)).expect("verify sealed stream");
+    verify_sealed_frame_against_policy(&sealed_a, &cfg.redact_boxes, Some(41))
+        .expect("policy ROI check passes");
+
+    let mut stripped_sealer = SensorFrameSealer::new();
+    let stripped_raw = RawSensorFrame::from_full_frame(7, 42, 4, 2, vec![Rgba::WHITE; 8], vec![]);
+    let stripped_sealed = stripped_sealer.seal_frame(&stripped_raw).expect("seal stripped");
+    assert!(matches!(
+        verify_sealed_frame_against_policy(&stripped_sealed, &cfg.redact_boxes, Some(41)),
+        Err(EpiphanyRefusal::InvalidGeometry { .. })
+    ));
+
+    // Multi-frame lifecycle: replay seq 42 refused; seq 43 succeeds with distinct digest.
+    assert!(matches!(
+        s_a.begin_frame(cfg.clone()),
+        Err(EpiphanyRefusal::SensorSeqRollback { .. })
+    ));
+    s_a.begin_frame(ScanlineStreamConfig { mono_seq: 43, ..cfg.clone() })
+        .expect("begin seq 43");
+    for p in &stream_a {
+        s_a.step_scanline(p).expect("next frame step");
+    }
+    let sealed_next = s_a.finalize_and_seal().expect("seal seq 43");
+    assert_ne!(sealed_next.seal_digest, sealed_a.seal_digest);
+
+    // Incomplete coverage refusals: truncated (1/2 lines), partial width (2 < 4), and out-of-order (y=1 then y=0).
+    let mut s_partial = ScanlineStreamSealer::new();
+    s_partial.begin_frame(cfg.clone()).expect("begin partial");
+    s_partial.step_scanline(&stream_a[0]).expect("line 0");
+    assert!(matches!(
+        s_partial.finalize_and_seal(),
+        Err(EpiphanyRefusal::ScanlineStreamViolation { .. })
+    ));
+
+    let mut s_narrow = ScanlineStreamSealer::new();
+    s_narrow.begin_frame(cfg.clone()).expect("begin narrow");
+    for line_y in 0..2 {
+        s_narrow
+            .step_scanline(&ScanlinePacket {
+                line_y,
+                start_x: 0,
+                width: 2,
+                raw_pixels: vec![Rgba::BLACK; 2],
+            })
+            .expect("narrow line");
+    }
+    assert!(matches!(
+        s_narrow.finalize_and_seal(),
+        Err(EpiphanyRefusal::ScanlineStreamViolation { .. })
+    ));
+
+    let mut s_ooo = ScanlineStreamSealer::new();
+    s_ooo.begin_frame(cfg.clone()).expect("begin ooo");
+    s_ooo.step_scanline(&stream_a[1]).expect("line 1");
+    s_ooo.step_scanline(&stream_a[0]).expect("line 0");
+    assert!(matches!(
+        s_ooo.finalize_and_seal(),
+        Err(EpiphanyRefusal::ScanlineStreamViolation { .. })
+    ));
+}
