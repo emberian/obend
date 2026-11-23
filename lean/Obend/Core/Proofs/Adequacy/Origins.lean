@@ -87,36 +87,172 @@ ordinary suspended aliases belong to the older-address arm. -/
       rw [allocateFields_cons]
       exact ih (heapOriginsBorn_suspend born captures) (environmentValid_mono captures (by simp))
 
-set_option maxHeartbeats 800000 in
+private theorem stepRaw_originsBorn_evaluate {state : State} {term : Term} {environment : Environment}
+    (hCtrl : state.control = .evaluate term environment)
+    (captures : EnvironmentValid state.heap.size environment)
+    (born : HeapOriginsBorn state.heap) : HeapOriginsBorn (stepRaw state).heap := by
+  cases term with
+  | bound index =>
+      simp only [stepRaw, hCtrl]
+      cases environment[index]? <;> exact born
+  | fix spec inherited =>
+      simp only [stepRaw, hCtrl]
+      exact heapOriginsBorn_fix born captures
+  | specification descriptor extension =>
+      simp only [stepRaw, hCtrl]
+      exact heapOriginsBorn_suspend (heapOriginsBorn_suspend born captures)
+        (environmentValid_mono captures (by simp))
+  | prototype spec target =>
+      simp only [stepRaw, hCtrl]
+      exact heapOriginsBorn_suspend (heapOriginsBorn_suspend born captures)
+        (environmentValid_mono captures (by simp))
+  | record fields =>
+      simp only [stepRaw, hCtrl]
+      exact allocateFields_originsBorn born captures
+  | inject tag payload =>
+      simp only [stepRaw, hCtrl]
+      exact heapOriginsBorn_suspend born captures
+  | perform plan =>
+      simp only [stepRaw, hCtrl]
+      cases forcingShared state.stack with
+      | true => exact born
+      | false => exact heapOriginsBorn_suspend born captures
+  | hole _ _ | lam _ | app _ _ | mix _ _ | reflect _ | metadata _ | project _
+  | nat _ | boolean _ | label _ | binary _ _ _ | extend _ _ | get _ _
+  | ifZero _ _ _ | case _ _ | ifBool _ _ _ | done _ | split _ _ _ =>
+      simpa [stepRaw, hCtrl] using born
+
+private theorem stepRaw_originsBorn_returned {state : State} {value : RuntimeValue}
+    (hCtrl : state.control = .returned value)
+    (valValid : RuntimeValueValid state.heap.size value)
+    (stackValid : ∀ frame ∈ state.stack, FrameValid state.heap.size frame)
+    (born : HeapOriginsBorn state.heap) : HeapOriginsBorn (stepRaw state).heap := by
+  cases hStack : state.stack with
+  | nil => simpa [stepRaw, hCtrl, hStack] using born
+  | cons frame rest =>
+      have frameValid : FrameValid state.heap.size frame :=
+        stackValid frame (hStack ▸ List.mem_cons_self)
+      cases frame with
+      | update address =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases hCell : state.heap[address]? with
+          | none => exact born
+          | some cell =>
+              cases cell with
+              | evaluating origin => exact heapOriginsBorn_set born hCell rfl
+              | suspended _ | cached _ _ => exact born
+      | argument argument environment =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value with
+          | closure body captured => exact heapOriginsBorn_suspend born frameValid.2
+          | specification _ _ | natural _ | boolean _ | label _
+          | record _ | prototype _ _ | variant _ _ => exact born
+      | extend fields environment =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value with
+          | record inherited => exact allocateFields_originsBorn born frameValid.1
+          | closure _ _ | specification _ _ | natural _ | boolean _
+          | label _ | prototype _ _ | variant _ _ => exact born
+      | condition zero successorBody environment =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value with
+          | natural n =>
+              cases n with
+              | zero => exact born
+              | succ m =>
+                  apply heapOriginsBorn_push born
+                  left
+                  intro address member
+                  simp [cellOrigin] at member
+          | closure _ _ | specification _ _ | boolean _ | label _
+          | record _ | prototype _ _ | variant _ _ => exact born
+      | case arms environment =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value with
+          | variant tag payload =>
+              dsimp only
+              cases hFind : arms.find? (fun arm => arm.1 == tag) with
+              | none => exact born
+              | some arm =>
+                  dsimp only
+                  apply heapOriginsBorn_suspend born
+                  intro address member
+                  simp at member
+                  subst member
+                  exact valValid
+          | closure _ _ | specification _ _ | natural _ | boolean _
+          | label _ | record _ | prototype _ _ => exact born
+      | split names function environment =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value with
+          | record fields =>
+              dsimp only
+              cases hSplit : splitValues fields names with
+              | none => exact born
+              | some addresses =>
+                  dsimp only
+                  apply allocateFields_originsBorn born
+                  intro address ha
+                  obtain ⟨f, hf, rfl⟩ := Obend.Core.Invariant.splitValues_mem hSplit address ha
+                  exact valValid f hf
+          | closure _ _ | specification _ _ | natural _ | boolean _
+          | label _ | prototype _ _ | variant _ _ => exact born
+      | reflect =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value <;> exact born
+      | metadata =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value <;> exact born
+      | project =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value <;> exact born
+      | field name =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value with
+          | record fields =>
+              dsimp only
+              cases fields.find? (fun field => field.1 == name) <;> exact born
+          | closure _ _ | specification _ _ | natural _ | boolean _
+          | label _ | prototype _ _ | variant _ _ => exact born
+      | binaryLeft primitive right environment =>
+          simpa [stepRaw, hCtrl, hStack] using born
+      | binaryRight primitive left =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases (valueTerm left).bind (fun l => (valueTerm value).bind (primitiveResult primitive l)) with
+          | none => exact born
+          | some res =>
+              dsimp only
+              cases scalarValue res <;> exact born
+      | ifBool whenTrue whenFalse environment =>
+          simp only [stepRaw, hCtrl, hStack]
+          cases value with
+          | boolean b => cases b <;> exact born
+          | closure _ _ | specification _ _ | natural _ | label _
+          | record _ | prototype _ _ | variant _ _ => exact born
+
 /-- Birth provenance is preserved by EVERY real transition. It permits tied
 Fix and sharing, while excluding arbitrary fabricated cyclic suspended aliases. -/
  public theorem stepRaw_originsBorn {state : State} (lexical : LexicalInvariant state)
     (born : HeapOriginsBorn state.heap) : HeapOriginsBorn (stepRaw state).heap := by
-  have headValid : ∀ frame rest, state.stack = frame::rest → FrameValid state.heap.size frame := by
-    intro frame rest eq
-    exact lexical.2.2 frame (eq ▸ List.mem_cons_self)
-  have controlValid := lexical.2.1
-  unfold stepRaw
-  split <;> repeat' first | split
-  all_goals try dsimp only
-  all_goals try (have frameValid := headValid _ _ (by assumption))
-  all_goals simp_all only [ControlValid,ClosureValid,FrameValid]
-  all_goals try (have captures := controlValid.2)
-  all_goals try (have frameCaptures := frameValid.2)
-  all_goals try (have extensionCaptures := frameValid.1)
-  all_goals solve
-    | exact born
-    | apply heapOriginsBorn_set born; assumption; rfl
-    | apply heapOriginsBorn_suspend born; assumption
-    | apply heapOriginsBorn_fix born; assumption
-    | apply allocateFields_originsBorn born; assumption
-    | apply heapOriginsBorn_suspend (heapOriginsBorn_suspend born (by assumption));
-      exact environmentValid_mono (by assumption) (by simp)
-    | apply heapOriginsBorn_push born; left; intro address member; simp [cellOrigin] at member
-    | apply heapOriginsBorn_suspend born; intro address member; simp at member; subst member; assumption
-    | apply allocateFields_originsBorn born; intro address ha
-      obtain ⟨f, hf, rfl⟩ := Obend.Core.Invariant.splitValues_mem (by assumption) address ha
-      first | exact controlValid f.1 f.2 hf | exact controlValid f hf
+  cases hCtrl : state.control with
+  | complete _ | refused _ | blackhole _ | yielded _ =>
+      simpa [stepRaw, hCtrl] using born
+  | enter address =>
+      simp only [stepRaw, hCtrl]
+      cases hCell : state.heap[address]? with
+      | none => exact born
+      | some cell =>
+          cases cell with
+          | suspended origin => exact heapOriginsBorn_set born hCell rfl
+          | evaluating _ | cached _ _ => exact born
+  | evaluate term environment =>
+      have hValid : ClosureValid state.heap.size ⟨term, environment⟩ := by
+        simpa [ControlValid, hCtrl] using lexical.2.1
+      exact stepRaw_originsBorn_evaluate hCtrl hValid.2 born
+  | returned value =>
+      have hValid : RuntimeValueValid state.heap.size value := by
+        simpa [ControlValid, hCtrl] using lexical.2.1
+      exact stepRaw_originsBorn_returned hCtrl hValid lexical.2.2 born
 
  public theorem initial_originsBorn (source : Term) : HeapOriginsBorn (initial source).heap := by
   intro address cell found

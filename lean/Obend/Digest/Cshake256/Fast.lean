@@ -514,19 +514,104 @@ theorem toState_ext (s : KState) (st : State) (hsize : st.size = 25)
     | 24, _ => exact h24
     | n + 25, h => exact absurd h (by rw [toState_size]; omega)
 
-set_option maxHeartbeats 4000000 in
-theorem thetaS_toState (s : KState) : (thetaS s).toState = thetaCached s.toState := by
-  apply toState_ext _ _ (by simp [thetaCached]) <;>
-    simp only [thetaCached, Array.getElem_ofFn, xorColumn_five, thetaS, toState_getElem_0, toState_getElem_1, toState_getElem_2, toState_getElem_3, toState_getElem_4, toState_getElem_5, toState_getElem_6, toState_getElem_7, toState_getElem_8, toState_getElem_9, toState_getElem_10, toState_getElem_11, toState_getElem_12, toState_getElem_13, toState_getElem_14, toState_getElem_15, toState_getElem_16, toState_getElem_17, toState_getElem_18, toState_getElem_19, toState_getElem_20, toState_getElem_21, toState_getElem_22, toState_getElem_23, toState_getElem_24,
-      UInt64.toBitVec_xor, rotlK_1, rotlK_2, rotlK_3, rotlK_6, rotlK_8, rotlK_10, rotlK_14, rotlK_15, rotlK_18, rotlK_20, rotlK_21, rotlK_25, rotlK_27, rotlK_28, rotlK_36, rotlK_39, rotlK_41, rotlK_43, rotlK_44, rotlK_45, rotlK_55, rotlK_56, rotlK_61, rotlK_62, u64_zero_toBitVec, Nat.reduceMod, Nat.reduceDiv,
-      Nat.reduceAdd, Nat.zero_mod, Nat.zero_div, lane_toState_0_0, lane_toState_1_0, lane_toState_2_0, lane_toState_3_0, lane_toState_4_0, lane_toState_5_0, lane_toState_6_0, lane_toState_0_1, lane_toState_1_1, lane_toState_2_1, lane_toState_3_1, lane_toState_4_1, lane_toState_5_1, lane_toState_6_1, lane_toState_0_2, lane_toState_1_2, lane_toState_2_2, lane_toState_3_2, lane_toState_4_2, lane_toState_5_2, lane_toState_6_2, lane_toState_0_3, lane_toState_1_3, lane_toState_2_3, lane_toState_3_3, lane_toState_4_3, lane_toState_5_3, lane_toState_6_3, lane_toState_0_4, lane_toState_1_4, lane_toState_2_4, lane_toState_3_4, lane_toState_4_4, lane_toState_5_4, lane_toState_6_4]
+private theorem thetaCached_getElem (st : State) (i : Nat) (hi : i < (thetaCached st).size) :
+    (thetaCached st)[i] =
+      lane st (i % 5) (i / 5) ^^^
+        (xorColumn st ((i % 5 + 4) % 5) ^^^ (xorColumn st ((i % 5 + 1) % 5)).rotateLeft 1) := by
+  simp only [thetaCached, Array.getElem_ofFn]
 
-set_option maxHeartbeats 4000000 in
+private theorem thetaS_col {x0 x1 x2 x3 x4 : UInt64} {st : State} {x : Nat}
+    (h0 : x0.toBitVec = lane st x 0) (h1 : x1.toBitVec = lane st x 1)
+    (h2 : x2.toBitVec = lane st x 2) (h3 : x3.toBitVec = lane st x 3)
+    (h4 : x4.toBitVec = lane st x 4) :
+    ((0 : UInt64) ^^^ x0 ^^^ x1 ^^^ x2 ^^^ x3 ^^^ x4).toBitVec = xorColumn st x := by
+  simp only [xorColumn_five, UInt64.toBitVec_xor, u64_zero_toBitVec, h0, h1, h2, h3, h4]
+
+private theorem thetaS_delta {cA cB : UInt64} {st : State} {xA xB : Nat}
+    (hA : cA.toBitVec = xorColumn st xA) (hB : cB.toBitVec = xorColumn st xB) :
+    (cA ^^^ rotlK cB 1 63).toBitVec = xorColumn st xA ^^^ (xorColumn st xB).rotateLeft 1 := by
+  rw [UInt64.toBitVec_xor, rotlK_1, hA, hB]
+
+theorem thetaS_toState (s : KState) : (thetaS s).toState = thetaCached s.toState := by
+  have hc0 : ((0 : UInt64) ^^^ s.a0 ^^^ s.a5 ^^^ s.a10 ^^^ s.a15 ^^^ s.a20).toBitVec =
+      xorColumn s.toState 0 := thetaS_col rfl rfl rfl rfl rfl
+  have hc1 : ((0 : UInt64) ^^^ s.a1 ^^^ s.a6 ^^^ s.a11 ^^^ s.a16 ^^^ s.a21).toBitVec =
+      xorColumn s.toState 1 := thetaS_col rfl rfl rfl rfl rfl
+  have hc2 : ((0 : UInt64) ^^^ s.a2 ^^^ s.a7 ^^^ s.a12 ^^^ s.a17 ^^^ s.a22).toBitVec =
+      xorColumn s.toState 2 := thetaS_col rfl rfl rfl rfl rfl
+  have hc3 : ((0 : UInt64) ^^^ s.a3 ^^^ s.a8 ^^^ s.a13 ^^^ s.a18 ^^^ s.a23).toBitVec =
+      xorColumn s.toState 3 := thetaS_col rfl rfl rfl rfl rfl
+  have hc4 : ((0 : UInt64) ^^^ s.a4 ^^^ s.a9 ^^^ s.a14 ^^^ s.a19 ^^^ s.a24).toBitVec =
+      xorColumn s.toState 4 := thetaS_col rfl rfl rfl rfl rfl
+  have hd0 := thetaS_delta hc4 hc1
+  have hd1 := thetaS_delta hc0 hc2
+  have hd2 := thetaS_delta hc1 hc3
+  have hd3 := thetaS_delta hc2 hc4
+  have hd4 := thetaS_delta hc3 hc0
+  apply toState_ext _ _ (by simp [thetaCached])
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd0)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd1)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd2)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd3)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd4)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd0)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd1)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd2)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd3)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd4)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd0)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd1)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd2)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd3)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd4)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd0)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd1)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd2)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd3)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd4)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd0)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd1)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd2)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd3)
+  · rw [thetaCached_getElem]; exact (UInt64.toBitVec_xor _ _).trans (congrArg _ hd4)
+
+private theorem chi_getElem (st : State) (i : Nat) (hi : i < (chi st).size) :
+    (chi st)[i] =
+      lane st (i % 5) (i / 5) ^^^
+        ((~~~lane st (i % 5 + 1) (i / 5)) &&& lane st (i % 5 + 2) (i / 5)) := by
+  simp only [chi, Array.getElem_ofFn]
+
+private theorem chi_lane_eq (a b c : UInt64) :
+    (a ^^^ ((~~~b) &&& c)).toBitVec = a.toBitVec ^^^ ((~~~b.toBitVec) &&& c.toBitVec) := by
+  rw [UInt64.toBitVec_xor, UInt64.toBitVec_and, UInt64.toBitVec_not]
+
 theorem chiS_toState (s : KState) : (chiS s).toState = chi s.toState := by
-  apply toState_ext _ _ (by simp [chi]) <;>
-    simp only [chi, Array.getElem_ofFn, chiS, toState_getElem_0, toState_getElem_1, toState_getElem_2, toState_getElem_3, toState_getElem_4, toState_getElem_5, toState_getElem_6, toState_getElem_7, toState_getElem_8, toState_getElem_9, toState_getElem_10, toState_getElem_11, toState_getElem_12, toState_getElem_13, toState_getElem_14, toState_getElem_15, toState_getElem_16, toState_getElem_17, toState_getElem_18, toState_getElem_19, toState_getElem_20, toState_getElem_21, toState_getElem_22, toState_getElem_23, toState_getElem_24,
-      UInt64.toBitVec_xor, UInt64.toBitVec_and, UInt64.toBitVec_not, Nat.reduceMod,
-      Nat.reduceDiv, Nat.reduceAdd, Nat.zero_mod, Nat.zero_div, lane_toState_0_0, lane_toState_1_0, lane_toState_2_0, lane_toState_3_0, lane_toState_4_0, lane_toState_5_0, lane_toState_6_0, lane_toState_0_1, lane_toState_1_1, lane_toState_2_1, lane_toState_3_1, lane_toState_4_1, lane_toState_5_1, lane_toState_6_1, lane_toState_0_2, lane_toState_1_2, lane_toState_2_2, lane_toState_3_2, lane_toState_4_2, lane_toState_5_2, lane_toState_6_2, lane_toState_0_3, lane_toState_1_3, lane_toState_2_3, lane_toState_3_3, lane_toState_4_3, lane_toState_5_3, lane_toState_6_3, lane_toState_0_4, lane_toState_1_4, lane_toState_2_4, lane_toState_3_4, lane_toState_4_4, lane_toState_5_4, lane_toState_6_4]
+  apply toState_ext _ _ (by simp [chi])
+  · rw [chi_getElem]; exact chi_lane_eq s.a0 s.a1 s.a2
+  · rw [chi_getElem]; exact chi_lane_eq s.a1 s.a2 s.a3
+  · rw [chi_getElem]; exact chi_lane_eq s.a2 s.a3 s.a4
+  · rw [chi_getElem]; exact chi_lane_eq s.a3 s.a4 s.a0
+  · rw [chi_getElem]; exact chi_lane_eq s.a4 s.a0 s.a1
+  · rw [chi_getElem]; exact chi_lane_eq s.a5 s.a6 s.a7
+  · rw [chi_getElem]; exact chi_lane_eq s.a6 s.a7 s.a8
+  · rw [chi_getElem]; exact chi_lane_eq s.a7 s.a8 s.a9
+  · rw [chi_getElem]; exact chi_lane_eq s.a8 s.a9 s.a5
+  · rw [chi_getElem]; exact chi_lane_eq s.a9 s.a5 s.a6
+  · rw [chi_getElem]; exact chi_lane_eq s.a10 s.a11 s.a12
+  · rw [chi_getElem]; exact chi_lane_eq s.a11 s.a12 s.a13
+  · rw [chi_getElem]; exact chi_lane_eq s.a12 s.a13 s.a14
+  · rw [chi_getElem]; exact chi_lane_eq s.a13 s.a14 s.a10
+  · rw [chi_getElem]; exact chi_lane_eq s.a14 s.a10 s.a11
+  · rw [chi_getElem]; exact chi_lane_eq s.a15 s.a16 s.a17
+  · rw [chi_getElem]; exact chi_lane_eq s.a16 s.a17 s.a18
+  · rw [chi_getElem]; exact chi_lane_eq s.a17 s.a18 s.a19
+  · rw [chi_getElem]; exact chi_lane_eq s.a18 s.a19 s.a15
+  · rw [chi_getElem]; exact chi_lane_eq s.a19 s.a15 s.a16
+  · rw [chi_getElem]; exact chi_lane_eq s.a20 s.a21 s.a22
+  · rw [chi_getElem]; exact chi_lane_eq s.a21 s.a22 s.a23
+  · rw [chi_getElem]; exact chi_lane_eq s.a22 s.a23 s.a24
+  · rw [chi_getElem]; exact chi_lane_eq s.a23 s.a24 s.a20
+  · rw [chi_getElem]; exact chi_lane_eq s.a24 s.a20 s.a21
 
 /-- A fold of in-bounds writes, read back at one index: the last write to that
 index wins, else the initial array's entry. -/
@@ -578,12 +663,33 @@ theorem rhoPi_getElem (st : State) (t : Nat) (ht : t < 25) (h : t < (rhoPi st).s
   apply Option.some.inj
   rw [← Array.getElem?_eq_getElem h, rhoPi_getElem? st t ht]
 
-set_option maxHeartbeats 4000000 in
 theorem rhoPiS_toState (s : KState) : (rhoPiS s).toState = rhoPi s.toState := by
-  apply toState_ext _ _ (rhoPi_size _) <;> rw [rhoPi_getElem _ _ (by decide)] <;>
-    simp only [rpSource_0, rpSource_1, rpSource_2, rpSource_3, rpSource_4, rpSource_5, rpSource_6, rpSource_7, rpSource_8, rpSource_9, rpSource_10, rpSource_11, rpSource_12, rpSource_13, rpSource_14, rpSource_15, rpSource_16, rpSource_17, rpSource_18, rpSource_19, rpSource_20, rpSource_21, rpSource_22, rpSource_23, rpSource_24, rpValue, rhoPiS, toState_getElem_0, toState_getElem_1, toState_getElem_2, toState_getElem_3, toState_getElem_4, toState_getElem_5, toState_getElem_6, toState_getElem_7, toState_getElem_8, toState_getElem_9, toState_getElem_10, toState_getElem_11, toState_getElem_12, toState_getElem_13, toState_getElem_14, toState_getElem_15, toState_getElem_16, toState_getElem_17, toState_getElem_18, toState_getElem_19, toState_getElem_20, toState_getElem_21, toState_getElem_22, toState_getElem_23, toState_getElem_24, rotlK_1, rotlK_2, rotlK_3, rotlK_6, rotlK_8, rotlK_10, rotlK_14, rotlK_15, rotlK_18, rotlK_20, rotlK_21, rotlK_25, rotlK_27, rotlK_28, rotlK_36, rotlK_39, rotlK_41, rotlK_43, rotlK_44, rotlK_45, rotlK_55, rotlK_56, rotlK_61, rotlK_62, bv_rotateLeft_zero,
-      Nat.reduceMod, Nat.reduceDiv, Nat.reduceAdd, Nat.zero_mod, Nat.zero_div,
-      lane_toState_0_0, lane_toState_1_0, lane_toState_2_0, lane_toState_3_0, lane_toState_4_0, lane_toState_5_0, lane_toState_6_0, lane_toState_0_1, lane_toState_1_1, lane_toState_2_1, lane_toState_3_1, lane_toState_4_1, lane_toState_5_1, lane_toState_6_1, lane_toState_0_2, lane_toState_1_2, lane_toState_2_2, lane_toState_3_2, lane_toState_4_2, lane_toState_5_2, lane_toState_6_2, lane_toState_0_3, lane_toState_1_3, lane_toState_2_3, lane_toState_3_3, lane_toState_4_3, lane_toState_5_3, lane_toState_6_3, lane_toState_0_4, lane_toState_1_4, lane_toState_2_4, lane_toState_3_4, lane_toState_4_4, lane_toState_5_4, lane_toState_6_4, rotationOffset_0_0, rotationOffset_1_0, rotationOffset_2_0, rotationOffset_3_0, rotationOffset_4_0, rotationOffset_0_1, rotationOffset_1_1, rotationOffset_2_1, rotationOffset_3_1, rotationOffset_4_1, rotationOffset_0_2, rotationOffset_1_2, rotationOffset_2_2, rotationOffset_3_2, rotationOffset_4_2, rotationOffset_0_3, rotationOffset_1_3, rotationOffset_2_3, rotationOffset_3_3, rotationOffset_4_3, rotationOffset_0_4, rotationOffset_1_4, rotationOffset_2_4, rotationOffset_3_4, rotationOffset_4_4]
+  apply toState_ext _ _ (rhoPi_size _)
+  · rw [rhoPi_getElem _ _ (by decide)]; exact (bv_rotateLeft_zero s.a0.toBitVec).symm
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_44 s.a6
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_43 s.a12
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_21 s.a18
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_14 s.a24
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_28 s.a3
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_20 s.a9
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_3 s.a10
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_45 s.a16
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_61 s.a22
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_1 s.a1
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_6 s.a7
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_25 s.a13
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_8 s.a19
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_18 s.a20
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_27 s.a4
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_36 s.a5
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_10 s.a11
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_15 s.a17
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_56 s.a23
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_62 s.a2
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_55 s.a8
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_39 s.a14
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_41 s.a15
+  · rw [rhoPi_getElem _ _ (by decide)]; exact rotlK_2 s.a21
 
 theorem iotaS_toState (s : KState) (c : UInt64) :
     (iotaS s c).toState = s.toState.setIfInBounds 0 (lane s.toState 0 0 ^^^ c.toBitVec) := by
@@ -688,13 +794,44 @@ theorem laneAt_eq (b : ByteArray) (off i : Nat) (hi : i < 17) :
   rw [laneAt_eq_fold, hfold (List.range 8) (fun t ht => List.mem_range.mp ht) 0]
   rfl
 
-set_option maxHeartbeats 4000000 in
+private theorem xorRateBlock_getElem_lt (st : State) (block : List UInt8) (i : Nat)
+    (hi : i < rateLanes) (h : i < (xorRateBlock st block).size) :
+    (xorRateBlock st block)[i] = st.getD i zeroLane ^^^ laneFromBlock block i := by
+  simp only [xorRateBlock, Array.getElem_ofFn, hi, ite_true]
+
+private theorem xorRateBlock_getElem_ge (st : State) (block : List UInt8) (i : Nat)
+    (hi : ¬ i < rateLanes) (h : i < (xorRateBlock st block).size) :
+    (xorRateBlock st block)[i] = st.getD i zeroLane := by
+  simp only [xorRateBlock, Array.getElem_ofFn, hi, ite_false]
+
 theorem xorBlockS_toState (s : KState) (b : ByteArray) (off : Nat) :
     (xorBlockS s b off).toState = xorRateBlock s.toState ((b.data.toList.drop off).take 136) := by
-  apply toState_ext _ _ (by simp [xorRateBlock]) <;>
-    simp (config := { decide := true }) only [xorRateBlock, Array.getElem_ofFn, rateLanes,
-      xorBlockS, toState_getElem_0, toState_getElem_1, toState_getElem_2, toState_getElem_3, toState_getElem_4, toState_getElem_5, toState_getElem_6, toState_getElem_7, toState_getElem_8, toState_getElem_9, toState_getElem_10, toState_getElem_11, toState_getElem_12, toState_getElem_13, toState_getElem_14, toState_getElem_15, toState_getElem_16, toState_getElem_17, toState_getElem_18, toState_getElem_19, toState_getElem_20, toState_getElem_21, toState_getElem_22, toState_getElem_23, toState_getElem_24, toState_getD_0, toState_getD_1, toState_getD_2, toState_getD_3, toState_getD_4, toState_getD_5, toState_getD_6, toState_getD_7, toState_getD_8, toState_getD_9, toState_getD_10, toState_getD_11, toState_getD_12, toState_getD_13, toState_getD_14, toState_getD_15, toState_getD_16, toState_getD_17, toState_getD_18, toState_getD_19, toState_getD_20, toState_getD_21, toState_getD_22, toState_getD_23, toState_getD_24, UInt64.toBitVec_xor, laneAt_eq, Nat.reduceMul, Nat.add_zero, ite_true,
-      ite_false]
+  apply toState_ext _ _ (by simp [xorRateBlock])
+  · rw [xorRateBlock_getElem_lt _ _ 0 (by decide), laneAt_eq b off 0 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 1 (by decide), laneAt_eq b off 1 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 2 (by decide), laneAt_eq b off 2 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 3 (by decide), laneAt_eq b off 3 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 4 (by decide), laneAt_eq b off 4 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 5 (by decide), laneAt_eq b off 5 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 6 (by decide), laneAt_eq b off 6 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 7 (by decide), laneAt_eq b off 7 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 8 (by decide), laneAt_eq b off 8 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 9 (by decide), laneAt_eq b off 9 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 10 (by decide), laneAt_eq b off 10 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 11 (by decide), laneAt_eq b off 11 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 12 (by decide), laneAt_eq b off 12 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 13 (by decide), laneAt_eq b off 13 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 14 (by decide), laneAt_eq b off 14 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 15 (by decide), laneAt_eq b off 15 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_lt _ _ 16 (by decide), laneAt_eq b off 16 (by decide)]; exact UInt64.toBitVec_xor _ _
+  · rw [xorRateBlock_getElem_ge _ _ 17 (by decide)]; rfl
+  · rw [xorRateBlock_getElem_ge _ _ 18 (by decide)]; rfl
+  · rw [xorRateBlock_getElem_ge _ _ 19 (by decide)]; rfl
+  · rw [xorRateBlock_getElem_ge _ _ 20 (by decide)]; rfl
+  · rw [xorRateBlock_getElem_ge _ _ 21 (by decide)]; rfl
+  · rw [xorRateBlock_getElem_ge _ _ 22 (by decide)]; rfl
+  · rw [xorRateBlock_getElem_ge _ _ 23 (by decide)]; rfl
+  · rw [xorRateBlock_getElem_ge _ _ 24 (by decide)]; rfl
 
 /-- Absorb `count` full rate blocks of `b`, starting at byte `off`. -/
 @[expose] def absorbLoop (b : ByteArray) : Nat → Nat → KState → KState

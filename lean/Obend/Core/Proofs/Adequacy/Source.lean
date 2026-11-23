@@ -19,21 +19,124 @@ set_option autoImplicit false
  theorem source_value_noStep {term next : Term} (value : Value term) (step : Step term next) : False := by
   cases value <;> cases step
 
-set_option maxHeartbeats 600000 in
 /-- The independent reference semantics is deterministic for every partial
 constructor. This includes fixed-point unfolding and field shadowing. -/
  theorem sourceStep_deterministic {term first second : Term}
     (left : Step term first) (right : Step term second) : first = second := by
-  induction left generalizing second <;> cases right
-  all_goals first
-    | exact False.elim (source_value_noStep (Value.function _) (by assumption))
-    | exact False.elim (source_value_noStep (Value.natural _) (by assumption))
-    | exact False.elim (source_value_noStep (Value.record _) (by assumption))
-    | exact False.elim (source_value_noStep (Value.specification _ _) (by assumption))
-    | exact False.elim (source_value_noStep (Value.prototype _ _) (by assumption))
-    | exact False.elim (source_value_noStep (Value.inject _ _) (by assumption))
-    | exact False.elim (source_value_noStep (Value.boolean _) (by assumption))
-    | grind [source_value_noStep]
+  induction left generalizing second with
+  | beta =>
+      cases right with
+      | beta => rfl
+      | application _ h => exact False.elim (source_value_noStep (.function _) h)
+  | application _ hL ih =>
+      cases right with
+      | beta => exact False.elim (source_value_noStep (.function _) hL)
+      | applySpecification => exact False.elim (source_value_noStep (.specification _ _) hL)
+      | application _ hR => rw [ih hR]
+  | mix => cases right; rfl
+  | fix => cases right; rfl
+  | applySpecification =>
+      cases right with
+      | applySpecification => rfl
+      | application _ h => exact False.elim (source_value_noStep (.specification _ _) h)
+  | reflectPrototype =>
+      cases right with
+      | reflectPrototype => rfl
+      | reflectStep h => exact False.elim (source_value_noStep (.prototype _ _) h)
+  | metadataSpecification =>
+      cases right with
+      | metadataSpecification => rfl
+      | metadataStep h => exact False.elim (source_value_noStep (.specification _ _) h)
+  | projectPrototype =>
+      cases right with
+      | projectPrototype => rfl
+      | projectStep h => exact False.elim (source_value_noStep (.prototype _ _) h)
+  | reflectStep hL ih =>
+      cases right with
+      | reflectPrototype => exact False.elim (source_value_noStep (.prototype _ _) hL)
+      | reflectStep hR => rw [ih hR]
+  | metadataStep hL ih =>
+      cases right with
+      | metadataSpecification => exact False.elim (source_value_noStep (.specification _ _) hL)
+      | metadataStep hR => rw [ih hR]
+  | projectStep hL ih =>
+      cases right with
+      | projectPrototype => exact False.elim (source_value_noStep (.prototype _ _) hL)
+      | projectStep hR => rw [ih hR]
+  | target _ hL ih =>
+      cases right with
+      | target _ hR => rw [ih hR]
+      | field => exact False.elim (source_value_noStep (.record _) hL)
+  | field _ _ _ h1 =>
+      cases right with
+      | target _ h => exact False.elim (source_value_noStep (.record _) h)
+      | field _ _ _ h2 => rw [h1] at h2; cases h2; rfl
+  | extendTarget _ hL ih =>
+      cases right with
+      | extendTarget _ hR => rw [ih hR]
+      | extendRecord => exact False.elim (source_value_noStep (.record _) hL)
+  | extendRecord =>
+      cases right with
+      | extendTarget _ h => exact False.elim (source_value_noStep (.record _) h)
+      | extendRecord => rfl
+  | binaryLeft _ _ hL ih =>
+      cases right with
+      | binaryLeft _ _ hR => rw [ih hR]
+      | binaryRight _ _ lv _ => exact False.elim (source_value_noStep lv hL)
+      | primitive _ _ _ _ lv _ _ => exact False.elim (source_value_noStep lv hL)
+  | binaryRight _ _ lv hL ih =>
+      cases right with
+      | binaryLeft _ _ hR => exact False.elim (source_value_noStep lv hR)
+      | binaryRight _ _ _ hR => rw [ih hR]
+      | primitive _ _ _ _ _ rv _ => exact False.elim (source_value_noStep rv hL)
+  | primitive _ _ _ _ lv rv h1 =>
+      cases right with
+      | binaryLeft _ _ hR => exact False.elim (source_value_noStep lv hR)
+      | binaryRight _ _ _ hR => exact False.elim (source_value_noStep rv hR)
+      | primitive _ _ _ _ _ _ h2 => rw [h1] at h2; cases h2; rfl
+  | condition _ _ hL ih =>
+      cases right with
+      | condition _ _ hR => rw [ih hR]
+      | zero => exact False.elim (source_value_noStep (.natural 0) hL)
+      | successor => exact False.elim (source_value_noStep (.natural _) hL)
+  | zero =>
+      cases right with
+      | condition _ _ h => exact False.elim (source_value_noStep (.natural 0) h)
+      | zero => rfl
+  | successor =>
+      cases right with
+      | condition _ _ h => exact False.elim (source_value_noStep (.natural _) h)
+      | successor => rfl
+  | caseTarget _ hL ih =>
+      cases right with
+      | caseTarget _ hR => rw [ih hR]
+      | caseInject => exact False.elim (source_value_noStep (.inject _ _) hL)
+  | caseInject _ _ _ _ h1 =>
+      cases right with
+      | caseTarget _ h => exact False.elim (source_value_noStep (.inject _ _) h)
+      | caseInject _ _ _ _ h2 => rw [h1] at h2; cases h2; rfl
+  | ifCondition _ _ hL ih =>
+      cases right with
+      | ifCondition _ _ hR => rw [ih hR]
+      | ifTrue => exact False.elim (source_value_noStep (.boolean true) hL)
+      | ifFalse => exact False.elim (source_value_noStep (.boolean false) hL)
+  | ifTrue =>
+      cases right with
+      | ifCondition _ _ h => exact False.elim (source_value_noStep (.boolean true) h)
+      | ifTrue => rfl
+  | ifFalse =>
+      cases right with
+      | ifCondition _ _ h => exact False.elim (source_value_noStep (.boolean false) h)
+      | ifFalse => rfl
+  | done => cases right; rfl
+  | splitTarget _ _ hL ih =>
+      cases right with
+      | splitTarget _ _ hR => rw [ih hR]
+      | splitRecord => exact False.elim (source_value_noStep (.record _) hL)
+  | splitRecord _ _ _ _ h1 =>
+      cases right with
+      | splitTarget _ _ h => exact False.elim (source_value_noStep (.record _) h)
+      | splitRecord _ _ _ _ h2 => rw [h1] at h2; cases h2; rfl
 
  theorem source_value_steps_identity {term next : Term} (value : Value term) (steps : Steps term next) : term = next := by
   cases steps with
@@ -289,16 +392,113 @@ their existence does not restrict the partial source domain. -/
     first = second :=
   source_evaluates_unique (sourceDerivation_evaluates left) (sourceDerivation_evaluates right)
 
-set_option maxHeartbeats 600000 in
 /-- Demand cost is determined by the partial source computation, even when
 there are multiple proofs of its evaluation. -/
  public theorem sourceDerivation_cost_unique {source first second : Term} {firstCost secondCost : Nat}
     (left : SourceDerivation source first firstCost) (right : SourceDerivation source second secondCost) :
     firstCost = secondCost := by
-  induction left generalizing second secondCost <;> cases right
-  all_goals try rfl
-  all_goals try (cases ‹Value _›)
-  all_goals grind [sourceDerivation_result_unique]
+  induction left generalizing second secondCost with
+  | value h => exact (sourceDerivation_value_inv h right).2.symm
+  | applicationLambda f1 _ ihf ihb =>
+      cases right with
+      | value v => cases v
+      | applicationLambda f2 b2 =>
+          cases sourceDerivation_result_unique f1 f2
+          rw [ihf f2, ihb b2]
+      | applicationSpecification f2 _ =>
+          cases sourceDerivation_result_unique f1 f2
+  | applicationSpecification f1 _ ihf ihb =>
+      cases right with
+      | value v => cases v
+      | applicationLambda f2 _ =>
+          cases sourceDerivation_result_unique f1 f2
+      | applicationSpecification f2 b2 =>
+          cases sourceDerivation_result_unique f1 f2
+          rw [ihf f2, ihb b2]
+  | mix _ ih =>
+      cases right with
+      | value v => cases v
+      | mix d2 => rw [ih d2]
+  | fix _ ih =>
+      cases right with
+      | value v => cases v
+      | fix d2 => rw [ih d2]
+  | reflect t1 _ iht ihr =>
+      cases right with
+      | value v => cases v
+      | reflect t2 r2 =>
+          cases sourceDerivation_result_unique t1 t2
+          rw [iht t2, ihr r2]
+  | metadata t1 _ iht ihr =>
+      cases right with
+      | value v => cases v
+      | metadata t2 r2 =>
+          cases sourceDerivation_result_unique t1 t2
+          rw [iht t2, ihr r2]
+  | project t1 _ iht ihr =>
+      cases right with
+      | value v => cases v
+      | project t2 r2 =>
+          cases sourceDerivation_result_unique t1 t2
+          rw [iht t2, ihr r2]
+  | field t1 found1 _ iht ihr =>
+      cases right with
+      | value v => cases v
+      | field t2 found2 r2 =>
+          cases sourceDerivation_result_unique t1 t2
+          rw [found1] at found2
+          cases found2
+          rw [iht t2, ihr r2]
+  | extend _ iht =>
+      cases right with
+      | value v => cases v
+      | extend t2 => rw [iht t2]
+  | binary _ _ _ ihl ihr =>
+      cases right with
+      | value v => cases v
+      | binary l2 r2 _ => rw [ihl l2, ihr r2]
+  | zero c1 _ ihc ihr =>
+      cases right with
+      | value v => cases v
+      | zero c2 r2 => rw [ihc c2, ihr r2]
+      | successor c2 _ => cases sourceDerivation_result_unique c1 c2
+  | successor c1 _ ihc ihr =>
+      cases right with
+      | value v => cases v
+      | zero c2 _ => cases sourceDerivation_result_unique c1 c2
+      | successor c2 r2 =>
+          cases sourceDerivation_result_unique c1 c2
+          rw [ihc c2, ihr r2]
+  | case s1 found1 _ ihs ihr =>
+      cases right with
+      | value v => cases v
+      | case s2 found2 r2 =>
+          cases sourceDerivation_result_unique s1 s2
+          rw [found1] at found2
+          cases found2
+          rw [ihs s2, ihr r2]
+  | ifTrue c1 _ ihc ihr =>
+      cases right with
+      | value v => cases v
+      | ifTrue c2 r2 => rw [ihc c2, ihr r2]
+      | ifFalse c2 _ => cases sourceDerivation_result_unique c1 c2
+  | ifFalse c1 _ ihc ihr =>
+      cases right with
+      | value v => cases v
+      | ifTrue c2 _ => cases sourceDerivation_result_unique c1 c2
+      | ifFalse c2 r2 => rw [ihc c2, ihr r2]
+  | done _ ih =>
+      cases right with
+      | value v => cases v
+      | done d2 => rw [ih d2]
+  | split t1 found1 _ iht ihr =>
+      cases right with
+      | value v => cases v
+      | split t2 found2 r2 =>
+          cases sourceDerivation_result_unique t1 t2
+          rw [found1] at found2
+          cases found2
+          rw [iht t2, ihr r2]
 
 /-- Every real source reduction consumes a positive part of the unique finite
 demand budget. This is the semantic component of the lazy graph progress rank. -/

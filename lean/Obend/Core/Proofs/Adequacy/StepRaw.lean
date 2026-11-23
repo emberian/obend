@@ -145,7 +145,6 @@ set_option autoImplicit false
     } state represented successful
 
 
-set_option maxHeartbeats 800000 in
 /-- All actual raw transition cases preserve the graph relation when the
 successor is running or finished. No syntactic fragment, evaluator oracle or
 implementation-selected coverage premise is used. Operational invariants for

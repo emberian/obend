@@ -202,18 +202,121 @@ theorem steps_congr {a b : Term} (frame : Term → Term)
 theorem value_no_step' {t u : Term} (value : Value t) (step : Step t u) : False := by
   cases value <;> cases step
 
-set_option maxHeartbeats 600000 in
 theorem step_deterministic {t u u' : Term} (left : Step t u) (right : Step t u') : u = u' := by
-  induction left generalizing u' <;> cases right
-  all_goals first
-    | exact False.elim (value_no_step' (Value.function _) (by assumption))
-    | exact False.elim (value_no_step' (Value.natural _) (by assumption))
-    | exact False.elim (value_no_step' (Value.record _) (by assumption))
-    | exact False.elim (value_no_step' (Value.specification _ _) (by assumption))
-    | exact False.elim (value_no_step' (Value.prototype _ _) (by assumption))
-    | exact False.elim (value_no_step' (Value.inject _ _) (by assumption))
-    | exact False.elim (value_no_step' (Value.boolean _) (by assumption))
-    | grind [value_no_step']
+  induction left generalizing u' with
+  | beta =>
+      cases right with
+      | beta => rfl
+      | application _ h => exact False.elim (value_no_step' (.function _) h)
+  | application _ hL ih =>
+      cases right with
+      | beta => exact False.elim (value_no_step' (.function _) hL)
+      | applySpecification => exact False.elim (value_no_step' (.specification _ _) hL)
+      | application _ hR => rw [ih hR]
+  | mix => cases right; rfl
+  | fix => cases right; rfl
+  | applySpecification =>
+      cases right with
+      | applySpecification => rfl
+      | application _ h => exact False.elim (value_no_step' (.specification _ _) h)
+  | reflectPrototype =>
+      cases right with
+      | reflectPrototype => rfl
+      | reflectStep h => exact False.elim (value_no_step' (.prototype _ _) h)
+  | metadataSpecification =>
+      cases right with
+      | metadataSpecification => rfl
+      | metadataStep h => exact False.elim (value_no_step' (.specification _ _) h)
+  | projectPrototype =>
+      cases right with
+      | projectPrototype => rfl
+      | projectStep h => exact False.elim (value_no_step' (.prototype _ _) h)
+  | reflectStep hL ih =>
+      cases right with
+      | reflectPrototype => exact False.elim (value_no_step' (.prototype _ _) hL)
+      | reflectStep hR => rw [ih hR]
+  | metadataStep hL ih =>
+      cases right with
+      | metadataSpecification => exact False.elim (value_no_step' (.specification _ _) hL)
+      | metadataStep hR => rw [ih hR]
+  | projectStep hL ih =>
+      cases right with
+      | projectPrototype => exact False.elim (value_no_step' (.prototype _ _) hL)
+      | projectStep hR => rw [ih hR]
+  | target _ hL ih =>
+      cases right with
+      | target _ hR => rw [ih hR]
+      | field => exact False.elim (value_no_step' (.record _) hL)
+  | field _ _ _ h1 =>
+      cases right with
+      | target _ h => exact False.elim (value_no_step' (.record _) h)
+      | field _ _ _ h2 => rw [h1] at h2; cases h2; rfl
+  | extendTarget _ hL ih =>
+      cases right with
+      | extendTarget _ hR => rw [ih hR]
+      | extendRecord => exact False.elim (value_no_step' (.record _) hL)
+  | extendRecord =>
+      cases right with
+      | extendTarget _ h => exact False.elim (value_no_step' (.record _) h)
+      | extendRecord => rfl
+  | binaryLeft _ _ hL ih =>
+      cases right with
+      | binaryLeft _ _ hR => rw [ih hR]
+      | binaryRight _ _ lv _ => exact False.elim (value_no_step' lv hL)
+      | primitive _ _ _ _ lv _ _ => exact False.elim (value_no_step' lv hL)
+  | binaryRight _ _ lv hL ih =>
+      cases right with
+      | binaryLeft _ _ hR => exact False.elim (value_no_step' lv hR)
+      | binaryRight _ _ _ hR => rw [ih hR]
+      | primitive _ _ _ _ _ rv _ => exact False.elim (value_no_step' rv hL)
+  | primitive _ _ _ _ lv rv h1 =>
+      cases right with
+      | binaryLeft _ _ hR => exact False.elim (value_no_step' lv hR)
+      | binaryRight _ _ _ hR => exact False.elim (value_no_step' rv hR)
+      | primitive _ _ _ _ _ _ h2 => rw [h1] at h2; cases h2; rfl
+  | condition _ _ hL ih =>
+      cases right with
+      | condition _ _ hR => rw [ih hR]
+      | zero => exact False.elim (value_no_step' (.natural 0) hL)
+      | successor => exact False.elim (value_no_step' (.natural _) hL)
+  | zero =>
+      cases right with
+      | condition _ _ h => exact False.elim (value_no_step' (.natural 0) h)
+      | zero => rfl
+  | successor =>
+      cases right with
+      | condition _ _ h => exact False.elim (value_no_step' (.natural _) h)
+      | successor => rfl
+  | caseTarget _ hL ih =>
+      cases right with
+      | caseTarget _ hR => rw [ih hR]
+      | caseInject => exact False.elim (value_no_step' (.inject _ _) hL)
+  | caseInject _ _ _ _ h1 =>
+      cases right with
+      | caseTarget _ h => exact False.elim (value_no_step' (.inject _ _) h)
+      | caseInject _ _ _ _ h2 => rw [h1] at h2; cases h2; rfl
+  | ifCondition _ _ hL ih =>
+      cases right with
+      | ifCondition _ _ hR => rw [ih hR]
+      | ifTrue => exact False.elim (value_no_step' (.boolean true) hL)
+      | ifFalse => exact False.elim (value_no_step' (.boolean false) hL)
+  | ifTrue =>
+      cases right with
+      | ifCondition _ _ h => exact False.elim (value_no_step' (.boolean true) h)
+      | ifTrue => rfl
+  | ifFalse =>
+      cases right with
+      | ifCondition _ _ h => exact False.elim (value_no_step' (.boolean false) h)
+      | ifFalse => rfl
+  | done => cases right; rfl
+  | splitTarget _ _ hL ih =>
+      cases right with
+      | splitTarget _ _ hR => rw [ih hR]
+      | splitRecord => exact False.elim (value_no_step' (.record _) hL)
+  | splitRecord _ _ _ _ h1 =>
+      cases right with
+      | splitTarget _ _ h => exact False.elim (value_no_step' (.record _) h)
+      | splitRecord _ _ _ _ h2 => rw [h1] at h2; cases h2; rfl
 
 theorem value_steps_eq {v u : Term} (value : Value v) (h : Steps v u) : u = v := by
   cases h with
