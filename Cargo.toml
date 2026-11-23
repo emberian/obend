@@ -10,5 +10,6 @@ members = [
     "crates/obend-lightclients",
     "crates/obend-prove-worker",
     "crates/obend-oracles-e2ee",
+    "crates/obend-hw-dpi",
 ]
 resolver = "2"

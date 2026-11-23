@@ -1,0 +1,10 @@
+[package]
+name = "obend-hw-dpi"
+version = "0.1.0"
+edition = "2021"
+description = "Isolated pure-Rust length-framed binary DPI RPC engine mirroring Obend.Hardware.OspcSignalFabric and the 4-tile OSPC hardware prover"
+license = "Apache-2.0"
+
+[dependencies]
+# Zero external dependencies: pure-Rust #![forbid(unsafe_code)] framed ODPI v1 codec
+# and deterministic 4-tile OSPC hardware cycle simulator.
