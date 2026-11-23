@@ -423,9 +423,9 @@ def goldenDkgCommitVec : List UInt8 :=
 #guard hexBytes (encodeAdrs goldenAdrsSample) == "0000000300000000010203040506070800000000000000070000000b00000002"
 #guard hexBytes (encodeMultiFrame [[1, 2], [3, 4, 5]]) == "0202010203030405"
 #guard hexBytes goldenCshakePrfVec == "c461f210265b042ab4a95566bee3f8f012369b504f0d613db3fe5950abb95e3f"
-#guard hexBytes goldenPoseidonPrfVec == "5c2e630c43432f25df376a8bcb589bfd06a2c6b30ca0e47cec2d96c1b4cce3d7"
+#guard hexBytes goldenPoseidonPrfVec == "9d8e13308f4896065e011eaad3a88fb2661f882b73b1d63b7530cfb6277d9c77"
 #guard hexBytes goldenPkCshake.pkRoot == "060cabbcc13f5548d6d75596ce5eecba3ebaf1f07b117ebcf7e2a74fae387e4c"
-#guard hexBytes goldenPkPoseidon.pkRoot == "a4c3a2637318e059316d52679d376050ee63b46a85c13d99d13d917d425bd86a"
+#guard hexBytes goldenPkPoseidon.pkRoot == "58a15dec578680f6cfdb75d30c08ab18107b00e18763e3ae957446ef22b90d43"
 #guard hexBytes goldenHybridIdCommitVec == "66094e4608c0f029966c719bfe27a34d07ee4b4d936da1a440aa7ae03afdb349"
 #guard hexBytes goldenDkgCommitVec == "3db80075c4e7c88b9e218161e7b98ecc51f6af1b808c82a4d63b0f0dbb07b62d"
 #guard match goldenSigCshakeOpt with

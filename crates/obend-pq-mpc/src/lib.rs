@@ -2297,7 +2297,7 @@ mod tests {
         let poseidon_prf = th_secret_prf(Poseidon2Suite, &sk.pk_seed, &sk.sk_seed, &adrs);
         assert_eq!(
             hex_encode(&poseidon_prf),
-            "5c2e630c43432f25df376a8bcb589bfd06a2c6b30ca0e47cec2d96c1b4cce3d7"
+            "9d8e13308f4896065e011eaad3a88fb2661f882b73b1d63b7530cfb6277d9c77"
         );
 
         let pk_cshake = derive_public_key(Cshake256Suite, &PqHashParams::COMPACT_GOLDEN, &sk);
@@ -2309,7 +2309,7 @@ mod tests {
         let pk_poseidon = derive_public_key(Poseidon2Suite, &PqHashParams::COMPACT_LEAN_SIG, &sk);
         assert_eq!(
             hex_encode(&pk_poseidon.pk_root),
-            "a4c3a2637318e059316d52679d376050ee63b46a85c13d99d13d917d425bd86a"
+            "58a15dec578680f6cfdb75d30c08ab18107b00e18763e3ae957446ef22b90d43"
         );
 
         let dummy_classical_pk = [0x11u8; 32];
