@@ -2227,6 +2227,27 @@ module = "Obend.Polis.SecureHardwareEnv"
 theorem = "she_trace_end_to_end_safe_and_anti_vaz"
 description = "Unified multi-turn *Rainbows End* Sovereign Hardware Environment ceremony (`she_trace_end_to_end_safe_and_anti_vaz`, `she_trace_coupled_sel4_private_frame_safe`, `sheTurnEnvelope_binds`) coupling monotone sensor seals, proven `UDR`/`JBR` zkML, `seL4` copy-before-verify, `Simplex` QCs, `(t, n)` PQ custody, and `OBEND.SHE.TURN/v1` commitments."
 
+[[apex]]
+id = "hardware-ospc-4tile-fabulous-ecp5-dpi-spine"
+subsystem = "Hardware"
+module = "Obend.Hardware.OspcProver"
+theorem = "ospc_4tile_fabulous_ecp5_refines_spec"
+description = "Clock-domain-indexed `RtlSignal dom w iv` (`cdcSync2FF` 2-FF CDC) + OSPC 4-Tile prover refined through `synthesizeModuleToBels`, `FABulous`/ECP5 bitstream decode/extract (`decodeBin` + `extract`), and isolated `#![forbid(unsafe_code)]` `obend-hw-dpi` RPC cycle server (`ospc_4tile_fabulous_ecp5_refines_spec`)."
+
+[[apex]]
+id = "lower-pancake-lcnf-fun-lower-and-emit-sound"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.LcnfFun"
+theorem = "lowerAndEmitLcnfFun_sound"
+description = "End-to-end LCNF function lowering and concrete Pancake emission soundness (`lowerAndEmitLcnfFun_sound`), uniting `lowerLcnfFun_correct` semantic `PanSem` evaluation with `emitPnkProg_balanced` syntactic delimiter invariants."
+
+[[apex]]
+id = "crypto-tower256-trace-pack-single-mask-zk"
+subsystem = "Crypto"
+module = "Obend.Crypto.Tower256TracePack"
+theorem = "zk_single_mask_completeness"
+description = "Frigo-shelat (`ePrint 2026/2770`) trace-duality 256-bit bijective `BinaryTower256` packing (`traceExec_refines`, `dual_basis_biorthogonal`), Vandermonde power-batching (`power_batching_roots_le`), and constructive additive Hilbert-90 single-mask ZK (`zk_single_mask_completeness`), bridged into `EinSumcheckMxfp4` (`einSumcheck_tower256_single_mask_zk_sound`)."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

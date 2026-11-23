@@ -129,6 +129,7 @@ public import Obend.Vault.Rehydration
 public import Obend.Vault.Form
 public import Obend.Vault.FormCheck
 public import Obend.Vault.CheckedCarry
+public import Obend.Vault.WorldTree.ShardedWorld
 public import Obend.Vault.WorldTree
 public import Obend.Vault.UnifiedDeos
 public import Obend.Vault.SwarmLedgerSeams
@@ -169,6 +170,7 @@ public import Obend.Hardware.ReductionMachine
 public import Obend.Hardware.Hvm
 public import Obend.Hardware.DigitalFilterAndArray
 public import Obend.Hardware.PinoutEquiv
+public import Obend.Hardware.OspcSignalFabric
 public import Obend.Hardware.OspcProver
 public import Obend.Hardware.Magnetics
 public import Obend.Hardware.CurrentLoop
@@ -190,6 +192,7 @@ public import Obend.Hardware.ArrayKernelUnique
 public import Obend.Hardware.ArrayKernelOwnership
 public import Obend.Hardware.Gpu.LayoutChecks
 public import Obend.Hardware.Gpu.Workgroup
+public import Obend.Hardware.Gpu.NttKernel.PhaseProofs
 public import Obend.Hardware.Gpu.NttKernel
 public import Obend.Hardware.Gpu.BlockLower
 public import Obend.Hardware.Gpu.BlockEmit
@@ -252,7 +255,10 @@ public import Obend.Lower.Pancake.RefinesClkPan
 public import Obend.Lower.Pancake.LcnfEmit
 public import Obend.Lower.Pancake.LcnfSimHelpers
 public import Obend.Lower.Pancake
+public import Obend.Lower.Pancake.LcnfFun
 public import Obend.Lower.LeanKernel
+public import Obend.Lower.ExprCAM.HwTypes
+public import Obend.Lower.ExprCAM.ConeAndWire
 public import Obend.Lower.ExprCAM
 public import Obend.Lower.DiscrTreeLUT
 public import Obend.Lower.SiliconElabFabric

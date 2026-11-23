@@ -337,6 +337,7 @@ import Obend.Hardware.Device.Wafer
 import Obend.Hardware.GeometryCAM
 import Obend.Hardware.GlitchAndTempestSafe
 import Obend.Hardware.Gpu.CollectiveImport
+import Obend.Hardware.Gpu.NttKernel.PhaseProofs
 import Obend.Hardware.Gpu.NttKernel
 import Obend.Hardware.Gpu.Rdna2.AsyncRefinement
 import Obend.Hardware.Gpu.Rdna2.DppShuffle
@@ -360,6 +361,7 @@ import Obend.Hardware.NotebookProjection
 import Obend.Hardware.OpenHypergraph
 import Obend.Hardware.OpenHypergraphQuotient
 import Obend.Hardware.OpenUSD
+import Obend.Hardware.OspcSignalFabric
 import Obend.Hardware.OspcProver
 import Obend.Hardware.PCB
 import Obend.Hardware.PdeHypergraphSymmetry
@@ -462,6 +464,8 @@ import Obend.Logic.SeparationFrame
 import Obend.Logic.Turn
 import Obend.Lower.Cli
 import Obend.Lower.DiscrTreeLUT
+import Obend.Lower.ExprCAM.HwTypes
+import Obend.Lower.ExprCAM.ConeAndWire
 import Obend.Lower.ExprCAM
 import Obend.Lower.Fragment
 import Obend.Lower.Inductive
@@ -704,6 +708,7 @@ import Obend.Vault.SwarmLedgerSeams
 import Obend.Vault.TransclusionAndMirror
 import Obend.Vault.Transport
 import Obend.Vault.UnifiedDeos
+import Obend.Vault.WorldTree.ShardedWorld
 import Obend.Vault.WorldTree
 import Obend.Core.EquiRecursiveSubstitution
 import Obend.Core.Proofs.Forcing.Completeness
@@ -786,19 +791,9 @@ run_cmd do
     if info.type.getUsedConstants.contains `Obend.Judge.Genealogy.LobCost then
       lobCarriers := lobCarriers.push constant
   logInfo m!"census: theorems carrying the Löb cost (`LobCost` in the statement): {(lobCarriers.qsort (·.toString < ·.toString)).toList}"
-  -- The heartbeat baseline of tier 1 (see the header). Paths as `walkDir "Obend"` reports them; the
-  -- values of every `set_option maxHeartbeats N` (file-level or `… in`) in that file on 2026-11-04.
-  let heartbeatBaseline : List (String × List Nat) :=
-    [ ("Obend/Analysis/EqSatHypergraph.lean", [800000, 800000])
-    , ("Obend/Analysis/Equitable.lean", [800000])
-    , ("Obend/Core/Proofs/Adequacy/Origins.lean", [800000])
-    , ("Obend/Core/Proofs/Adequacy/Source.lean", [600000, 600000])
-    , ("Obend/Core/Proofs/Adequacy/StepRaw.lean", [800000])
-    , ("Obend/Digest/Cshake256/Fast.lean", [4000000, 4000000, 4000000, 4000000])
-    , ("Obend/Equiv/Reduction.lean", [600000])
-    , ("Obend/Hardware/Judge.lean", [800000, 800000, 1600000])
-    , ("Obend/Hardware/OpenHypergraph.lean", [1600000, 1600000])
-    , ("Obend/Hardware/QuantumMatter.lean", [1600000]) ]
+  -- The heartbeat baseline of tier 1 (see the header). All 2026-11-04 grandfathered overrides have
+  -- been refactored under the default 200,000 heartbeats (`0` Tier-1 overrides permitted).
+  let heartbeatBaseline : List (String × List Nat) := []
   let stripLeanCode (s : String) : String := Id.run do
     let arr := s.toList.toArray
     let len := arr.size
