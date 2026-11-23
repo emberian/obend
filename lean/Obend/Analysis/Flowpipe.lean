@@ -666,7 +666,7 @@ theorem intervalContainsTerm_sound {iv : Interval} {st : Data} {v : String}
   have hHiDenPos : (0 : CanonicalRat) < (iv.hi.den : CanonicalRat) := by exact_mod_cast iv.hi.den_pos
   have hDenRatPos : (0 : CanonicalRat) < (den : CanonicalRat) := by exact_mod_cast hDenPos
   have hqEq : q = (((posN : Int) - (negN : Int) : Int) : CanonicalRat) / (den : CanonicalRat) := by
-    simp [q, CanonicalRat.mk, Rat.mkRat_eq_div]
+    simp [q, Rat.mkRat_eq_div]
   have hLoEq : iv.lo = (iv.lo.num : CanonicalRat) / (iv.lo.den : CanonicalRat) := by
     have h1 := Rat.mkRat_self iv.lo
     rw [Rat.mkRat_eq_div] at h1
@@ -2210,6 +2210,8 @@ def IsTrueC2OdeTrajectory
     (∀ curBox xTildeBox,
       verifyPicardAPriori sys curBox xTildeBox sys.dt = true →
       BoxMem (traj k 0) curBox →
+      BoxMem (traj k 0) xTildeBox →
+      (∀ v iv, xTildeBox.lookup v = some iv → ∃ rhs, (v, rhs) ∈ sys.fields) →
       ∀ τ ∈ Interval.mk 0 sys.dt,
         IsPicardSegmentState sys curBox xTildeBox sys.dt (traj k 0) (traj k τ)) ∧
     (∀ name rhsExpr, (name, rhsExpr) ∈ sys.fields →
@@ -2260,14 +2262,14 @@ private theorem verifyTrajectorySafetyLoop_c2_ode_sound :
           | some nextBox =>
             rw [hStep] at hVer
             dsimp only at hVer
-            obtain ⟨hPic, _, _, _⟩ :=
+            obtain ⟨hPic, _, hInitTilde, hCovTilde⟩ :=
               inferPicardAPrioriBox_encloses_init_and_fields hInfer hInit
             obtain ⟨hMvt0, hTaylor0⟩ := hFlow 0 (Nat.zero_lt_succ steps)
             have hSegTilde : ∀ τ ∈ Interval.mk 0 sys.dt, BoxMem (traj 0 τ) xTildeBox := by
               intro τ hτ
               exact verifyPicardAPriori_discharges_rough_enclosure
                 sys curBox xTildeBox sys.dt (traj 0 0) (traj 0 τ)
-                hPic hInit (hMvt0 curBox xTildeBox hPic hInit τ hτ)
+                hPic hInit (hMvt0 curBox xTildeBox hPic hInit hInitTilde hCovTilde τ hτ)
             have hNextInit : BoxMem (traj 1 0) nextBox := by
               apply stepPicardValidated_encloses_step hStep hInit
               intro name rhsExpr hMemField
@@ -2502,6 +2504,174 @@ theorem odeSafetyCellContract_enforces_flowpipe_step :
           refuses_of_run 600 (by decide +kernel),
           refuses_of_run 600 (by decide +kernel),
           by decide +kernel⟩
+
+private theorem flowpipe_picard_and_lie_inhabited (steps : Nat) (hSteps : steps = 2) :
+    ∃ (sys : OdeSystem) (initBox safeBounds velBox : List (String × Interval))
+      (lieIv1 lieIv2 : Interval) (traj : Nat → CanonicalRat → String → CanonicalRat),
+      0 < initBox.length ∧
+      BoxMem (traj 0 0) initBox ∧
+      checkBoxInEnvelope initBox safeBounds = true ∧
+      evalOdeField sys initBox = some velBox ∧
+      evalLieDerivSum initBox (.var "v") sys.fields = some lieIv1 ∧
+      evalOdeLieDerivComponent sys initBox (.var "v") = some lieIv2 ∧
+      verifyTrajectorySafetyLoop sys safeBounds steps initBox = true ∧
+      IsValidOdeFlowTrajectory sys steps traj := by
+  subst hSteps
+  let sys := coupledOscillatorOde
+  let initBox : List (String × Interval) := [("x", ⟨1, 1⟩), ("v", ⟨0, 0⟩)]
+  let safeBounds : List (String × Interval) := [("x", ⟨-2, 2⟩), ("v", ⟨-2, 2⟩)]
+  let rho0 : String → CanonicalRat := fun s => if s == "x" then 1 else 0
+  let traj : Nat → CanonicalRat → String → CanonicalRat :=
+    fun k τ => buildTaylorPicardTrajectory sys 2 rho0 k τ
+  have hAtZero : ∀ k v, traj k 0 v = buildTaylorPicardDiscrete sys 2 rho0 k (CanonicalRat.mk 1 3) v := by
+    intro k v
+    unfold traj buildTaylorPicardTrajectory iteratePicardOperator picardOperator simpsonQuadrature
+    simp only [evalPicardQuadSum]
+    cases sys.fields.find? (·.1 == v) <;> grind
+  have hFunZero : ∀ k, traj k 0 = buildTaylorPicardDiscrete sys 2 rho0 k (CanonicalRat.mk 1 3) :=
+    fun k => funext (hAtZero k)
+  have hBox0 : BoxMem (traj 0 0) initBox := by
+    rw [hFunZero 0]
+    intro v iv hLook
+    simp only [initBox, List.lookup] at hLook
+    by_cases hvx : v = "x"
+    · subst hvx
+      simp only [beq_self_eq_true, Option.some.injEq] at hLook
+      subst hLook
+      rw [Interval.mem_iff]; decide +kernel
+    · by_cases hvv : v = "v"
+      · subst hvv
+        simp only [show ("v" == "x") = false from rfl, beq_self_eq_true, Option.some.injEq] at hLook
+        subst hLook
+        rw [Interval.mem_iff]; decide +kernel
+      · simp [beq_false_of_ne hvx, beq_false_of_ne hvv] at hLook
+  have hNodup : (sys.fields.map Prod.fst).Nodup := by decide
+  have hValid : IsValidOdeFlowTrajectory sys 2 traj := by
+    intro k _
+    refine ⟨⟨simpsonQuadrature sys.dt, simpsonQuadrature_valid (by decide), ?_⟩, ?_⟩
+    · intro τ _
+      exact ⟨2, fun u => by rw [hFunZero k]; rfl⟩
+    · intro name rhsExpr hMemField
+      refine ⟨CanonicalRat.mk 1 3 * sys.dt, 0, by decide +kernel, Interval.ofPoint_mem 0, ?_⟩
+      rw [hAtZero (k + 1) name]
+      unfold buildTaylorPicardDiscrete buildTaylorPicardStep
+      rw [lookup_of_mem_nodup_keys hNodup hMemField]
+      dsimp only
+      rw [hFunZero k]
+      rfl
+  exact ⟨sys, initBox, safeBounds, [("x", ⟨0, 0⟩), ("v", ⟨-1, -1⟩)], ⟨-1, -1⟩, ⟨-1, -1⟩, traj,
+    by decide, hBox0, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel,
+    by decide +kernel, hValid⟩
+
+private theorem flowpipe_true_c2_nonautonomous_inhabited (steps : Nat) (hSteps : steps = 2) :
+    ∃ (sys : OdeSystem) (initBox safeBounds : List (String × Interval))
+      (traj : Nat → CanonicalRat → String → CanonicalRat),
+      0 < initBox.length ∧
+      BoxMem (traj 0 0) initBox ∧
+      verifyTrajectorySafetyLoop sys safeBounds steps initBox = true ∧
+      IsTrueC2OdeTrajectory sys steps traj := by
+  subst hSteps
+  let sys : OdeSystem :=
+    { fields := [("t", .const 1), ("x", .mul (.var "t") (.var "t"))]
+    , dt := CanonicalRat.mk 1 2
+    , remainderPad := Interval.ofPoint 0 }
+  let initBox : List (String × Interval) := [("t", ⟨0, 0⟩), ("x", ⟨0, 0⟩)]
+  let safeBounds : List (String × Interval) := [("t", ⟨-1, 3⟩), ("x", ⟨-1, 3⟩)]
+  let traj : Nat → CanonicalRat → String → CanonicalRat := fun k τ v =>
+    let tk := (k : CanonicalRat) * CanonicalRat.mk 1 2
+    if v == "t" then tk + τ
+    else if v == "x" then ((tk + τ) * (tk + τ) * (tk + τ)) / 3
+    else 0
+  have hInit : BoxMem (traj 0 0) initBox := by
+    intro v iv hLook
+    simp only [initBox, List.lookup] at hLook
+    by_cases hvt : v = "t"
+    · subst hvt
+      simp only [beq_self_eq_true, Option.some.injEq] at hLook
+      subst hLook
+      rw [Interval.mem_iff]; decide +kernel
+    · by_cases hvx : v = "x"
+      · subst hvx
+        simp only [show ("x" == "t") = false from rfl, beq_self_eq_true, Option.some.injEq] at hLook
+        subst hLook
+        rw [Interval.mem_iff]; decide +kernel
+      · simp [beq_false_of_ne hvt, beq_false_of_ne hvx] at hLook
+  have hC2 : IsTrueC2OdeTrajectory sys 2 traj := by
+    intro k hk
+    have hk01 : k = 0 ∨ k = 1 := by omega
+    have htk_nn : (0 : CanonicalRat) ≤ (k : CanonicalRat) * CanonicalRat.mk 1 2 := by
+      rcases hk01 with rfl | rfl <;> decide +kernel
+    refine ⟨?_, ?_⟩
+    · intro curBox xTildeBox hPic hCur hTilde0 hCov τ hτ v xTildeIv hxLook
+      have hPic0 := hPic
+      unfold verifyPicardAPriori verifyPicardFields at hPic
+      dsimp only [sys] at hPic
+      cases hc_t : curBox.lookup "t" with
+      | none => rw [hc_t] at hPic; simp at hPic
+      | some x0Iv_t =>
+        cases ht_t : xTildeBox.lookup "t" with
+        | none => rw [hc_t, ht_t] at hPic; simp at hPic
+        | some xTildeIv_t =>
+          cases hf_t : evalInterval xTildeBox (.const 1) with
+          | none => rw [hc_t, ht_t, hf_t] at hPic; simp at hPic
+          | some fTildeIv_t =>
+            rw [hc_t, ht_t, hf_t] at hPic
+            unfold verifyPicardFields at hPic
+            cases hc_x : curBox.lookup "x" with
+            | none => rw [hc_x] at hPic; simp at hPic
+            | some x0Iv_x =>
+              cases ht_x : xTildeBox.lookup "x" with
+              | none => rw [hc_x, ht_x] at hPic; simp at hPic
+              | some xTildeIv_x =>
+                cases hf_x : evalInterval xTildeBox (.mul (.var "t") (.var "t")) with
+                | none => rw [hc_x, ht_x, hf_x] at hPic; simp at hPic
+                | some fTildeIv_x =>
+                  have h1Mem : (1 : CanonicalRat) ∈ fTildeIv_t :=
+                    evalInterval_sound xTildeBox (traj k 0) hTilde0 (.const 1) fTildeIv_t hf_t
+                  obtain ⟨rhs0, hMem0⟩ := hCov v xTildeIv hxLook
+                  simp only [sys, List.mem_cons, List.not_mem_nil, or_false, Prod.mk.injEq] at hMem0
+                  rcases hMem0 with ⟨rfl, _⟩ | ⟨rfl, _⟩
+                  · exact ⟨.const 1, x0Iv_t, fTildeIv_t, τ, 1,
+                      by simp [sys], hc_t, hf_t, hτ, h1Mem, by dsimp only [traj]; simp; grind⟩
+                  · have htTauMem : (traj k 0 "t" + τ * 1) ∈ xTildeIv_t :=
+                      verifyPicardAPriori_encloses sys curBox xTildeBox sys.dt hPic0
+                        (by simp [sys]) hc_t ht_t hf_t (hCur "t" x0Iv_t hc_t) hτ h1Mem
+                    let rhoEnd : String → CanonicalRat :=
+                      fun s => if s = "t" then traj k 0 "t" + τ * 1 else traj k 0 s
+                    have hEndBox : BoxMem rhoEnd xTildeBox := by
+                      intro s iv hsLook
+                      by_cases hst : s = "t"
+                      · subst hst; rw [ht_t] at hsLook; cases Option.some.inj hsLook
+                        simpa [rhoEnd] using htTauMem
+                      · simpa [rhoEnd, hst] using hTilde0 s iv hsLook
+                    have hSq0 : evalExpr (traj k 0) (.mul (.var "t") (.var "t")) ∈ fTildeIv_x :=
+                      evalInterval_sound xTildeBox (traj k 0) hTilde0 _ fTildeIv_x hf_x
+                    have hSq1 : evalExpr rhoEnd (.mul (.var "t") (.var "t")) ∈ fTildeIv_x :=
+                      evalInterval_sound xTildeBox rhoEnd hEndBox _ fTildeIv_x hf_x
+                    let tk := (k : CanonicalRat) * CanonicalRat.mk 1 2
+                    let vel := tk * tk + tk * τ + (τ * τ) / 3
+                    have hτ0 : 0 ≤ τ := by rw [Interval.mem_iff] at hτ; exact hτ.1
+                    have hVelMem : vel ∈ fTildeIv_x := by
+                      rw [Interval.mem_iff] at hSq0 hSq1 ⊢
+                      have he0 : evalExpr (traj k 0) (.mul (.var "t") (.var "t")) = tk * tk := by
+                        dsimp only [evalExpr, traj, tk]; simp; grind
+                      have he1 : evalExpr rhoEnd (.mul (.var "t") (.var "t")) = (tk + τ) * (tk + τ) := by
+                        dsimp only [evalExpr, rhoEnd, traj, tk]; simp; grind
+                      rw [he0] at hSq0; rw [he1] at hSq1
+                      have hm1 := Rat.mul_nonneg htk_nn hτ0
+                      have hm2 := Rat.mul_nonneg hτ0 hτ0
+                      dsimp only [vel]; constructor <;> grind
+                    refine ⟨.mul (.var "t") (.var "t"), x0Iv_x, fTildeIv_x, τ, vel,
+                      by simp [sys], hc_x, hf_x, hτ, hVelMem, ?_⟩
+                    dsimp only [traj, tk, vel]; simp; grind
+    · intro name rhsExpr hMem
+      simp only [sys, List.mem_cons, List.not_mem_nil, or_false, Prod.mk.injEq] at hMem
+      rcases hMem with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+      · refine ⟨CanonicalRat.mk 1 6, 0, by decide +kernel, Interval.ofPoint_mem 0, ?_⟩
+        rcases hk01 with rfl | rfl <;> decide +kernel
+      · refine ⟨CanonicalRat.mk 1 6, 0, by decide +kernel, Interval.ofPoint_mem 0, ?_⟩
+        rcases hk01 with rfl | rfl <;> decide +kernel
+  exact ⟨sys, initBox, safeBounds, traj, by decide, hInit, by decide +kernel, hC2⟩
 
 end Obend.Analysis
 end

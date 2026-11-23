@@ -424,6 +424,93 @@ example :
   checkLaxWendroffAudit (mkQuery 4 2 1) == .refused .invalidQueryShape [] &&
   checkLaxWendroffAudit (mkQuery 4 (1 / 4) 0) == .refused .residualExceedsTolerance []
 
+/-! ## 2b. Initial-TV-Only Weak-Residual Bound & Discrete Lax–Tadmor Entropy Inequality -/
+
+-- Initial-TV-only `O(Δx)` weak-residual bound on nonlinear `Burgers1D.spec` Riemann step (0 external per-step TV or box assumptions!).
+def burgersInitStep : MultiDGrid := fun idx _ => if idx % 4 < 2 then 1 / 2 else 0
+def burgersBumpTest : SpaceTimeTestFn := ⟨2, fun n idx _ => if n == 1 && idx == 1 then 1 else 0⟩
+
+example :
+    let dt := (1 : Rat) / (8 * Burgers1D.spec.aMax)
+    let U := exactTrajectory (evalSchemeStepRat Burgers1D.spec .periodic [4] (dt / (1 / 4)) false) burgersInitStep
+    spatialTV1D 4 burgersInitStep = 1 ∧
+    (∀ n, spatialTV1D 4 (U n) ≤ 1) ∧
+    ratAbs (discreteWeakResidual Burgers1D.spec [4] (1 / 4) dt U burgersBumpTest) ≤
+      laxWendroffConst Burgers1D.spec 0 4 1 *
+        (((3 / 2 : Rat) / weightOf Burgers1D.spec 0) * ((2 : Rat) * dt * 1) * (1 / 4)) := by
+  have haPos := Burgers1D.endToEnd_certified.rung1_continuum_ad_and_wavespeed.2.1
+  have ha0 : 0 < Burgers1D.spec.aMax := haPos.1
+  have hdt : 0 < (1 : Rat) / (8 * Burgers1D.spec.aMax) :=
+    rat_inv_one_div_pos (by grind)
+  have hcfl : 2 * (((1 : Rat) / (8 * Burgers1D.spec.aMax)) / (1 / 4)) * Burgers1D.spec.aMax ≤ 1 := by
+    have hc := Rat.div_mul_cancel (by grind : 8 * Burgers1D.spec.aMax ≠ 0) (a := (1 : Rat)); grind
+  have hInitBox : ∀ idx, InBox Burgers1D.spec.numVars (effectiveStateBox Burgers1D.spec) (burgersInitStep idx) := by
+    intro idx c hc
+    have hVars : Burgers1D.spec.numVars = 1 := by decide +kernel
+    cases (show c = 0 by omega)
+    unfold burgersInitStep
+    by_cases hlt : idx % 4 < 2 <;> simp only [hlt, ↓reduceIte] <;> decide +kernel
+  have hGrad : ∀ n d i c, n < burgersBumpTest.steps → d < [4].length → i < gridCellCount [4] → c < Burgers1D.spec.numVars →
+      ratAbs (spatialDiffTest [4] (1 / 4) (burgersBumpTest.val n) d i c) ≤ 4 := by
+    intro n d i c hn hd hi hc
+    have hVars : Burgers1D.spec.numVars = 1 := by decide +kernel
+    have hn2 : n = 0 ∨ n = 1 := by simp [burgersBumpTest] at hn; omega
+    cases (show d = 0 by simp at hd; omega)
+    cases (show c = 0 by omega)
+    have hi4 : i = 0 ∨ i = 1 ∨ i = 2 ∨ i = 3 := by simp [gridCellCount] at hi; omega
+    rcases hn2 with rfl | rfl <;> rcases hi4 with rfl | rfl | rfl | rfl <;> decide +kernel
+  have hVal : ∀ n i c, n < burgersBumpTest.steps → i < gridCellCount [4] → c < Burgers1D.spec.numVars →
+      ratAbs (burgersBumpTest.val n i c) ≤ 1 := by
+    intro n i c hn hi hc
+    have hVars : Burgers1D.spec.numVars = 1 := by decide +kernel
+    have hn2 : n = 0 ∨ n = 1 := by simp [burgersBumpTest] at hn; omega
+    cases (show c = 0 by omega)
+    have hi4 : i = 0 ∨ i = 1 ∨ i = 2 ∨ i = 3 := by simp [gridCellCount] at hi; omega
+    rcases hn2 with rfl | rfl <;> rcases hi4 with rfl | rfl | rfl | rfl <;> decide +kernel
+  have hTV0 : spatialTV1D 4 burgersInitStep = 1 := by decide +kernel
+  have hRate := lax_wendroff_1d_initial_tv_convergence_rate Burgers1D.spec
+    (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel) (Rat.le_of_lt ha0)
+    4 (by decide) (1 / 4) ((1 : Rat) / (8 * Burgers1D.spec.aMax)) 4 1 (by grind) hdt hcfl (by grind)
+    burgersInitStep hInitBox burgersBumpTest hGrad hVal
+  dsimp only [burgersBumpTest] at hRate
+  rw [hTV0] at hRate
+  exact ⟨hTV0, hRate.1, hRate.2⟩
+
+-- Quadratic Burgers convex entropy `(η(u) = u²/2, q(u) = u³/3)` with Tadmor EC flux `fEC = (uL² + uL uR + uR²)/6`:
+-- initial-data-only `O(Δx)` entropy residual bound + `discreteEntropyWeakPairing` discrimination of stationary expansion vs compression shocks!
+def burgersEntropyInit : MultiDGrid := fun idx _ => if idx < 2 then -(1 / 2) else 1 / 2
+def burgersNonnegTest : SpaceTimeTestFn := ⟨2, fun n idx _ => if n == 1 && idx == 1 then 1 else 0⟩
+
+example :
+    let U := exactTrajectory (evalTadmorStep1D burgersTadmorEC 1 ((1 / 16) / (1 / 4)) 4) burgersEntropyInit
+    let Uexp : MultiDGrid := fun idx _ => if idx < 2 then -1 else 1
+    let Ucomp : MultiDGrid := fun idx _ => if idx < 2 then 1 else -1
+    -- Against the same non-negative compact `burgersShockTest`, stationary expansion shock `(-1, 1)` yields `> 0` (`= +1/24`),
+    -- whereas stationary compressive shock `(1, -1)` yields `≤ 0` (`= -1/24`):
+    (0 < discreteEntropyWeakPairing burgersEta burgersEntQ 4 (1 / 4) (1 / 16) (fun _ => Uexp) burgersShockTest ∧
+      discreteEntropyWeakPairing burgersEta burgersEntQ 4 (1 / 4) (1 / 16) (fun _ => Ucomp) burgersShockTest ≤ 0 ∧
+      -1 < evalTadmorStep1D burgersTadmorEC 1 ((1 / 16) / (1 / 4)) 4 Uexp 1 0) ∧
+    -- Initial-data-only Burgers box invariance, TVD non-increase, and `O(Δx)` entropy weak-residual bound:
+    (∀ k idx, idx < 4 → burgersEntDom 1 (U k idx)) ∧
+    (∀ k, spatialTV1D 4 (U k) ≤ spatialTV1D 4 burgersEntropyInit) ∧
+    discreteEntropyWeakPairing burgersEta burgersEntQ 4 (1 / 4) (1 / 16) U burgersNonnegTest ≤
+      ((1 * 1) * 4 * ((2 : Rat) * (1 / 16) * spatialTV1D 4 burgersEntropyInit)) * (1 / 4) := by
+  have hRef := burgers_stationary_expansion_shock_refused 1 (1 / 4) (1 / 16) (by grind) (by grind) (by grind)
+  have hInitDom : ∀ idx, idx < 4 → burgersEntDom 1 (burgersEntropyInit idx) := by
+    intro idx _; unfold burgersEntDom burgersEntropyInit; split <;> grind
+  have hComp : CompactInTime burgersNonnegTest := ⟨fun _ _ => rfl, fun _ _ => rfl⟩
+  have hNonneg : ∀ n idx, 0 ≤ burgersNonnegTest.val n idx 0 := by intro n idx; unfold burgersNonnegTest; dsimp only; split <;> grind
+  have hGrad : ∀ n idx, n < burgersNonnegTest.steps → idx < 4 →
+      ratAbs (spatialDiffTest [4] (1 / 4) (burgersNonnegTest.val n) 0 idx 0) ≤ 4 := by
+    intro n idx hn hidx
+    have hn2 : n = 0 ∨ n = 1 := by simp [burgersNonnegTest] at hn; omega
+    have hi4 : idx = 0 ∨ idx = 1 ∨ idx = 2 ∨ idx = 3 := by omega
+    rcases hn2 with rfl | rfl <;> rcases hi4 with rfl | rfl | rfl | rfl <;> decide +kernel
+  have hConv := burgers_tadmor_initial_data_entropy_convergence 4 (by decide) 1 (1 / 4) (1 / 16) 4
+    (by grind) (by grind) (by grind) (by grind) (by grind) burgersEntropyInit hInitDom
+    burgersNonnegTest hComp hNonneg hGrad
+  exact ⟨⟨hRef.2.2.2.2.1, hRef.2.2.2.2.2.2.1, hRef.2.2.2.2.2.2.2⟩, hConv⟩
+
 /-! ## 3. Universal `#tooth` Kernel Mutation Kills Across Both Modules -/
 
 #tooth strang_local_commutator_second_order by mutation commutatorGrid := fun _ _ _ _ _ => (0 : Rat)
@@ -436,6 +523,11 @@ example :
 -- both time-endpoint errors dropped from the Q32 perturbation bound; dyadic guard dropped from a turn.
 #tooth lax_wendroff_weak_residual_bound by mutation weakCellIntegrand := fun S _ _ dt U φ n idx c => U (n + 1) idx c * timeDiffTest dt φ n idx c + evalSourceComp S (U n idx) c * φ.val n idx c
 #tooth lax_wendroff_1d_tvd_shock_rate by mutation totalOscillation := fun S dims dx dt useStrang K U => sumTo K (fun n => stepOscillation S dims dx dt useStrang (U n))
+#tooth lax_wendroff_1d_initial_tv_convergence_rate by mutation spatialTV1D := fun _ _ => (0 : Rat)
+#tooth lax_wendroff_discrete_entropy_weak_inequality by mutation discreteEntropyWeakPairing := fun eta q N dx dt U φ => dt * dx * sumTo φ.steps (fun n => sumTo N (fun idx => eta (U (n + 1) idx) * timeDiffTest dt φ n idx 0 + q (U n idx) * spatialDiffTest [N] dx (φ.val n) 0 idx 0))
+#tooth lax_wendroff_discrete_entropy_weak_inequality by mutation evalTadmorStep1D := fun _ _ _ _ G => G
+#tooth burgers_tadmor_initial_data_entropy_convergence by mutation burgersTadmorEC := fun _ _ _ => (0 : Rat)
+#tooth burgers_stationary_expansion_shock_refused by mutation burgersEntQ := fun u => -((u 0 * u 0 * u 0) / 3)
 #tooth endToEnd_q32_silicon_weak_form_bound by mutation q32WeakPerturbationBound := fun S dims dx dt Lsrc Mφ Mt Mx steps E => sumTo S.numVars (weightOf S) * cellVolume dims dx * (gridCellCount dims : Rat) * (dt * sumTo steps (fun n => E (n + 1) * Mt + E n * ((dims.length : Rat) * S.aMax * Mx + Lsrc * Mφ)))
 #tooth runMeshRefinementTrace_sound by mutation stepMeshRefinement := fun st turn => if checkLaxWendroffAudit turn.query == .ok then some ⟨turn.query.dx, st.acceptedLevels + 1, rmax st.maxCertifiedResidual turn.query.tolerance⟩ else none
 #tooth checkLaxWendroffAudit_sound by mutation checkLaxWendroffAudit := fun _ => Obend.Judge.Verdict.ok

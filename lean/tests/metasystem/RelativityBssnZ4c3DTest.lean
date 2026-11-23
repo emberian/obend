@@ -13,11 +13,12 @@ computational audit covering:
    - Discrete Gronwall $H_0$-norm stability & strict contraction (`symmetricHyperbolic_gronwall_stability`),
    - Inhabited non-tautological `symmetricHyperbolicJudge` positive & negative refutation vectors.
 2. `Obend.Analysis.RelativityBssnZ4c3D`:
-   - 3+1 Z4c constraint-propagation symmetric hyperbolicity (`z4c3d_constraint_symmetric_hyperbolic`),
-   - Covariant light-cone eigenpairs `{−β_n, −β_n ± α}` (`z4c3d_characteristic_eigenpairs`),
+   - 5-variable 3D linear Friedrichs constraint-model symmetric hyperbolicity (`z4c3d_constraint_symmetric_hyperbolic`),
+   - Principal-symbol characteristic eigenpairs `{−β_n, −β_n ± α}` (`z4c3d_characteristic_eigenpairs`),
    - 3D spatial $C_3$ cyclic axis equivariance (`z4c3d_cyclic_axis_equivariant`),
-   - Exponential 3D Z4c constraint-energy damping vs undamped `κ_1 = 0` ADM (`z4c3d_total_constraint_energy_damped`),
-   - 3D `#pde_solver BssnZ4cConstraint3D` `EndToEndPdeCert` & 1D slab reduction (`z4c3d_slab_reduction_matches_1d`).
+   - Exponential 3D linear constraint-energy damping (`κ_1 > 0` vs undamped `κ_1 = 0`, `z4c3d_total_constraint_energy_damped`),
+   - 3D `#pde_solver BssnZ4cConstraint3D` `EndToEndPdeCert` & 1D slab reduction (`z4c3d_slab_reduction_matches_1d`),
+   - Spatially varying `(α(x), β^i(x))` Friedrichs commutator & Strand SBP + Olsson–Strand SAT open-box dissipation.
 -/
 import Lean
 import Obend.Analysis.SymmetricHyperbolicEnergy
@@ -221,20 +222,21 @@ def skew3CellGrid : MultiDGrid := fun idx c =>
   | 1 => if c == 0 then 1 / 3 else if c == 1 then -(1 / 2) else 1 / 8
   | _ => if c == 0 then -(1 / 5) else if c == 4 then 1 / 4 else 0
 
-#guard
-  let dims2 := [2, 2, 2]
-  let dims3 := [3, 2, 2]
-  let rhsSkew := applyGridMat 5 (z4c3dFluxMat sampleZ4cParams 0) (centeredDiffAxis dims3 0 1 skew3CellGrid)
-  let localPair0 := h0Inner 5 z4c3dSymmetrizer (skew3CellGrid 0) (rhsSkew 0)
-  let totalSkew := multiDH0Pair dims3 5 z4c3dSymmetrizer skew3CellGrid rhsSkew
-  let koRate := -((1 / 16 : Rat) *
-    multiDH0Pair dims2 5 z4c3dSymmetrizer osc3dConstraintGrid (kreissOliger4AxisOp dims2 2 osc3dConstraintGrid))
-  let traceRes := runSymHypRolloutTrace (z4c3dConstraintSystem sampleZ4cParams) dims3 2 1
-    ⟨skew3CellGrid, 0, 0⟩ [⟨1 / 10⟩, ⟨1 / 20⟩]
-  let traceOk := match traceRes with
-    | some stF => (stF.acceptedSteps == 2) && (stF.elapsedTime == 3 / 20) && (stF.grid 0 0 != skew3CellGrid 0 0)
-    | none => false
-  (localPair0 != 0) && (totalSkew == 0) && (koRate < 0) && traceOk
+example :
+    (let dims2 := [2, 2, 2]
+     let dims3 := [3, 2, 2]
+     let rhsSkew := applyGridMat 5 (z4c3dFluxMat sampleZ4cParams 0) (centeredDiffAxis dims3 0 1 skew3CellGrid)
+     let localPair0 := h0Inner 5 z4c3dSymmetrizer (skew3CellGrid 0) (rhsSkew 0)
+     let totalSkew := multiDH0Pair dims3 5 z4c3dSymmetrizer skew3CellGrid rhsSkew
+     let koRate := -((1 / 16 : Rat) *
+       multiDH0Pair dims2 5 z4c3dSymmetrizer osc3dConstraintGrid (kreissOliger4AxisOp dims2 2 osc3dConstraintGrid))
+     let traceRes := runSymHypRolloutTrace (z4c3dConstraintSystem sampleZ4cParams) dims3 2 1
+       ⟨skew3CellGrid, 0, 0⟩ [⟨1 / 10⟩, ⟨1 / 20⟩]
+     let traceOk := match traceRes with
+       | some stF => (stF.acceptedSteps == 2) && (stF.elapsedTime == 3 / 20) && (stF.grid 0 0 != skew3CellGrid 0 0)
+       | none => false
+     (localPair0 != 0) && (totalSkew == 0) && (koRate < 0) && traceOk) = true := by
+  decide +kernel
 
 example :
     let dims := [2, 2, 2]
@@ -307,12 +309,13 @@ def antiViscousRusanov (dims : List Nat) (m : Nat) (A : Mat) (a ν : Rat) (d : N
   else U
 
 -- A two-cell jump diffuses to its mean. Reversing viscosity doubles its amplitude.
-#guard
-  let U : MultiDGrid := fun idx _ => if idx == 0 then 0 else 1
-  let A : Mat := fun _ _ => 0
-  let step := rusanovSymmetricAxisStep [2] 1 A 1 (1 / 2) 0 U
-  let mutant := antiViscousRusanov [2] 1 A 1 (1 / 2) 0 U
-  step 0 0 == 1 / 2 && step 1 0 == 1 / 2 && mutant 0 0 == -(1 / 2) && mutant 1 0 == 3 / 2
+example :
+    (let U : MultiDGrid := fun idx _ => if idx == 0 then 0 else 1
+     let A : Mat := fun _ _ => 0
+     let step := rusanovSymmetricAxisStep [2] 1 A 1 (1 / 2) 0 U
+     let mutant := antiViscousRusanov [2] 1 A 1 (1 / 2) 0 U
+     step 0 0 == 1 / 2 && step 1 0 == 1 / 2 && mutant 0 0 == -(1 / 2) && mutant 1 0 == 3 / 2) = true := by
+  decide +kernel
 
 def frozenRollout (_ : SymmetricHyperbolicSystem) (_ : List Nat)
     (_ _ _ : Rat) (_ : Nat) (U : MultiDGrid) : MultiDGrid := U
@@ -349,6 +352,122 @@ def badBssnSolverParams (alpha : Rat) : Z4c3DParams :=
 #tooth z4c3d_total_constraint_energy_damped by mutation z4c3dConstraintRollout := frozenZ4cRollout
 #tooth bssnZ4cConstraint3D_constraint_sector_eq_z4c3d by mutation bssnZ4c3dSolverParams := badBssnSolverParams
 #tooth z4c3d_slab_reduction_matches_1d by mutation embedZ4cVec1DTo3D := badEmbedZ4cVec
+
+/-! ## 3b. Spatially Varying `(α(x), β^i(x))` Commutator & Open-Box SBP+SAT Boundary Tests -/
+
+-- Spatially inhomogeneous 3D parameter field on `[3, 2, 2]` (`α(x) ∈ {3/4, 1, 5/4}`, `β^x(x) ∈ {0, 1/8, 1/4}`).
+def inhomogeneousGaugeField (idx : Nat) : Z4c3DParams :=
+  let ix := (idx / 4) % 3
+  let iy := ((idx % 4) / 2) % 2
+  { alpha := if ix == 0 then 3 / 4 else if ix == 1 then 1 else 5 / 4
+  , betax := if ix == 0 then 0 else if ix == 1 then 1 / 8 else 1 / 4
+  , betay := if iy == 0 then 0 else 1 / 16
+  , betaz := -(1 / 20)
+  , kappa1 := 1 / 2
+  , kappa2 := 0 }
+
+theorem inhomogeneousGaugeField_valid : VariableGaugeField3D [3, 2, 2] 1 (3 / 4) 2 (1 / 2) inhomogeneousGaugeField := by
+  refine {
+    alphaMin_pos := by grind
+    lGauge_nonneg := by grind
+    lapse_lower := fun idx hidx => ?_
+    speed_bound := fun idx d hidx hd => ?_
+    grad_alpha_lip := fun d idx hd hidx => ?_
+    grad_shift_lip := fun d idx hd hidx => ?_
+  }
+  · have hi : idx < 12 := by simpa [gridCellCount] using hidx
+    rcases (by omega : idx = 0 ∨ idx = 1 ∨ idx = 2 ∨ idx = 3 ∨ idx = 4 ∨ idx = 5 ∨ idx = 6 ∨ idx = 7 ∨ idx = 8 ∨ idx = 9 ∨ idx = 10 ∨ idx = 11) with
+      rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide +kernel
+  · have hi : idx < 12 := by simpa [gridCellCount] using hidx
+    have hd3 : d = 0 ∨ d = 1 ∨ d = 2 := by omega
+    rcases hd3 with rfl | rfl | rfl <;>
+      rcases (by omega : idx = 0 ∨ idx = 1 ∨ idx = 2 ∨ idx = 3 ∨ idx = 4 ∨ idx = 5 ∨ idx = 6 ∨ idx = 7 ∨ idx = 8 ∨ idx = 9 ∨ idx = 10 ∨ idx = 11) with
+        rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide +kernel
+  · have hi : idx < 12 := by simpa [gridCellCount] using hidx
+    have hd3 : d = 0 ∨ d = 1 ∨ d = 2 := by omega
+    rcases hd3 with rfl | rfl | rfl <;>
+      rcases (by omega : idx = 0 ∨ idx = 1 ∨ idx = 2 ∨ idx = 3 ∨ idx = 4 ∨ idx = 5 ∨ idx = 6 ∨ idx = 7 ∨ idx = 8 ∨ idx = 9 ∨ idx = 10 ∨ idx = 11) with
+        rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide +kernel
+  · have hi : idx < 12 := by simpa [gridCellCount] using hidx
+    have hd3 : d = 0 ∨ d = 1 ∨ d = 2 := by omega
+    rcases hd3 with rfl | rfl | rfl <;>
+      rcases (by omega : idx = 0 ∨ idx = 1 ∨ idx = 2 ∨ idx = 3 ∨ idx = 4 ∨ idx = 5 ∨ idx = 6 ∨ idx = 7 ∨ idx = 8 ∨ idx = 9 ∨ idx = 10 ∨ idx = 11) with
+        rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide +kernel
+
+example (U0 : MultiDGrid) :
+    ratAbs (sumTo 3 fun d => multiDH0Pair [3, 2, 2] 5 z4c3dSymmetrizer U0
+      (fun idx => mulVec 5 (z4c3dFluxMat (inhomogeneousGaugeField idx) d) (centeredDiffAxis [3, 2, 2] d 1 U0 idx))) ≤
+      (3 * (1 / 2 : Rat)) * multiDH0Energy [3, 2, 2] 5 z4c3dSymmetrizer U0 ∧
+    multiDH0Energy [3, 2, 2] 5 z4c3dSymmetrizer (z4c3dVarGaugeRollout inhomogeneousGaugeField [3, 2, 2] 2 1 (1 / 8) 3 U0) ≤
+      ((((1 + 2 * (1 / 2 : Rat) * (1 / 8)) ^ 3) * (1 - (1 / 2 : Rat) * (3 / 4) * (1 / 8))) ^ 3) *
+        multiDH0Energy [3, 2, 2] 5 z4c3dSymmetrizer U0 := by
+  have hDamp : ∀ idx, idx < gridCellCount [3, 2, 2] →
+      1 / 2 ≤ (inhomogeneousGaugeField idx).kappa1 ∧ -1 ≤ (inhomogeneousGaugeField idx).kappa2 ∧ z4c3dMaxDampRate (inhomogeneousGaugeField idx) ≤ 5 / 4 := by
+    intro idx hidx; have hi : idx < 12 := by simpa [gridCellCount] using hidx
+    rcases (by omega : idx = 0 ∨ idx = 1 ∨ idx = 2 ∨ idx = 3 ∨ idx = 4 ∨ idx = 5 ∨ idx = 6 ∨ idx = 7 ∨ idx = 8 ∨ idx = 9 ∨ idx = 10 ∨ idx = 11) with
+      rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide +kernel
+  have hMain := z4c3d_variable_gauge_commutator_energy_bound [3, 2, 2] rfl (by simp)
+    1 (1 / 8) (3 / 4) 2 (1 / 2) (1 / 2) (5 / 4) (by grind) (by grind) (by grind)
+    inhomogeneousGaugeField inhomogeneousGaugeField_valid (by grind) hDamp (by grind) (by grind) 3 U0 U0
+  exact ⟨hMain.1, hMain.2.2⟩
+
+-- Open-box `[3, 3, 3]` Olsson–Strand SBP+SAT radiative boundary test:
+-- 1. Unconditional `≤ 0` open-box energy dissipation for **arbitrary** `U : MultiDGrid` (even with incoming boundary modes!),
+-- 2. Strict `< 0` (`= -16`) energy radiation on outgoing `+α` light-cone pulse `(1, 1, 0, 0, 2)` at `(2, 1, 1)` (`idx = 22`) with `κ_1 = 0`,
+-- 3. Vanishing SAT penalty whenever `SommerfeldNoIncoming3D` holds!
+def undampedOpenBoxParams : Z4c3DParams :=
+  { alpha := 1, betax := 0, betay := 0, betaz := 0, kappa1 := 0, kappa2 := 0 }
+
+def outgoingLightConeGrid : MultiDGrid :=
+  fun idx => if idx == 22 then z4cLightConePlus 1 0 0 else fun _ => 0
+
+example (Uany : MultiDGrid) :
+    -- Unconditional for EVERY `Uany : MultiDGrid` (including incoming waves!):
+    2 * openBoxH0Pair 3 3 3 Uany (z4c3dOpenBoxRhs undampedOpenBoxParams 3 3 3 1 Uany) ≤ 0 ∧
+    -- Concrete outgoing light-cone pulse at `(2, 1, 1)` strictly radiates energy `< 0` (`= -16`):
+    SommerfeldNoIncoming3D undampedOpenBoxParams 3 3 3 outgoingLightConeGrid ∧
+    2 * openBoxH0Pair 3 3 3 outgoingLightConeGrid
+      (openBoxSbpSatAxis3D undampedOpenBoxParams 3 3 3 0 1 outgoingLightConeGrid) < 0 ∧
+    2 * openBoxH0Pair 3 3 3 outgoingLightConeGrid
+      (z4c3dOpenBoxRhs undampedOpenBoxParams 3 3 3 1 outgoingLightConeGrid) = -16 := by
+  have hAny := (z4c3d_sommerfeld_boundary_dissipative undampedOpenBoxParams 3 3 3
+    (by decide) (by decide) (by decide) 1 (by grind) Uany).2.2.2.1
+    (by decide +kernel) (by decide +kernel) (by decide +kernel)
+  have hAny0 : 2 * openBoxH0Pair 3 3 3 Uany (z4c3dOpenBoxRhs undampedOpenBoxParams 3 3 3 1 Uany) ≤ 0 := by
+    have : -(2 * (undampedOpenBoxParams.kappa1 * undampedOpenBoxParams.alpha)) = 0 := by decide +kernel
+    rw [this, Rat.zero_mul] at hAny; exact hAny
+  have hZeroAmp : ∀ d m, z4cCharAmplitudes d (fun _ => 0) m = 0 :=
+    fun _ _ => by unfold z4cCharAmplitudes mulVec; simp [sumTo, Rat.zero_add, Rat.mul_zero]
+  have hSomm : SommerfeldNoIncoming3D undampedOpenBoxParams 3 3 3 outgoingLightConeGrid := by
+    intro ix iy iz hix hiy hiz
+    by_cases h22 : ix * 9 + (iy * 3 + iz) = 22
+    · have hx2 : ix = 2 := by omega
+      have hy1 : iy = 1 := by omega
+      have hz1 : iz = 1 := by omega
+      subst hx2 hy1 hz1
+      refine ⟨fun h => by omega, fun _ m hm hNeg => ?_, fun h => by omega, fun h => by omega, fun h => by omega, fun h => by omega⟩
+      have hm5 : m = 0 ∨ m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 := by omega
+      rcases hm5 with rfl | rfl | rfl | rfl | rfl <;>
+        (first | decide +kernel | (exfalso; revert hNeg; decide +kernel))
+    · have hCellZero : outgoingLightConeGrid (ix * (3 * 3) + (iy * 3 + iz)) = (fun _ => 0) := by
+        unfold outgoingLightConeGrid; simp [show (ix * 9 + (iy * 3 + iz) == 22) = false by simp [beq_eq_false_iff_ne, h22]]
+      dsimp only; rw [hCellZero]
+      exact ⟨fun _ m _ _ => hZeroAmp 0 m, fun _ m _ _ => hZeroAmp 0 m, fun _ m _ _ => hZeroAmp 1 m,
+             fun _ m _ _ => hZeroAmp 1 m, fun _ m _ _ => hZeroAmp 2 m, fun _ m _ _ => hZeroAmp 2 m⟩
+  have hStrict := (z4c3d_sommerfeld_boundary_dissipative undampedOpenBoxParams 3 3 3
+    (by decide) (by decide) (by decide) 1 (by grind) outgoingLightConeGrid).2.2.2.2.1
+    (by decide +kernel) ⟨1, 1, by decide, by decide, by decide +kernel⟩
+  exact ⟨hAny0, hSomm, hStrict, by decide +kernel⟩
+
+def antiDampedVarGaugeRhs (gField : Nat → Z4c3DParams) (dims : List Nat) (dx : Rat) (C : MultiDGrid) : MultiDGrid :=
+  fun idx c => -mulVec 5 (z4c3dSourceMat (gField idx)) (C idx) c +
+    sumTo 3 fun d => mulVec 5 (z4c3dFluxMat (gField idx) d) (centeredDiffAxis dims d dx C idx) c
+
+#tooth z4c3d_variable_gauge_commutator_energy_bound by mutation z4c3dVarGaugeSemiDiscreteRhs := antiDampedVarGaugeRhs
+#tooth z4c3d_variable_gauge_commutator_energy_bound by mutation z4c3dVarGaugeRollout := fun _ _ _ _ _ _ U0 => fun idx c => 2 * U0 idx c
+#tooth z4c3d_sommerfeld_boundary_dissipative by mutation z4cCharAmplitudes := fun _ _ _ => (0 : Rat)
+#tooth z4c3d_sommerfeld_boundary_dissipative by mutation sbpSatPenalty1D := fun _ _ _ _ _ _ _ => (1 : Rat)
+#tooth z4c3d_sommerfeld_boundary_dissipative by mutation sbpDiff1D := fun _ _ _ _ => (0 : Rat)
 
 /-! ## 4. Kernel Axiom, Zero-Closed-Theorem & `0 Classical.choice` Computational Audit -/
 
@@ -411,6 +530,8 @@ run_cmd do
       ``symHypRollout,
       ``z4c3dSymHypObj,
       ``z4c3dConstraintRollout,
+      ``z4c3dVarGaugeRollout,
+      ``z4c3dOpenBoxRhs,
       ``embedZ4cPlanarSlab,
       ``BssnZ4cConstraint3D.spec,
       ``BssnZ4cConstraint3D.specializedPlan,

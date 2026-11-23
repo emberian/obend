@@ -1442,4 +1442,26 @@ theorem runPdeRolloutTrace_invariants (spec : ConservationLawSpec) (dims : List 
         · rw [← hStep] at hStepsRest; dsimp only at hStepsRest; simp only [List.length_cons]; omega
       · cases hStep
 
+private theorem nonlinearMultiDPde_reflective_inhabited (q : Rat) (hq : 0 < q) :
+    ∃ (dom : List PosTarget) (env : FluxEnv) (e1 e2 : FluxExpr),
+      0 < dom.length ∧
+      DomainValid dom env ∧
+      checkExprPositive dom e1 = true ∧
+      checkFluxEqReflective dom e1 e2 = true ∧
+      0 < evalFlux e1 env ∧
+      evalFlux e1 env = evalFlux e2 env := by
+  let dom : List PosTarget := [.stateVar 0, .paramVar 0]
+  let env : FluxEnv := ⟨fun _ => q, fun _ => q⟩
+  let e1 : FluxExpr := .mul (.add (.var 0) (.param 0)) (.invSafe (.var 0))
+  let e2 : FluxExpr := .add (.const 1) (.mul (.param 0) (.invSafe (.var 0)))
+  have hDom : DomainValid dom env := by
+    intro t ht
+    simp only [dom, List.mem_cons, List.not_mem_nil, or_false] at ht
+    rcases ht with rfl | rfl <;> exact hq
+  have hPos : checkExprPositive dom e1 = true := by decide +kernel
+  have hEq : checkFluxEqReflective dom e1 e2 = true := by decide +kernel
+  exact ⟨dom, env, e1, e2, by decide, hDom, hPos, hEq,
+    checkExprPositive_sound dom e1 env hPos hDom,
+    checkFluxEqReflective_sound dom e1 e2 hEq env hDom⟩
+
 end Obend.Analysis.NonlinearMultiDPde
