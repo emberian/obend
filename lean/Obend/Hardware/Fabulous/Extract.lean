@@ -48,21 +48,21 @@ def mac8NetLean (N : Net) (fm : List (Nat × Nat)) (source : String) : String :=
     "the module's bits; `bv_decide` discharges them (its LRAT check is compiled evaluation,\n" ++
     "re-run by `#assert_compiled`). `Obend.Hardware.Fabulous.Mac8` instantiates them.\n-/\n" ++
     "public import Obend.Hardware.Fabulous.Mac8Ref\npublic import Obend.AssertCompiled\n" ++
-    "public import Std.Tactic.BVDecide\npublic meta import Std.Tactic.BVDecide.Reflect\n@[expose] public section\n\n" ++
+    "public import Std.Tactic.BVDecide\npublic meta import Std.Tactic.BVDecide.Reflect\npublic section\n\n" ++
     "namespace Obend.Hardware.Fabulous\n\n"
   t := t ++ "/-- The configured fabric's logic. -/\n" ++ netLean "mac8Net" N
   t := t ++ s!"\n/-- Flop `k` holds bit `mac8FlopMap[k].2` of register `mac8FlopMap[k].1`. -/\ndef mac8FlopMap : List (Nat × Nat) := {fm}\n"
   t := t ++ "\ntheorem mac8_proj (regs : Nat → BitVec 64) (R0 R1 R2 : BitVec 16)\n" ++
     "    (hr0 : regs 0 = R0.setWidth 64) (hr1 : regs 1 = R1.setWidth 64) (hr2 : regs 2 = R2.setWidth 64) :\n      " ++
     projStmt ++ " :=\n  ⟨" ++ projPrf ++ "⟩\n"
-  t := t ++ "\nset_option maxHeartbeats 0 in\n/-- One edge out of reset: the flops' next values are the module's next register bits, and the\noutput pins show `mac_out`. -/\n" ++
+  t := t ++ "\n/-- One edge out of reset: the flops' next values are the module's next register bits, and the\noutput pins show `mac_out`. -/\n" ++
     "theorem mac8_step_bv (I0 I1 : BitVec 8) (I2 R0 R1 R2 : BitVec 16) (rst : Bool) (p q v o : Nat → Bool)\n" ++
     "    (s : Nat → BitVec 64)\n    (hp : " ++ hp "rst" ++ ")\n    (hq : " ++ hq ++ ")\n" ++
     "    (hs : s 0 = (mac8Next I0 I1 I2 R0 R1 rst 0).setWidth 64 ∧ s 1 = (mac8Next I0 I1 I2 R0 R1 rst 1).setWidth 64 ∧\n" ++
     "      s 2 = (mac8Next I0 I1 I2 R0 R1 rst 2).setWidth 64)\n    (ho : " ++ ho ++ ")\n    (hv : " ++ hv ++ ") :\n    " ++
     flops ++ " =\n      " ++ exp ++ " ∧\n    " ++ outs ++ " =\n      " ++ outExp ++ " := by\n  " ++
     "simp only [mac8Next] at hs\n  " ++ simpSet ++ " at hp hq hs ho hv ⊢\n  bv_decide (config := { timeout := 1200 })\n\n#assert_compiled mac8_step_bv\n"
-  t := t ++ "\nset_option maxHeartbeats 0 in\n/-- A reset edge, from any flop state: every flop's next value is its register's reset bit. -/\n" ++
+  t := t ++ "\n/-- A reset edge, from any flop state: every flop's next value is its register's reset bit. -/\n" ++
     "theorem mac8_reset_bv (I0 I1 : BitVec 8) (I2 : BitVec 16) (p q v : Nat → Bool) (s : Nat → BitVec 64)\n" ++
     "    (hp : " ++ hp "true" ++ ")\n    (hs : s 0 = 0#64 ∧ s 1 = 0#64 ∧ s 2 = 0#64)\n    (hv : " ++ hv ++ ") :\n    " ++
     flops ++ " =\n      " ++ exp ++ " := by\n  simp only [lut4, mux2, List.cons.injEq, and_true] at hp hs hv ⊢\n  bv_decide (config := { timeout := 1200 })\n\n#assert_compiled mac8_reset_bv\n"

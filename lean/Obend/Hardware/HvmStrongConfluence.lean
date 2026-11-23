@@ -545,106 +545,261 @@ private theorem retained_lookup {σ : PortRef → PortRef} {p : PortRef} (ps : L
 /-- Normalize an arena read through the concrete sequence of node placements and wire writes. -/
 local macro "arena_reads" : tactic => `(tactic| simp only [Arena.erasers, Arena.splice, Arena.connect_link, Arena.place_link, Arena.drop_link, Arena.connect_next,
     Arena.drop_next, Arena.place_next, commuteSpawnedNodes, commuteSplices, mkEraNode, List.foldl_cons, List.foldl_nil])
-set_option maxHeartbeats 1500000 in
+private theorem arena_find_keep {N : ICNet} {A : Arena} {a b : Agent} (hMatch : ArenaMatchesNet A N)
+    (sp : List Agent) (σ' : PortRef → PortRef) (nx id : Nat)
+    (hWfM : WfNet (mkNetFrom (N.agents.filter (fun x => x.id != a.id && x.id != b.id) ++ sp) N.freePorts σ' nx)) :
+    (mkNetFrom (N.agents.filter (fun x => x.id != a.id && x.id != b.id) ++ sp) N.freePorts σ' nx).toArena.node id =
+      match sp.find? (·.id == id) with
+      | some x => some (x.kind.toINet.1, x.kind.toINet.2, 0)
+      | none => if id = b.id then none else if id = a.id then none else A.node id := by
+  simp only [ICNet.toArena]
+  cases hfs : sp.find? (·.id == id) with
+  | some x =>
+    rw [← beq_iff_eq.1 (List.find?_some (p := fun y : Agent => y.id == id) hfs),
+      findAgent_of_mem hWfM (List.mem_append_right _ (List.mem_of_find?_eq_some hfs))]
+    rfl
+  | none =>
+    have filtered : (N.agents.filter (fun x => x.id != a.id && x.id != b.id)).find? (·.id == id) =
+        if id = b.id ∨ id = a.id then none else findAgent N id := by
+      rw [List.find?_filter]; split
+      · rw [List.find?_eq_none]; intro x _; simp; grind only
+      · unfold findAgent; congr 1; funext x; by_cases h : x.id = id <;> simp [h] <;> grind only
+    rw [hMatch.node_eq]
+    simp only [ICNet.toArena, findAgent, mkNetFrom, List.find?_append, filtered, hfs]
+    split <;> split <;> simp_all [findAgent]
+
+private theorem arena_active_aux_props {N : ICNet} {A : Arena} {i j : Nat}
+    (hWf : WfNet N) (hMatch : ArenaMatchesNet A N) (hLoopFree : LoopFreePair N i j)
+    (c : Agent) (hc : c ∈ N.agents) (hcid : c.id = i ∨ c.id = j) (har : c.kind.arity = 2) :
+    A.link ⟨c.id, 1⟩ = N.partner ⟨c.id, 1⟩ ∧ A.link ⟨c.id, 2⟩ = N.partner ⟨c.id, 2⟩ ∧
+    (N.partner ⟨c.id, 1⟩).nodeId < N.nextId ∧ (N.partner ⟨c.id, 2⟩).nodeId < N.nextId ∧
+    (N.partner ⟨c.id, 1⟩).nodeId ≠ i ∧ (N.partner ⟨c.id, 1⟩).nodeId ≠ j ∧
+    (N.partner ⟨c.id, 2⟩).nodeId ≠ i ∧ (N.partner ⟨c.id, 2⟩).nodeId ≠ j ∧
+    N.partner ⟨c.id, 1⟩ ≠ N.partner ⟨c.id, 2⟩ ∧
+    N.partner (N.partner ⟨c.id, 1⟩) = ⟨c.id, 1⟩ ∧ N.partner (N.partner ⟨c.id, 2⟩) = ⟨c.id, 2⟩ := by
+  have hm1 : ⟨c.id, 1⟩ ∈ livePorts N :=
+    List.mem_append_left _ (List.mem_flatMap.2 ⟨c, hc, by rw [agentPorts_of_arity2 har]; simp⟩)
+  have hm2 : ⟨c.id, 2⟩ ∈ livePorts N :=
+    List.mem_append_left _ (List.mem_flatMap.2 ⟨c, hc, by rw [agentPorts_of_arity2 har]; simp⟩)
+  have hi1 := (hWf.partner_wf _ hm1).2.2
+  have hi2 := (hWf.partner_wf _ hm2).2.2
+  have hlf1 := hLoopFree c hc hcid ⟨c.id, 1⟩ (by rw [agentAuxPorts_of_arity2 har]; simp)
+  have hlf2 := hLoopFree c hc hcid ⟨c.id, 2⟩ (by rw [agentAuxPorts_of_arity2 har]; simp)
+  exact ⟨hMatch.link_live _ hm1, hMatch.link_live _ hm2,
+    livePorts_lt_nextId hWf (hWf.partner_wf _ hm1).1, livePorts_lt_nextId hWf (hWf.partner_wf _ hm2).1,
+    hlf1.1, hlf1.2, hlf2.1, hlf2.2,
+    (fun e => by have := congrArg N.partner e; rw [hi1, hi2] at this; cases this), hi1, hi2⟩
+
+private theorem contractBridge_anni_eq {N : ICNet} {i j : Nat} (hne : i ≠ j)
+    (hq1a : (N.partner ⟨i, 1⟩).nodeId ≠ i) (hq1b : (N.partner ⟨i, 1⟩).nodeId ≠ j)
+    (hq2a : (N.partner ⟨i, 2⟩).nodeId ≠ i) (hq2b : (N.partner ⟨i, 2⟩).nodeId ≠ j)
+    (hq3a : (N.partner ⟨j, 1⟩).nodeId ≠ i) (hq3b : (N.partner ⟨j, 1⟩).nodeId ≠ j)
+    (hq4a : (N.partner ⟨j, 2⟩).nodeId ≠ i) (hq4b : (N.partner ⟨j, 2⟩).nodeId ≠ j) (q : PortRef) :
+    contractBridge N.partner (swapList [(⟨i, 1⟩, ⟨j, 1⟩), (⟨i, 2⟩, ⟨j, 2⟩)])
+      (pairsDom [(⟨i, 1⟩, ⟨j, 1⟩), (⟨i, 2⟩, ⟨j, 2⟩)]) q =
+      if N.partner q = ⟨i, 1⟩ then N.partner ⟨j, 1⟩
+      else if N.partner q = ⟨j, 1⟩ then N.partner ⟨i, 1⟩
+      else if N.partner q = ⟨i, 2⟩ then N.partner ⟨j, 2⟩
+      else if N.partner q = ⟨j, 2⟩ then N.partner ⟨i, 2⟩ else N.partner q := by
+  unfold contractBridge
+  change walkAux _ _ _ 4 (N.partner q) = _
+  have off {u : PortRef} {m k : Nat} (h : u.nodeId ≠ m) : u ≠ ⟨m, k⟩ := fun eq => h (eq ▸ rfl)
+  by_cases h : N.partner q ∈ pairsDom [(⟨i, 1⟩, ⟨j, 1⟩), (⟨i, 2⟩, ⟨j, 2⟩)]
+  · simp [pairsDom] at h
+    rcases h with h | h | h | h <;>
+      simp (disch := assumption) [h, walkAux, swapList, pairsDom, off, hne.symm]
+  · simp [pairsDom] at h; simp [walkAux, pairsDom, h]
+
+private theorem icNet_simulates_era {N : ICNet} {A : Arena} {a b c : Agent}
+    (hWf : WfNet N) (hMatch : ArenaMatchesNet A N) (hLoopFree : LoopFreePair N a.id b.id)
+    (ha : a ∈ N.agents) (hb : b ∈ N.agents) (hne : a.id ≠ b.id)
+    (hc : c ∈ N.agents) (hcid : c.id = a.id ∨ c.id = b.id) (har : c.kind.arity = 2)
+    (hinet_a : A.inet? a.id = some ⟨a.id, a.kind.toINet.1, a.kind.toINet.2, 0, A.link ⟨a.id, 1⟩, A.link ⟨a.id, 2⟩⟩)
+    (hinet_b : A.inet? b.id = some ⟨b.id, b.kind.toINet.1, b.kind.toINet.2, 0, A.link ⟨b.id, 1⟩, A.link ⟨b.id, 2⟩⟩)
+    (hAl1 : A.link ⟨a.id, 0⟩ = ⟨b.id, 0⟩) (hAl2 : A.link ⟨b.id, 0⟩ = ⟨a.id, 0⟩)
+    (hred' : reduceActivePair ⟨⟨a.id, a.kind.toINet.1, a.kind.toINet.2, 0, A.link ⟨a.id, 1⟩, A.link ⟨a.id, 2⟩⟩,
+        ⟨b.id, b.kind.toINet.1, b.kind.toINet.2, 0, A.link ⟨b.id, 1⟩, A.link ⟨b.id, 2⟩⟩⟩ A.next =
+      .erase [A.link ⟨c.id, 1⟩, A.link ⟨c.id, 2⟩])
+    (hWf' : WfNet (mkNetFrom (N.agents.filter (fun x => x.id != a.id && x.id != b.id) ++
+        [⟨N.nextId, .era⟩, ⟨N.nextId + 1, .era⟩]) N.freePorts
+      (applyConj (swapList [(⟨c.id, 1⟩, ⟨N.nextId, 0⟩), (⟨c.id, 2⟩, ⟨N.nextId + 1, 0⟩)])
+        (swapList []) (pairsDom []) N.partner) (N.nextId + 2))) :
+    ∃ A', Arena.Step A A' ∧ ArenaMatchesNet A'
+      (mkNetFrom (N.agents.filter (fun x => x.id != a.id && x.id != b.id) ++
+          [⟨N.nextId, .era⟩, ⟨N.nextId + 1, .era⟩]) N.freePorts
+        (applyConj (swapList [(⟨c.id, 1⟩, ⟨N.nextId, 0⟩), (⟨c.id, 2⟩, ⟨N.nextId + 1, 0⟩)])
+          (swapList []) (pairsDom []) N.partner) (N.nextId + 2)) := by
+  let B := (A.drop a.id).drop b.id
+  have hBn : B.next = N.nextId := by simp [B, hMatch.next_eq]
+  have hBl : B.link = A.link := by simp [B]
+  obtain ⟨hl1, hl2, hq1lt, hq2lt, hq1a, hq1b, hq2a, hq2b, hq12, hq1inv, hq2inv⟩ :=
+    arena_active_aux_props hWf hMatch hLoopFree c hc hcid har
+  have hltc := hWf.agents_lt c hc
+  have hq1c : (N.partner ⟨c.id, 1⟩).nodeId ≠ c.id := hcid.elim (· ▸ hq1a) (· ▸ hq1b)
+  have hq2c : (N.partner ⟨c.id, 2⟩).nodeId ≠ c.id := hcid.elim (· ▸ hq2a) (· ▸ hq2b)
+  refine ⟨B.erasers [N.partner ⟨c.id, 1⟩, N.partner ⟨c.id, 2⟩],
+    .fire hne hinet_a hinet_b hAl1 hAl2 (by rw [hred', hl1, hl2]; simp [Arena.apply, B]),
+    fun id => ?_, fun p hp => ?_, by simp [mkNetFrom, Arena.erasers, hBn]⟩
+  · rw [arena_find_keep hMatch _ _ _ id hWf']
+    simp only [Arena.erasers, Arena.connect_node, Arena.connect_next, Arena.place_node, B,
+      Arena.drop_node, Arena.drop_next, hMatch.next_eq, mkEraNode, List.find?_cons, List.find?_nil, CombKind.toINet]
+    grind -verbose only
+  · rw [partner_mkNetFrom, ite_t hp]
+    let keep := N.agents.filter (fun x => x.id != a.id && x.id != b.id)
+    have hsp : p ∈ (keep.flatMap agentPorts) ++ N.freePorts ∨ p = ⟨N.nextId, 0⟩ ∨ p = ⟨N.nextId + 1, 0⟩ := by
+      simp only [keep, livePorts, mkNetFrom, List.flatMap_append, List.flatMap_cons, List.flatMap_nil,
+        agentPorts, List.append_nil, List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hp ⊢
+      grind
+    arena_reads
+    simp only [hBn, hBl, applyConj, pairsDom, List.flatMap_nil, List.not_mem_nil, ite_false]
+    rcases hsp with hpK | rfl | rfl
+    · have hpL := ((livePorts_split hWf ha hb hne p).1).2 (.inl hpK)
+      have hplt := livePorts_lt_nextId hWf hpL
+      have hne_ab := (livePorts_split hWf ha hb hne p).2 hpK
+      have hinv := (hWf.partner_wf p hpL).2.2
+      have hnplt := livePorts_lt_nextId hWf (hWf.partner_wf p hpL).1
+      have hpnc : p.nodeId ≠ c.id := hcid.elim (· ▸ hne_ab.1) (· ▸ hne_ab.2)
+      rw [hMatch.link_live p hpL, swapList_outside (x := p) (by simp [pairsDom]; grind only),
+        retained_lookup _ hinv (by intro uv hu; simp at hu; rcases hu with rfl | rfl <;> grind only)]
+      simp only [redirect]; grind only
+    all_goals simp (disch := omega) [swapList, port_after, port_before] <;> grind -verbose only
+
+private theorem icNet_simulates_anni {N : ICNet} {A : Arena} {a b : Agent}
+    (hWf : WfNet N) (hMatch : ArenaMatchesNet A N) (hLoopFree : LoopFreePair N a.id b.id)
+    (ha : a ∈ N.agents) (hb : b ∈ N.agents) (hne : a.id ≠ b.id) (hk : a.kind = b.kind) (ha2 : a.kind.arity = 2)
+    (hinet_a : A.inet? a.id = some ⟨a.id, a.kind.toINet.1, a.kind.toINet.2, 0, A.link ⟨a.id, 1⟩, A.link ⟨a.id, 2⟩⟩)
+    (hinet_b : A.inet? b.id = some ⟨b.id, b.kind.toINet.1, b.kind.toINet.2, 0, A.link ⟨b.id, 1⟩, A.link ⟨b.id, 2⟩⟩)
+    (hAl1 : A.link ⟨a.id, 0⟩ = ⟨b.id, 0⟩) (hAl2 : A.link ⟨b.id, 0⟩ = ⟨a.id, 0⟩)
+    (hred : reduceActivePair ⟨⟨a.id, a.kind.toINet.1, a.kind.toINet.2, 0, A.link ⟨a.id, 1⟩, A.link ⟨a.id, 2⟩⟩,
+        ⟨b.id, b.kind.toINet.1, b.kind.toINet.2, 0, A.link ⟨b.id, 1⟩, A.link ⟨b.id, 2⟩⟩⟩ A.next =
+      .annihilate (A.link ⟨a.id, 1⟩, A.link ⟨b.id, 1⟩) (A.link ⟨a.id, 2⟩, A.link ⟨b.id, 2⟩))
+    (hWf' : WfNet (mkNetFrom (N.agents.filter (fun x => x.id != a.id && x.id != b.id) ++ []) N.freePorts
+      (contractBridge N.partner (swapList [(⟨a.id, 1⟩, ⟨b.id, 1⟩), (⟨a.id, 2⟩, ⟨b.id, 2⟩)])
+        (pairsDom [(⟨a.id, 1⟩, ⟨b.id, 1⟩), (⟨a.id, 2⟩, ⟨b.id, 2⟩)])) (N.nextId + 0))) :
+    ∃ A', Arena.Step A A' ∧ ArenaMatchesNet A'
+      (mkNetFrom (N.agents.filter (fun x => x.id != a.id && x.id != b.id) ++ []) N.freePorts
+        (contractBridge N.partner (swapList [(⟨a.id, 1⟩, ⟨b.id, 1⟩), (⟨a.id, 2⟩, ⟨b.id, 2⟩)])
+          (pairsDom [(⟨a.id, 1⟩, ⟨b.id, 1⟩), (⟨a.id, 2⟩, ⟨b.id, 2⟩)])) (N.nextId + 0)) := by
+  let B := (A.drop a.id).drop b.id
+  obtain ⟨hl1, hl2, _, _, hq1a, hq1b, hq2a, hq2b, _, hq1inv, hq2inv⟩ :=
+    arena_active_aux_props hWf hMatch hLoopFree a ha (.inl rfl) ha2
+  obtain ⟨hr1, hr2, _, _, hq3a, hq3b, hq4a, hq4b, _, hq3inv, hq4inv⟩ :=
+    arena_active_aux_props hWf hMatch hLoopFree b hb (.inr rfl) (hk ▸ ha2)
+  let A' := (B.connect (N.partner ⟨a.id, 1⟩) (N.partner ⟨b.id, 1⟩)).connect (N.partner ⟨a.id, 2⟩) (N.partner ⟨b.id, 2⟩)
+  refine ⟨A', .fire hne hinet_a hinet_b hAl1 hAl2 (by rw [hred]; simp [hl1, hl2, hr1, hr2, Arena.apply, A', B]),
+    fun id => by simpa [A', B, Arena.connect_node, Arena.drop_node] using (arena_find_keep hMatch [] _ N.nextId id (by simpa using hWf')).symm,
+    fun p hp => ?_, by simp [A', B, mkNetFrom, hMatch.next_eq]⟩
+  rw [partner_mkNetFrom, ite_t hp]
+  have hpL := ((livePorts_split hWf ha hb hne p).1).2 (.inl (by simpa [livePorts, mkNetFrom] using hp))
+  have hinv := (hWf.partner_wf p hpL).2.2
+  have hAl := hMatch.link_live p hpL
+  rw [contractBridge_anni_eq hne hq1a hq1b hq2a hq2b hq3a hq3b hq4a hq4b p]
+  simp only [A', B, Arena.connect_link, Arena.drop_link]
+  grind -verbose (splits := 20) only
+
+private theorem icNet_simulates_comm_link {N : ICNet} {A : Arena} {a b : Agent}
+    (hWf : WfNet N) (hMatch : ArenaMatchesNet A N) (hLoopFree : LoopFreePair N a.id b.id)
+    (ha : a ∈ N.agents) (hb : b ∈ N.agents) (hne : a.id ≠ b.id) (ha2 : a.kind.arity = 2) (hb2 : b.kind.arity = 2)
+    (p : PortRef)
+    (hp : p ∈ livePorts (mkNetFrom (N.agents.filter (fun x => x.id != a.id && x.id != b.id) ++
+        [⟨N.nextId, b.kind⟩, ⟨N.nextId + 1, b.kind⟩, ⟨N.nextId + 2, a.kind⟩, ⟨N.nextId + 3, a.kind⟩]) N.freePorts
+      (applyConj (swapList [(⟨a.id, 1⟩, ⟨N.nextId, 0⟩), (⟨a.id, 2⟩, ⟨N.nextId + 1, 0⟩),
+        (⟨b.id, 1⟩, ⟨N.nextId + 2, 0⟩), (⟨b.id, 2⟩, ⟨N.nextId + 3, 0⟩)])
+        (swapList (commTauPairs N.nextId)) (pairsDom (commTauPairs N.nextId)) N.partner) (N.nextId + 4))) :
+    let l : INetNode := ⟨a.id, a.kind.toINet.1, a.kind.toINet.2, 0, A.link ⟨a.id, 1⟩, A.link ⟨a.id, 2⟩⟩
+    let r : INetNode := ⟨b.id, b.kind.toINet.1, b.kind.toINet.2, 0, A.link ⟨b.id, 1⟩, A.link ⟨b.id, 2⟩⟩
+    let B := (A.drop a.id).drop b.id
+    let sp := commuteSpawnedNodes l r A.next
+    let A' := ({ sp.foldl Arena.place B with next := A.next + sp.length }).splice (commuteSplices l r A.next)
+    A'.link p = (mkNetFrom (N.agents.filter (fun x => x.id != a.id && x.id != b.id) ++
+        [⟨N.nextId, b.kind⟩, ⟨N.nextId + 1, b.kind⟩, ⟨N.nextId + 2, a.kind⟩, ⟨N.nextId + 3, a.kind⟩]) N.freePorts
+      (applyConj (swapList [(⟨a.id, 1⟩, ⟨N.nextId, 0⟩), (⟨a.id, 2⟩, ⟨N.nextId + 1, 0⟩),
+        (⟨b.id, 1⟩, ⟨N.nextId + 2, 0⟩), (⟨b.id, 2⟩, ⟨N.nextId + 3, 0⟩)])
+        (swapList (commTauPairs N.nextId)) (pairsDom (commTauPairs N.nextId)) N.partner) (N.nextId + 4)).partner p := by
+  intro l r B sp A'
+  have hltA := hWf.agents_lt a ha
+  have hltB := hWf.agents_lt b hb
+  have hBl : B.link = A.link := by simp [B]
+  obtain ⟨hl1, hl2, hq1lt, hq2lt, hq1a, hq1b, hq2a, hq2b, hq12, hq1inv, hq2inv⟩ :=
+    arena_active_aux_props hWf hMatch hLoopFree a ha (.inl rfl) ha2
+  obtain ⟨hr1, hr2, hq3lt, hq4lt, hq3a, hq3b, hq4a, hq4b, hq34, hq3inv, hq4inv⟩ :=
+    arena_active_aux_props hWf hMatch hLoopFree b hb (.inr rfl) hb2
+  rw [partner_mkNetFrom, ite_t hp]
+  have hpA : ∀ id, agentPorts ⟨id, a.kind⟩ = [⟨id, 0⟩, ⟨id, 1⟩, ⟨id, 2⟩] :=
+    fun id => agentPorts_of_arity2 (a := ⟨id, a.kind⟩) ha2
+  have hpB : ∀ id, agentPorts ⟨id, b.kind⟩ = [⟨id, 0⟩, ⟨id, 1⟩, ⟨id, 2⟩] :=
+    fun id => agentPorts_of_arity2 (a := ⟨id, b.kind⟩) hb2
+  let keep := N.agents.filter (fun x => x.id != a.id && x.id != b.id)
+  have hsp : p ∈ (keep.flatMap agentPorts) ++ N.freePorts ∨
+      p ∈ [⟨N.nextId, 0⟩, ⟨N.nextId + 1, 0⟩, ⟨N.nextId + 2, 0⟩, ⟨N.nextId + 3, 0⟩] ∨
+      p ∈ pairsDom (commTauPairs N.nextId) := by
+    simp only [keep, livePorts, mkNetFrom, List.flatMap_append, List.flatMap_cons, List.flatMap_nil,
+      hpA, hpB, List.append_nil, List.mem_append, List.mem_cons, List.not_mem_nil, or_false, pairsDom, commTauPairs] at hp ⊢
+    grind
+  dsimp only [A', sp]; arena_reads
+  simp only [l, r, hl1, hl2, hr1, hr2, hMatch.next_eq, hBl, applyConj]
+  rcases hsp with hpK | hpF | hpT
+  · have hpL := ((livePorts_split hWf ha hb hne p).1).2 (.inl hpK)
+    have hplt := livePorts_lt_nextId hWf hpL
+    have _ := (livePorts_split hWf ha hb hne p).2 hpK
+    have hinv := (hWf.partner_wf p hpL).2.2
+    have hnplt := livePorts_lt_nextId hWf (hWf.partner_wf p hpL).1
+    have outside : p ∉ pairsDom (commTauPairs N.nextId) := by simp [pairsDom, commTauPairs]; grind only
+    simp only [ite_f outside, hMatch.link_live p hpL]
+    rw [swapList_outside (x := p) (by simp [pairsDom]; grind -verbose only),
+      retained_lookup _ hinv (by intro uv hu; simp at hu; rcases hu with rfl | rfl | rfl | rfl <;> grind only)]
+    simp (disch := omega) only [redirect, port_before, ite_false]; grind -verbose only
+  · simp at hpF
+    rcases hpF with rfl | rfl | rfl | rfl <;>
+      simp (disch := omega) [pairsDom, commTauPairs, swapList, port_before] <;> grind -verbose only
+  · simp [pairsDom, commTauPairs] at hpT
+    rcases hpT with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+      simp (disch := omega) [swapList, pairsDom, commTauPairs, port_after]
+
 theorem icNet_simulates_arenaStep (N N' : ICNet) (A : Arena) (i j : Nat) (hWf : WfNet N) (hMatch : ArenaMatchesNet A N) (hAct : IsActivePair N i j)
     (hFire : fireActivePair N i j = some N') (hLoopFree : LoopFreePair N i j) : ∃ A', Arena.Step A A' ∧ ArenaMatchesNet A' N' := by
-  obtain ⟨a, b, ha, rfl, hb, rfl, hfeq⟩ := fireActivePair_of_active hWf hAct; rw [hfeq, Option.some.injEq] at hFire; subst hFire
-  have hne := hAct.hne; have hltA := hWf.agents_lt a ha; have hltB := hWf.agents_lt b hb; let l : INetNode := ⟨a.id, a.kind.toINet.1, a.kind.toINet.2, 0, A.link ⟨a.id, 1⟩, A.link ⟨a.id, 2⟩⟩
+  obtain ⟨a, b, ha, rfl, hb, rfl, hfeq⟩ := fireActivePair_of_active hWf hAct
+  rw [hfeq, Option.some.injEq] at hFire; subst hFire
+  have hne := hAct.hne
+  let l : INetNode := ⟨a.id, a.kind.toINet.1, a.kind.toINet.2, 0, A.link ⟨a.id, 1⟩, A.link ⟨a.id, 2⟩⟩
   let r : INetNode := ⟨b.id, b.kind.toINet.1, b.kind.toINet.2, 0, A.link ⟨b.id, 1⟩, A.link ⟨b.id, 2⟩⟩
   have hinet_a : A.inet? a.id = some l := by simp [Arena.inet?, hMatch.node_eq, ICNet.toArena, findAgent_of_mem hWf ha, l]
   have hinet_b : A.inet? b.id = some r := by simp [Arena.inet?, hMatch.node_eq, ICNet.toArena, findAgent_of_mem hWf hb, r]
   have hAl1 : A.link ⟨a.id, 0⟩ = ⟨b.id, 0⟩ := by rw [hMatch.link_live _ (principal_live ha), hAct.facing]
   have hAl2 : A.link ⟨b.id, 0⟩ = ⟨a.id, 0⟩ := by rw [hMatch.link_live _ (principal_live hb), (hAct.symm hWf).facing]
-  have hWf' := step_preserves_wfNet N _ hWf (.fire hAct hfeq); let keep := N.agents.filter (fun x => x.id != a.id && x.id != b.id)
-  have hfind_keep : ∀ (sp : List Agent) (σ' : PortRef → PortRef) (nx id : Nat), WfNet (mkNetFrom (keep ++ sp) N.freePorts σ' nx) →
-      (mkNetFrom (keep ++ sp) N.freePorts σ' nx).toArena.node id = match sp.find? (·.id == id) with
-        | some x => some (x.kind.toINet.1, x.kind.toINet.2, 0)
-        | none => if id = b.id then none else if id = a.id then none else A.node id := by
-    intro sp σ' nx id hWfM; simp only [ICNet.toArena]; cases hfs : sp.find? (·.id == id) with
-    | some x => rw [← beq_iff_eq.1 (List.find?_some (p := fun y : Agent => y.id == id) hfs), findAgent_of_mem hWfM (List.mem_append_right _ (List.mem_of_find?_eq_some hfs))]; rfl
-    | none =>
-      have filtered : keep.find? (·.id == id) = if id = b.id ∨ id = a.id then none else findAgent N id := by
-        rw [List.find?_filter]; split
-        · rw [List.find?_eq_none]; intro x _; simp; grind only
-        · unfold findAgent; congr 1; funext x; by_cases h : x.id = id <;> simp [h] <;> grind only
-      rw [hMatch.node_eq]; simp only [ICNet.toArena, findAgent, mkNetFrom, List.find?_append, filtered, hfs]; split <;> split <;> simp_all [findAgent]
-  have haux : ∀ (c : Agent), c ∈ N.agents → (c.id = a.id ∨ c.id = b.id) → c.kind.arity = 2 → A.link ⟨c.id, 1⟩ = N.partner ⟨c.id, 1⟩ ∧ A.link ⟨c.id, 2⟩ = N.partner ⟨c.id, 2⟩ ∧
-      (N.partner ⟨c.id, 1⟩).nodeId < N.nextId ∧ (N.partner ⟨c.id, 2⟩).nodeId < N.nextId ∧
-      (N.partner ⟨c.id, 1⟩).nodeId ≠ a.id ∧ (N.partner ⟨c.id, 1⟩).nodeId ≠ b.id ∧
-      (N.partner ⟨c.id, 2⟩).nodeId ≠ a.id ∧ (N.partner ⟨c.id, 2⟩).nodeId ≠ b.id ∧
-      N.partner ⟨c.id, 1⟩ ≠ N.partner ⟨c.id, 2⟩ ∧
-      N.partner (N.partner ⟨c.id, 1⟩) = ⟨c.id, 1⟩ ∧ N.partner (N.partner ⟨c.id, 2⟩) = ⟨c.id, 2⟩ := by
-    intro c hc hcid har; have hm1 : ⟨c.id, 1⟩ ∈ livePorts N := List.mem_append_left _ (List.mem_flatMap.2 ⟨c, hc, by rw [agentPorts_of_arity2 har]; simp⟩)
-    have hm2 : ⟨c.id, 2⟩ ∈ livePorts N := List.mem_append_left _ (List.mem_flatMap.2 ⟨c, hc, by rw [agentPorts_of_arity2 har]; simp⟩)
-    have hi1 := (hWf.partner_wf _ hm1).2.2; have hi2 := (hWf.partner_wf _ hm2).2.2; have hlf1 := hLoopFree c hc hcid ⟨c.id, 1⟩ (by rw [agentAuxPorts_of_arity2 har]; simp)
-    have hlf2 := hLoopFree c hc hcid ⟨c.id, 2⟩ (by rw [agentAuxPorts_of_arity2 har]; simp)
-    exact ⟨hMatch.link_live _ hm1, hMatch.link_live _ hm2, livePorts_lt_nextId hWf (hWf.partner_wf _ hm1).1, livePorts_lt_nextId hWf (hWf.partner_wf _ hm2).1, hlf1.1, hlf1.2, hlf2.1, hlf2.2,
-      (fun e => by have := congrArg N.partner e; rw [hi1, hi2] at this; cases this), hi1, hi2⟩
-  have hred := reduceActivePair_of_classifyPair a b l r A.next hne ⟨rfl, rfl⟩ ⟨rfl, rfl⟩; have hspec := classifyPair_spec a b; unfold firePairWith classifyRule at hWf' ⊢; let B := (A.drop a.id).drop b.id
-  have hBn : B.next = N.nextId := by simp [B, hMatch.next_eq]
-  have hBl : B.link = A.link := by simp [B]
-  cases hpk : classifyPair a.id b.id a.kind b.kind <;> rw [hpk] at hred hspec hWf' <;> simp only [PairKind.toOp, RuleOp.spawned, RuleOp.spawnCount, RuleOp.apply] at hWf' ⊢
-  · refine ⟨B, .fire hne hinet_a hinet_b hAl1 hAl2 (by rw [hred]; simp [Arena.apply, Arena.erasers, l, r, B]), fun id => by simpa [B, Arena.drop_node] using (hfind_keep [] _ N.nextId id (by simpa using hWf')).symm,
-      fun p hp => by rw [partner_mkNetFrom, ite_t hp]; simp [B, applyConj, pairsDom, swapList, hMatch.link_live p (((livePorts_split hWf ha hb hne p).1).2 (.inl (by simpa [livePorts, mkNetFrom] using hp)))],
-      by simp [mkNetFrom, hBn]⟩
-  · rename_i bin; have hbin : ∃ c, c ∈ N.agents ∧ c.id = bin ∧ (c.id = a.id ∨ c.id = b.id) ∧ c.kind.arity = 2 ∧ reduceActivePair ⟨l, r⟩ A.next = .erase [A.link ⟨c.id, 1⟩, A.link ⟨c.id, 2⟩] := by
-      rcases hspec with ⟨rfl, ha2, _⟩ | ⟨rfl, hb2, _⟩
-      · exact ⟨a, ha, rfl, .inl rfl, ha2, by simpa [l] using hred⟩
-      · exact ⟨b, hb, rfl, .inr rfl, hb2, by simpa [hne.symm, r] using hred⟩
-    obtain ⟨c, hc, rfl, hcid, har, hred'⟩ := hbin; obtain ⟨hl1, hl2, hq1lt, hq2lt, hq1a, hq1b, hq2a, hq2b, hq12, hq1inv, hq2inv⟩ := haux c hc hcid har; have hltc := hWf.agents_lt c hc
-    have hq1c : (N.partner ⟨c.id, 1⟩).nodeId ≠ c.id := hcid.elim (· ▸ hq1a) (· ▸ hq1b); have hq2c : (N.partner ⟨c.id, 2⟩).nodeId ≠ c.id := hcid.elim (· ▸ hq2a) (· ▸ hq2b)
-    refine ⟨B.erasers [N.partner ⟨c.id, 1⟩, N.partner ⟨c.id, 2⟩], .fire hne hinet_a hinet_b hAl1 hAl2 (by rw [hred', hl1, hl2]; simp [Arena.apply, l, r, B]),
-      fun id => ?_, fun p hp => ?_, by simp [mkNetFrom, Arena.erasers, hBn]⟩
-    · rw [hfind_keep _ _ _ id hWf']
-      simp only [Arena.erasers, Arena.connect_node, Arena.connect_next, Arena.place_node, B, Arena.drop_node, Arena.drop_next, hMatch.next_eq, mkEraNode, List.find?_cons, List.find?_nil, CombKind.toINet]
-      grind -verbose only
-    · rw [partner_mkNetFrom, ite_t hp]; have hsp : p ∈ (keep.flatMap agentPorts) ++ N.freePorts ∨ p = ⟨N.nextId, 0⟩ ∨ p = ⟨N.nextId + 1, 0⟩ := by
-        simp only [livePorts, mkNetFrom, List.flatMap_append, List.flatMap_cons, List.flatMap_nil, agentPorts, List.append_nil, List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hp ⊢; grind
-      arena_reads; simp only [hBn, hBl, applyConj, pairsDom, List.flatMap_nil, List.not_mem_nil, ite_false]; rcases hsp with hpK | rfl | rfl
-      · have hpL := ((livePorts_split hWf ha hb hne p).1).2 (.inl hpK); have hplt := livePorts_lt_nextId hWf hpL; have := (livePorts_split hWf ha hb hne p).2 hpK
-        have hinv := (hWf.partner_wf p hpL).2.2; have hnplt := livePorts_lt_nextId hWf (hWf.partner_wf p hpL).1; have hpnc : p.nodeId ≠ c.id := hcid.elim (· ▸ this.1) (· ▸ this.2)
-        rw [hMatch.link_live p hpL, swapList_outside (x := p) (by simp [pairsDom]; grind only), retained_lookup _ hinv (by intro uv hu; simp at hu; rcases hu with rfl | rfl <;> grind only)]
-        simp only [redirect]; grind only
-      all_goals simp (disch := omega) [swapList, port_after, port_before] <;> grind -verbose only
-  · obtain ⟨hk, ha2⟩ := hspec; obtain ⟨hl1, hl2, _, _, hq1a, hq1b, hq2a, hq2b, _, hq1inv, hq2inv⟩ := haux a ha (.inl rfl) ha2
-    obtain ⟨hr1, hr2, _, _, hq3a, hq3b, hq4a, hq4b, _, hq3inv, hq4inv⟩ := haux b hb (.inr rfl) (hk ▸ ha2)
-    let A' := (B.connect (N.partner ⟨a.id, 1⟩) (N.partner ⟨b.id, 1⟩)).connect (N.partner ⟨a.id, 2⟩) (N.partner ⟨b.id, 2⟩)
-    refine ⟨A', .fire hne hinet_a hinet_b hAl1 hAl2 (by rw [hred]; simp [l, r, hl1, hl2, hr1, hr2, Arena.apply, A', B]),
-      fun id => by simpa [A', B, Arena.connect_node, Arena.drop_node] using (hfind_keep [] _ N.nextId id (by simpa using hWf')).symm,
-      fun p hp => ?_, by simp [A', B, mkNetFrom, hMatch.next_eq]⟩
-    rw [partner_mkNetFrom, ite_t hp]; have hpL := ((livePorts_split hWf ha hb hne p).1).2 (.inl (by simpa [livePorts, mkNetFrom] using hp))
-    have hinv := (hWf.partner_wf p hpL).2.2; have hAl := hMatch.link_live p hpL
-    have hcb : ∀ q, contractBridge N.partner (swapList [(⟨a.id, 1⟩, ⟨b.id, 1⟩), (⟨a.id, 2⟩, ⟨b.id, 2⟩)]) (pairsDom [(⟨a.id, 1⟩, ⟨b.id, 1⟩), (⟨a.id, 2⟩, ⟨b.id, 2⟩)]) q =
-        if N.partner q = ⟨a.id, 1⟩ then N.partner ⟨b.id, 1⟩
-        else if N.partner q = ⟨b.id, 1⟩ then N.partner ⟨a.id, 1⟩
-        else if N.partner q = ⟨a.id, 2⟩ then N.partner ⟨b.id, 2⟩
-        else if N.partner q = ⟨b.id, 2⟩ then N.partner ⟨a.id, 2⟩ else N.partner q := by
-      intro q; unfold contractBridge; change walkAux _ _ _ 4 (N.partner q) = _; have off {u : PortRef} {i k : Nat} (hne : u.nodeId ≠ i) : u ≠ ⟨i,k⟩ := fun eq => hne (eq ▸ rfl)
-      by_cases h : N.partner q ∈ pairsDom [(⟨a.id,1⟩,⟨b.id,1⟩), (⟨a.id,2⟩,⟨b.id,2⟩)]
-      · simp [pairsDom] at h; rcases h with h | h | h | h <;> simp (disch := assumption) [h, walkAux, swapList, pairsDom, off, hne.symm]
-      · simp [pairsDom] at h; simp [walkAux, pairsDom, h]
-    rw [hcb p]; simp only [A', B, Arena.connect_link, Arena.drop_link]; grind -verbose (splits := 20) only
-  · rename_i ka kb; obtain ⟨rfl, rfl, ha2, hb2, _⟩ := hspec; obtain ⟨hl1, hl2, hq1lt, hq2lt, hq1a, hq1b, hq2a, hq2b, hq12, hq1inv, hq2inv⟩ := haux a ha (.inl rfl) ha2
-    obtain ⟨hr1, hr2, hq3lt, hq4lt, hq3a, hq3b, hq4a, hq4b, hq34, hq3inv, hq4inv⟩ := haux b hb (.inr rfl) hb2; let sp := commuteSpawnedNodes l r A.next
+  have hWf' := step_preserves_wfNet N _ hWf (.fire hAct hfeq)
+  have hred := reduceActivePair_of_classifyPair a b l r A.next hne ⟨rfl, rfl⟩ ⟨rfl, rfl⟩
+  have hspec := classifyPair_spec a b
+  unfold firePairWith classifyRule at hWf' ⊢
+  let B := (A.drop a.id).drop b.id
+  cases hpk : classifyPair a.id b.id a.kind b.kind <;> rw [hpk] at hred hspec hWf' <;>
+    simp only [PairKind.toOp, RuleOp.spawned, RuleOp.spawnCount, RuleOp.apply] at hWf' ⊢
+  · refine ⟨B, .fire hne hinet_a hinet_b hAl1 hAl2 (by rw [hred]; simp [Arena.apply, Arena.erasers, l, r, B]),
+      fun id => by simpa [B, Arena.drop_node] using (arena_find_keep hMatch [] _ N.nextId id (by simpa using hWf')).symm,
+      fun p hp => by
+        rw [partner_mkNetFrom, ite_t hp]
+        simp [B, applyConj, pairsDom, swapList,
+          hMatch.link_live p (((livePorts_split hWf ha hb hne p).1).2 (.inl (by simpa [livePorts, mkNetFrom] using hp)))],
+      by simp [mkNetFrom, B, hMatch.next_eq]⟩
+  · rename_i bin
+    rcases hspec with ⟨rfl, ha2, _⟩ | ⟨rfl, hb2, _⟩
+    · exact icNet_simulates_era hWf hMatch hLoopFree ha hb hne ha (.inl rfl) ha2 hinet_a hinet_b hAl1 hAl2 (by simpa [l] using hred) hWf'
+    · exact icNet_simulates_era hWf hMatch hLoopFree ha hb hne hb (.inr rfl) hb2 hinet_a hinet_b hAl1 hAl2 (by simpa [hne.symm, r] using hred) hWf'
+  · obtain ⟨hk, ha2⟩ := hspec
+    exact icNet_simulates_anni hWf hMatch hLoopFree ha hb hne hk ha2 hinet_a hinet_b hAl1 hAl2 hred hWf'
+  · rename_i ka kb
+    obtain ⟨rfl, rfl, ha2, hb2, _⟩ := hspec
+    let sp := commuteSpawnedNodes l r A.next
     let A' := ({ sp.foldl Arena.place B with next := A.next + sp.length }).splice (commuteSplices l r A.next)
     refine ⟨A', .fire hne hinet_a hinet_b hAl1 hAl2 (by rw [hred]; simp [Arena.apply, l, r, A', sp, B]),
-      fun id => ?_, fun p hp => ?_, by simp [A', sp, commuteSpawnedNodes, commuteSplices, Arena.splice, mkNetFrom, hMatch.next_eq]⟩
-    · rw [hfind_keep _ _ _ id hWf']; simp only [A', sp, commuteSplices, Arena.splice, Arena.connect_node, commuteSpawnedNodes,
-        List.foldl_cons, List.foldl_nil, Arena.place_node, B, Arena.drop_node, hMatch.next_eq, List.find?_cons, List.find?_nil, l, r]
-      grind -verbose only
-    · rw [partner_mkNetFrom, ite_t hp]; have hpA : ∀ id, agentPorts ⟨id, a.kind⟩ = [⟨id, 0⟩, ⟨id, 1⟩, ⟨id, 2⟩] := fun id => agentPorts_of_arity2 (a := ⟨id, a.kind⟩) ha2
-      have hpB : ∀ id, agentPorts ⟨id, b.kind⟩ = [⟨id, 0⟩, ⟨id, 1⟩, ⟨id, 2⟩] := fun id => agentPorts_of_arity2 (a := ⟨id, b.kind⟩) hb2
-      have hsp : p ∈ (keep.flatMap agentPorts) ++ N.freePorts ∨ p ∈ [⟨N.nextId, 0⟩, ⟨N.nextId + 1, 0⟩, ⟨N.nextId + 2, 0⟩, ⟨N.nextId + 3, 0⟩] ∨ p ∈ pairsDom (commTauPairs N.nextId) := by
-        simp only [livePorts, mkNetFrom, List.flatMap_append, List.flatMap_cons, List.flatMap_nil,
-          hpA, hpB, List.append_nil, List.mem_append, List.mem_cons, List.not_mem_nil, or_false, pairsDom, commTauPairs] at hp ⊢; grind
-      dsimp only [A', sp]; arena_reads; simp only [l, r, hl1, hl2, hr1, hr2, hMatch.next_eq, hBl, applyConj]; rcases hsp with hpK | hpF | hpT
-      · have hpL := ((livePorts_split hWf ha hb hne p).1).2 (.inl hpK); have hplt := livePorts_lt_nextId hWf hpL; have := (livePorts_split hWf ha hb hne p).2 hpK
-        have hinv := (hWf.partner_wf p hpL).2.2; have hnplt := livePorts_lt_nextId hWf (hWf.partner_wf p hpL).1; have outside : p ∉ pairsDom (commTauPairs N.nextId) := by simp [pairsDom, commTauPairs]; grind only
-        simp only [ite_f outside, hMatch.link_live p hpL]
-        rw [swapList_outside (x := p) (by simp [pairsDom]; grind -verbose only), retained_lookup _ hinv (by intro uv hu; simp at hu; rcases hu with rfl | rfl | rfl | rfl <;> grind only)]
-        simp (disch := omega) only [redirect, port_before, ite_false]; grind -verbose only
-      · simp at hpF; rcases hpF with rfl | rfl | rfl | rfl <;> simp (disch := omega) [pairsDom, commTauPairs, swapList, port_before] <;> grind -verbose only
-      · simp [pairsDom, commTauPairs] at hpT; rcases hpT with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> simp (disch := omega) [swapList, pairsDom, commTauPairs, port_after]
+      fun id => ?_,
+      fun p hp => icNet_simulates_comm_link hWf hMatch hLoopFree ha hb hne ha2 hb2 p hp,
+      by simp [A', sp, commuteSpawnedNodes, commuteSplices, Arena.splice, mkNetFrom, hMatch.next_eq]⟩
+    rw [arena_find_keep hMatch _ _ _ id hWf']
+    simp only [A', sp, commuteSplices, Arena.splice, Arena.connect_node, commuteSpawnedNodes,
+      List.foldl_cons, List.foldl_nil, Arena.place_node, B, Arena.drop_node, hMatch.next_eq,
+      List.find?_cons, List.find?_nil, l, r]
+    grind -verbose only
 theorem icNet_toArena_simulates_arenaStep (N N' : ICNet) (i j : Nat) (hWf : WfNet N) (hAct : IsActivePair N i j) (hFire : fireActivePair N i j = some N') (hLoopFree : LoopFreePair N i j) :
     ∃ A', Arena.Step N.toArena A' ∧ ArenaMatchesNet A' N' :=
   icNet_simulates_arenaStep N N' N.toArena i j hWf (arenaMatchesNet_toArena N) hAct hFire hLoopFree

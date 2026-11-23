@@ -1082,6 +1082,7 @@ pub enum E2eeChannelError {
     InvalidClock,
     InvalidAttestationNonce,
     MalformedMlKemPubkey,
+    InvalidMlKemDecapsKey,
     CpuTeeVendorRequired,
     ReportDataBindingMismatch,
     InsufficientAttestedGpus { required: usize, actual: usize },
@@ -1093,6 +1094,7 @@ pub enum E2eeChannelError {
     SessionExpired,
     InvocationNonceReplayed,
     EmptyInvocationNonce,
+    AeadFailure(crate::chacha20poly1305::AeadError),
 }
 
 /// Sealed verified E2EE session channel bound to attested CPU TEE + GPU evidence.
@@ -1101,7 +1103,7 @@ pub enum E2eeChannelError {
 pub struct VerifiedE2eeChannel {
     chute_id: String,
     instance_id: String,
-    mlkem768_pubkey: Vec<u8>,
+    mlkem768_pubkey: [u8; ML_KEM_768_PUBKEY_LEN],
     attestation_nonce: [u8; 32],
     cpu_evidence_digest: [u8; 32],
     gpu_fwids: Vec<[u8; 48]>,
@@ -1157,6 +1159,37 @@ impl VerifiedE2eeChannel {
         Ok(hkdf_sha256_expand(&base_key, &info))
     }
 
+    /// Encapsulate an FIPS 203 `ML-KEM-768` ciphertext to this channel's attested encapsulation
+    /// key and derive the channel-bound directional session key (`(ct, bound_key)`).
+    pub fn encapsulate_bound_session(
+        &self,
+        rand_m: &[u8; 32],
+        direction: ChannelDirection,
+    ) -> Result<([u8; ML_KEM_768_CT_LEN], [u8; 32]), E2eeChannelError> {
+        let (ct, shared_secret) =
+            crate::mlkem768::ml_kem_768_encaps_internal(&self.mlkem768_pubkey, rand_m);
+        let bound_key = self.derive_bound_session_key(&shared_secret, &ct, direction)?;
+        Ok((ct, bound_key))
+    }
+
+    /// Decapsulate an FIPS 203 `ML-KEM-768` ciphertext under `dk` (enforcing §7.3 hash check AND
+    /// constant-time match against this channel's attested `mlkem768_pubkey`, plus constant-time
+    /// Fujisaki–Okamoto implicit rejection) and derive the channel-bound directional session key.
+    pub fn decapsulate_bound_session(
+        &self,
+        dk: &[u8; crate::mlkem768::ML_KEM_768_DK_LEN],
+        ct: &[u8; ML_KEM_768_CT_LEN],
+        direction: ChannelDirection,
+    ) -> Result<[u8; 32], E2eeChannelError> {
+        crate::mlkem768::validate_decaps_key(dk)
+            .map_err(|_| E2eeChannelError::InvalidMlKemDecapsKey)?;
+        if !ct_eq(&dk[1152..2336], &self.mlkem768_pubkey) {
+            return Err(E2eeChannelError::InvalidMlKemDecapsKey);
+        }
+        let shared_secret = crate::mlkem768::ml_kem_768_decaps_internal(dk, ct);
+        self.derive_bound_session_key(&shared_secret, ct, direction)
+    }
+
     /// Derive mandatory ChaCha20-Poly1305 AEAD AAD binding `(channel_binding_id, instance_id,
     /// invocation_nonce, direction)` — closing `dregg-chutes-e2ee`'s missing AEAD AAD gap.
     pub fn derive_aad(&self, invocation_nonce: &str, direction: ChannelDirection) -> [u8; 32] {
@@ -1166,6 +1199,52 @@ impl VerifiedE2eeChannel {
             invocation_nonce,
             direction,
         )
+    }
+
+    /// Seal a frame (`ciphertext || 16-byte Poly1305 tag`) with RFC 8439 `ChaCha20-Poly1305`,
+    /// binding mandatory `derive_aad(invocation_nonce, direction)`.
+    pub fn seal_frame(
+        &self,
+        session_key: &[u8; 32],
+        frame_nonce: &[u8; crate::chacha20poly1305::CHACHA20_NONCE_LEN],
+        invocation_nonce: &str,
+        direction: ChannelDirection,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, E2eeChannelError> {
+        if invocation_nonce.is_empty() {
+            return Err(E2eeChannelError::EmptyInvocationNonce);
+        }
+        let aad = self.derive_aad(invocation_nonce, direction);
+        crate::chacha20poly1305::chacha20poly1305_seal_combined(
+            session_key,
+            frame_nonce,
+            &aad,
+            plaintext,
+        )
+        .map_err(E2eeChannelError::AeadFailure)
+    }
+
+    /// Open and authenticate a `ciphertext || 16-byte Poly1305 tag` frame under RFC 8439
+    /// `ChaCha20-Poly1305` and mandatory `derive_aad(invocation_nonce, direction)`.
+    pub fn open_frame(
+        &self,
+        session_key: &[u8; 32],
+        frame_nonce: &[u8; crate::chacha20poly1305::CHACHA20_NONCE_LEN],
+        invocation_nonce: &str,
+        direction: ChannelDirection,
+        sealed_frame: &[u8],
+    ) -> Result<Vec<u8>, E2eeChannelError> {
+        if invocation_nonce.is_empty() {
+            return Err(E2eeChannelError::EmptyInvocationNonce);
+        }
+        let aad = self.derive_aad(invocation_nonce, direction);
+        crate::chacha20poly1305::chacha20poly1305_open_combined(
+            session_key,
+            frame_nonce,
+            &aad,
+            sealed_frame,
+        )
+        .map_err(E2eeChannelError::AeadFailure)
     }
 }
 
@@ -1245,12 +1324,12 @@ pub fn verify_e2ee_channel(
     let mut attestation_nonce = [0u8; 32];
     attestation_nonce.copy_from_slice(&nonce_vec);
 
-    // Validate ML-KEM-768 public key base64 strictly decodes to 1184 bytes.
-    let mlkem768_pubkey = base64_decode_strict(&input.e2e_pubkey_b64)
+    // Validate ML-KEM-768 public key base64 strictly decodes to 1184 bytes AND passes the
+    // mandatory FIPS 203 §7.2 canonical modulus check (all 12-bit coefficients < 3329).
+    let mlkem768_pubkey_vec = base64_decode_strict(&input.e2e_pubkey_b64)
         .ok_or(E2eeChannelError::MalformedMlKemPubkey)?;
-    if mlkem768_pubkey.len() != ML_KEM_768_PUBKEY_LEN {
-        return Err(E2eeChannelError::MalformedMlKemPubkey);
-    }
+    let mlkem768_pubkey = *crate::mlkem768::validate_encaps_key(&mlkem768_pubkey_vec)
+        .map_err(|_| E2eeChannelError::MalformedMlKemPubkey)?;
 
     // Core channel binding: CPU TEE report_data[0..32] == SHA-256(ascii(nonce_hex) || ascii(pubkey_b64)).
     let expected_rd =
@@ -1446,5 +1525,210 @@ mod notary_signature_tests {
             verify_tlsn_transcript(&reg, &env, None, NOW).unwrap_err(),
             OracleError::UnsupportedNotaryAlgorithm
         );
+    }
+
+    fn base64_encode_std(bytes: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let b0 = chunk[0];
+            let b1 = *chunk.get(1).unwrap_or(&0);
+            let b2 = *chunk.get(2).unwrap_or(&0);
+            out.push(TABLE[(b0 >> 2) as usize] as char);
+            out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+            if chunk.len() > 1 {
+                out.push(TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+            } else {
+                out.push('=');
+            }
+            if chunk.len() > 2 {
+                out.push(TABLE[(b2 & 0x3f) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn e2ee_channel_rejects_noncanonical_ff_ek_and_seals_genuine_mlkem_frames() {
+        use crate::mlkem768::ml_kem_768_keygen_internal;
+        use crate::sha256::hex_encode_lower;
+        use crate::tee::{
+            fixture_build_intel_tdx_quote, fixture_issue_cert_der, verify_intel_tdx,
+            BasicConstraints, CertRecord, FixtureCertSpec, FixtureTdxQuoteFields,
+            IntelTdxAttestation, IntelTdxMeasurementPin, IntelTdxPolicy, KeyUsage,
+            KEY_USAGE_DIGITAL_SIGNATURE, KEY_USAGE_KEY_CERT_SIGN, NO_SERVICE_TD,
+        };
+
+        let nonce_bytes = [0x51u8; 32];
+        let nonce_hex = hex_encode_lower(&nonce_bytes);
+        let policy = E2eeChannelPolicy {
+            min_gpus: 0,
+            ttl_secs: 1800,
+        };
+
+        let build_cpu_tee = |pubkey_b64: &str| {
+            let root_k = FixtureSigner::p256(b"unit-tdx-root");
+            let leaf_k = FixtureSigner::p256(b"unit-tdx-leaf");
+            let att_k = FixtureSigner::p256(b"unit-tdx-att");
+            let p256 = SignatureAlgorithm::EcdsaP256Sha256;
+            let intel_root = CertRecord::from_der(&fixture_issue_cert_der(
+                &FixtureCertSpec {
+                    subject_cn: "Intel Root",
+                    issuer_cn: "Intel Root",
+                    serial: &[1],
+                    not_before: NOW - 3600,
+                    not_after: NOW + 3600,
+                    subject_key: root_k.public_key(),
+                    basic_constraints: Some(BasicConstraints {
+                        is_ca: true,
+                        path_len_constraint: None,
+                    }),
+                    key_usage: Some(KeyUsage::new(KEY_USAGE_KEY_CERT_SIGN)),
+                    ocsp_signing_eku: false,
+                    dice_fwid: None,
+                    amd_vcek_ext: None,
+                },
+                &root_k,
+                p256,
+            ))
+            .unwrap();
+            let pck_leaf = CertRecord::from_der(&fixture_issue_cert_der(
+                &FixtureCertSpec {
+                    subject_cn: "PCK Leaf",
+                    issuer_cn: "Intel Root",
+                    serial: &[2],
+                    not_before: NOW - 3600,
+                    not_after: NOW + 3600,
+                    subject_key: leaf_k.public_key(),
+                    basic_constraints: Some(BasicConstraints {
+                        is_ca: false,
+                        path_len_constraint: None,
+                    }),
+                    key_usage: Some(KeyUsage::new(KEY_USAGE_DIGITAL_SIGNATURE)),
+                    ocsp_signing_eku: false,
+                    dice_fwid: None,
+                    amd_vcek_ext: None,
+                },
+                &root_k,
+                p256,
+            ))
+            .unwrap();
+            let pin = IntelTdxMeasurementPin {
+                mr_td: [0x11; 48],
+                rt_mr0: [0x22; 48],
+                rt_mr1: [0x33; 48],
+                rt_mr2: [0x44; 48],
+                pin_rtmr3: None,
+            };
+            let tdx_policy = IntelTdxPolicy {
+                pinned_intel_root_sha256: intel_root.cert_sha256(),
+                measurement_pin: pin.clone(),
+                accepted_tcb_statuses: vec!["UpToDate".to_string()],
+                accepted_service_tds: vec![],
+            };
+            let mut rd = [0u8; 64];
+            rd[..32].copy_from_slice(&chutes_report_data_binding(&nonce_hex, pubkey_b64));
+            let quote_bytes = fixture_build_intel_tdx_quote(
+                &FixtureTdxQuoteFields {
+                    mr_td: pin.mr_td,
+                    rt_mr0: pin.rt_mr0,
+                    rt_mr1: pin.rt_mr1,
+                    rt_mr2: pin.rt_mr2,
+                    rt_mr3: [0; 48],
+                    mr_servicetd: Some(NO_SERVICE_TD),
+                    td_attributes: 0,
+                    report_data: rd,
+                    qe_auth_data: b"unit-qe".to_vec(),
+                },
+                &[intel_root, pck_leaf],
+                &leaf_k,
+                &att_k,
+            );
+            verify_intel_tdx(
+                &tdx_policy,
+                &IntelTdxAttestation {
+                    quote_bytes,
+                    tcb_status: "UpToDate".to_string(),
+                },
+                NOW,
+            )
+            .unwrap()
+        };
+
+        // 1. Non-canonical 0xFF 1184-byte key violates FIPS 203 §7.2 (4095 >= 3329) and MUST be refused.
+        let bad_b64 = base64_encode_std(&[0xFFu8; ML_KEM_768_PUBKEY_LEN]);
+        let bad_cpu = build_cpu_tee(&bad_b64);
+        assert_eq!(
+            verify_e2ee_channel(
+                &policy,
+                &E2eeChannelInput {
+                    chute_id: "chute-1".to_string(),
+                    instance_id: "inst-1".to_string(),
+                    attestation_nonce_hex: nonce_hex.clone(),
+                    e2e_pubkey_b64: bad_b64,
+                },
+                &bad_cpu,
+                &[],
+                NOW,
+            ),
+            Err(E2eeChannelError::MalformedMlKemPubkey)
+        );
+
+        // 2. Genuine ML-KEM-768 keypair passes §7.2, encapsulates/decapsulates matching session keys,
+        // and seals/opens AAD-bound ChaCha20-Poly1305 frames.
+        let (ek, dk) = ml_kem_768_keygen_internal(&[0x11; 32], &[0x22; 32]);
+        let ok_b64 = base64_encode_std(&ek);
+        let cpu = build_cpu_tee(&ok_b64);
+        let ch = verify_e2ee_channel(
+            &policy,
+            &E2eeChannelInput {
+                chute_id: "chute-1".to_string(),
+                instance_id: "inst-1".to_string(),
+                attestation_nonce_hex: nonce_hex,
+                e2e_pubkey_b64: ok_b64,
+            },
+            &cpu,
+            &[],
+            NOW,
+        )
+        .unwrap();
+
+        let (ct, client_key) = ch
+            .encapsulate_bound_session(&[0x77; 32], ChannelDirection::Request)
+            .unwrap();
+        let enclave_key = ch
+            .decapsulate_bound_session(&dk, &ct, ChannelDirection::Request)
+            .unwrap();
+        assert_eq!(client_key, enclave_key);
+
+        // Mismatched decapsulation key is rejected before returning any derived key.
+        let (_, wrong_dk) = ml_kem_768_keygen_internal(&[0x33; 32], &[0x44; 32]);
+        assert_eq!(
+            ch.decapsulate_bound_session(&wrong_dk, &ct, ChannelDirection::Request),
+            Err(E2eeChannelError::InvalidMlKemDecapsKey)
+        );
+
+        let frame_nonce = [0x09u8; 12];
+        let pt = b"confidential prompt over attested TEE+ML-KEM-768 channel";
+        let sealed = ch
+            .seal_frame(&client_key, &frame_nonce, "inv-42", ChannelDirection::Request, pt)
+            .unwrap();
+        let opened = ch
+            .open_frame(&enclave_key, &frame_nonce, "inv-42", ChannelDirection::Request, &sealed)
+            .unwrap();
+        assert_eq!(opened, pt);
+
+        // Wrong invocation nonce or direction fails Poly1305 AAD authentication fail-closed.
+        assert!(matches!(
+            ch.open_frame(&enclave_key, &frame_nonce, "inv-43", ChannelDirection::Request, &sealed),
+            Err(E2eeChannelError::AeadFailure(crate::chacha20poly1305::AeadError::AuthenticationFailed))
+        ));
+        assert!(matches!(
+            ch.open_frame(&enclave_key, &frame_nonce, "inv-42", ChannelDirection::Response, &sealed),
+            Err(E2eeChannelError::AeadFailure(crate::chacha20poly1305::AeadError::AuthenticationFailed))
+        ));
     }
 }

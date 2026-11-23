@@ -28,7 +28,6 @@ theorem mac8_regs_fit (regs : Nat → BitVec 64) (h : RegsFit iceStickMac8 regs)
   ⟨exists_setWidth_of_lt _ (h 0), exists_setWidth_of_lt _ (h 1), exists_setWidth_of_lt _ (h 2)⟩
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 0 in
 /-- One edge: the fabric's flops follow the module's registers through `mac8FlopMap`, and its output
 pins show `mac_out`, for every in-width state and input. -/
 theorem mac8_step_realizes : StepRealizes mac8Net iceStickMac8 mac8Pins (projOf mac8FlopMap) := by
@@ -42,20 +41,10 @@ theorem mac8_step_realizes : StepRealizes mac8Net iceStickMac8 mac8Pins (projOf 
     (mac8_pins c a b cc ha hb hc) (mac8_proj regs r0 r1 r2 hr0 hr1 hr2)
     (mac8_module_step c.2 regs c.1 a b cc r0 r1 ha hb hc hr0 hr1)
     (mac8_outs c.2 regs r2 hr2)
-    (by have hG := mac8Net.gatesHold_gateVals mac8Net_topo (pinValues mac8Pins c) (projOf mac8FlopMap regs)
-        simp only [gatesHold, mac8Net, Lit.evalF, Nat.reduceAdd] at hG
-        exact hG)
-  refine ⟨mac8Net.step_eq_projOf mac8FlopMap _ _ _ rfl ?_, ?_⟩
-  · have h1 := h.1
-    simp only [mac8Net, mac8FlopMap, List.zipIdx_cons, List.zipIdx_nil, List.map_cons, List.map_nil,
-      Flop.next, Lit.eval, Nat.reduceAdd] at h1 ⊢
-    exact h1
-  · have h2 := h.2
-    simp only [Net.outputs, mac8Net, List.map_cons, List.map_nil, Lit.eval] at h2 ⊢
-    exact h2
+    (mac8Net.gatesHold_gateVals mac8Net_topo (pinValues mac8Pins c) (projOf mac8FlopMap regs))
+  exact ⟨mac8Net.step_eq_projOf mac8FlopMap _ _ _ rfl h.1, h.2⟩
 
 set_option maxRecDepth 100000 in
-set_option maxHeartbeats 0 in
 /-- A reset edge, from any flop state, leaves the flops holding the module's reset registers. -/
 theorem mac8_reset_realizes : ResetRealizes mac8Net iceStickMac8 mac8Pins (projOf mac8FlopMap) := by
   intro q regs ins hI
@@ -64,14 +53,8 @@ theorem mac8_reset_realizes : ResetRealizes mac8Net iceStickMac8 mac8Pins (projO
     (fun i => (mac8Net.gateVals (pinValues mac8Pins (true, ins)) q).getD i false)
     (stepModuleRegs iceStickMac8 true ins regs)
     (mac8_pins (true, ins) a b cc ha hb hc) (mac8_module_reset ins regs)
-    (by have hG := mac8Net.gatesHold_gateVals mac8Net_topo (pinValues mac8Pins (true, ins)) (q)
-        simp only [gatesHold, mac8Net, Lit.evalF, Nat.reduceAdd] at hG
-        exact hG)
-  refine mac8Net.step_eq_projOf mac8FlopMap _ _ _ rfl ?_
-  have h1 := h
-  simp only [mac8Net, mac8FlopMap, List.zipIdx_cons, List.zipIdx_nil, List.map_cons, List.map_nil,
-    Flop.next, Lit.eval, Nat.reduceAdd] at h1 ⊢
-  exact h1
+    (mac8Net.gatesHold_gateVals mac8Net_topo (pinValues mac8Pins (true, ins)) q)
+  exact mac8Net.step_eq_projOf mac8FlopMap _ _ _ rfl h
 
 theorem iceStickMac8_checkWidths : checkWidths iceStickMac8 = true := by decide
 
