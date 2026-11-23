@@ -15,13 +15,9 @@ public import Obend.Apps.ZkNtt.Goldilocks
 public import Obend.Hardware.HDL
 public import Obend.Hardware.Process
 public import Obend.Hardware.Retiming
-
 public section
-
 namespace Obend.Hardware.PipelinedZkCrypto
-
 open Obend.Apps.ZkNtt Obend.Hardware.HDL Obend.Hardware.Process Obend.Hardware.Retiming
-
 set_option autoImplicit false
 set_option maxRecDepth 4096
 
@@ -198,7 +194,9 @@ def pipelinedGlButterflyRtlModule : RtlModule :=
   | 0 => u | 1 => v | 2 => w | 3 => valid | _ => 0#64
 
 theorem pipelinedGlButterfly_wellFormed (u : Unit) (_ : u = ()) :
-    checkRtlModuleW pipelinedGlButterflyRtlModule = true := by decide +kernel
+    checkRtlModuleW pipelinedGlButterflyRtlModule = true ∧
+    checkWidths pipelinedGlButterflyRtlModule = true :=
+  ⟨by decide +kernel, by decide +kernel⟩
 
 /-! ### 2a. Leiserson–Saxe Retiming Timing Closure (0-Stage Fails 300 MHz, 4-Stage Closes >300 MHz) -/
 
@@ -254,7 +252,7 @@ private def glCanonBV (vx : BitVec 64) : BitVec 64 :=
 private def glAddBV (va vb : BitVec 64) : BitVec 64 :=
   let remP := evalAluOp .sub 0xFFFFFFFF00000001#64 vb
   if evalAluOp .ult va remP != 0#64 then evalAluOp .add va vb else evalAluOp .sub va remP
-private def glSubBV (va vb : BitVec 64) : BitVec 64 :=
+def glSubBV (va vb : BitVec 64) : BitVec 64 :=
   if evalAluOp .ult va vb != 0#64 then evalAluOp .add (evalAluOp .sub 0xFFFFFFFF00000001#64 vb) va
   else evalAluOp .sub va vb
 
@@ -435,43 +433,36 @@ private theorem pushGlAdd_spec (ins regs fin : Nat → BitVec 64) (finalRev : Li
     then evalAluOp .add (evalRtlExpr ins fin regs a) (evalRtlExpr ins fin regs b)
     else evalAluOp .sub (evalRtlExpr ins fin regs a) z) (e1 (fun wa h => hSub wa (m2 wa h)))
 
-private theorem pipelinedGlButterfly_step_regs (ins st : Nat → BitVec 64) :
+private theorem glButterfly_dag : checkWireTableDAG 4 16 pipelinedGlButterflyRtlModule.wires = true := by decide +kernel
+private theorem glButterfly_nodup : (pipelinedGlButterflyRtlModule.regs.map (·.regIdx)).Nodup := by decide +kernel
+private theorem glButterfly_reg_at (ins st : Nat → BitVec 64) (k : Nat) (hk : k < glRegs.length)
+    (hIdx : (glRegs[k]'hk).regIdx = k) :
+    stepModuleRegs pipelinedGlButterflyRtlModule false ins st k =
+      evalRtlExpr ins (evalWireTable ins st pipelinedGlButterflyRtlModule.wires) st (glRegs[k]'hk).nextExpr := by
+  have hEq := stepModuleRegs_false_at pipelinedGlButterflyRtlModule ins st glButterfly_nodup (glRegs[k]'hk) (List.getElem_mem hk)
+  rwa [hIdx] at hEq
+
+private theorem pipelinedGlButterfly_step_s12 (ins st : Nat → BitVec 64) :
     let st' := stepModuleRegs pipelinedGlButterflyRtlModule false ins st
     st' 0 = stage1P00 (ins 1) (ins 2) ∧ st' 1 = stage1P01 (ins 1) (ins 2) ∧
     st' 2 = stage1P10 (ins 1) (ins 2) ∧ st' 3 = stage1P11 (ins 1) (ins 2) ∧
     st' 4 = glCanonBV (ins 0) ∧ st' 5 = truncToWidth 1 (ins 3) ∧
     st' 6 = stage2Lo (st 0) (st 1) (st 2) ∧ st' 7 = stage2Hi (st 0) (st 1) (st 2) (st 3) ∧
-    st' 8 = st 4 ∧ st' 9 = st 5 ∧
-    st' 10 = stage3Reduce (st 6) (st 7) ∧ st' 11 = st 8 ∧ st' 12 = st 9 ∧
-    st' 13 = glAddBV (st 11) (st 10) ∧ st' 14 = glSubBV (st 11) (st 10) ∧ st' 15 = st 12 := by
-  have hDag : checkWireTableDAG 4 16 pipelinedGlButterflyRtlModule.wires = true := by decide +kernel
-  have hNodup : (pipelinedGlButterflyRtlModule.regs.map (·.regIdx)).Nodup := by decide +kernel
-  let fin := evalWireTable ins st pipelinedGlButterflyRtlModule.wires
-  let finalRev := glBuilt.2.2.rev
+    st' 8 = st 4 ∧ st' 9 = st 5 := by
+  let fin := evalWireTable ins st pipelinedGlButterflyRtlModule.wires; let finalRev := glBuilt.2.2.rev
   have hFin : ∀ wa ∈ finalRev, fin wa.wireIdx = evalRtlExpr ins fin st wa.expr :=
-    fun wa hwa => evalWireTable_at_dag 4 16 ins st _ hDag wa (List.mem_reverse.mpr hwa)
-  have hr (k : Nat) (r : RegSpec) (hMem : r ∈ pipelinedGlButterflyRtlModule.regs) (hk : r.regIdx = k) :
-      stepModuleRegs pipelinedGlButterflyRtlModule false ins st k = evalRtlExpr ins fin st r.nextExpr := by
-    rw [← hk, stepModuleRegs_false_at pipelinedGlButterflyRtlModule ins st hNodup r hMem]
-  let r1  := pushGlCanon {} (.inputPort 0)
-  let r2  := pushW r1.2 "s1_vlo" (.alu .bitAnd (.inputPort 1) glMask32Expr)
-  let r3  := pushW r2.2 "s1_vhi" (.alu .lshr (.inputPort 1) glShift32Expr)
-  let r4  := pushW r3.2 "s1_wlo" (.alu .bitAnd (.inputPort 2) glMask32Expr)
-  let r5  := pushW r4.2 "s1_whi" (.alu .lshr (.inputPort 2) glShift32Expr)
-  let r6  := pushW r5.2 "s1_p00" (.alu .mul r2.1 r4.1); let r7 := pushW r6.2 "s1_p01" (.alu .mul r2.1 r5.1)
-  let r8  := pushW r7.2 "s1_p10" (.alu .mul r3.1 r4.1); let r9 := pushW r8.2 "s1_p11" (.alu .mul r3.1 r5.1)
-  let r10 := pushW r9.2 "s1_val" (.resize (.trunc 1) (.inputPort 3)) 1
-  let r11 := pushW r10.2 "s2_mid32" (.alu .add (.alu .add (.alu .lshr (.regRead 0) glShift32Expr)
-    (.alu .bitAnd (.regRead 1) glMask32Expr)) (.alu .bitAnd (.regRead 2) glMask32Expr))
-  let r12 := pushW r11.2 "s2_lo" (.alu .bitOr (.alu .bitAnd (.regRead 0) glMask32Expr)
-    (.alu .shl (.alu .bitAnd r11.1 glMask32Expr) glShift32Expr))
-  let r13 := pushW r12.2 "s2_hi" (.alu .add (.alu .add (.alu .add (.regRead 3)
-    (.alu .lshr (.regRead 1) glShift32Expr)) (.alu .lshr (.regRead 2) glShift32Expr)) (.alu .lshr r11.1 glShift32Expr))
-  let r14 := pushW r13.2 "s3_hilo" (.alu .bitAnd (.regRead 7) glMask32Expr)
-  let r15 := pushW r14.2 "s3_hihi" (.alu .lshr (.regRead 7) glShift32Expr)
-  let r16 := pushW r15.2 "s3_mid"  (.alu .sub (.alu .shl r14.1 glShift32Expr) r14.1)
-  let r17 := pushGlCanon r16.2 (.regRead 6); let r18 := pushGlAdd r17.2 r17.1 r16.1
-  let r19 := pushGlSub r18.2 r18.1 r15.1; let r20 := pushGlAdd r19.2 (.regRead 11) (.regRead 10)
+    fun wa hwa => evalWireTable_at_dag 4 16 ins st _ glButterfly_dag wa (List.mem_reverse.mpr hwa)
+  let r1 := pushGlCanon {} (.inputPort 0); let r2 := pushW r1.2 "s1_vlo" (.alu .bitAnd (.inputPort 1) glMask32Expr)
+  let r3 := pushW r2.2 "s1_vhi" (.alu .lshr (.inputPort 1) glShift32Expr); let r4 := pushW r3.2 "s1_wlo" (.alu .bitAnd (.inputPort 2) glMask32Expr)
+  let r5 := pushW r4.2 "s1_whi" (.alu .lshr (.inputPort 2) glShift32Expr); let r6 := pushW r5.2 "s1_p00" (.alu .mul r2.1 r4.1)
+  let r7 := pushW r6.2 "s1_p01" (.alu .mul r2.1 r5.1); let r8 := pushW r7.2 "s1_p10" (.alu .mul r3.1 r4.1)
+  let r9 := pushW r8.2 "s1_p11" (.alu .mul r3.1 r5.1); let r10 := pushW r9.2 "s1_val" (.resize (.trunc 1) (.inputPort 3)) 1
+  let r11 := pushW r10.2 "s2_mid32" (.alu .add (.alu .add (.alu .lshr (.regRead 0) glShift32Expr) (.alu .bitAnd (.regRead 1) glMask32Expr)) (.alu .bitAnd (.regRead 2) glMask32Expr))
+  let r12 := pushW r11.2 "s2_lo" (.alu .bitOr (.alu .bitAnd (.regRead 0) glMask32Expr) (.alu .shl (.alu .bitAnd r11.1 glMask32Expr) glShift32Expr))
+  let r13 := pushW r12.2 "s2_hi" (.alu .add (.alu .add (.alu .add (.regRead 3) (.alu .lshr (.regRead 1) glShift32Expr)) (.alu .lshr (.regRead 2) glShift32Expr)) (.alu .lshr r11.1 glShift32Expr))
+  let r14 := pushW r13.2 "s3_hilo" (.alu .bitAnd (.regRead 7) glMask32Expr); let r15 := pushW r14.2 "s3_hihi" (.alu .lshr (.regRead 7) glShift32Expr)
+  let r16 := pushW r15.2 "s3_mid" (.alu .sub (.alu .shl r14.1 glShift32Expr) r14.1); let r17 := pushGlCanon r16.2 (.regRead 6)
+  let r18 := pushGlAdd r17.2 r17.1 r16.1; let r19 := pushGlSub r18.2 r18.1 r15.1; let r20 := pushGlAdd r19.2 (.regRead 11) (.regRead 10)
   obtain ⟨m1, e1⟩ := pushGlCanon_spec ins st fin finalRev hFin {} (.inputPort 0)
   obtain ⟨m2, e2⟩ := pushW_spec ins st fin finalRev hFin r1.2 "s1_vlo" (.alu .bitAnd (.inputPort 1) glMask32Expr)
   obtain ⟨m3, e3⟩ := pushW_spec ins st fin finalRev hFin r2.2 "s1_vhi" (.alu .lshr (.inputPort 1) glShift32Expr)
@@ -482,53 +473,62 @@ private theorem pipelinedGlButterfly_step_regs (ins st : Nat → BitVec 64) :
   obtain ⟨m8, e8⟩ := pushW_spec ins st fin finalRev hFin r7.2 "s1_p10" (.alu .mul r3.1 r4.1)
   obtain ⟨m9, e9⟩ := pushW_spec ins st fin finalRev hFin r8.2 "s1_p11" (.alu .mul r3.1 r5.1)
   obtain ⟨m10, e10⟩ := pushW_spec ins st fin finalRev hFin r9.2 "s1_val" (.resize (.trunc 1) (.inputPort 3)) 1
-  obtain ⟨m11, e11⟩ := pushW_spec ins st fin finalRev hFin r10.2 "s2_mid32" (.alu .add (.alu .add (.alu .lshr (.regRead 0) glShift32Expr)
-    (.alu .bitAnd (.regRead 1) glMask32Expr)) (.alu .bitAnd (.regRead 2) glMask32Expr))
-  obtain ⟨m12, e12⟩ := pushW_spec ins st fin finalRev hFin r11.2 "s2_lo" (.alu .bitOr (.alu .bitAnd (.regRead 0) glMask32Expr)
-    (.alu .shl (.alu .bitAnd r11.1 glMask32Expr) glShift32Expr))
-  obtain ⟨m13, e13⟩ := pushW_spec ins st fin finalRev hFin r12.2 "s2_hi" (.alu .add (.alu .add (.alu .add (.regRead 3)
-    (.alu .lshr (.regRead 1) glShift32Expr)) (.alu .lshr (.regRead 2) glShift32Expr)) (.alu .lshr r11.1 glShift32Expr))
+  obtain ⟨m11, e11⟩ := pushW_spec ins st fin finalRev hFin r10.2 "s2_mid32" (.alu .add (.alu .add (.alu .lshr (.regRead 0) glShift32Expr) (.alu .bitAnd (.regRead 1) glMask32Expr)) (.alu .bitAnd (.regRead 2) glMask32Expr))
+  obtain ⟨m12, e12⟩ := pushW_spec ins st fin finalRev hFin r11.2 "s2_lo" (.alu .bitOr (.alu .bitAnd (.regRead 0) glMask32Expr) (.alu .shl (.alu .bitAnd r11.1 glMask32Expr) glShift32Expr))
+  obtain ⟨m13, e13⟩ := pushW_spec ins st fin finalRev hFin r12.2 "s2_hi" (.alu .add (.alu .add (.alu .add (.regRead 3) (.alu .lshr (.regRead 1) glShift32Expr)) (.alu .lshr (.regRead 2) glShift32Expr)) (.alu .lshr r11.1 glShift32Expr))
+  obtain ⟨m14, _⟩ := pushW_spec ins st fin finalRev hFin r13.2 "s3_hilo" (.alu .bitAnd (.regRead 7) glMask32Expr)
+  obtain ⟨m15, _⟩ := pushW_spec ins st fin finalRev hFin r14.2 "s3_hihi" (.alu .lshr (.regRead 7) glShift32Expr)
+  obtain ⟨m16, _⟩ := pushW_spec ins st fin finalRev hFin r15.2 "s3_mid" (.alu .sub (.alu .shl r14.1 glShift32Expr) r14.1)
+  obtain ⟨m17, _⟩ := pushGlCanon_spec ins st fin finalRev hFin r16.2 (.regRead 6); obtain ⟨m18, _⟩ := pushGlAdd_spec ins st fin finalRev hFin r17.2 r17.1 r16.1
+  obtain ⟨m19, _⟩ := pushGlSub_spec ins st fin finalRev hFin r18.2 r18.1 r15.1; obtain ⟨m20, _⟩ := pushGlAdd_spec ins st fin finalRev hFin r19.2 (.regRead 11) (.regRead 10)
+  obtain ⟨m21, _⟩ := pushGlSub_spec ins st fin finalRev hFin r20.2 (.regRead 11) (.regRead 10)
+  have s13 : ∀ wa ∈ r13.2.rev, wa ∈ finalRev := fun w h => m21 w (m20 w (m19 w (m18 w (m17 w (m16 w (m15 w (m14 w h)))))))
+  have s12 := fun w h => s13 w (m13 w h); have s11 := fun w h => s12 w (m12 w h); have s10 := fun w h => s11 w (m11 w h); have s9 := fun w h => s10 w (m10 w h)
+  have s8 := fun w h => s9 w (m9 w h); have s7 := fun w h => s8 w (m8 w h); have s6 := fun w h => s7 w (m7 w h); have s5 := fun w h => s6 w (m6 w h)
+  have s4 := fun w h => s5 w (m5 w h); have s3 := fun w h => s4 w (m4 w h); have s2 := fun w h => s3 w (m3 w h); have s1 := fun w h => s2 w (m2 w h)
+  dsimp only; refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, glButterfly_reg_at ins st 8 (by decide) rfl, glButterfly_reg_at ins st 9 (by decide) rfl⟩
+  · rw [glButterfly_reg_at ins st 0 (by decide) rfl]; change evalRtlExpr ins fin st r6.1 = _; rw [e6 s6]; simp only [evalRtlExpr]; rw [e2 s2, e4 s4]; rfl
+  · rw [glButterfly_reg_at ins st 1 (by decide) rfl]; change evalRtlExpr ins fin st r7.1 = _; rw [e7 s7]; simp only [evalRtlExpr]; rw [e2 s2, e5 s5]; rfl
+  · rw [glButterfly_reg_at ins st 2 (by decide) rfl]; change evalRtlExpr ins fin st r8.1 = _; rw [e8 s8]; simp only [evalRtlExpr]; rw [e3 s3, e4 s4]; rfl
+  · rw [glButterfly_reg_at ins st 3 (by decide) rfl]; change evalRtlExpr ins fin st r9.1 = _; rw [e9 s9]; simp only [evalRtlExpr]; rw [e3 s3, e5 s5]; rfl
+  · rw [glButterfly_reg_at ins st 4 (by decide) rfl]; exact e1 s1
+  · rw [glButterfly_reg_at ins st 5 (by decide) rfl]; exact e10 s10
+  · rw [glButterfly_reg_at ins st 6 (by decide) rfl]; change evalRtlExpr ins fin st r12.1 = _; rw [e12 s12]; simp only [evalRtlExpr]; rw [e11 s11]; rfl
+  · rw [glButterfly_reg_at ins st 7 (by decide) rfl]; change evalRtlExpr ins fin st r13.1 = _; rw [e13 s13]; simp only [evalRtlExpr]; rw [e11 s11]; rfl
+
+private theorem pipelinedGlButterfly_step_s34 (ins st : Nat → BitVec 64) :
+    let st' := stepModuleRegs pipelinedGlButterflyRtlModule false ins st
+    st' 10 = stage3Reduce (st 6) (st 7) ∧ st' 11 = st 8 ∧ st' 12 = st 9 ∧
+    st' 13 = glAddBV (st 11) (st 10) ∧ st' 14 = glSubBV (st 11) (st 10) ∧ st' 15 = st 12 := by
+  let fin := evalWireTable ins st pipelinedGlButterflyRtlModule.wires; let finalRev := glBuilt.2.2.rev
+  have hFin : ∀ wa ∈ finalRev, fin wa.wireIdx = evalRtlExpr ins fin st wa.expr :=
+    fun wa hwa => evalWireTable_at_dag 4 16 ins st _ glButterfly_dag wa (List.mem_reverse.mpr hwa)
+  let r1 := pushGlCanon {} (.inputPort 0); let r2 := pushW r1.2 "s1_vlo" (.alu .bitAnd (.inputPort 1) glMask32Expr)
+  let r3 := pushW r2.2 "s1_vhi" (.alu .lshr (.inputPort 1) glShift32Expr); let r4 := pushW r3.2 "s1_wlo" (.alu .bitAnd (.inputPort 2) glMask32Expr)
+  let r5 := pushW r4.2 "s1_whi" (.alu .lshr (.inputPort 2) glShift32Expr); let r6 := pushW r5.2 "s1_p00" (.alu .mul r2.1 r4.1)
+  let r7 := pushW r6.2 "s1_p01" (.alu .mul r2.1 r5.1); let r8 := pushW r7.2 "s1_p10" (.alu .mul r3.1 r4.1)
+  let r9 := pushW r8.2 "s1_p11" (.alu .mul r3.1 r5.1); let r10 := pushW r9.2 "s1_val" (.resize (.trunc 1) (.inputPort 3)) 1
+  let r11 := pushW r10.2 "s2_mid32" (.alu .add (.alu .add (.alu .lshr (.regRead 0) glShift32Expr) (.alu .bitAnd (.regRead 1) glMask32Expr)) (.alu .bitAnd (.regRead 2) glMask32Expr))
+  let r12 := pushW r11.2 "s2_lo" (.alu .bitOr (.alu .bitAnd (.regRead 0) glMask32Expr) (.alu .shl (.alu .bitAnd r11.1 glMask32Expr) glShift32Expr))
+  let r13 := pushW r12.2 "s2_hi" (.alu .add (.alu .add (.alu .add (.regRead 3) (.alu .lshr (.regRead 1) glShift32Expr)) (.alu .lshr (.regRead 2) glShift32Expr)) (.alu .lshr r11.1 glShift32Expr))
+  let r14 := pushW r13.2 "s3_hilo" (.alu .bitAnd (.regRead 7) glMask32Expr); let r15 := pushW r14.2 "s3_hihi" (.alu .lshr (.regRead 7) glShift32Expr)
+  let r16 := pushW r15.2 "s3_mid" (.alu .sub (.alu .shl r14.1 glShift32Expr) r14.1); let r17 := pushGlCanon r16.2 (.regRead 6)
+  let r18 := pushGlAdd r17.2 r17.1 r16.1; let r19 := pushGlSub r18.2 r18.1 r15.1; let r20 := pushGlAdd r19.2 (.regRead 11) (.regRead 10)
   obtain ⟨m14, e14⟩ := pushW_spec ins st fin finalRev hFin r13.2 "s3_hilo" (.alu .bitAnd (.regRead 7) glMask32Expr)
   obtain ⟨m15, e15⟩ := pushW_spec ins st fin finalRev hFin r14.2 "s3_hihi" (.alu .lshr (.regRead 7) glShift32Expr)
-  obtain ⟨m16, e16⟩ := pushW_spec ins st fin finalRev hFin r15.2 "s3_mid"  (.alu .sub (.alu .shl r14.1 glShift32Expr) r14.1)
-  obtain ⟨m17, e17⟩ := pushGlCanon_spec ins st fin finalRev hFin r16.2 (.regRead 6)
-  obtain ⟨m18, e18⟩ := pushGlAdd_spec ins st fin finalRev hFin r17.2 r17.1 r16.1
-  obtain ⟨m19, e19⟩ := pushGlSub_spec ins st fin finalRev hFin r18.2 r18.1 r15.1
-  obtain ⟨m20, e20⟩ := pushGlAdd_spec ins st fin finalRev hFin r19.2 (.regRead 11) (.regRead 10)
+  obtain ⟨m16, e16⟩ := pushW_spec ins st fin finalRev hFin r15.2 "s3_mid" (.alu .sub (.alu .shl r14.1 glShift32Expr) r14.1)
+  obtain ⟨m17, e17⟩ := pushGlCanon_spec ins st fin finalRev hFin r16.2 (.regRead 6); obtain ⟨m18, e18⟩ := pushGlAdd_spec ins st fin finalRev hFin r17.2 r17.1 r16.1
+  obtain ⟨m19, e19⟩ := pushGlSub_spec ins st fin finalRev hFin r18.2 r18.1 r15.1; obtain ⟨m20, e20⟩ := pushGlAdd_spec ins st fin finalRev hFin r19.2 (.regRead 11) (.regRead 10)
   obtain ⟨m21, e21⟩ := pushGlSub_spec ins st fin finalRev hFin r20.2 (.regRead 11) (.regRead 10)
   have s20 : ∀ wa ∈ r20.2.rev, wa ∈ finalRev := m21
-  have s19 : ∀ wa ∈ r19.2.rev, wa ∈ finalRev := fun w h => s20 w (m20 w h)
-  have s18 := fun w h => s19 w (m19 w h); have s17 := fun w h => s18 w (m18 w h)
-  have s16 := fun w h => s17 w (m17 w h); have s15 := fun w h => s16 w (m16 w h)
-  have s14 := fun w h => s15 w (m15 w h); have s13 := fun w h => s14 w (m14 w h)
-  have s12 := fun w h => s13 w (m13 w h); have s11 := fun w h => s12 w (m12 w h)
-  have s10 := fun w h => s11 w (m11 w h); have s9  := fun w h => s10 w (m10 w h)
-  have s8  := fun w h => s9  w (m9  w h); have s7  := fun w h => s8  w (m8  w h)
-  have s6  := fun w h => s7  w (m7  w h); have s5  := fun w h => s6  w (m6  w h)
-  have s4  := fun w h => s5  w (m5  w h); have s3  := fun w h => s4  w (m4  w h)
-  have s2  := fun w h => s3  w (m3  w h); have s1  := fun w h => s2  w (m2  w h)
-  dsimp only; refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
-    hr 8 glRegs[8] (by decide +kernel) rfl, hr 9 glRegs[9] (by decide +kernel) rfl, ?_,
-    hr 11 glRegs[11] (by decide +kernel) rfl, hr 12 glRegs[12] (by decide +kernel) rfl, ?_, ?_,
-    hr 15 glRegs[15] (by decide +kernel) rfl⟩
-  · rw [hr 0 glRegs[0] (by decide +kernel) rfl]; change evalRtlExpr ins fin st r6.1 = _
-    rw [e6 s6]; simp only [evalRtlExpr]; rw [e2 s2, e4 s4]; rfl
-  · rw [hr 1 glRegs[1] (by decide +kernel) rfl]; change evalRtlExpr ins fin st r7.1 = _
-    rw [e7 s7]; simp only [evalRtlExpr]; rw [e2 s2, e5 s5]; rfl
-  · rw [hr 2 glRegs[2] (by decide +kernel) rfl]; change evalRtlExpr ins fin st r8.1 = _
-    rw [e8 s8]; simp only [evalRtlExpr]; rw [e3 s3, e4 s4]; rfl
-  · rw [hr 3 glRegs[3] (by decide +kernel) rfl]; change evalRtlExpr ins fin st r9.1 = _
-    rw [e9 s9]; simp only [evalRtlExpr]; rw [e3 s3, e5 s5]; rfl
-  · rw [hr 4 glRegs[4] (by decide +kernel) rfl]; exact e1 s1
-  · rw [hr 5 glRegs[5] (by decide +kernel) rfl]; exact e10 s10
-  · rw [hr 6 glRegs[6] (by decide +kernel) rfl]; change evalRtlExpr ins fin st r12.1 = _
-    rw [e12 s12]; simp only [evalRtlExpr]; rw [e11 s11]; rfl
-  · rw [hr 7 glRegs[7] (by decide +kernel) rfl]; change evalRtlExpr ins fin st r13.1 = _
-    rw [e13 s13]; simp only [evalRtlExpr]; rw [e11 s11]; rfl
-  · rw [hr 10 glRegs[10] (by decide +kernel) rfl]; change evalRtlExpr ins fin st r19.1 = _
+  have s19 := fun w h => s20 w (m20 w h); have s18 := fun w h => s19 w (m19 w h); have s17 := fun w h => s18 w (m18 w h)
+  have s16 := fun w h => s17 w (m17 w h); have s15 := fun w h => s16 w (m16 w h); have s14 := fun w h => s15 w (m15 w h)
+  dsimp only; refine ⟨?_, glButterfly_reg_at ins st 11 (by decide) rfl,
+    glButterfly_reg_at ins st 12 (by decide) rfl, ?_, ?_, glButterfly_reg_at ins st 15 (by decide) rfl⟩
+  · rw [glButterfly_reg_at ins st 10 (by decide) rfl]; change evalRtlExpr ins fin st r19.1 = _
     rw [e19 s19, e18 s18, e17 s17, e16 s16]; simp only [evalRtlExpr]; rw [e14 s14, e15 s15]; rfl
-  · rw [hr 13 glRegs[13] (by decide +kernel) rfl]; exact e20 s20
-  · rw [hr 14 glRegs[14] (by decide +kernel) rfl]; exact e21 (fun _ h => h)
+  · rw [glButterfly_reg_at ins st 13 (by decide) rfl]; exact e20 s20
+  · rw [glButterfly_reg_at ins st 14 (by decide) rfl]; exact e21 (fun _ h => h)
 
 /-- **4-Step Non-Interference Theorem**: starting from ANY state `st0` and clocking ANY 4 inputs
 `ins0..ins3`, Stage-4 outputs equal the canonical Goldilocks butterfly of `ins0` alone. -/
@@ -546,10 +546,10 @@ theorem pipelinedGlButterfly_four_steps_sound
     outs.lookup "out_valid" = some (truncToWidth 1 (ins0 3)) ∧
     (st4 13).toNat < goldilocksPrime ∧ (st4 14).toNat < goldilocksPrime := by
   intro st1 st2 st3 st4 u0 v0 w0 outs
-  obtain ⟨s1_0, s1_1, s1_2, s1_3, s1_4, s1_5, _, _, _, _, _, _, _, _, _, _⟩ := pipelinedGlButterfly_step_regs ins0 st0
-  obtain ⟨_, _, _, _, _, _, s2_6, s2_7, s2_8, s2_9, _, _, _, _, _, _⟩ := pipelinedGlButterfly_step_regs ins1 st1
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, s3_10, s3_11, s3_12, _, _, _⟩ := pipelinedGlButterfly_step_regs ins2 st2
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, s4_13, s4_14, s4_15⟩ := pipelinedGlButterfly_step_regs ins3 st3
+  obtain ⟨s1_0, s1_1, s1_2, s1_3, s1_4, s1_5, _, _, _, _⟩ := pipelinedGlButterfly_step_s12 ins0 st0
+  obtain ⟨_, _, _, _, _, _, s2_6, s2_7, s2_8, s2_9⟩ := pipelinedGlButterfly_step_s12 ins1 st1
+  obtain ⟨s3_10, s3_11, s3_12, _, _, _⟩ := pipelinedGlButterfly_step_s34 ins2 st2
+  obtain ⟨_, _, _, s4_13, s4_14, s4_15⟩ := pipelinedGlButterfly_step_s34 ins3 st3
   let vwBV := stage3Reduce (stage2Lo (stage1P00 (ins0 1) (ins0 2)) (stage1P01 (ins0 1) (ins0 2)) (stage1P10 (ins0 1) (ins0 2)))
     (stage2Hi (stage1P00 (ins0 1) (ins0 2)) (stage1P01 (ins0 1) (ins0 2)) (stage1P10 (ins0 1) (ins0 2)) (stage1P11 (ins0 1) (ins0 2)))
   dsimp only [st4, st3, st2, st1] at *
@@ -656,22 +656,18 @@ theorem pipelinedGlButterfly_latency4_sound
 abbrev TowerElem (k : Nat) : Type := BitVec (2 ^ k)
 abbrev Tower64 : Type := BitVec 64
 abbrev Tower128 : Type := BitVec 64 × BitVec 64
-
 def towerLo {k : Nat} (a : BitVec (2 ^ (k + 1))) : BitVec (2 ^ k) := a.setWidth (2 ^ k)
 def towerHi {k : Nat} (a : BitVec (2 ^ (k + 1))) : BitVec (2 ^ k) := (a >>> (2 ^ k)).setWidth (2 ^ k)
 def towerJoin {k : Nat} (lo hi : BitVec (2 ^ k)) : BitVec (2 ^ (k + 1)) :=
   (hi.append lo).cast (by rw [Nat.pow_succ]; omega)
-
 @[expose] def towerZero (k : Nat) : BitVec (2 ^ k) := 0#(2 ^ k)
 @[expose] def towerOne (k : Nat) : BitVec (2 ^ k) := 1#(2 ^ k)
 @[expose] def towerOmega : (k : Nat) → BitVec (2 ^ k)
   | 0 => 1#1 | k + 1 => towerJoin (towerZero k) (towerOne k)
 @[expose] def towerAdd (k : Nat) (a b : BitVec (2 ^ k)) : BitVec (2 ^ k) := a ^^^ b
-
 def towerMulOmega : (k : Nat) → BitVec (2 ^ k) → BitVec (2 ^ k)
   | 0, u => u
   | k + 1, u => towerJoin (towerHi u) (towerLo u ^^^ towerMulOmega k (towerHi u))
-
 /-- **Recursive 3-Submultiplication Karatsuba-Wiedemann Binary-Tower Multiplier**. -/
 @[expose] def towerMul : (k : Nat) → BitVec (2 ^ k) → BitVec (2 ^ k) → BitVec (2 ^ k)
   | 0, a, b => a &&& b
@@ -681,7 +677,6 @@ def towerMulOmega : (k : Nat) → BitVec (2 ^ k) → BitVec (2 ^ k)
     let p01 := towerMul k (a0 ^^^ a1) (b0 ^^^ b1)
     let lo := p0 ^^^ p1
     towerJoin lo ((p01 ^^^ lo) ^^^ towerMulOmega k p1)
-
 /-- **Recursive Norm-Reduction Wiedemann Tower Multiplicative Inverse (`towerInv`)**. -/
 @[expose] def towerInv : (k : Nat) → BitVec (2 ^ k) → BitVec (2 ^ k)
   | 0, a => a
@@ -690,31 +685,24 @@ def towerMulOmega : (k : Nat) → BitVec (2 ^ k) → BitVec (2 ^ k)
     let a0Shift := a0 ^^^ towerMulOmega k a1
     let d := towerInv k (towerMul k a0 a0Shift ^^^ towerMul k a1 a1)
     towerJoin (towerMul k d a0Shift) (towerMul k d a1)
-
 def tower128Mul (a b : Tower128) : Tower128 :=
   let prod := towerMul 7 (towerJoin (k := 6) a.1 a.2) (towerJoin (k := 6) b.1 b.2)
   (towerLo (k := 6) prod, towerHi (k := 6) prod)
-
 def tower128Inv (a : Tower128) : Tower128 :=
   let inv := towerInv 7 (towerJoin (k := 6) a.1 a.2)
   (towerLo (k := 6) inv, towerHi (k := 6) inv)
-
 /-! ### 3a. Split/Join Bijection & Characteristic-2 Commutative Ring Algebra -/
-
 private theorem getLsbD_towerJoin {k : Nat} (lo hi : BitVec (2 ^ k)) (i : Nat) :
     (towerJoin lo hi).getLsbD i = if i < 2 ^ k then lo.getLsbD i else hi.getLsbD (i - 2 ^ k) := by
   simp [towerJoin, BitVec.getLsbD_cast, BitVec.getLsbD_append]
-
 theorem towerLo_join {k : Nat} (lo hi : BitVec (2 ^ k)) : towerLo (towerJoin lo hi) = lo := by
   apply BitVec.eq_of_getLsbD_eq; intro i hiLt; simp [towerLo, getLsbD_towerJoin, hiLt]
-
 theorem towerHi_join {k : Nat} (lo hi : BitVec (2 ^ k)) : towerHi (towerJoin lo hi) = hi := by
   apply BitVec.eq_of_getLsbD_eq; intro i hiLt
   rw [towerHi, BitVec.getLsbD_setWidth, BitVec.getLsbD_ushiftRight, getLsbD_towerJoin]
   have hnot : ¬ (2 ^ k + i < 2 ^ k) := by omega
   have hsub : 2 ^ k + i - 2 ^ k = i := by omega
   simp [hiLt, hnot, hsub]
-
 theorem towerJoin_lo_hi {k : Nat} (x : BitVec (2 ^ (k + 1))) : towerJoin (towerLo x) (towerHi x) = x := by
   apply BitVec.eq_of_getLsbD_eq; intro i hiLt
   rw [getLsbD_towerJoin]; split
@@ -753,12 +741,10 @@ theorem towerAdd_assoc (k : Nat) (a b c : BitVec (2 ^ k)) :
 theorem towerAdd_zero_right (k : Nat) (a : BitVec (2 ^ k)) : towerAdd k a (towerZero k) = a := xor_towerZero a
 theorem towerAdd_zero_left (k : Nat) (a : BitVec (2 ^ k)) : towerAdd k (towerZero k) a = a := towerZero_xor a
 theorem towerAdd_self_zero (k : Nat) (a : BitVec (2 ^ k)) : towerAdd k a a = towerZero k := xor_self_towerZero a
-
 theorem towerMulOmega_zero (k : Nat) : towerMulOmega k (towerZero k) = towerZero k := by
   induction k with
   | zero => rfl
   | succ k ih => rw [towerZero_succ]; unfold towerMulOmega; rw [towerLo_join, towerHi_join, ih, xor_self_towerZero]
-
 theorem towerMulOmega_add (k : Nat) (a b : BitVec (2 ^ k)) :
     towerMulOmega k (a ^^^ b) = towerMulOmega k a ^^^ towerMulOmega k b := by
   induction k with
@@ -767,7 +753,6 @@ theorem towerMulOmega_add (k : Nat) (a b : BitVec (2 ^ k)) :
     unfold towerMulOmega; rw [towerLo_xor, towerHi_xor, ih, ← towerJoin_xor]; congr 1
     rw [BitVec.xor_assoc, ← BitVec.xor_assoc (towerLo b), BitVec.xor_comm (towerLo b),
       BitVec.xor_assoc, BitVec.xor_assoc]
-
 theorem towerMul_comm (k : Nat) (a b : BitVec (2 ^ k)) : towerMul k a b = towerMul k b a := by
   induction k with
   | zero => exact BitVec.and_comm a b
@@ -776,7 +761,6 @@ theorem towerMul_comm (k : Nat) (a b : BitVec (2 ^ k)) : towerMul k a b = towerM
     rw [ih (towerLo a) (towerLo b), ih (towerHi a) (towerHi b),
       BitVec.xor_comm (towerLo a) (towerHi a), BitVec.xor_comm (towerLo b) (towerHi b),
       ih (towerHi a ^^^ towerLo a) (towerHi b ^^^ towerLo b)]
-
 theorem towerMul_zero (k : Nat) (a : BitVec (2 ^ k)) : towerMul k a (towerZero k) = towerZero k := by
   induction k with
   | zero => simp [towerMul, towerZero]
@@ -784,10 +768,8 @@ theorem towerMul_zero (k : Nat) (a : BitVec (2 ^ k)) : towerMul k a (towerZero k
     rw [towerZero_succ]; unfold towerMul; dsimp only
     rw [towerLo_join, towerHi_join, xor_self_towerZero, ih, ih, ih,
       xor_self_towerZero, xor_self_towerZero, towerMulOmega_zero, xor_self_towerZero]
-
 theorem towerZero_mul (k : Nat) (a : BitVec (2 ^ k)) : towerMul k (towerZero k) a = towerZero k := by
   rw [towerMul_comm, towerMul_zero]
-
 theorem towerMul_distrib_left (k : Nat) (a b c : BitVec (2 ^ k)) :
     towerMul k a (towerAdd k b c) = towerAdd k (towerMul k a b) (towerMul k a c) := by
   induction k with
@@ -815,7 +797,6 @@ theorem towerMul_distrib_left (k : Nat) (a b c : BitVec (2 ^ k)) :
 theorem towerMul_distrib_right (k : Nat) (a b c : BitVec (2 ^ k)) :
     towerMul k (towerAdd k a b) c = towerAdd k (towerMul k a c) (towerMul k b c) := by
   rw [towerMul_comm, towerMul_distrib_left, towerMul_comm k c a, towerMul_comm k c b]
-
 theorem towerMul_succ_bilinear (k : Nat) (a b : BitVec (2 ^ (k + 1))) :
     towerMul (k + 1) a b =
       towerJoin (towerMul k (towerLo a) (towerLo b) ^^^ towerMul k (towerHi a) (towerHi b))
@@ -833,7 +814,6 @@ theorem towerMul_succ_bilinear (k : Nat) (a b : BitVec (2 ^ (k + 1))) :
   apply BitVec.eq_of_getLsbD_eq; intro i _; simp only [BitVec.getLsbD_xor]
   cases p00.getLsbD i <;> cases p01.getLsbD i <;> cases p10.getLsbD i <;>
     cases p11.getLsbD i <;> cases pt.getLsbD i <;> rfl
-
 theorem towerMul_one (k : Nat) (a : BitVec (2 ^ k)) : towerMul k a (towerOne k) = a := by
   induction k with
   | zero =>
@@ -844,10 +824,8 @@ theorem towerMul_one (k : Nat) (a : BitVec (2 ^ k)) : towerMul k a (towerOne k) 
     rw [towerOne_succ, towerMul_succ_bilinear, towerLo_join, towerHi_join,
       ih, towerMul_zero, towerMul_zero, ih,
       xor_towerZero, towerZero_xor, towerMulOmega_zero, xor_towerZero, towerJoin_lo_hi]
-
 theorem towerOne_mul (k : Nat) (a : BitVec (2 ^ k)) : towerMul k (towerOne k) a = a := by
   rw [towerMul_comm, towerMul_one]
-
 theorem towerMulOmega_eq_mul_omega (k : Nat) (u : BitVec (2 ^ k)) :
     towerMulOmega k u = towerMul k u (towerOmega k) := by
   induction k with
@@ -1077,7 +1055,7 @@ private def swarMulOmegaBV : Nat → BitVec 64 → BitVec 64
     let m := swarMask k; let sh := BitVec.ofNat 64 (2 ^ k)
     let u0 := evalAluOp .bitAnd u m; let u1 := evalAluOp .bitAnd (evalAluOp .lshr u sh) m
     evalAluOp .bitOr u1 (evalAluOp .shl (evalAluOp .bitXor u0 (swarMulOmegaBV k u1)) sh)
-private def swarCombineBV (k : Nat) (p q : BitVec 64) : BitVec 64 :=
+def swarCombineBV (k : Nat) (p q : BitVec 64) : BitVec 64 :=
   let m := swarMask k; let sh := BitVec.ofNat 64 (2 ^ k)
   let p0 := evalAluOp .bitAnd p m; let p1 := evalAluOp .bitAnd (evalAluOp .lshr p sh) m
   let lo := evalAluOp .bitXor p0 p1
@@ -1155,8 +1133,9 @@ def checkModuleCarryFree (m : RtlModule) : Bool :=
   m.outputs.all (fun o => checkCarryFreeExpr o.expr)
 theorem gf2_64TowerMulRtl_wellFormed (u : Unit) (_ : u = ()) :
     checkRtlModuleW gf2_64TowerMulRtlModule = true ∧
+    checkWidths gf2_64TowerMulRtlModule = true ∧
     checkModuleCarryFree gf2_64TowerMulRtlModule = true :=
-  ⟨by decide +kernel, by decide +kernel⟩
+  ⟨by decide +kernel, by decide +kernel, by decide +kernel⟩
 
 /-! ### 4a. DAG Evaluation & Bit-Exact Equivalence (`gf2_64TowerMulRtl_eq_towerMul`) -/
 
@@ -1402,7 +1381,7 @@ private theorem swarMulBV_6_eq_towerMul (a b : BitVec 64) : swarMulBV 6 a b = to
     apply BitVec.eq_of_getLsbD_eq; intro i hi; simp [swarLane, hi]
   simpa only [hId] using h
 
-private def swarQ5BV (a b : BitVec 64) : BitVec 64 :=
+def swarQ5BV (a b : BitVec 64) : BitVec 64 :=
   evalAluOp .bitAnd (swarMulBV 5
     (evalAluOp .bitXor a (evalAluOp .lshr a (BitVec.ofNat 64 (2 ^ 5))))
     (evalAluOp .bitXor b (evalAluOp .lshr b (BitVec.ofNat 64 (2 ^ 5))))) (swarMask 5)
@@ -1478,14 +1457,14 @@ theorem gf2_64TowerMulRtl_pipe2_sound (st0 ins0 ins1 anyIns : Nat → BitVec 64)
   obtain ⟨_, hp0, hq0, _, hv0⟩ := gf2_64_wire_eval ins0 st0
   obtain ⟨_, _, _, hpipe1, _⟩ := gf2_64_wire_eval ins1 st1
   have hs1_0 : st1 0 = swarMulBV 5 (ins0 0) (ins0 1) :=
-    (hr 0 t64Regs[0] (by decide +kernel) rfl ins0 st0).trans hp0
+    (hr 0 (t64Regs[0]'(by decide)) (List.getElem_mem (by decide)) rfl ins0 st0).trans hp0
   have hs1_1 : st1 1 = swarQ5BV (ins0 0) (ins0 1) :=
-    (hr 1 t64Regs[1] (by decide +kernel) rfl ins0 st0).trans hq0
+    (hr 1 (t64Regs[1]'(by decide)) (List.getElem_mem (by decide)) rfl ins0 st0).trans hq0
   have hs1_2 : st1 2 = truncToWidth 1 (ins0 2) :=
-    (hr 2 t64Regs[2] (by decide +kernel) rfl ins0 st0).trans hv0
+    (hr 2 (t64Regs[2]'(by decide)) (List.getElem_mem (by decide)) rfl ins0 st0).trans hv0
   have hs2_3 : st2 3 = swarCombineBV 5 (st1 0) (st1 1) :=
-    (hr 3 t64Regs[3] (by decide +kernel) rfl ins1 st1).trans hpipe1
-  have hs2_4 : st2 4 = st1 2 := hr 4 t64Regs[4] (by decide +kernel) rfl ins1 st1
+    (hr 3 (t64Regs[3]'(by decide)) (List.getElem_mem (by decide)) rfl ins1 st1).trans hpipe1
+  have hs2_4 : st2 4 = st1 2 := hr 4 (t64Regs[4]'(by decide)) (List.getElem_mem (by decide)) rfl ins1 st1
   have hLookup : outs.lookup "tower64_pipe_out" = some (st2 3) ∧
       outs.lookup "tower64_pipe_valid" = some (st2 4) := ⟨rfl, rfl⟩
   rw [hLookup.1, hLookup.2, hs2_3, hs2_4, hs1_0, hs1_1, hs1_2]

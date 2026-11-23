@@ -1,16 +1,21 @@
 import Obend.Hardware.YosysLec
 import Obend.Hardware.Synth
+import Obend.Hardware.PipelinedRisc
+import Obend.Hardware.PipelinedZkCrypto
+import Obend.Hardware.OspcProver
+import Obend.Tactic.Tooth
 
 /-!
 # `Obend.Hardware.YosysLec`: the printed LEC file against its model and the committed files
 
 The library module proves what `lecScript m` means (`lecScript_holds_iff`) and prints it. These
 tests pin the print: every `RtlExpr` constructor against `VerilateRunner.emitExprSmt2`, the glue
-lines of two committed files verbatim, and two whole committed files byte for byte.
+lines of committed files verbatim, and all six committed `hardware/sim/*_lec.smt2` files byte-for-byte.
 -/
 
 namespace Obend.Tests.YosysLecTest
 open Obend.Hardware.HDL Obend.Hardware.VerilateRunner Obend.Hardware.YosysLec
+open Obend.Hardware.PipelinedRisc Obend.Hardware.PipelinedZkCrypto Obend.Hardware.OspcProver
 
 /-- One expression per `RtlExpr` constructor, `RtlAluOp` and `RtlWidthOp` (and the out-of-range
 `sext` the emitter prints as its operand). -/
@@ -37,10 +42,30 @@ example : (SmtBV.bin .udiv (.lit 5#64) (.lit 0#64)).eval { inp := fun _ => 0, wi
 example : (SmtBV.bin .urem (.lit 5#64) (.lit 0#64)).eval { inp := fun _ => 0, wire := fun _ => 0, reg := fun _ => 0 } =
     5#64 := by decide
 
+/-- All 4 synthesizable `ospcTileDatapathRtl` modules and both `PipelinedZkCrypto` vaults pass
+`checkRtlModuleW` and `YosysLec.moduleFaithful`. -/
+theorem ospcTileDatapathRtl_faithful (t : Fin 4) :
+    checkRtlModule (ospcTileDatapathRtl t) = true ∧
+    checkRtlModuleW (ospcTileDatapathRtl t) = true ∧
+    moduleFaithful (ospcTileDatapathRtl t) = true := by
+  obtain ⟨hm, hmw, hw⟩ := ospcTileDatapathRtl_wellFormed t
+  exact ⟨hm, hmw, moduleFaithful_of_checkWidths (ospcTileDatapathRtl t) hw⟩
+
+theorem pipelinedZkVaults_faithful (u : Unit) (hu : u = ()) :
+    checkRtlModuleW pipelinedGlButterflyRtlModule = true ∧
+    moduleFaithful pipelinedGlButterflyRtlModule = true ∧
+    checkRtlModuleW gf2_64TowerMulRtlModule = true ∧
+    moduleFaithful gf2_64TowerMulRtlModule = true := by
+  obtain ⟨hw1, hcw1⟩ := pipelinedGlButterfly_wellFormed u hu
+  obtain ⟨hw2, hcw2, _⟩ := gf2_64TowerMulRtl_wellFormed u hu
+  exact ⟨hw1, moduleFaithful_of_checkWidths _ hcw1, hw2, moduleFaithful_of_checkWidths _ hcw2⟩
+
 /-! ## Glue lines, verbatim from the committed files -/
 
-def probeLines : List String := ((lecScript widthProbeTwoClockRtl).print.splitOn "\n")
-def mac2Lines : List String := ((lecScript Obend.Hardware.Synth.retimedMac2StageRtl).print.splitOn "\n")
+def probeLines : List String := (lecScript widthProbeTwoClockRtl).print.splitOn "\n"
+def mac2Lines  : List String := (lecScript Obend.Hardware.Synth.retimedMac2StageRtl).print.splitOn "\n"
+def riscLines  : List String := (lecScript pipelinedRiscCoreRtlModule).print.splitOn "\n"
+def ospc0Lines : List String := (lecScript (ospcTileDatapathRtl ⟨0, by decide⟩)).print.splitOn "\n"
 
 -- a narrow input and a 1-bit input (Yosys's `Bool`) zero-extended to the 64-bit word
 #guard probeLines.contains "(define-fun in_2 () (_ BitVec 64) ((_ zero_extend 48) (|obend_width_probe_n c| s)))"
@@ -55,8 +80,15 @@ def mac2Lines : List String := ((lecScript Obend.Hardware.Synth.retimedMac2Stage
 #guard mac2Lines.contains "(assert (|obend_retimed_mac2_t| s s1))"
 #guard mac2Lines.contains "(define-fun |rtl_next_mulReg| () (_ BitVec 64) (|obend_retimed_mac2_n mulReg| s1))"
 #guard mac2Lines.contains "(assert (not (and true |lec_out_mac_out| |lec_next_mulReg| |lec_next_cReg| |lec_next_outReg|)))"
+-- RISC64 & OSPC Tile 0 LEC obligations:
+#guard riscLines.contains "(assert (|pipelined_risc_core_5stage_t| s s1))"
+#guard riscLines.contains "(define-fun |rtl_out_ex_alu_out| () (_ BitVec 64) (|pipelined_risc_core_5stage_n ex_alu_out| s))"
+#guard riscLines.contains "(define-fun |rtl_next_fetch_pc| () (_ BitVec 64) (|pipelined_risc_core_5stage_n fetch_pc| s1))"
+#guard ospc0Lines.contains "(assert (|obend_ospc_tile0_t| s s1))"
+#guard ospc0Lines.contains "(define-fun |rtl_out_out_face_hi17| () (_ BitVec 17) (|obend_ospc_tile0_n out_face_hi17| s))"
+#guard ospc0Lines.contains "(define-fun |rtl_next_cam_q| () (_ BitVec 64) (|obend_ospc_tile0_n cam_q| s1))"
 
-/-! ## Two whole committed files (the build runs in `lean/`) -/
+/-! ## All six committed `hardware/sim/*_lec.smt2` files byte-for-byte -/
 
 def checkCommitted (target path qualified : String) (m : RtlModule) : IO Unit := do
   let committed ← IO.FS.readFile path
@@ -68,5 +100,17 @@ def checkCommitted (target path qualified : String) (m : RtlModule) : IO Unit :=
   "Obend.Hardware.Synth.goldenRetimedMacRtl" Obend.Hardware.Synth.retimedMac2StageRtl
 #eval checkCommitted "width-probe" "../hardware/sim/obend_width_probe_lec.smt2"
   "Obend.Hardware.VerilateRunner.goldenWidthProbeRtl" widthProbeTwoClockRtl
+#eval checkCommitted "risc64" "../hardware/sim/obend_pipelined_risc64_lec.smt2"
+  "Obend.Hardware.PipelinedRisc.pipelinedRiscCoreRtlModule" pipelinedRiscCoreRtlModule
+#eval checkCommitted "goldilocks-bfly4" "../hardware/sim/obend_goldilocks_bfly4_lec.smt2"
+  "Obend.Hardware.PipelinedZkCrypto.pipelinedGlButterflyRtlModule" pipelinedGlButterflyRtlModule
+#eval checkCommitted "gf2-64-karatsuba" "../hardware/sim/obend_gf2_64_karatsuba_lec.smt2"
+  "Obend.Hardware.PipelinedZkCrypto.gf2_64TowerMulRtlModule" gf2_64TowerMulRtlModule
+#eval checkCommitted "ospc-tile0" "../hardware/sim/obend_ospc_tile0_lec.smt2"
+  "Obend.Hardware.OspcProver.ospcTileDatapathRtl 0" (ospcTileDatapathRtl ⟨0, by decide⟩)
+
+-- Dropping synchronous BRAM readout injection in `ospcTileDatapathInputs` breaks `ospcTileRtl_refines_ospcTileDatapathRtl`:
+#tooth Obend.Hardware.OspcProver.ospcTileRtl_refines_ospcTileDatapathRtl by mutation
+  Obend.Hardware.OspcProver.ospcTileDatapathInputs := fun _ inputs _ => inputs
 
 end Obend.Tests.YosysLecTest

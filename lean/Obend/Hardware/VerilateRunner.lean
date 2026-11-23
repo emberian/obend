@@ -106,36 +106,9 @@ structure VerilateReport where
   vcdPath           : Option String
   deriving DecidableEq, Repr
 
-/-! ## 2. Canonical Physical `.obend` Compositions for Built-In Modules -/
+/-! ## 2. Legacy Leaf `Composition` Fixtures (`NotebookProjection` Compatibility Only) -/
 
-/-- 2-layer `CleanroomTcadStack` composition (`stdlib/physical/CleanroomTcadStack.obend`). -/
-def cleanroomTcadStackComp : Composition where
-  top :=
-    { name     := "HighKMetalGateFinFetUpgrade"
-      metadata := .record []
-      fields   :=
-        [ ("oxideEotPicometers", .nat 700)
-        , ("vthMilliV",          .nat 250)
-        , ("gateDelayPs",        .lam (.binary .add (.app (.get (.bound 1) "gateDelayPs") (.bound 0)) (.nat 4))) ]
-      flat     := false }
-  below :=
-    [ { name     := "PlanarBulkMosfetBase"
-        metadata := .record []
-        fields   :=
-          [ ("oxideEotPicometers", .nat 1200)
-          , ("vthMilliV",          .nat 400)
-          , ("drainCurrentUa",     .lam (.binary .add (.binary .multiply (.bound 0) (.nat 5)) (.get (.bound 2) "vthMilliV")))
-          , ("gateDelayPs",        .lam (.binary .add (.binary .multiply (.bound 0) (.nat 8)) (.nat 20)))
-          , ("calibratedDelayPs",  .lam (.app (.get (.bound 2) "gateDelayPs") (.binary .add (.bound 0) (.nat 2)))) ]
-        flat     := false } ]
-  seed :=
-    [ ("oxideEotPicometers", .nat 0)
-    , ("vthMilliV",          .nat 0)
-    , ("drainCurrentUa",     .lam (.nat 0))
-    , ("gateDelayPs",        .lam (.nat 0))
-    , ("calibratedDelayPs",  .lam (.nat 0)) ]
-
-/-- 3-layer `LcDrivesStator` composition (`stdlib/physical/LcDrivesStator.obend`). -/
+/-- 3-layer `LcDrivesStator` composition. -/
 @[expose] def lcDrivesStatorComp : Composition where
   top :=
     { name     := "FiveAxisFinishMilled"
@@ -167,7 +140,7 @@ def cleanroomTcadStackComp : Composition where
     , ("peakWindingTemp",   .lam (.bound 0))
     , ("camSurfaceErrorUm", .lam (.bound 0)) ]
 
-/-- 2-layer `Cnc5AxisMill` composition (`stdlib/physical/Cnc5AxisMill.obend`). -/
+/-- 2-layer `Cnc5AxisMill` composition. -/
 @[expose] def cnc5AxisMillComp : Composition where
   top :=
     { name     := "AbbeAndRuckigCompensatedMill"
@@ -199,15 +172,6 @@ def cleanroomTcadStackComp : Composition where
     , ("abbeAngularDriftUm",     .lam (.nat 0))
     , ("commandedAxisAt10mmUm",  .lam (.nat 10000))
     , ("totalVolumetricErrorUm", .lam (.nat 0)) ]
-
-/-- Select a built-in physical `Composition` and module name when requested by `--top` / `--module` or file stem. -/
-def selectBuiltInComposition (choice : String) : String × Composition :=
-  if choice == "lc_drives_stator" || choice == "lc_drives_userspace_stator" || choice == "LcDrivesStator" || choice == "LcDrivesStatorUsd" then
-    ("lc_drives_userspace_stator", lcDrivesStatorComp)
-  else if choice == "cnc_5axis_mill" || choice == "cnc_5axis_userspace_mill" || choice == "Cnc5AxisMill" then
-    ("cnc_5axis_userspace_mill", cnc5AxisMillComp)
-  else
-    ("cleanroom_tcad_stack", cleanroomTcadStackComp)
 
 /-- Specialize a single `BookItem` by applying `inlineDict passes` followed by `betaRecordDict passes`. -/
 def specializeVerilateBookItem (passes : Nat) : BookItem → BookItem
@@ -890,12 +854,7 @@ def resolveTargetRtlModule (cfg : VerilateConfig) : IO (Except String (String ×
     let src ← IO.FS.readFile cfg.inputPath
     let base := match (cfg.inputPath.splitOn "/").getLast? with | some b => b | none => cfg.inputPath
     let stem := if base.endsWith ".obend" then (base.take (base.length - 6)).toString else base
-    let modName :=
-      if cfg.topModule != "" then cfg.topModule
-      else if stem == "CleanroomTcadStack" then "cleanroom_tcad_stack"
-      else if stem == "LcDrivesStator" || stem == "LcDrivesStatorUsd" then "lc_drives_userspace_stator"
-      else if stem == "Cnc5AxisMill" then "cnc_5axis_userspace_mill"
-      else stem
+    let modName := if cfg.topModule != "" then cfg.topModule else stem
     match parseObendSourceComposition stem cfg.topModule src with
     | some comp =>
       match compileCompositionToVerifiedRtl modName comp with
@@ -905,15 +864,7 @@ def resolveTargetRtlModule (cfg : VerilateConfig) : IO (Except String (String ×
       return .error s!"failed to parse or elaborate Composition from {cfg.inputPath}"
   else
     let choice := if cfg.topModule != "" then cfg.topModule else cfg.inputPath
-    if choice == "" || choice == "cleanroom_tcad_stack" || choice == "CleanroomTcadStack" ||
-       choice == "lc_drives_stator" || choice == "lc_drives_userspace_stator" || choice == "LcDrivesStator" ||
-       choice == "cnc_5axis_mill" || choice == "cnc_5axis_userspace_mill" || choice == "Cnc5AxisMill" then
-      let (modName, comp) := selectBuiltInComposition choice
-      match compileCompositionToVerifiedRtl modName comp with
-      | some (_, m) => return .ok (modName, some comp, m)
-      | none => return .error s!"failed to compile built-in composition {modName} to RtlModule"
-    else
-      return .error s!"input file or built-in module not found: {choice}"
+    return .error s!"input file or built-in module not found: {choice}"
 
 /-- Read the `mismatches=<n>` field of the harness summary line (`VERILATE_OK ... mismatches=N`). -/
 def parseMismatchCount (stdout : String) : Option Nat :=
@@ -1004,7 +955,7 @@ def cmdEmitSv (args : List String) : IO UInt32 := do
   let (modOpt, args1) := extractCliFlag "--module" args0
   let (outOpt, args2) := extractCliFlag "--out" args1
   let posArgs := args2.filter (fun a => !a.startsWith "--")
-  let modChoice := topOpt.getD (modOpt.getD (posArgs.headD "cleanroom_tcad_stack"))
+  let modChoice := topOpt.getD (modOpt.getD (posArgs.headD "obend_width_probe"))
   if modChoice == "silicon_elab_top" || modChoice == "silicon_elab" then
     IO.eprintln "refused (emit-sv): use `obend hardware emit-silicon-sv` for silicon_elab_top"
     return 3

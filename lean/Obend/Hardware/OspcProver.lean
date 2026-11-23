@@ -17,7 +17,6 @@ public import Obend.Hardware.HDL
 public import Obend.Crypto.Multilinear
 public import Obend.Crypto.Transcript
 public import Obend.Crypto.Sumcheck
-public import Obend.SymbolicZk.CompileToPiop
 public import Obend.Judge.Lrat
 public import Obend.Receipt.Merkle
 public import Obend.Judge.Class
@@ -25,13 +24,11 @@ import all Obend.Hardware.HDL
 import all Obend.Crypto.Multilinear
 import all Obend.Crypto.Transcript
 import all Obend.Crypto.Sumcheck
-import all Obend.SymbolicZk.CompileToPiop
 import all Obend.Receipt.Merkle
 
 public section
 namespace Obend.Hardware.OspcProver
 open Obend.Hardware.HDL Obend.Crypto Obend.Digest.Cshake256
-open Obend.SymbolicZk.CompileToPiop (polyAdd eval_polyAdd)
 open Obend.Core.Digest (digestWith admissible_of_lt binds_or_collides deployed preimage)
 open Obend.Digest.HashBytes (Hash CollisionAmong be ofBE be_injective length_be)
 open Obend.Judge.Lrat (Clause litTrue Sat)
@@ -265,6 +262,191 @@ def ospcTileRtl : Fin 4 → RtlMemModule
 
 theorem ospcTileRtl_checkRtlMemModuleW : ∀ t : Fin 4, checkRtlMemModuleW (ospcTileRtl t) = true := by decide +kernel
 
+/-! ### Synthesizable Pure-Register/Port Datapath Extraction (`ospcTileDatapathRtl`) & Refinement -/
+
+/-- Synthesizable `RtlModule` datapath/register extraction of `ospcTileRtl t` (`t : Fin 4`),
+exposing each synchronous `SyncRamSpec`'s registered readout latch `ram.rdataName` at register
+slot `core.regs.length + ram.ramIdx` (fed by input `{ram.rdataName}_in`) and driving the BRAM
+interface ports `{ram.name}_{raddr,we,waddr,wdata}` at their exact checked widths. -/
+def ospcTileDatapathRtl (t : Fin 4) : RtlModule :=
+  let m := ospcTileRtl t
+  let nIn := m.core.inputNames.length
+  let nCore := m.core.regs.length
+  { name        := s!"obend_ospc_tile{t.val}"
+  , inputNames  := m.core.inputNames ++ m.rams.map (fun ram => s!"{ram.rdataName}_in")
+  , inputWidths := m.core.inputWidths ++ m.rams.map (·.dataWidth)
+  , wires       := m.core.wires
+  , regs        := m.core.regs ++ m.rams.map (fun ram =>
+      { regIdx         := nCore + ram.ramIdx
+      , name           := ram.rdataName
+      , domain         := ram.domain
+      , resetKind      := .resetFree
+      , isSynchronizer := false
+      , nextExpr       := .inputPort (nIn + ram.ramIdx)
+      , width          := ram.dataWidth })
+  , outputs     := m.core.outputs ++ m.rams.flatMap (fun ram =>
+      [ { name := s!"{ram.name}_raddr", expr := .resize (.trunc ram.addrWidth) ram.readAddrExpr, width := ram.addrWidth }
+      , { name := s!"{ram.name}_we",    expr := .resize (.trunc 1) ram.writeEnExpr,             width := 1 }
+      , { name := s!"{ram.name}_waddr", expr := .resize (.trunc ram.addrWidth) ram.writeAddrExpr, width := ram.addrWidth }
+      , { name := s!"{ram.name}_wdata", expr := .resize (.trunc ram.dataWidth) ram.writeDataExpr, width := ram.dataWidth } ]) }
+
+/-- Lift `ospcTileRtl t` port `inputs` and `MemState` `st` to the port environment of `ospcTileDatapathRtl t`,
+binding input `nIn + ram.ramIdx` to `evalSyncRamReadNext` of `ram`. -/
+def ospcTileDatapathInputs (t : Fin 4) (inputs : Nat → BitVec 64) (st : MemState) : Nat → BitVec 64 :=
+  let m := ospcTileRtl t
+  let nIn := m.core.inputNames.length
+  let wireEnv := evalWireTable inputs st.regs m.core.wires
+  fun idx =>
+    if idx < nIn then inputs idx
+    else match m.rams.find? (fun ram => nIn + ram.ramIdx == idx) with
+      | some ram => evalSyncRamReadNext inputs wireEnv st.regs (st.mems ram.ramIdx) ram
+      | none => 0#64
+
+private theorem ospcTileDatapathRtl_checks :
+    ∀ t : Fin 4,
+      checkRtlModule (ospcTileDatapathRtl t) = true ∧
+      checkRtlModuleW (ospcTileDatapathRtl t) = true ∧
+      checkWidths (ospcTileDatapathRtl t) = true := by decide +kernel
+
+private theorem ospcTile_core_dag :
+    ∀ t : Fin 4,
+      let m := ospcTileRtl t
+      let nIn := m.core.inputNames.length
+      let nTotal := m.core.regs.length + m.rams.length
+      let nWires := m.core.wires.length
+      checkWireTableDAG nIn nTotal m.core.wires = true ∧
+      m.core.regs.all (fun r => checkExprDAG nIn nTotal nWires r.nextExpr) = true ∧
+      m.core.outputs.all (fun o => checkExprDAG nIn nTotal nWires o.expr) = true := by decide +kernel
+
+private theorem ospcTile_single_ram (t : Fin 4) :
+    ∃ ram0 : SyncRamSpec, (ospcTileRtl t).rams = [ram0] ∧ ram0.ramIdx = 0 := by
+  rcases t with ⟨_ | _ | _ | _ | n, hlt⟩
+  · exact ⟨_, rfl, rfl⟩
+  · exact ⟨_, rfl, rfl⟩
+  · exact ⟨_, rfl, rfl⟩
+  · exact ⟨_, rfl, rfl⟩
+  · omega
+
+/-- All 4 `ospcTileDatapathRtl` modules pass `checkRtlModule`, `checkRtlModuleW`, and `checkWidths`
+(which directly discharges `YosysLec.moduleFaithful` via `YosysLec.moduleFaithful_of_checkWidths`). -/
+theorem ospcTileDatapathRtl_wellFormed (t : Fin 4) :
+    checkRtlModule (ospcTileDatapathRtl t) = true ∧
+    checkRtlModuleW (ospcTileDatapathRtl t) = true ∧
+    checkWidths (ospcTileDatapathRtl t) = true :=
+  ospcTileDatapathRtl_checks t
+
+private theorem evalRtlExpr_inputs_locality (nIn : Nat) (ins1 ins2 wires regs : Nat → BitVec 64)
+    (hAgree : ∀ i, i < nIn → ins1 i = ins2 i) :
+    ∀ (nReg wB : Nat) (e : RtlExpr), checkExprDAG nIn nReg wB e = true →
+      evalRtlExpr ins1 wires regs e = evalRtlExpr ins2 wires regs e := by
+  intro nReg wB e; induction e with
+  | const _ | wireRef _ | regRead _ => intro _; rfl
+  | inputPort idx => intro h; simp only [checkExprDAG, decide_eq_true_eq] at h; exact hAgree idx h
+  | alu _ _ _ iha ihb =>
+    intro h; simp only [checkExprDAG, Bool.and_eq_true] at h; simp only [evalRtlExpr, iha h.1, ihb h.2]
+  | mux _ _ _ ihc iht ihf =>
+    intro h; simp only [checkExprDAG, Bool.and_eq_true] at h; simp only [evalRtlExpr, ihc h.1.1, iht h.1.2, ihf h.2]
+  | bitNot _ iha | resize _ _ iha =>
+    intro h; simp only [checkExprDAG] at h; simp only [evalRtlExpr, iha h]
+
+private theorem evalWireTable_inputs_locality (nIn nReg : Nat) (ins1 ins2 regs : Nat → BitVec 64)
+    (assigns : List WireAssign) (hDag : checkWireTableDAG nIn nReg assigns = true)
+    (hAgree : ∀ i, i < nIn → ins1 i = ins2 i) :
+    evalWireTable ins1 regs assigns = evalWireTable ins2 regs assigns := by
+  unfold evalWireTable; unfold checkWireTableDAG at hDag
+  suffices ∀ (ws : List WireAssign) (k : Nat) (env : Nat → BitVec 64),
+      checkWireTableDAG.go nIn nReg k ws = true →
+      ws.foldl (fun e a => let v := evalRtlExpr ins1 e regs a.expr; fun i => if i == a.wireIdx then v else e i) env =
+        ws.foldl (fun e a => let v := evalRtlExpr ins2 e regs a.expr; fun i => if i == a.wireIdx then v else e i) env from
+    this assigns 0 (fun _ => 0#64) hDag
+  intro ws; induction ws with
+  | nil => intro _ _ _; rfl
+  | cons a rest ih =>
+    intro k env hGo
+    simp only [checkWireTableDAG.go, Bool.and_eq_true] at hGo
+    simp only [List.foldl_cons, evalRtlExpr_inputs_locality nIn ins1 ins2 env regs hAgree nReg k a.expr hGo.1.2]
+    exact ih (k + 1) _ hGo.2
+
+private theorem foldRegs_inputs_locality (nIn nReg nWires : Nat) (rst : Bool)
+    (ins1 ins2 wireEnv regs : Nat → BitVec 64) (hAgree : ∀ i, i < nIn → ins1 i = ins2 i) :
+    ∀ (rs : List RegSpec) (acc : Nat → BitVec 64),
+      rs.all (fun r => checkExprDAG nIn nReg nWires r.nextExpr) = true →
+      rs.foldl (fun nextSt r => fun i => if i == r.regIdx then regNextValue rst ins1 wireEnv regs r else nextSt i) acc =
+        rs.foldl (fun nextSt r => fun i => if i == r.regIdx then regNextValue rst ins2 wireEnv regs r else nextSt i) acc
+  | [], _, _ => rfl
+  | r :: rest, acc, hAll => by
+    simp only [List.all_cons, Bool.and_eq_true] at hAll
+    have hVal : regNextValue rst ins1 wireEnv regs r = regNextValue rst ins2 wireEnv regs r := by
+      unfold regNextValue
+      rw [evalRtlExpr_inputs_locality nIn ins1 ins2 wireEnv regs hAgree nReg nWires r.nextExpr hAll.1]
+    simp only [List.foldl_cons, hVal]
+    exact foldRegs_inputs_locality nIn nReg nWires rst ins1 ins2 wireEnv regs hAgree rest _ hAll.2
+
+/-- **Single-Step Datapath Refinement (`ospcTileRtl_refines_ospcTileDatapathRtl`)**:
+For every tile `t : Fin 4`, `rst : Bool`, `inputs`, and `st : MemState`:
+1. Stepping `ospcTileDatapathRtl t` under `ospcTileDatapathInputs t inputs st` produces the **exact**
+   `Nat → BitVec 64` register function `(stepMemModule (ospcTileRtl t) rst inputs st).regs` (across both
+   core flip-flops `0 .. nCore - 1` and the registered BRAM readout latch `nCore + ram.ramIdx`), and
+2. The core output prefix of `evalModuleOutputs (ospcTileDatapathRtl t)` agrees identically with
+   `evalMemModuleOutputs (ospcTileRtl t) inputs st`. -/
+theorem ospcTileRtl_refines_ospcTileDatapathRtl
+    (t : Fin 4) (rst : Bool) (inputs : Nat → BitVec 64) (st : MemState) :
+    let dpIns := ospcTileDatapathInputs t inputs st
+    stepModuleRegs (ospcTileDatapathRtl t) rst dpIns st.regs =
+      (stepMemModule (ospcTileRtl t) rst inputs st).regs ∧
+    (evalModuleOutputs (ospcTileDatapathRtl t) dpIns st.regs).take (ospcTileRtl t).core.outputs.length =
+      evalMemModuleOutputs (ospcTileRtl t) inputs st := by
+  intro dpIns
+  have hAgree : ∀ i, i < (ospcTileRtl t).core.inputNames.length → dpIns i = inputs i := fun i hi => by
+    dsimp only [dpIns, ospcTileDatapathInputs]; simp [hi]
+  obtain ⟨hWireDag, hRegDag, hOutDagAll⟩ := ospcTile_core_dag t
+  have hWires : evalWireTable dpIns st.regs (ospcTileRtl t).core.wires =
+      evalWireTable inputs st.regs (ospcTileRtl t).core.wires :=
+    evalWireTable_inputs_locality _ _ dpIns inputs st.regs (ospcTileRtl t).core.wires hWireDag hAgree
+  refine ⟨?_, ?_⟩
+  · obtain ⟨ram0, hRams, hIdx0⟩ := ospcTile_single_ram t
+    have hDpRam : dpIns (ospcTileRtl t).core.inputNames.length =
+        evalSyncRamReadNext inputs (evalWireTable inputs st.regs (ospcTileRtl t).core.wires)
+          st.regs (st.mems 0) ram0 := by
+      dsimp only [dpIns, ospcTileDatapathInputs]
+      simp [Nat.lt_irrefl, hRams, hIdx0]
+    rw [stepModuleRegs_eq_foldl_next]
+    dsimp only [ospcTileDatapathRtl, stepMemModule]
+    rw [hWires, List.foldl_append,
+        foldRegs_inputs_locality _ _ _ rst dpIns inputs _ st.regs hAgree
+          (ospcTileRtl t).core.regs st.regs hRegDag,
+        ← stepModuleRegs_eq_foldl_next, hRams]
+    simp only [List.map_cons, List.map_nil, List.foldl_cons, List.foldl_nil,
+      regNextValue, evalRtlExpr, hIdx0, Nat.add_zero, hDpRam]
+  · dsimp only [evalMemModuleOutputs, evalModuleOutputs, ospcTileDatapathRtl]
+    rw [hWires, List.map_append, List.take_left' (by simp)]
+    apply List.map_congr_left; intro o ho
+    exact Prod.ext rfl (evalRtlExpr_inputs_locality _ dpIns inputs _ st.regs hAgree _ _ o.expr
+      (List.all_eq_true.mp hOutDagAll o ho))
+
+/-- Lift a multi-cycle `(rst, inputs)` trace of `ospcTileRtl t` starting at `st` to `ospcTileDatapathRtl t`. -/
+def liftOspcTileDatapathTrace (t : Fin 4) :
+    MemState → List (Bool × (Nat → BitVec 64)) → List (Bool × (Nat → BitVec 64))
+  | _, [] => []
+  | st, (rst, ins) :: rest =>
+    (rst, ospcTileDatapathInputs t ins st) ::
+      liftOspcTileDatapathTrace t (stepMemModule (ospcTileRtl t) rst ins st) rest
+
+/-- **Multi-Cycle Datapath Trace Refinement (`ospcTileRtl_trace_refines_datapath`)**:
+Across arbitrary multi-cycle traces `trace`, running `ospcTileDatapathRtl t` via `HDL.runModuleTrace`
+produces the exact final register state `(runMemModuleTrace (ospcTileRtl t) st trace).regs`. -/
+theorem ospcTileRtl_trace_refines_datapath
+    (t : Fin 4) (st : MemState) (trace : List (Bool × (Nat → BitVec 64))) :
+    runModuleTrace (ospcTileDatapathRtl t) st.regs (liftOspcTileDatapathTrace t st trace) =
+      (runMemModuleTrace (ospcTileRtl t) st trace).regs := by
+  induction trace generalizing st with
+  | nil => rfl
+  | cons cyc rest ih =>
+    rcases cyc with ⟨rst, ins⟩
+    dsimp only [liftOspcTileDatapathTrace, runModuleTrace, runMemModuleTrace, List.foldl_cons]
+    rw [(ospcTileRtl_refines_ospcTileDatapathRtl t rst ins st).1]
+    exact ih (stepMemModule (ospcTileRtl t) rst ins st)
+
 /-! ### Tile 0 RTL-to-Spec Simulation (`stepTile0_simulates_faceIdeal4`) -/
 private theorem setWidth64_and17 (a b : BitVec 17) : a.setWidth 64 &&& b.setWidth 64 = (a &&& b).setWidth 64 := by
   apply BitVec.eq_of_getLsbD_eq; intro i hi; simp [hi]
@@ -470,32 +652,54 @@ theorem q2Partner_involutive (stage : Fin 2) (t : Fin 4) : q2Partner stage (q2Pa
 theorem q2_two_hop_all_pairs (src dst : Fin 4) :
     ∃ b0 b1 : Bool, let mid := if b0 then q2Partner ⟨0, by omega⟩ src else src
       (if b1 then q2Partner ⟨1, by omega⟩ mid else mid) = dst := by revert src dst; decide
+def ospcPolyAddCoeffs {R : Type} [CommRingOps R] : List R → List R → List R
+  | [], qs => qs
+  | ps, [] => ps
+  | c :: cs, d :: ds => CommRingOps.add c d :: ospcPolyAddCoeffs cs ds
+
+def ospcPolyAdd {R : Type} [CommRingOps R] (p q : RoundPoly R) : RoundPoly R :=
+  ⟨ospcPolyAddCoeffs p.coeffs q.coeffs⟩
+
+private theorem evalCoeffs_ospcPolyAdd {R : Type} [LawfulCommRing R] :
+    ∀ (ps qs : List R) (x : R),
+      RoundPoly.evalCoeffs (ospcPolyAddCoeffs ps qs) x =
+        CommRingOps.add (RoundPoly.evalCoeffs ps x) (RoundPoly.evalCoeffs qs x)
+  | [], _, _ => by simp [ospcPolyAddCoeffs, RoundPoly.evalCoeffs, LawfulCommRing.zero_add]
+  | _ :: _, [], _ => by simp [ospcPolyAddCoeffs, RoundPoly.evalCoeffs, LawfulCommRing.add_zero]
+  | _ :: cs, _ :: ds, x => by
+    simp only [ospcPolyAddCoeffs, RoundPoly.evalCoeffs, evalCoeffs_ospcPolyAdd cs ds x,
+      LawfulCommRing.left_distrib, LawfulCommRing.add_add_add_comm]
+
+theorem eval_ospcPolyAdd {R : Type} [LawfulCommRing R] (p q : RoundPoly R) (x : R) :
+    (ospcPolyAdd p q).eval x = CommRingOps.add (p.eval x) (q.eval x) :=
+  evalCoeffs_ospcPolyAdd p.coeffs q.coeffs x
+
 def stepButterflySumcheck2Hop {R : Type} [CommRingOps R] (s : Fin 4 → RoundPoly R) : Fin 4 → RoundPoly R :=
-  let p0 : Fin 4 → RoundPoly R := fun t => polyAdd (s (q2OrderedLo ⟨0, by omega⟩ t)) (s (q2OrderedHi ⟨0, by omega⟩ t))
-  fun t => polyAdd (p0 (q2OrderedLo ⟨1, by omega⟩ t)) (p0 (q2OrderedHi ⟨1, by omega⟩ t))
+  let p0 : Fin 4 → RoundPoly R := fun t => ospcPolyAdd (s (q2OrderedLo ⟨0, by omega⟩ t)) (s (q2OrderedHi ⟨0, by omega⟩ t))
+  fun t => ospcPolyAdd (p0 (q2OrderedLo ⟨1, by omega⟩ t)) (p0 (q2OrderedHi ⟨1, by omega⟩ t))
 def stepButterflySumcheckUnordered {R : Type} [CommRingOps R] (s : Fin 4 → RoundPoly R) : Fin 4 → RoundPoly R :=
-  let p0 : Fin 4 → RoundPoly R := fun t => polyAdd (s t) (s (q2Partner ⟨0, by omega⟩ t))
-  fun t => polyAdd (p0 t) (p0 (q2Partner ⟨1, by omega⟩ t))
+  let p0 : Fin 4 → RoundPoly R := fun t => ospcPolyAdd (s t) (s (q2Partner ⟨0, by omega⟩ t))
+  fun t => ospcPolyAdd (p0 t) (p0 (q2Partner ⟨1, by omega⟩ t))
 
 theorem q2Butterfly_sumcheck_canonical_eq {R : Type} [CommRingOps R] (s : Fin 4 → RoundPoly R) (t : Fin 4) :
-    stepButterflySumcheck2Hop s t = polyAdd (polyAdd (s ⟨0, by omega⟩) (s ⟨1, by omega⟩)) (polyAdd (s ⟨2, by omega⟩) (s ⟨3, by omega⟩)) := by
+    stepButterflySumcheck2Hop s t = ospcPolyAdd (ospcPolyAdd (s ⟨0, by omega⟩) (s ⟨1, by omega⟩)) (ospcPolyAdd (s ⟨2, by omega⟩) (s ⟨3, by omega⟩)) := by
   match t with | ⟨0, _⟩ | ⟨1, _⟩ | ⟨2, _⟩ | ⟨3, _⟩ => rfl
 
 theorem q2Butterfly_sumcheck_lockstep_exact {R : Type} [LawfulCommRing R] (s : Fin 4 → RoundPoly R) (t : Fin 4) (x : R) :
     (stepButterflySumcheck2Hop s t).eval x =
       CommRingOps.add (CommRingOps.add ((s ⟨0, by omega⟩).eval x) ((s ⟨1, by omega⟩).eval x))
                       (CommRingOps.add ((s ⟨2, by omega⟩).eval x) ((s ⟨3, by omega⟩).eval x)) := by
-  rw [q2Butterfly_sumcheck_canonical_eq, eval_polyAdd, eval_polyAdd, eval_polyAdd]
+  rw [q2Butterfly_sumcheck_canonical_eq, eval_ospcPolyAdd, eval_ospcPolyAdd, eval_ospcPolyAdd]
 
 theorem q2Butterfly_sumcheck_unordered_exact {R : Type} [LawfulCommRing R] (s : Fin 4 → RoundPoly R) (t : Fin 4) (x : R) :
     (stepButterflySumcheckUnordered s t).eval x =
       CommRingOps.add (CommRingOps.add ((s ⟨0, by omega⟩).eval x) ((s ⟨1, by omega⟩).eval x))
                       (CommRingOps.add ((s ⟨2, by omega⟩).eval x) ((s ⟨3, by omega⟩).eval x)) := by
   match t with
-  | ⟨0, _⟩ => simp only [stepButterflySumcheckUnordered, q2Partner, eval_polyAdd]
-  | ⟨1, _⟩ => simp only [stepButterflySumcheckUnordered, q2Partner, eval_polyAdd]; rw [LawfulCommRing.add_comm ((s ⟨1, by omega⟩).eval x), LawfulCommRing.add_comm ((s ⟨3, by omega⟩).eval x)]
-  | ⟨2, _⟩ => simp only [stepButterflySumcheckUnordered, q2Partner, eval_polyAdd]; rw [LawfulCommRing.add_comm]
-  | ⟨3, _⟩ => simp only [stepButterflySumcheckUnordered, q2Partner, eval_polyAdd]; rw [LawfulCommRing.add_comm ((s ⟨3, by omega⟩).eval x), LawfulCommRing.add_comm ((s ⟨1, by omega⟩).eval x), LawfulCommRing.add_comm]
+  | ⟨0, _⟩ => simp only [stepButterflySumcheckUnordered, q2Partner, eval_ospcPolyAdd]
+  | ⟨1, _⟩ => simp only [stepButterflySumcheckUnordered, q2Partner, eval_ospcPolyAdd]; rw [LawfulCommRing.add_comm ((s ⟨1, by omega⟩).eval x), LawfulCommRing.add_comm ((s ⟨3, by omega⟩).eval x)]
+  | ⟨2, _⟩ => simp only [stepButterflySumcheckUnordered, q2Partner, eval_ospcPolyAdd]; rw [LawfulCommRing.add_comm]
+  | ⟨3, _⟩ => simp only [stepButterflySumcheckUnordered, q2Partner, eval_ospcPolyAdd]; rw [LawfulCommRing.add_comm ((s ⟨3, by omega⟩).eval x), LawfulCommRing.add_comm ((s ⟨1, by omega⟩).eval x), LawfulCommRing.add_comm]
 
 theorem q2Butterfly_transcript_lockstep {R : Type} [CommRingOps R] [TranscriptChallenge R]
     {phase : TranscriptPhase} [CanSqueezeTranscript phase] (s : Fin 4 → RoundPoly R) (tr : Transcript phase) (t₁ t₂ : Fin 4) :
