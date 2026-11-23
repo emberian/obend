@@ -160,6 +160,7 @@ import Obend.Crypto.Sumcheck
 import Obend.Crypto.ThresholdFheAndLatticeVrf
 import Obend.Crypto.ThresholdHashMpc
 import Obend.Crypto.ThresholdMpcUcGames
+import Obend.Crypto.Tower256TracePack
 import Obend.Crypto.Transcript
 import Obend.Crypto.WireDomainTags
 import Obend.Core.AliasExposure
@@ -496,6 +497,7 @@ import Obend.Metatheory.SponsorAndMigration
 import Obend.Metatheory.StratifiedCut
 import Obend.OS.Sel4MicrokitKernel
 import Obend.OS.Sel4MicrokitKernelCore
+import Obend.OS.SmmuRadixTables
 import Obend.OS.SmmuDmaConfinement
 import Obend.Paco.GPaco
 import Obend.Polis.BlumRam
