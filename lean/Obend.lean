@@ -315,6 +315,7 @@ public import Obend.Crypto.GameSoundness
 public import Obend.Crypto.Poseidon2Goldilocks
 public import Obend.Crypto.DarkBazaar
 public import Obend.Crypto.BinaryTower256
+public import Obend.Crypto.Tower256TracePack
 public import Obend.Crypto.BinarySpartanAndShout
 public import Obend.Crypto.ThresholdFheAndLatticeVrf
 public import Obend.Crypto.ThresholdMpcUcGames
