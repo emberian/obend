@@ -82,14 +82,6 @@ def lowerStage (param : String) (f : Stage) : PStmt :=
 
 def runStage (f : Stage) (v : Lanes) : Lanes := fun i => (f i).value v
 
-private theorem fields_eval {τ : Type} (s : PanState τ) (p : String) (b : Word)
-    (hp : s.locals p = some (.word b)) (hm : Mapped s b) (f : Stage) (xs : List (Fin 25)) :
-    evalList s (xs.map fun i => (f i).lower p) =
-      some (xs.map fun i => .word (runStage f (fun j => s.memory (address b j)) i)) := by
-  induction xs with
-  | nil => rfl
-  | cons i xs ih => simp [eval_lower s p b hp hm, ih, runStage]
-
 private theorem flatten_words (ws : List Word) :
     flatten_list (ws.map PanVal.word) = ws := by
   induction ws <;> simp [flatten_list, flatten, *]
@@ -139,13 +131,17 @@ private theorem write_outside (b a : Word) (ws : List Word) (n : Nat) (m : Word 
     rw [write, ih _ _ (by simp at h; omega)]
     simp [UPDATE, Ne.symm (away ⟨n, hn⟩)]
 
-/-- Simultaneous assignment of all lanes. Every RHS observes the same pre-store state. -/
-theorem lowerStage_correct {τ : Type} (s : PanState τ) (p : String) (b : Word)
-    (hp : s.locals p = some (.word b)) (hm : Mapped s b) (f : Stage) :
-    ∃ m, evaluate (lowerStage p f) s = (.normal, {s with memory := m}) ∧
-      (∀ i : Fin 25, m (address b i) = runStage f (fun j => s.memory (address b j)) i) ∧
+/-- A 25-word store evaluates every field before updating the destination. -/
+theorem storeFields_correct {τ : Type} (s : PanState τ) (p : String) (b : Word)
+    (hp : s.locals p = some (.word b)) (hm : Mapped s b) (fields : Fin 25 → PExp)
+    (out : Lanes) (he : ∀ i, eval s (fields i) = some (.word (out i))) :
+    ∃ m, evaluate (.store (.lvar p) (.rstruct ((List.finRange 25).map fields))) s =
+        (.normal, {s with memory := m}) ∧
+      (∀ i : Fin 25, m (address b i) = out i) ∧
       ∀ a, (∀ i : Fin 25, a ≠ address b i) → m a = s.memory a := by
-  let out := runStage f (fun j => s.memory (address b j))
+  have evals (xs : List (Fin 25)) : evalList s (xs.map fields) =
+      some (xs.map fun i => PanVal.word (out i)) := by
+    induction xs <;> simp [*]
   let ws := (List.finRange 25).map out
   have len : ws.length = 25 := by simp [ws]
   refine ⟨write b s.memory 0 ws, ?_, ?_, ?_⟩
@@ -155,13 +151,21 @@ theorem lowerStage_correct {τ : Type} (s : PanState τ) (p : String) (b : Word)
       simp [ws, List.map_map, Function.comp_def]
     have hs := stores_write b s.memaddrs hm ws 0 s.memory (by omega)
     simp [address] at hs
-    simp only [lowerStage, evaluate_store, eval_lvar, hp, eval_rstruct, fields_eval s p b hp hm, Option.map_some]
+    simp only [evaluate_store, eval_lvar, hp, eval_rstruct, evals, Option.map_some]
     rw [hf, hs]
   · intro i
     rw [write_at _ _ _ _ (by omega)]
-    simp [ws, out, i.isLt]
+    simp [ws, i.isLt]
 
   · intro a away
     exact write_outside b a ws 0 _ (by omega) away
+
+/-- Simultaneous assignment of all lanes. Every RHS observes the same pre-store state. -/
+theorem lowerStage_correct {τ : Type} (s : PanState τ) (p : String) (b : Word)
+    (hp : s.locals p = some (.word b)) (hm : Mapped s b) (f : Stage) :
+    ∃ m, evaluate (lowerStage p f) s = (.normal, {s with memory := m}) ∧
+      (∀ i : Fin 25, m (address b i) = runStage f (fun j => s.memory (address b j)) i) ∧
+      ∀ a, (∀ i : Fin 25, a ≠ address b i) → m a = s.memory a :=
+  storeFields_correct s p b hp hm _ _ (fun i => eval_lower s p b hp hm (f i))
 
 end Obend.Lower.Pancake.WordBuffer

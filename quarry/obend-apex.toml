@@ -441,6 +441,13 @@ theorem = "runCompiledLcnfBatch_sound"
 description = "Multi-turn first-order `LcnfCode` batch compilation to CakeML Pancake `PStmt` refines `evalLcnfCode` and `Core4` under path-sensitive `CondSClk` fuel with zero `TimeOut`/`Error`."
 
 [[apex]]
+id = "lower-pancake-cshake256"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.PancakeCshake256"
+theorem = "pancakeCshake256_correct"
+description = "The exported Pancake sponge on mapped raw function-name, customization and message slices returns the 32 bytes of the SP 800-185 specification."
+
+[[apex]]
 id = "lower-pancake-sclk-refinement"
 subsystem = "Lower"
 module = "Obend.Lower.Pancake.RefinesClkPan"

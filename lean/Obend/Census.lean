@@ -468,14 +468,17 @@ import Obend.Lower.Inductive
 import Obend.Lower.Judge
 import Obend.Lower.LCNF
 import Obend.Lower.Pancake
+import Obend.Lower.Pancake.ByteMemory
 import Obend.Lower.Pancake.CondSClk
 import Obend.Lower.Pancake.EmitPnk
 import Obend.Lower.Pancake.LcnfEmit
 import Obend.Lower.Pancake.LcnfFun
 import Obend.Lower.Pancake.LcnfSimHelpers
 import Obend.Lower.Pancake.PanSem
+import Obend.Lower.Pancake.PancakeCshake256
 import Obend.Lower.Pancake.PancakeKeccak
 import Obend.Lower.Pancake.RefinesClkPan
+import Obend.Lower.Pancake.SpongeFrame
 import Obend.Lower.Pancake.WordBuffer
 import Obend.Lower.LeanKernel
 import Obend.Lower.MetaUnify
