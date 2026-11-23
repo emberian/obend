@@ -1305,7 +1305,8 @@ def verifyAndClearDarkBazaarZkEpoch {rows cols : Nat} (cfg : ThresholdDecryptCon
 
 theorem verifyZkOrderProofBatch_sound {rows cols : Nat} (pp : BdlopParams rows cols) (market : Market)
     (zs : List (CommittedZkOrderSpec rows cols)) (hOk : verifyZkOrderProofBatch pp market zs = true) :
-    ∀ s ∈ zs, verifyMaskedSameOpening pp (zkOrderStmtContext market s) s.bdlopComm s.zkProof = true :=
+    ∀ s : CommittedZkOrderSpec rows cols, s ∈ zs →
+      verifyMaskedSameOpening pp (zkOrderStmtContext market s) s.bdlopComm s.zkProof = true :=
   List.all_eq_true.1 hOk
 
 /-- **Soundness of Witness-Free `verifyAndClearDarkBazaarZkEpoch` (`verifyAndClearDarkBazaarZkEpoch_sound`)**:
