@@ -1,7 +1,6 @@
 import Obend.Analysis.Equitable
 import Obend.Analysis.QuantumWalk
 import Obend.Analysis.SosLyapunov
-import Obend.Hardware.Photonics
 import Obend.Hardware.QuantumMatter
 import Obend.Judge
 
@@ -21,7 +20,6 @@ Verifies:
 namespace Obend.Tests.QuantumMatterTest
 
 open Obend.Analysis
-open Obend.Hardware.Photonics
 open Obend.Hardware.QuantumMatter
 open Obend.Judge
 

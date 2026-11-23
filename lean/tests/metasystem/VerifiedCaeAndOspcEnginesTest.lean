@@ -38,7 +38,6 @@ open Obend.Analysis
 open Obend.Crypto
 open Obend.Hardware.HDL
 open Obend.Hardware.YosysLec
-open Obend.Hardware.Datasheet
 open Obend.Hardware.PinoutEquiv
 open Obend.Hardware.PlaneSweepDrcLvs
 open Obend.Hardware.SmallSignalMna

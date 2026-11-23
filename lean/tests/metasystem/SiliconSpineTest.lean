@@ -1,9 +1,9 @@
 module
 import all Obend.Hardware.Judge
 /-
-# tests/SiliconSpineTest — End-to-End Verification Suite for Hardware Compilation & Silicon Tapeout Spine
+# tests/SiliconSpineTest — End-to-End Verification Suite for Hardware Compilation & Process Corner Spine
 
-Verifies all 5 pillars in a single end-to-end test suite (`0 sorry`, `0 sorryAx`, `0 custom axioms`):
+Verifies all 4 pillars in a single end-to-end test suite (`0 sorry`, `0 sorryAx`, `0 custom axioms`):
 1. **In-Place `compileTermPipelined` Callee Body Substitution (`Obend.Hardware.Compiler`)**:
    - `substRtlInputPort0_sound`, `compileTermPipelined_sound`, and
      `compileTermPipelined_arg_wired_and_stage_correspondence` prove that direct arguments
@@ -13,15 +13,12 @@ Verifies all 5 pillars in a single end-to-end test suite (`0 sorry`, `0 sorryAx`
 2. **Strict `Hardware/Judge.lean` JSON Certificate Decoders (`Obend.Hardware.Judge`)**:
    - Verifies that `decodeRtlSynthCert` parses actual `RtlModule` wire/register/output tables and
      refuses (`.isOk = false`) certificates missing wire definitions, and that all hardware/EDA
-     certificate decoders (`decodeRetimeCert`, `decodePnrCert`, `decodeDatasheetFitCert`,
-     `decodeAgenticEdaCert`) refuse inputs when required fields are omitted (zero `golden*` fallback).
+     certificate decoders (`decodeRetimeCert`, `decodePnrCert`, `decodeAgenticEdaCert`) refuse inputs
+     when required fields are omitted (zero `golden*` fallback).
 3. **Rational `Device.Wafer` Root Enclosures & `[FF, TT, SS]` Process Corner Envelope (`Device.Wafer`, `Process`)**:
    - Verifies `sqrtEnclosure_spec` (`lo² ≤ v ≤ hi²`), `anneal_var_mono`, `envelope7nm_valid`, and
      `envelope_timing_signoff_implies_all_intermediate_corners_safe`.
-4. **Netlist-Bound `.obend` Silicon Tapeout Pipeline & Real cSHAKE256 SV Digest (`Obend.Hardware.TapeoutPipeline`)**:
-   - Verifies `compileCompositionToSiliconTapeout_sound`, `compileObendModuleToSiliconTapeout_sound`,
-     `tapeout_sv_digest_binds_or_collides`, and `reference_obend_module_silicon_tapeout_verified`.
-5. **`#tooth` Mutation Probes**:
+4. **`#tooth` Mutation Probes**:
    - Exercises `#tooth` mutation falsification on `substRtlInputPort0` and `checkEnvelopeTimingSignoff`.
 -/
 public import Obend.Spec.FrontEnd
@@ -31,7 +28,6 @@ public import Obend.Hardware.Synth
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.Device.Wafer
 public import Obend.Hardware.Judge
-public import Obend.Hardware.TapeoutPipeline
 public import Obend.Tactic.Tooth
 import all Obend.Hardware.Process
 import all Obend.Hardware.Compiler
@@ -49,7 +45,6 @@ open Obend.Hardware.Synth
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.Device
 open Obend.Hardware.Judge
-open Obend.Hardware.TapeoutPipeline
 
 set_option autoImplicit false
 
@@ -93,9 +88,7 @@ theorem judge_decoders_strictly_refuse_missing_fields :
     (decodeRetimeCert "{\"lag0\":0}").isOk = false ∧
     -- 4. `hw-pnr-bitstream@1`: missing `net1DstWire` is refused
     (decodePnrCert "{\"sinkCapFf\":5,\"cell1TileY\":1,\"cell0BelSlot\":0,\"cell1BelSlot\":0,\"net0DstWire\":12}").isOk = false ∧
-    -- 5. `datasheet-fit@1`: missing `rmseScaled` is refused
-    (decodeDatasheetFitCert "{\"vthMv\":1700,\"kpScaled\":500}").isOk = false ∧
-    -- 6. `agentic-eda@1`: missing `postSwapMaxTempMilliC` is refused
+    -- 5. `agentic-eda@1`: missing `postSwapMaxTempMilliC` is refused
     (decodeAgenticEdaCert "{\"cand2LcscPartId\":25801,\"cand2StockQty\":50000,\"cand2VdsMaxMv\":40000,\"cand2RdsOnMaxMohm\":28}").isOk = false := by
   rw [decodeRtlSynthCert_encodeRtlSynthCert_roundtrip]
   decide +kernel
@@ -119,38 +112,7 @@ theorem device_wafer_and_process_envelope_spine_verified :
             (envelope_timing_signoff_implies_all_intermediate_corners_safe
               envelope7nm 2000 obendStageCritPath c hBet hSign).1⟩
 
-/-! ## 4. End-to-End Netlist-Bound `.obend` Silicon Tapeout Pipeline Verification -/
-
-/-- Verify that the netlist-bound `.obend` tapeout pipeline (`compileObendModuleToSiliconTapeout_sound`,
-`compileCompositionToSiliconTapeout_sound`, `reference_obend_module_silicon_tapeout_verified`)
-binds `checkPnrCertificate` 1-to-1 to `art.belNetlist` and commits emitted SystemVerilog bytes via
-real cSHAKE256 (`Obend.Core.Digest.deployed`). -/
-theorem silicon_tapeout_pipeline_spine_verified :
-    (∀ cfg src art,
-       compileObendModuleToSiliconTapeout cfg src = .ok art →
-       checkRtlModule art.rtlModule = true ∧
-       checkBelNetlistValid art.belNetlist = true ∧
-       countFfBels art.belNetlist = art.rtlModule.regs.length ∧
-       checkPnrCertificate art.belNetlist art.tcadEnvelope.slowCorner cfg.clockPeriodPs art.pnrCert = true ∧
-       art.pnrCert.placedCells.length = art.belNetlist.cells.length ∧
-       checkEnvelopeTimingSignoff art.tcadEnvelope cfg.clockPeriodPs cfg.timingPath = true ∧
-       art.systemVerilog = emitModuleSV art.rtlModule ∧
-       art.svDigest = Obend.Digest.HashBytes.ofBE (Obend.Core.Digest.deployed art.systemVerilog.toUTF8.toList) ∧
-       checkTapeoutTrustChecked tapeoutCheckedSupports art.receipt.trust = true) ∧
-    FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag referenceTapeoutIsarCert = true := by
-  refine ⟨fun cfg src art hOk => ?_, reference_obend_module_silicon_tapeout_verified.1⟩
-  have hSound := compileObendModuleToSiliconTapeout_sound cfg src art hOk
-  exact ⟨hSound.2.2.1,
-         hSound.2.2.2.1,
-         hSound.2.2.2.2.1,
-         hSound.2.2.2.2.2.2.1,
-         hSound.2.2.2.2.2.2.2.1,
-         hSound.2.2.2.2.2.2.2.2.2.1,
-         hSound.2.2.2.2.2.2.2.2.2.2.1,
-         hSound.2.2.2.2.2.2.2.2.2.2.2.1,
-         hSound.2.2.2.2.2.2.2.2.2.2.2.2.2.2⟩
-
-/-! ## 5. `#tooth` Mutation Falsification Probes -/
+/-! ## 4. `#tooth` Mutation Falsification Probes -/
 
 #tooth Obend.Hardware.Compiler.substRtlInputPort0_sound by mutation
   Obend.Hardware.Compiler.substRtlInputPort0 := fun _ body => body
@@ -161,7 +123,6 @@ theorem silicon_tapeout_pipeline_spine_verified :
 #print axioms pipelined_callee_body_substitution_distinguishes_methods
 #print axioms judge_decoders_strictly_refuse_missing_fields
 #print axioms device_wafer_and_process_envelope_spine_verified
-#print axioms silicon_tapeout_pipeline_spine_verified
 
 end Obend.Tests.SiliconSpineTest
 end

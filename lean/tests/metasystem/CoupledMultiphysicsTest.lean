@@ -2,17 +2,15 @@ module
 
 public import Obend.Tactic.Tooth
 public import Obend.Hardware.Magnetics
-public import Obend.Hardware.ThermalPassivity
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.NotebookProjection
 import all Obend.Hardware.NotebookProjection
 import all Obend.Hardware.Magnetics
-import all Obend.Hardware.ThermalPassivity
 import all Obend.Hardware.Kinematics
 import all Obend.Hardware.Device.Sky130Diode
 
 /-!
-# Metasystem Test Suite — Coupled Multi-Physics, $1/\Delta_e$ Courant $P_1$ FEMM, PRIMA Thermal Passivity & Featherstone Twist Chains (`WS-J`)
+# Metasystem Test Suite — Coupled Multi-Physics, $1/\Delta_e$ Courant $P_1$ FEMM & Featherstone Twist Chains (`WS-J`)
 
 Verifies universal theorems, concrete positive/negative boundary cases, `#tooth` mutation-killing
 probes, and `#print axioms` (`0 sorryAx`) across:
@@ -24,15 +22,11 @@ probes, and `#print axioms` (`0 sorryAx`) across:
      `evalMeshTotalCoEnergy_nonneg`, `evalMeshTotalCoEnergy_gauge_invariant`),
    - Damped Picard nonlinear $B$-$H$ fixed-point iteration (`stepBhPicardReluctivity`,
      `stepBhPicardReluctivity_fixed_point`, `stepBhPicardReluctivity_monotone`).
-2. `Obend.Hardware.ThermalPassivity`:
-   - Discretized Fourier heat operator & PRIMA congruence projection (`prima_preserves_passivity`),
-   - $N$-node Graph-Laplacian thermal network passivity (`laplacian_quadratic_passive_universal`),
-   - Multi-column ($N \times 2$) PRIMA Krylov congruence passivity (`prima_2col_congruence_preserves_passivity`).
-3. `Obend.Hardware.Kinematics`:
+2. `Obend.Hardware.Kinematics`:
    - `propagateSerialChainTwists`, `propagateSerialChainTwists_append`,
      `propagateSerialChainTwists_scale`, `propagateSerialChainTwists_zipWith_add`,
      `spatialPower_propagateSerialChainTwists_append`.
-4. `Obend.Vault.PhysicalProjection`:
+3. `Obend.Vault.PhysicalProjection`:
    - `physical_projection_deterministic`, `physical_cnc_abbe_projection_sound`,
      `physical_openusd_lifecycle_fixture`, `physical_projection_doc_noninterference`.
 -/
@@ -43,7 +37,6 @@ namespace Obend.Tests.Metasystem.CoupledMultiphysicsTest
 open Obend.Core.Data
 open Obend.Doc
 open Obend.Hardware.Magnetics
-open Obend.Hardware.ThermalPassivity
 open Obend.Hardware.Kinematics
 open Obend.Vault.HardwareProjection
 open Obend.Vault.PhysicalProjection
@@ -121,23 +114,7 @@ theorem test_bh_picard_fixed_point_and_monotone
 #guard evalMeshNodalResidual testMesh2D 42 == 0
 #guard stepBhPicardReluctivity 800 5 500 1300 100 == 1300
 
-/-! ## 2. PRIMA Thermal Model-Order Reduction & Graph-Laplacian Passivity (`ThermalPassivity`) -/
-
-theorem test_thermal_laplacian_and_prima_passivity
-    (op : FineThermalOperator) (v1 v2 z : Int)
-    (hg1 : 0 ≤ op.g1) (hg2 : 0 ≤ op.g2) (hg12 : 0 ≤ op.g12)
-    (col0 col1 tempsMk : List Int) (edges : List ThermalEdge) (alpha0 alpha1 : Int)
-    (hPassive : ∀ e ∈ edges, 0 ≤ e.conductanceMwPerK) :
-    0 ≤ primaProject1D op v1 v2 ∧
-    0 ≤ evalReducedThermalEnergy op v1 v2 z ∧
-    0 ≤ evalLaplacianQuadratic tempsMk edges ∧
-    0 ≤ evalPrima2ColReducedQuadratic col0 col1 edges alpha0 alpha1 :=
-  ⟨(prima_preserves_passivity op v1 v2 z hg1 hg2 hg12).1,
-   (prima_preserves_passivity op v1 v2 z hg1 hg2 hg12).2.1,
-   laplacian_quadratic_passive_universal tempsMk edges hPassive,
-   prima_2col_congruence_preserves_passivity col0 col1 edges alpha0 alpha1 hPassive⟩
-
-/-! ## 3. Multi-Body Serial Twist Propagation & `.obnb` Physical Projections -/
+/-! ## 2. Multi-Body Serial Twist Propagation & `.obnb` Physical Projections -/
 
 theorem test_serial_chain_twist_linearity
     (s : Int) (f : SpatialWrench6D) (c1 c2 : List SpatialTwist6D)
@@ -160,8 +137,7 @@ theorem test_physical_projections_verified (spec : CncToolpathViewportSpec) :
     (evalUncompensatedTipPos3D
       (evalAbbeCompensatedCmd3D spec.pTarget spec.linErr spec.angErr spec.abbeArm)
       spec.linErr spec.angErr spec.abbeArm = spec.pTarget ∧
-     spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist = 0 ∧
-     (Obend.Leaf.emit Obend.Hardware.VerilateRunner.cnc5AxisMillComp).closedB = true) ∧
+     spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist = 0) ∧
     (let usd : OpenUsdViewportSpec :=
        { stageName     := "LcDrives_Production_Stator"
        , primPath      := ["Factory", "Draft", "Stator", "Slot01"]
@@ -187,23 +163,16 @@ theorem test_physical_projections_verified (spec : CncToolpathViewportSpec) :
      (Obend.Hardware.OpenUSD.AffineForm1D.sub usd.sdfWallForm usd.sdfWallForm).toInterval = { lo := 0, hi := 0 } ∧
      Obend.Hardware.OpenUSD.checkPartLifecycleInvariant usd.minWallUm usd.maxTempMilliC
        (Obend.Hardware.OpenUSD.finalUsdState usd.initSample usd.timeSamples) = true ∧
-     Obend.Analysis.verifyTrajectorySafety stator.ode stator.initBox stator.steps stator.safeBounds = true ∧
-     (Obend.Leaf.emit Obend.Hardware.VerilateRunner.lcDrivesStatorComp).closedB = true) :=
+     Obend.Analysis.verifyTrajectorySafety stator.ode stator.initBox stator.steps stator.safeBounds = true) :=
   ⟨physical_cnc_abbe_projection_sound spec, physical_openusd_lifecycle_fixture⟩
 
-/-! ## 4. `#tooth` Mutation-Killing Probes & `#print axioms` Verification (`0 sorryAx`) -/
+/-! ## 3. `#tooth` Mutation-Killing Probes & `#print axioms` Verification (`0 sorryAx`) -/
 
 def stepBhPicardBrokenUnscaled (nuLinear kSat omegaPermille nuCur bSq : Int) : Int :=
   (1000 - omegaPermille) * nuCur + omegaPermille * evalNonlinearReluctivity nuLinear kSat bSq
 
 #tooth Obend.Hardware.Magnetics.stepBhPicardReluctivity_fixed_point by mutation
   Obend.Hardware.Magnetics.stepBhPicardReluctivity := stepBhPicardBrokenUnscaled
-
-def evalEdgeQuadraticBrokenLinear (tempsMk : List Int) (e : ThermalEdge) : Int :=
-  e.conductanceMwPerK * (tempsMk.getD e.nodeU 0 - tempsMk.getD e.nodeV 0)
-
-#tooth Obend.Hardware.ThermalPassivity.laplacian_quadratic_passive_universal by mutation
-  Obend.Hardware.ThermalPassivity.evalEdgeQuadratic := evalEdgeQuadraticBrokenLinear
 
 def propagateSerialChainTwistsBroken : List SpatialTwist6D → SpatialTwist6D
   | [] => SpatialTwist6D.zero
@@ -218,9 +187,6 @@ def propagateSerialChainTwistsBroken : List SpatialTwist6D → SpatialTwist6D
 #print axioms Obend.Hardware.Magnetics.evalMeshTotalCoEnergyQ_nonneg
 #print axioms Obend.Hardware.Magnetics.stepBhPicardReluctivity_fixed_point
 #print axioms Obend.Hardware.Magnetics.stepBhPicardReluctivity_monotone
-#print axioms Obend.Hardware.ThermalPassivity.prima_preserves_passivity
-#print axioms Obend.Hardware.ThermalPassivity.laplacian_quadratic_passive_universal
-#print axioms Obend.Hardware.ThermalPassivity.prima_2col_congruence_preserves_passivity
 #print axioms Obend.Hardware.Kinematics.propagateSerialChainTwists_append
 #print axioms Obend.Hardware.Kinematics.propagateSerialChainTwists_scale
 #print axioms Obend.Hardware.Kinematics.propagateSerialChainTwists_zipWith_add

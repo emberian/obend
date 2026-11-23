@@ -12,8 +12,6 @@ public import Obend.Hardware.Compiler
 public import Obend.Hardware.Retiming
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.SmallSignalMna
-public import Obend.Hardware.Datasheet
-public import Obend.Hardware.Circuits
 public import Obend.Hardware.ReductionMachine
 public import Obend.Hardware.DigitalFilterAndArray
 public import Obend.Hardware.PinoutEquiv
@@ -28,7 +26,6 @@ open Obend.Judge
 open Obend.Hardware.Process Obend.Hardware.HDL Obend.Hardware.Compiler
 open Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.SmallSignalMna
-open Obend.Hardware.Datasheet Obend.Hardware.Circuits
 open Obend.Hardware.ReductionMachine Obend.Hardware.DigitalFilterAndArray Obend.Hardware.PinoutEquiv
 open Obend.Hardware.Codec
 set_option autoImplicit false
@@ -408,12 +405,10 @@ inductive HwClause where
   | emptyRtlTopName
   | unsatRetimeTarget
   | invalidPnrProblem
-  | emptyDatasheetSuiteName
   | unsatAgenticMarginTarget
   | rtlInvalidDagOrCdc (modName : String)
   | retimeInvalidLagOrTiming (graphName : String)
   | pnrCollisionShortOrTiming (designName : String)
-  | datasheetCalibrationOrMarginViolation (suiteName : String)
   | agenticEdaSwapViolation (partName : String)
   | binaryCborCertViolation (domainId : Nat)
   deriving DecidableEq, Repr
@@ -953,90 +948,6 @@ theorem hwPnrFormat_sound {r : Nat} {obj cert : String}
     (h : hwPnrFormat.checkBytes r obj cert = .ok) :
     ∃ o c, decodePnrProblem obj = .ok o ∧ decodePnrWireCert cert = .ok c ∧ PnrBitstreamMeaning o c :=
   hwPnrFormat.checkBytes_sound h
-/-! ## 5. Format 4: `datasheet-fit@1` (Automated Datasheet Calibration, `74LS00` + `74HCT00` + INA + Buck Judge) -/
-/-- Declarative physical/electrical specification for `datasheet-fit@1`: suite identity, DC noise
-margins, `74LS00` saturated totem-pole fanout swing, empirical $L_\infty$ curve fit, laser-trimmed INA
-common-mode balance, and synchronous Buck CCM & inductor core-saturation bounds. -/
-def DatasheetFitMeaning (expectedSuite : String) (c : DatasheetFitCert) : Prop :=
-  expectedSuite ≠ "" ∧ c.suiteName = expectedSuite ∧
-  c.minMarginMv ≤ noiseMarginHigh c.driverSpec c.receiverSpec c.pullupBoostMv ∧
-  c.minMarginMv ≤ noiseMarginLow c.driverSpec c.receiverSpec ∧
-  c.driverSpec.volMaxMv < c.receiverSpec.vihMinMv ∧
-  c.fanout ≤ c.ttlParams.maxFanout ∧
-  evalTtlNandMv c.ttlParams 2000 2000 c.fanout ≤ 400 ∧
-  c.modelPreds.length = c.datasheetPoints.length ∧
-  0 ≤ c.maxCalErrMv ∧
-  maxCurveErrorLInf c.modelPreds c.datasheetPoints ≤ c.maxCalErrMv ∧
-  c.inaSpec.gainCmRaw = c.inaSpec.trimCmCancel ∧
-  c.buckStage.dutyPermille ≤ 1000 ∧
-  0 < c.buckStage.inductanceUh ∧
-  0 < c.buckStage.fswKhz ∧
-  evalBuckRippleMa c.buckStage ≤ 2 * c.buckStage.iLoadMa ∧
-  evalBuckPeakInductorMa c.buckStage ≤ c.buckStage.iSatMaxMa
-def checkDatasheetFitJudge (_grade : Nat) (expectedSuite : String) (cert : DatasheetFitCert) : Verdict HwClause :=
-  if expectedSuite == "" then .refused .emptyDatasheetSuiteName []
-  else if (cert.suiteName == expectedSuite) && checkDatasheetFitSignoff cert then .ok
-  else .refused (.datasheetCalibrationOrMarginViolation cert.suiteName) []
-theorem checkDatasheetFitJudge_ok_iff (r : Nat) (expectedSuite : String) (c : DatasheetFitCert) :
-    checkDatasheetFitJudge r expectedSuite c = .ok ↔ DatasheetFitMeaning expectedSuite c := by
-  unfold checkDatasheetFitJudge
-  by_cases hEmpty : expectedSuite = ""
-  · subst hEmpty; simp [DatasheetFitMeaning]
-  · have hB : (expectedSuite == "") = false := beq_eq_false_iff_ne.mpr hEmpty
-    simp [hB, hEmpty, DatasheetFitMeaning, checkDatasheetFitSignoff, checkLogicInterface,
-      checkTtlFanout, checkModelCalibration, checkBuckCcmSafe, Bool.and_eq_true, beq_iff_eq,
-      decide_eq_true_eq, and_assoc]
-instance datasheetFitJudge : Obend.Judge String DatasheetFitCert where
-  Clause := HwClause
-  Meaning := DatasheetFitMeaning
-  check := checkDatasheetFitJudge
-  sound := by intro r o c h; exact (checkDatasheetFitJudge_ok_iff r o c).mp h
-  refutes | .emptyDatasheetSuiteName => true | _ => false
-  refuted := by
-    intro r o c k cs hc hk c' hm
-    unfold checkDatasheetFitJudge at hc
-    split at hc
-    · rename_i ho; exact hm.1 (beq_iff_eq.mp ho)
-    · split at hc <;> cases hc; cases hk
-  Fragment _ := True
-  complete := by intro o _ ⟨c, hc⟩; exact ⟨c, 0, (checkDatasheetFitJudge_ok_iff 0 o c).mpr hc⟩
-  mono := by intro _ _ _ _ _ _; rfl
-theorem badDatasheetFitCert_refused :
-    checkDatasheetFitJudge 0 "obend_74ls_hct_ina_calibrated" badDirect74HcFitCert =
-      .refused (.datasheetCalibrationOrMarginViolation "obend_74ls_hct_ina_calibrated") [] := by decide +kernel
-def decodeDatasheetFitObj (s : String) : Except String String := do
-  ensureWireFrame s; requireStringField s "suite"
-def decodeDatasheetFitCert (s : String) : Except String DatasheetFitCert := do
-  ensureWireFrame s
-  let suiteName   ← requireStringField s "suiteName"
-  let pullup      ← requireIntField s "pullupBoostMv"
-  let minMargin   ← requireIntField s "minMarginMv"
-  let rcvVihMinMv ← requireIntField s "rcvVihMinMv"
-  let rcvVilMaxMv ← requireIntField s "rcvVilMaxMv"
-  let fanout      ← requireNatField s "fanout"
-  let maxCalErr   ← requireIntField s "maxCalErrMv"
-  let buckLoadMa  ← requireNatField s "buckLoadMa"
-  return {
-    suiteName := suiteName, driverSpec := sn74ls00Datasheet.logic
-    receiverSpec := { cd74hct00Datasheet.logic with vihMinMv := rcvVihMinMv, vilMaxMv := rcvVilMaxMv }
-    pullupBoostMv := pullup, minMarginMv := minMargin, ttlParams := sn74ls00TotemParams
-    fanout := fanout, modelPreds := calibrated74ls00ModelPreds
-    datasheetPoints := sn74ls00Datasheet.transferCurve, maxCalErrMv := maxCalErr
-    inaSpec := precisionMatchedIna, buckStage := { buck12vTo5v2aSpec with iLoadMa := buckLoadMa } }
-def datasheetFitFormat : Format where
-  name := "datasheet-fit"; version := "1"; Obj := String; Cert := DatasheetFitCert
-  judge := datasheetFitJudge; decodeObj := decodeDatasheetFitObj; decodeCert := decodeDatasheetFitCert
-  trust := .kernel; regime := .decidable
-  bad := ("obend_74ls_hct_ina_calibrated", badDirect74HcFitCert); badGrade := 0
-  bad_refused := ⟨_, _, badDatasheetFitCert_refused⟩
-theorem datasheetFitFormat_sound {r : Nat} {obj cert : String}
-    (h : datasheetFitFormat.checkBytes r obj cert = .ok) :
-    ∃ o c, decodeDatasheetFitObj obj = .ok o ∧ decodeDatasheetFitCert cert = .ok c ∧
-      DatasheetFitMeaning o c :=
-  datasheetFitFormat.checkBytes_sound h
-theorem datasheetFitFormat_complete {o : String} (h : ∃ c : DatasheetFitCert, DatasheetFitMeaning o c) :
-    ∃ c r, datasheetFitJudge.check r o c = .ok :=
-  datasheetFitJudge.complete trivial h
 /-! ## 6. Format 5: `agentic-eda-swap@1` (Smart-Contract Markdown Vault BOM Swap Judge) -/
 /-- Declarative semantic specification for `agentic-eda-swap@1`: vault `.obend` law admission plus
 denotational law satisfaction and physical 3.3V LVCMOS static noise-margin inequalities. -/
@@ -1155,13 +1066,6 @@ def BinaryHwCertDomainMeaning (c : BinaryHwCert) : Prop :=
     checkRetimingCert macUnretimedGraph
       { vertexLags := [(0, c.p0), (1, c.p1), (2, c.p2)], ioLatencyShift := c.p3 }
       corner7nm_SS c.p5.toNat = true
-  | .photonics =>
-    let e1 : Obend.Hardware.Photonics.ComplexField := ⟨c.p2, c.p3⟩
-    let e2 : Obend.Hardware.Photonics.ComplexField := ⟨c.p4, c.p5⟩
-    let (o1, o2) := Obend.Hardware.Photonics.evalDirectionalCoupler2x2 c.p0 c.p1 e1 e2
-    let (barCross, _) := Obend.Hardware.Photonics.evalCascadedMzi2x2 c.p0 c.p0 ⟨1, 0⟩ e1 ⟨0, 0⟩
-    o1.normSq + o2.normSq = (c.p0 * c.p0 + c.p1 * c.p1) * (e1.normSq + e2.normSq) ∧
-      0 < c.p0 * c.p0 + c.p1 * c.p1 ∧ barCross = ⟨0, 0⟩
   | .pcb =>
     Obend.Hardware.PCB.checkSingleEndedZ0 c.p0.toNat c.p1.toNat c.p2.toNat c.p3.toNat c.p4.toNat c.p5.toNat 3000 = true
   | .dpr =>
@@ -1175,11 +1079,6 @@ def BinaryHwCertDomainMeaning (c : BinaryHwCert) : Prop :=
     AgenticEdaSwapMeaning c.p5 { baselineLdoPart with
       vohMinMv := c.p0.toNat, volMaxMv := c.p1.toNat, maxTempMc := c.p2.toNat,
       vswrMilli := c.p3.toNat, costCents := c.p4.toNat }
-  | .multiphysics =>
-    let edges : List Obend.Hardware.ThermalPassivity.ThermalEdge :=
-      [ { nodeU := 0, nodeV := 1, conductanceMwPerK := c.p0 }
-      , { nodeU := 1, nodeV := 2, conductanceMwPerK := c.p1 } ]
-    0 ≤ c.p0 ∧ 0 ≤ c.p1 ∧ 0 ≤ Obend.Hardware.ThermalPassivity.evalLaplacianQuadratic [c.p2, c.p3, c.p4] edges
   | .analog2d =>
     chiralityBalanced2DMismatch c.p0 c.p1 c.p2 c.p3 c.p4 c.p5 10 10 = 0 ∧
       prouhetThueMorseMismatch1D c.p0 c.p1 c.p3 10 = 0
@@ -1200,7 +1099,6 @@ theorem verifyBinaryHwCert_iff (c : BinaryHwCert) :
   cases dom
   · rfl
   · rfl
-  · simp [verifyBinaryHwCert, BinaryHwCertDomainMeaning, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq, and_assoc]
   · rfl
   · unfold verifyBinaryHwCert BinaryHwCertDomainMeaning; dsimp only
     cases h1 : decodeTileOpKindBits p1.toNat <;> cases h2 : decodeRuleOpcodeBits p2.toNat
@@ -1216,7 +1114,6 @@ theorem verifyBinaryHwCert_iff (c : BinaryHwCert) :
       (checkAgenticEdaSwapBool_iff p5 { baselineLdoPart with
         vohMinMv := p0.toNat, volMaxMv := p1.toNat, maxTempMc := p2.toNat,
         vswrMilli := p3.toNat, costCents := p4.toNat })
-  · simp [verifyBinaryHwCert, BinaryHwCertDomainMeaning, decide_eq_true_eq]
   · simp [verifyBinaryHwCert, BinaryHwCertDomainMeaning, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq]
   · simp [verifyBinaryHwCert, BinaryHwCertDomainMeaning, decide_eq_true_eq, beq_iff_eq]
   · simp [verifyBinaryHwCert, BinaryHwCertDomainMeaning, decide_eq_true_eq]
@@ -1321,40 +1218,34 @@ def decodeBinaryCborCert (s : String) : Except String BinaryHwCert := do
     | none => .error "invalid RFC 8949 CBOR BinaryHwCert frame"
   | none => .error "invalid hex-encoded CBOR byte stream"
 /-- Declarative specification for variable-length RFC 8949 CBOR tape/mesh certificates:
-restricted strictly to `.magnetics` and `.multiphysics` domains with ≥4 positive mesh words summing
+restricted strictly to the `.magnetics` domain with ≥4 positive mesh words summing
 to `metric0` and bounded peak metric `metric1 ≤ 5_000_000`. -/
 def BinaryTapeCertMeaning (expectedDom : HwCertDomain) (c : BinaryTapeCert) : Prop :=
-  c.domain = expectedDom ∧ (expectedDom = .magnetics ∨ expectedDom = .multiphysics) ∧
+  c.domain = expectedDom ∧ expectedDom = .magnetics ∧
   4 ≤ c.words.length ∧ 0 < c.metric0.toNat ∧ 0 < c.metric1.toNat ∧ c.metric1.toNat ≤ 5000000 ∧
   (∀ w ∈ c.words, 0 < w.toNat) ∧ c.words.foldl (fun acc w => acc + w.toNat) 0 = c.metric0.toNat
 def checkBinaryTapeCert (_grade : Nat) (expectedDom : HwCertDomain) (cert : BinaryTapeCert) : Verdict HwClause :=
-  if expectedDom != .magnetics && expectedDom != .multiphysics then
+  if expectedDom != .magnetics then
     .refused (.binaryCborCertViolation expectedDom.toCode) []
   else if (cert.domain == expectedDom) && verifyBinaryTapeCert cert then .ok
   else .refused (.binaryCborCertViolation expectedDom.toCode) []
 theorem verifyBinaryTapeCert_iff (c : BinaryTapeCert) :
     verifyBinaryTapeCert c = true ↔
-      (c.domain = .magnetics ∨ c.domain = .multiphysics) ∧
+      c.domain = .magnetics ∧
       4 ≤ c.words.length ∧ 0 < c.metric0.toNat ∧ 0 < c.metric1.toNat ∧ c.metric1.toNat ≤ 5000000 ∧
       (∀ w ∈ c.words, 0 < w.toNat) ∧ c.words.foldl (fun acc w => acc + w.toNat) 0 = c.metric0.toNat := by
   unfold verifyBinaryTapeCert
   rcases c with ⟨dom, m0, m1, ws⟩
   cases dom <;>
     simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff, decide_eq_true_eq,
-      beq_iff_eq, List.all_eq_true, Bool.and_false, Bool.false_eq_true, reduceCtorEq, or_self,
-      true_or, or_true, true_and, false_and]
-  · constructor
-    · rintro ⟨⟨⟨⟨_, hm0⟩, hm1⟩, hws⟩, ⟨hlen, hm1b⟩, hsum⟩
-      exact ⟨hlen, hm0, hm1, hm1b, hws, hsum⟩
-    · rintro ⟨hlen, hm0, hm1, hm1b, hws, hsum⟩
-      have hne : ws ≠ [] := by intro h; subst h; simp at hlen
-      exact ⟨⟨⟨⟨hne, hm0⟩, hm1⟩, hws⟩, ⟨hlen, hm1b⟩, hsum⟩
-  · constructor
-    · rintro ⟨⟨⟨⟨_, hm0⟩, hm1⟩, hws⟩, ⟨hlen, hm1b⟩, hsum⟩
-      exact ⟨hlen, hm0, hm1, hm1b, hws, hsum⟩
-    · rintro ⟨hlen, hm0, hm1, hm1b, hws, hsum⟩
-      have hne : ws ≠ [] := by intro h; subst h; simp at hlen
-      exact ⟨⟨⟨⟨hne, hm0⟩, hm1⟩, hws⟩, ⟨hlen, hm1b⟩, hsum⟩
+      beq_iff_eq, List.all_eq_true, Bool.and_false, Bool.false_eq_true, reduceCtorEq,
+      true_and, false_and]
+  constructor
+  · rintro ⟨⟨⟨⟨_, hm0⟩, hm1⟩, hws⟩, ⟨hlen, hm1b⟩, hsum⟩
+    exact ⟨hlen, hm0, hm1, hm1b, hws, hsum⟩
+  · rintro ⟨hlen, hm0, hm1, hm1b, hws, hsum⟩
+    have hne : ws ≠ [] := by intro h; subst h; simp at hlen
+    exact ⟨⟨⟨⟨hne, hm0⟩, hm1⟩, hws⟩, ⟨hlen, hm1b⟩, hsum⟩
 theorem checkBinaryTapeCert_sound {grade : Nat} {expectedDom : HwCertDomain} {cert : BinaryTapeCert}
     (h : checkBinaryTapeCert grade expectedDom cert = .ok) :
     BinaryTapeCertMeaning expectedDom cert := by
@@ -1364,24 +1255,22 @@ theorem checkBinaryTapeCert_sound {grade : Nat} {expectedDom : HwCertDomain} {ce
   · split at h
     · rename_i _ hOk
       simp only [Bool.and_eq_true, beq_iff_eq, verifyBinaryTapeCert_iff] at hOk
-      obtain ⟨hDomEq, hDomOr, hRest⟩ := hOk
-      exact ⟨hDomEq, hDomEq ▸ hDomOr, hRest⟩
+      obtain ⟨hDomEq, hDomMag, hRest⟩ := hOk
+      exact ⟨hDomEq, hDomEq ▸ hDomMag, hRest⟩
     · cases h
 theorem checkBinaryTapeCert_ok_iff (r : Nat) (expectedDom : HwCertDomain) (c : BinaryTapeCert) :
     checkBinaryTapeCert r expectedDom c = .ok ↔ BinaryTapeCertMeaning expectedDom c := by
   refine ⟨checkBinaryTapeCert_sound, fun hm => ?_⟩
-  rcases hm with ⟨hEq, hOr, hRest⟩
-  have hDomOk : (expectedDom != .magnetics && expectedDom != .multiphysics) = false := by
-    rcases hOr with rfl | rfl <;> rfl
+  rcases hm with ⟨hEq, rfl, hRest⟩
   have hVer : verifyBinaryTapeCert c = true :=
-    (verifyBinaryTapeCert_iff c).mpr ⟨hEq ▸ hOr, hRest⟩
-  simp [checkBinaryTapeCert, hDomOk, hEq, hVer]
+    (verifyBinaryTapeCert_iff c).mpr ⟨hEq, hRest⟩
+  simp [checkBinaryTapeCert, hEq, hVer]
 instance binaryTapeJudge : Obend.Judge HwCertDomain BinaryTapeCert where
   Clause := HwClause
   Meaning := BinaryTapeCertMeaning
   check := checkBinaryTapeCert
   sound := by intro _ _ _ h; exact checkBinaryTapeCert_sound h
-  refutes | .binaryCborCertViolation d => d != 7 && d != 10 | _ => false
+  refutes | .binaryCborCertViolation d => d != 10 | _ => false
   refuted := by
     intro r o c k cs hc hk c' hm
     have hCode : k = .binaryCborCertViolation o.toCode := by
@@ -1392,7 +1281,8 @@ instance binaryTapeJudge : Obend.Judge HwCertDomain BinaryTapeCert where
         · cases hc
         · cases hc; rfl
     subst hCode
-    rcases hm.2.1 with rfl | rfl <;> simp [HwCertDomain.toCode] at hk
+    rcases hm.2.1 with rfl
+    simp [HwCertDomain.toCode] at hk
   Fragment _ := True
   complete := by intro o _ ⟨c, hc⟩; exact ⟨c, 0, (checkBinaryTapeCert_ok_iff 0 o c).mpr hc⟩
   mono := by intro _ _ _ _ _ _; rfl
@@ -1440,7 +1330,7 @@ theorem binaryCborFormat_sound {r : Nat} {obj cert : String}
   binaryCborFormat.checkBytes_sound h
 def hardwareFormats : List Format :=
   [ hwSynthFormat, rtlSynthFormat, hwRetimeFormat, hwPnrFormat
-  , datasheetFitFormat, agenticEdaFormat, binaryCborFormat, binaryTapeFormat ]
+  , agenticEdaFormat, binaryCborFormat, binaryTapeFormat ]
 def findHardwareFormat? (tag : String) : Option Format :=
   hardwareFormats.find? (fun f => s!"{f.name}@{f.version}" == tag)
 theorem verifyRawBinaryCborCert_refuses_pnr_tape_bypass :
@@ -1478,7 +1368,6 @@ theorem extractNatField_token_boundary_and_decoders_verified (grade : Nat) :
     extractNatField "{\"max_fanout\": 99, \"mode\": \"calibrated\"}" "fanout" = none ∧
     extractNatField "max_fanout=99,mode=calibrated" "fanout" = none ∧
     extractIntField "{\"extra_minMarginMv\": -500}" "minMarginMv" = none ∧
-    (decodeDatasheetFitCert "mode=calibrated").isOk = false ∧
     (decodeAgenticEdaCert "mode=golden").isOk = false ∧
     (decodeRtlSynthCert "{\"module\": \"m\"}").isOk = false ∧
     (decodePnrCert "{\"mode\": \"valid\"}").isOk = false ∧

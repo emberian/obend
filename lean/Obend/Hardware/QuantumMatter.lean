@@ -1,37 +1,20 @@
 module
 /-
-# Obend.Hardware.QuantumMatter — Physical Quantum & Photonic Matter Compiler: Coupled-Waveguide CTQW Synthesis, IBM Heavy-Hex $C_{12}$ Lattice & Majorana-1 Parity-Sector Noise Immunity
+# Obend.Hardware.QuantumMatter — IBM Heavy-Hex $C_{12}$ Lattice, Majorana-1 Clifford $Cl_4$ Parity Sector & `StrictOpenHypergraph` Equitable Quotient Intertwining
 
-Replaces abstract stubbed hardware predicates (`satisfies := True`) with a **Real Physical Matter Compiler**
-inside `Obend.Hardware`, coupling `Obend.Analysis.Equitable` and `Obend.Analysis.QuantumWalk` to
-`Obend.Hardware.Photonics`:
-
-1. **Photonic Coupled-Waveguide Array CTQW Synthesizer (`PhotonicWaveguideArraySpec`, `checkPhotonicArrayMatterDrc`, `compileEquitableToPhotonicArray`)**:
-   - Synthesizes an $r$-waveguide evanescently coupled Silicon Photonics (`soi220nm`, `ihpSg13g2Epic`,
-     `sin400nm`) waveguide array from an $N$-vertex Hamiltonian's equitable quotient $Q$, eliminating
-     non-planar waveguide crossings (e.g., collapsing the 8-vertex non-planar Hypercube $Q_3$ into a
-     planar 4-waveguide Krawtchouk tridiagonal array).
-   - Enforces **real foundry Design Rule Checks (`checkPhotonicArrayMatterDrc`)**: single-mode $\text{TE}_{00}$
-     core width ($400\text{--}1200\,\text{nm}$), lithography minimum coupler gap ($\ge 150\,\text{nm}$),
-     evanescent interaction ceiling ($\le 600\,\text{nm}$), platform minimum radiative S-bend radius
-     ($5\,\mu\text{m}$ on SOI, $25\,\mu\text{m}$ on $\text{Si}_3\text{N}_4$), crosstalk isolation pitch
-     ($\ge 2000\,\text{nm}$), and Coupled-Mode Theory (CMT) lossless unitarity ($t^2 + \kappa^2 = 10^6\,\text{ppm}$).
-   - Proves **`photonic_ctqw_array_power_conserved`** (exact $\mathbb{Z}[i]$ unitary optical power
-     conservation across multi-waveguide coupler layers and interleaved meshes) and
-     **`photonic_matter_compiler_drc_sound`**.
-2. **IBM Heavy-Hex $C_{12}$ Lattice & Microsoft Majorana-1 Tetron Parity-Sector Noise Immunity**:
-   - Mechanizes the 12-qubit **IBM Heavy-Hex** ring unit cell $C_{12}$ under both its 7-cell antipodal
-     distance partition and its 2-cell degree-3 corner vs. degree-2 bridge partition.
-   - Mechanizes the **Microsoft Majorana-1 Tetron** 4-Majorana fermion parity projector system
+Mechanizes:
+1. **IBM Heavy-Hex $C_{12}$ Lattice & Microsoft Majorana-1 Tetron Parity-Sector Noise Immunity**:
+   - 12-qubit Heavy-Hex ring unit cell $C_{12}$ under its 7-cell antipodal distance partition and
+     2-cell corner-vs-bridge partition, plus the 4-Majorana $Cl_4$ fermion parity projector system
      ($C_{\text{even}} = \{0, 1\}$, $C_{\text{odd}} = \{2, 3\}$).
-   - Proves **`symmetry_preserving_noise_zero_leakage`** universally and concretely: any noise
-     perturbation $\epsilon \Delta H$ commuting with the equitable / parity partition preserves exact
-     intertwining $((H + \epsilon \Delta H)(S w) = S((Q + \epsilon \Delta Q) w))$ and produces
-     **identically zero leakage** (`= 0`) out of the computational quotient subspace across all
-     $\epsilon \in \mathbb{Z}$, whereas parity-breaking quasiparticle poisoning induces a strictly
-     positive residual leakage floor.
+   - `symmetry_preserving_noise_zero_leakage`, `breakingScore_zero_iff_equitable`, and
+     `perturbative_disorder_leakage_bound`: any perturbation commuting with an equitable / parity
+     partition produces identically zero leakage out of the quotient subspace, whereas parity-breaking
+     quasiparticle poisoning induces a strictly positive leakage bound.
+2. **Symmetric `StrictOpenHypergraph` Equitable Quotient Compression (`quotientOpenHypergraph_intertwines_eval_and_adjoint`)**:
+   - Forward evaluation and reverse-mode `compileGraphAdjoint` differentiation of
+     `buildSymmetric4LaneHypergraph` factor through `quotientOpenHypergraph`.
 -/
-public import Obend.Hardware.Photonics
 public import Obend.Hardware.OpenHypergraph
 public import Obend.Leaf.Specialize
 public import Obend.Analysis.Equitable
@@ -39,7 +22,6 @@ public import Obend.Analysis.QuantumWalk
 public section
 
 namespace Obend.Hardware.QuantumMatter
-open Obend.Hardware.Photonics
 open Obend.Hardware.OpenHypergraph
 open Obend.Leaf
 open Obend.Slot
@@ -48,282 +30,7 @@ open Obend.Core.Term
 open Obend.Analysis
 set_option autoImplicit false
 
-/-! ## 1. Multi-Waveguide Photonic CTQW Array & Exact $\mathbb{Z}[i]$ Unitary Power Conservation -/
-
-/-- Coupling-ratio specification for an adjacent waveguide pair in a planar Krawtchouk tridiagonal
-coupled-waveguide array (`tSqPpm + kappaSqPpm = 1_000_000` in lossless operation). -/
-structure CouplerRatioSpec where
-  couplerName   : String
-  gapNm         : Nat
-  couplingLenUm : Nat
-  tSqPpm        : Int
-  kappaSqPpm    : Int
-  deriving DecidableEq, Repr
-
-/-- Squared cross-coupling coefficient $\kappa^2$ (in ppm) of a `CouplerRatioSpec`. -/
-def CouplerRatioSpec.kappaSqScaled (dc : CouplerRatioSpec) : Int :=
-  dc.kappaSqPpm
-
-/-- Canonical 50:50 (`3 dB`) reference coupler ratio (`t^2 = 500_000 ppm`, `\kappa^2 = 500_000 ppm`). -/
-def coupler3dBRatio : CouplerRatioSpec where
-  couplerName   := "dc_3dB_ref"
-  gapNm         := 200
-  couplingLenUm := 14
-  tSqPpm        := 500000
-  kappaSqPpm    := 500000
-
-/-- Symmetrized squared inter-cell coupling weight $\kappa_{i,j}^2 \propto Q_{i,j} \cdot Q_{j,i} \in \mathbb{Z}$
-between quotient cells $C_i$ and $C_j$. By `equitable_handshake_identity` ($|C_i| Q_{i,j} = |C_j| Q_{j,i}$),
-this integer product captures the exact symmetrized tridiagonal coupling $D^{1/2} Q D^{-1/2}$
-without requiring `Real.sqrt`! -/
-def evalSymmetrizedCouplingSq (quotientEntry : Nat → Nat → Int) (i j : Nat) : Int :=
-  quotientEntry i j * quotientEntry j i
-
-/-- Projection wrapper for `directional_coupler_2x2_power_conservation` over `.1` and `.2`. -/
-theorem directional_coupler_2x2_fst_snd_power
-    (t kappa : Int) (e1 e2 : ComplexField) :
-    (evalDirectionalCoupler2x2 t kappa e1 e2).1.normSq +
-      (evalDirectionalCoupler2x2 t kappa e1 e2).2.normSq =
-      (t * t + kappa * kappa) * (e1.normSq + e2.normSq) :=
-  directional_coupler_2x2_power_conservation t kappa e1 e2
-
-/-- Evaluate one parallel evanescent coupling layer across a 4-waveguide photonic array
-(coupling waveguide pair $(0, 1)$ with $(t_{01}, \kappa_{01})$ and pair $(2, 3)$ with $(t_{23}, \kappa_{23})$)
-over exact Gaussian-integer optical field phasors `ComplexField` ($\mathbb{Z}[i]$). -/
-@[expose] def evalPhotonicArray4LayerEven
-    (t01 k01 t23 k23 : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  let c01 := evalDirectionalCoupler2x2 t01 k01 e0 e1
-  let c23 := evalDirectionalCoupler2x2 t23 k23 e2 e3
-  (c01.1, c01.2, c23.1, c23.2)
-
-/-- Evaluate an inner evanescent coupling step on waveguide pair $(1, 2)$ of a 4-waveguide array
-(leaving outer boundary waveguides $0$ and $3$ in phase-matched straight propagation scaled by
-unitary norm factor `s12` so all modes share a common scale). -/
-abbrev evalPhotonicArray4LayerOdd
-    (t12 k12 : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  let c12 := evalDirectionalCoupler2x2 t12 k12 e1 e2
-  (e0, c12.1, c12.2, e3)
-
-/-- Evaluate a two-step Suzuki–Trotter / Clements 4-waveguide coupled array propagation mesh:
-first coupling $(0, 1)$ and $(2, 3)$ with $(t, \kappa)$, then coupling $(1, 2)$ with $(t, \kappa)$
-while scaling outer waveguides $(0, 3)$ by $(t, \kappa)$ via a balanced reference coupler. -/
-def evalPhotonicArray4Mesh2Step
-    (t kappa : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  let m01 := evalDirectionalCoupler2x2 t kappa e0 e1
-  let m23 := evalDirectionalCoupler2x2 t kappa e2 e3
-  let c12 := evalDirectionalCoupler2x2 t kappa m01.2 m23.1
-  let c03 := evalDirectionalCoupler2x2 t kappa m01.1 m23.2
-  (c03.1, c12.1, c12.2, c03.2)
-
-/-- Evaluate a **Planar Clements 4-Mode Nearest-Neighbor Mesh** (`evalPlanarClements4Mesh`):
-* **Layer 1 (Even Nearest-Neighbor Layer)**: couples adjacent waveguide pairs $(0, 1)$ and $(2, 3)$
-  with field transmission/coupling $(t_1, \kappa_1)$.
-* **Layer 2 (Odd Nearest-Neighbor Inner Layer)**: couples ONLY the inner adjacent waveguide pair $(1, 2)$
-  with $(t_2, \kappa_2)$, while outer waveguides $0$ and $3$ propagate straight through without any
-  non-planar $0 \leftrightarrow 3$ waveguide crossing! -/
-@[expose] def evalPlanarClements4Mesh
-    (t1 k1 t2 k2 : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  let (m0, m1, m2, m3) := evalPhotonicArray4LayerEven t1 k1 t1 k1 e0 e1 e2 e3
-  evalPhotonicArray4LayerOdd t2 k2 m0 m1 m2 m3
-
-/-- **Theorem (`planarClements4Mesh_conserves_optical_power`)**:
-For ALL coupler coefficients `t1, k1, t2, k2 : Int` and ALL 4 complex optical field inputs
-`e0, e1, e2, e3 : ComplexField`:
-1. **Universal Weighted Power Identity (Zero Non-Planar Crossings)**:
-   With Layer 1 scale $s_1 = t_1^2 + \kappa_1^2$ and Layer 2 inner-coupler scale $s_2 = t_2^2 + \kappa_2^2$,
-   the planar Clements 4-mode mesh satisfies:
-   $$s_2 |E_{\text{out},0}|^2 + |E_{\text{out},1}|^2 + |E_{\text{out},2}|^2 + s_2 |E_{\text{out},3}|^2
-     = s_2 \cdot s_1 \cdot \left(|E_0|^2 + |E_1|^2 + |E_2|^2 + |E_3|^2\right).$$
-2. **Normalized Inner Coupler Power Conservation ($t_2^2 + \kappa_2^2 = 1$)**:
-   Whenever $t_2^2 + \kappa_2^2 = 1$, total unweighted optical power across all 4 outputs equals
-   $(t_1^2 + \kappa_1^2) (|E_0|^2 + |E_1|^2 + |E_2|^2 + |E_3|^2)$.
-3. **Planar Nearest-Neighbor Locality ($0 \leftrightarrow 3$ Isolation)**:
-   In Layer 2, outer mode $0$ is completely isolated from modes $2, 3$ (`(evalPlanarClements4Mesh t1 k1 t2 k2 e0 e1 e2 e3).1 = (evalDirectionalCoupler2x2 t1 k1 e0 e1).1`). -/
-theorem planarClements4Mesh_conserves_optical_power
-    (t1 k1 t2 k2 : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    (let s1 := t1 * t1 + k1 * k1
-     let s2 := t2 * t2 + k2 * k2
-     let (p0, p1, p2, p3) := evalPlanarClements4Mesh t1 k1 t2 k2 e0 e1 e2 e3
-     s2 * p0.normSq + p1.normSq + p2.normSq + s2 * p3.normSq =
-       s2 * (s1 * (e0.normSq + e1.normSq + e2.normSq + e3.normSq))) ∧
-    (t2 * t2 + k2 * k2 = 1 →
-     let (p0, p1, p2, p3) := evalPlanarClements4Mesh t1 k1 t2 k2 e0 e1 e2 e3
-     p0.normSq + p1.normSq + p2.normSq + p3.normSq =
-       (t1 * t1 + k1 * k1) * (e0.normSq + e1.normSq + e2.normSq + e3.normSq)) ∧
-    (evalPlanarClements4Mesh t1 k1 t2 k2 e0 e1 e2 e3).1 =
-      (evalDirectionalCoupler2x2 t1 k1 e0 e1).1 := by
-  have h01 := directional_coupler_2x2_fst_snd_power t1 k1 e0 e1
-  have h23 := directional_coupler_2x2_fst_snd_power t1 k1 e2 e3
-  have h12 := directional_coupler_2x2_fst_snd_power t2 k2
-    (evalDirectionalCoupler2x2 t1 k1 e0 e1).2
-    (evalDirectionalCoupler2x2 t1 k1 e2 e3).1
-  dsimp only [evalPlanarClements4Mesh, evalPhotonicArray4LayerEven, evalPhotonicArray4LayerOdd]
-  have hLayer1 :
-      ((evalDirectionalCoupler2x2 t1 k1 e0 e1).1.normSq +
-       (evalDirectionalCoupler2x2 t1 k1 e0 e1).2.normSq) +
-      ((evalDirectionalCoupler2x2 t1 k1 e2 e3).1.normSq +
-       (evalDirectionalCoupler2x2 t1 k1 e2 e3).2.normSq) =
-      (t1 * t1 + k1 * k1) * (e0.normSq + e1.normSq + e2.normSq + e3.normSq) := by
-    have hDist1 :
-        (t1 * t1 + k1 * k1) * (e0.normSq + e1.normSq + e2.normSq + e3.normSq) =
-        (t1 * t1 + k1 * k1) * (e0.normSq + e1.normSq) +
-        (t1 * t1 + k1 * k1) * (e2.normSq + e3.normSq) := by
-      have hAssoc : e0.normSq + e1.normSq + e2.normSq + e3.normSq =
-          (e0.normSq + e1.normSq) + (e2.normSq + e3.normSq) := by omega
-      rw [hAssoc, Int.mul_add]
-    omega
-  have hRearr :
-      (evalDirectionalCoupler2x2 t1 k1 e0 e1).1.normSq +
-      ((evalDirectionalCoupler2x2 t1 k1 e0 e1).2.normSq +
-       (evalDirectionalCoupler2x2 t1 k1 e2 e3).1.normSq) +
-      (evalDirectionalCoupler2x2 t1 k1 e2 e3).2.normSq =
-      (t1 * t1 + k1 * k1) * (e0.normSq + e1.normSq + e2.normSq + e3.normSq) := by
-    omega
-  have hMulS2 :
-      (t2 * t2 + k2 * k2) * (evalDirectionalCoupler2x2 t1 k1 e0 e1).1.normSq +
-      (t2 * t2 + k2 * k2) *
-        ((evalDirectionalCoupler2x2 t1 k1 e0 e1).2.normSq +
-         (evalDirectionalCoupler2x2 t1 k1 e2 e3).1.normSq) +
-      (t2 * t2 + k2 * k2) * (evalDirectionalCoupler2x2 t1 k1 e2 e3).2.normSq =
-      (t2 * t2 + k2 * k2) *
-        ((t1 * t1 + k1 * k1) * (e0.normSq + e1.normSq + e2.normSq + e3.normSq)) := by
-    rw [← Int.mul_add, ← Int.mul_add, hRearr]
-  refine ⟨by omega, ?_, rfl⟩
-  intro hUnit2
-  rw [hUnit2] at h12
-  omega
-
-/-- **Theorem (`photonic_ctqw_array_power_conserved`)**:
-For ALL field transmission/coupling coefficients `t, kappa : Int` and ALL complex input optical
-field phasors `e0, e1, e2, e3 : ComplexField` (arbitrary amplitude and phase in $\mathbb{Z}[i]$):
-1. **Single-Layer 4-Waveguide Array Power Conservation**:
-   `evalPhotonicArray4LayerEven t kappa t kappa e0 e1 e2 e3` strictly conserves total optical power
-   across all 4 waveguides up to the CMT unitary scale factor $t^2 + \kappa^2$:
-   $$|E_{\text{out},0}|^2 + |E_{\text{out},1}|^2 + |E_{\text{out},2}|^2 + |E_{\text{out},3}|^2
-     = (t^2 + \kappa^2)\left(|E_0|^2 + |E_1|^2 + |E_2|^2 + |E_3|^2\right).$$
-2. **Two-Layer Cascaded 4-Waveguide Mesh Power Conservation**:
-   `evalPhotonicArray4Mesh2Step t kappa e0 e1 e2 e3` strictly conserves total optical power across
-   all 4 waveguides up to $(t^2 + \kappa^2)^2$:
-   $$\sum_{m=0}^3 |E_{\text{mesh},m}|^2 = (t^2 + \kappa^2) \cdot (t^2 + \kappa^2) \cdot \sum_{m=0}^3 |E_m|^2.$$ -/
-theorem photonic_ctqw_array_power_conserved
-    (t kappa : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    (let (o0, o1, o2, o3) := evalPhotonicArray4LayerEven t kappa t kappa e0 e1 e2 e3
-     o0.normSq + o1.normSq + o2.normSq + o3.normSq =
-       (t * t + kappa * kappa) * (e0.normSq + e1.normSq + e2.normSq + e3.normSq)) ∧
-    (let (p0, p1, p2, p3) := evalPhotonicArray4Mesh2Step t kappa e0 e1 e2 e3
-     p0.normSq + p1.normSq + p2.normSq + p3.normSq =
-       (t * t + kappa * kappa) * ((t * t + kappa * kappa) * (e0.normSq + e1.normSq + e2.normSq + e3.normSq))) := by
-  have h01 := directional_coupler_2x2_fst_snd_power t kappa e0 e1
-  have h23 := directional_coupler_2x2_fst_snd_power t kappa e2 e3
-  dsimp only [evalPhotonicArray4LayerEven, evalPhotonicArray4Mesh2Step]
-  have hDistLayer :
-      (t * t + kappa * kappa) * (e0.normSq + e1.normSq + e2.normSq + e3.normSq) =
-      (t * t + kappa * kappa) * (e0.normSq + e1.normSq) +
-      (t * t + kappa * kappa) * (e2.normSq + e3.normSq) := by
-    have hAssoc : e0.normSq + e1.normSq + e2.normSq + e3.normSq =
-        (e0.normSq + e1.normSq) + (e2.normSq + e3.normSq) := by omega
-    rw [hAssoc, Int.mul_add]
-  constructor
-  · omega
-  · have hInner := directional_coupler_2x2_fst_snd_power t kappa
-      (evalDirectionalCoupler2x2 t kappa e0 e1).2 (evalDirectionalCoupler2x2 t kappa e2 e3).1
-    have hOuter := directional_coupler_2x2_fst_snd_power t kappa
-      (evalDirectionalCoupler2x2 t kappa e0 e1).1 (evalDirectionalCoupler2x2 t kappa e2 e3).2
-    have hMidSum :
-        ((evalDirectionalCoupler2x2 t kappa e0 e1).1.normSq +
-          (evalDirectionalCoupler2x2 t kappa e2 e3).2.normSq) +
-        ((evalDirectionalCoupler2x2 t kappa e0 e1).2.normSq +
-          (evalDirectionalCoupler2x2 t kappa e2 e3).1.normSq) =
-        (t * t + kappa * kappa) * (e0.normSq + e1.normSq + e2.normSq + e3.normSq) := by
-      omega
-    have hDistMesh :
-        (t * t + kappa * kappa) *
-          (((evalDirectionalCoupler2x2 t kappa e0 e1).1.normSq +
-            (evalDirectionalCoupler2x2 t kappa e2 e3).2.normSq) +
-           ((evalDirectionalCoupler2x2 t kappa e0 e1).2.normSq +
-            (evalDirectionalCoupler2x2 t kappa e2 e3).1.normSq)) =
-        (t * t + kappa * kappa) *
-          ((evalDirectionalCoupler2x2 t kappa e0 e1).1.normSq +
-            (evalDirectionalCoupler2x2 t kappa e2 e3).2.normSq) +
-        (t * t + kappa * kappa) *
-          ((evalDirectionalCoupler2x2 t kappa e0 e1).2.normSq +
-            (evalDirectionalCoupler2x2 t kappa e2 e3).1.normSq) :=
-      Int.mul_add (t * t + kappa * kappa)
-        ((evalDirectionalCoupler2x2 t kappa e0 e1).1.normSq +
-          (evalDirectionalCoupler2x2 t kappa e2 e3).2.normSq)
-        ((evalDirectionalCoupler2x2 t kappa e0 e1).2.normSq +
-          (evalDirectionalCoupler2x2 t kappa e2 e3).1.normSq)
-    rw [hMidSum] at hDistMesh
-    omega
-
-/-! ## 2. Exact Quotient-Coupling Ratio Verification & Krawtchouk Synthesis -/
-
-/-- Check whether adjacent directional couplers in `couplers` realize the exact cross-multiplied
-symmetrized quotient coupling-squared ratios of `Q`:
-$$\forall j,\quad \kappa_j^2 \cdot \left(Q_{j+1, j+2} Q_{j+2, j+1}\right)
-  = \kappa_{j+1}^2 \cdot \left(Q_{j, j+1} Q_{j+1, j}\right).$$ -/
-def couplerRealizesQuotientRatio
-    (Q : Nat → Nat → Int)
-    (couplers : List CouplerRatioSpec) : Bool :=
-  let pairIndices := List.range (couplers.length - 1)
-  pairIndices.all (fun j =>
-    let cJ    := couplers[j]?.getD coupler3dBRatio
-    let cNext := couplers[j + 1]?.getD coupler3dBRatio
-    let qSqJ    := Q j (j + 1) * Q (j + 1) j
-    let qSqNext := Q (j + 1) (j + 2) * Q (j + 2) (j + 1)
-    decide (cJ.kappaSqScaled * qSqNext = cNext.kappaSqScaled * qSqJ))
-
-/-- Synthesize a list of `dim - 1` lossless directional couplers whose coupling-squared coefficients
-$\kappa_j^2 = \text{scale} \cdot Q_{j, j+1} Q_{j+1, j}$ and $t_j^2 = 10^6 - \kappa_j^2$ realize the
-exact tridiagonal quotient coupling profile of `Q` (e.g., for $Q_3$ with `dim = 4` and `scale = 125000`,
-producing exact $3 : 4 : 3 = 375000 : 500000 : 375000\,\text{ppm}$ Krawtchouk couplers). -/
-def synthesizeKrawtchoukPhotonicCouplers
-    (Q : Nat → Nat → Int)
-    (dim : Nat)
-    (scale : Int) : List CouplerRatioSpec :=
-  (List.range (dim - 1)).map (fun j =>
-    let qSq := Q j (j + 1) * Q (j + 1) j
-    let kappaSq := scale * qSq
-    let tSq := 1000000 - kappaSq
-    let isHalf := decide (kappaSq = 500000)
-    { couplerName   := "dc_krawtchouk_synth"
-    , gapNm         := cond isHalf 200 225
-    , couplingLenUm := cond isHalf 14 11
-    , tSqPpm        := tSq
-    , kappaSqPpm    := kappaSq })
-
-/-- **Theorem (`synthesizeKrawtchoukPhotonicCouplers_realizes_ratio`)**:
-For EVERY quotient matrix `Q : Nat → Nat → Int`, EVERY dimension `dim : Nat`, and EVERY integer
-scale factor `scale : Int`, the couplers synthesized by `synthesizeKrawtchoukPhotonicCouplers Q dim scale`
-universally satisfy `couplerRealizesQuotientRatio Q ... = true`! -/
-theorem synthesizeKrawtchoukPhotonicCouplers_realizes_ratio
-    (Q : Nat → Nat → Int)
-    (dim : Nat)
-    (scale : Int) :
-    couplerRealizesQuotientRatio Q (synthesizeKrawtchoukPhotonicCouplers Q dim scale) = true := by
-  unfold couplerRealizesQuotientRatio synthesizeKrawtchoukPhotonicCouplers
-  rw [list_all_iff_forall]
-  intro j hj
-  rw [List.mem_range, List.length_map, List.length_range] at hj
-  have hj1 : j < dim - 1 := by omega
-  have hj2 : j + 1 < dim - 1 := by omega
-  simp only [List.getElem?_map, List.getElem?_range hj1, List.getElem?_range hj2,
-    Option.map_some, Option.getD_some, CouplerRatioSpec.kappaSqScaled, decide_eq_true_eq]
-  rw [Int.mul_assoc scale (Q j (j + 1) * Q (j + 1) j) (Q (j + 1) (j + 2) * Q (j + 2) (j + 1))]
-  rw [Int.mul_comm (Q j (j + 1) * Q (j + 1) j) (Q (j + 1) (j + 2) * Q (j + 2) (j + 1))]
-  rw [← Int.mul_assoc scale (Q (j + 1) (j + 2) * Q (j + 2) (j + 1)) (Q j (j + 1) * Q (j + 1) j)]
-
-/-! ## 3. IBM Heavy-Hex $C_{12}$ Unit-Cell Lattice & Microsoft Majorana-1 Tetron Parity Sector -/
+/-! ## 1. IBM Heavy-Hex $C_{12}$ Unit-Cell Lattice & Microsoft Majorana-1 Tetron Parity Sector -/
 
 /-- Adjacency matrix of the 12-qubit **IBM Heavy-Hex** ring unit cell $C_{12}$ ($0 - 1 - \dots - 11 - 0$). -/
 def heavyHexC12RingMatrix : IntMatrix where
@@ -650,14 +357,7 @@ def isEvenBladeSupported (H : CliffordElem) : Bool :=
   decide (H.b13 = 0) &&
   decide (H.b14 = 0)
 
-/-- **Theorem (`clifford_majorana_algebra_laws`)**:
-1. **Generator Square Law ($\gamma_a^2 = 1$)**: For every Majorana generator $a \in \{0, 1, 2, 3\}$,
-   `cliffordMul (cliffordGamma a) (cliffordGamma a) = cliffordOne`.
-2. **Canonical Anticommutation ($\{\gamma_a, \gamma_b\} = \gamma_a \gamma_b + \gamma_b \gamma_a = 0$ for $a \neq b$)**:
-   For all distinct $a, b \in \{0, 1, 2, 3\}$,
-   `cliffordAdd (cliffordMul (cliffordGamma a) (cliffordGamma b)) (cliffordMul (cliffordGamma b) (cliffordGamma a)) = cliffordZero`.
-3. **Fermion Parity Involution ($P^2 = 1$)**:
-   For $P = -\gamma_0\gamma_1\gamma_2\gamma_3$, `cliffordMul cliffordParity cliffordParity = cliffordOne`. -/
+/-- Majorana generator square, canonical anticommutation, and fermion parity involution ($P^2 = 1$). -/
 theorem clifford_majorana_algebra_laws (a : Fin 4) :
     cliffordMul (cliffordGamma a) (cliffordGamma a) = cliffordOne ∧
     (∀ b : Fin 4, a ≠ b →
@@ -667,13 +367,7 @@ theorem clifford_majorana_algebra_laws (a : Fin 4) :
   revert a
   decide +kernel
 
-/-- **Theorem (`clifford_commutesWithParity_iff_even_blades`)**:
-**Clifford Parity Selection Theorem**:
-For EVERY operator $H \in Cl_4$ (`H : CliffordElem`, universally quantified over $\mathbb{Z}^{16}$),
-$H$ commutes with total fermion parity $P = -\gamma_0\gamma_1\gamma_2\gamma_3$ (`commutesWithParity H = true`,
-i.e., $[H, P] = 0$) **if and only if** $H$ is supported purely on even-weight Majorana blades
-(`isEvenBladeSupported H = true`, i.e., every odd-popcount blade $m$ with `bladePopcount m % 2 == 1`
-has `H.coeff m = 0`)! -/
+/-- $H \in Cl_4$ commutes with fermion parity $P$ iff $H$ is supported purely on even-weight blades. -/
 theorem clifford_commutesWithParity_iff_even_blades (H : CliffordElem) :
     commutesWithParity H = true ↔ isEvenBladeSupported H = true := by
   rcases H with ⟨b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15⟩
@@ -695,15 +389,7 @@ theorem clifford_commutesWithParity_iff_even_blades (H : CliffordElem) :
     refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega,
             by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega⟩
 
-/-- Rank-16 bijective $4 \times 4$ Pauli-block matrix representation $\rho(H)$ (`cliffordToTetronMatrix`)
-of a Clifford operator $H \in Cl_4$ on the 4-state Majorana-1 tetron space in the parity-ordered basis
-$C_{\text{even}} = \{0, 1\}$ ($P = +1$) and $C_{\text{odd}} = \{2, 3\}$ ($P = -1$):
-* Even-weight blades (`b0, b3, b5, b6, b9, b10, b12, b15`) act **strictly block-diagonally** as full
-  $2 \times 2$ Pauli spinor blocks ($I_L, Z_L, X_L, i Y_L$) within $C_{\text{even}}$ and $C_{\text{odd}}$,
-  preserving all 8 even blades with $e_{00} \neq e_{11}$ whenever $Z_L \neq 0$ (`b6 ≠ b9`)!
-* Odd-weight blades (`b1, b2, b4, b7, b8, b11, b13, b14`) act **strictly off-block-diagonally**
-  between $C_{\text{even}}$ and $C_{\text{odd}}$, so all 16 Clifford blades are linearly independent
-  (`cliffordToTetronMatrix H = IntMatrix.zero 4 ↔ H = cliffordZero`). -/
+/-- Rank-16 bijective $4 \times 4$ Pauli-block matrix representation of $H \in Cl_4$ in the parity-ordered basis. -/
 def cliffordToTetronMatrix (H : CliffordElem) : IntMatrix where
   dim := 4
   rows :=
@@ -740,28 +426,13 @@ def majoranaParityPreserveClifford : CliffordElem :=
 def majoranaQuasiparticlePoisonClifford : CliffordElem :=
   cliffordGamma ⟨0, by decide⟩
 
-/-- $2 \times 2$ Pauli spinor block quotient induced on the 2-sector parity partition
-(`C_even = {0, 1}`, `C_odd = {2, 3}`) by any Clifford element $H \in Cl_4$:
-* `cliffordParityQuotient H 0 0` is the $2 \times 2$ logical qubit Pauli block on $C_{\text{even}}$,
-* `cliffordParityQuotient H 1 1` is the $2 \times 2$ poisoned Pauli block on $C_{\text{odd}}$,
-* `cliffordParityQuotient H 0 1 = cliffordParityQuotient H 1 0 = IntMatrix.zero 2`. -/
+/-- $2 \times 2$ Pauli spinor block quotient induced on `C_even = {0, 1}`, `C_odd = {2, 3}` by $H \in Cl_4$. -/
 def cliffordParityQuotient (H : CliffordElem) : Nat → Nat → IntMatrix
   | 0, 0 => extractCellBlock (cliffordToTetronMatrix H) 2 0 0
   | 1, 1 => extractCellBlock (cliffordToTetronMatrix H) 2 1 1
   | _, _ => IntMatrix.zero 2
 
-/-- **Theorem (`clifford_commutesWithParity_zero_offblock_and_leakage`)**:
-**Universal Clifford Parity Eigenspace Protection Theorem**:
-For ANY Clifford operator $\Delta H \in Cl_4$, if $\Delta H$ commutes with fermion parity $P$
-(`commutesWithParity dH = true`), then:
-1. By the **Clifford Parity Selection Theorem**, all 8 odd-weight Majorana blades of $\Delta H$
-   vanish (`isEvenBladeSupported dH = true`),
-2. Every off-sector matrix element of `cliffordToTetronMatrix dH` between the $+1$ parity eigenspace
-   $C_{\text{even}} = \{0, 1\}$ and the $-1$ parity eigenspace $C_{\text{odd}} = \{2, 3\}$ is
-   **identically zero** (`extractCellBlock (cliffordToTetronMatrix dH) 2 0 1 = IntMatrix.zero 2` and
-   `extractCellBlock (cliffordToTetronMatrix dH) 2 1 0 = IntMatrix.zero 2`),
-3. The inter-sector row sums from $C_{\text{odd}}$ into $C_{\text{even}}$ and from $C_{\text{even}}$
-   into $C_{\text{odd}}$ are **derived to be identically zero** (`= 0`)! -/
+/-- Whenever $\Delta H \in Cl_4$ commutes with fermion parity $P$, all odd blades and off-sector entries vanish. -/
 theorem clifford_commutesWithParity_zero_offblock_and_leakage
     (dH : CliffordElem)
     (hComm : commutesWithParity dH = true) :
@@ -812,18 +483,7 @@ theorem clifford_commutesWithParity_zero_offblock_and_leakage
   refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega,
           by omega, by omega, by omega, by omega, by omega, rfl, rfl⟩
 
-/-- **Theorem (`clifford_commutesWithParity_iff_offblock_and_equitable`)**:
-**Bidirectional $2 \times 2$ Block Off-Sector Vanishing, Block-Equitable Partition & 16D Injectivity Theorem for $Cl_4$**:
-For EVERY Clifford operator $H \in Cl_4$ (universally quantified over $\mathbb{Z}^{16}$):
-1. Both off-diagonal $2 \times 2$ blocks (`extractCellBlock (cliffordToTetronMatrix H) 2 0 1` and
-   `extractCellBlock (cliffordToTetronMatrix H) 2 1 0`, i.e., all 8 off-sector entries between
-   $C_{\text{even}} = \{0, 1\}$ and $C_{\text{odd}} = \{2, 3\}$) vanish **if and only if**
-   `commutesWithParity H = true` ($[H, P] = 0$)!
-2. `commutesWithParity H = true` holds **if and only if** `cliffordToTetronMatrix H` satisfies
-   `checkBlockEquitablePartition (cliffordToTetronMatrix H) 2 2 majoranaParityPart (cliffordParityQuotient H) = true`
-   (full bidirectional `↔` with $2 \times 2$ Pauli spinor blocks)!
-3. `cliffordToTetronMatrix H = IntMatrix.zero 4` holds **if and only if** `H = cliffordZero`
-   (full 16-dimensional injectivity across all 8 even and 8 odd blades!). -/
+/-- Bidirectional off-sector vanishing, block-equitable partition equivalence, and 16D injectivity for $Cl_4$. -/
 theorem clifford_commutesWithParity_iff_offblock_and_equitable (H : CliffordElem) :
     ((extractCellBlock (cliffordToTetronMatrix H) 2 0 1 = IntMatrix.zero 2 ∧
       extractCellBlock (cliffordToTetronMatrix H) 2 1 0 = IntMatrix.zero 2) ↔
@@ -877,10 +537,7 @@ theorem clifford_commutesWithParity_iff_offblock_and_equitable (H : CliffordElem
     · rintro ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       refine ⟨⟨rfl, rfl, rfl, rfl⟩, ⟨rfl, rfl, rfl, rfl⟩, ⟨rfl, rfl, rfl, rfl⟩, ⟨rfl, rfl, rfl, rfl⟩⟩
 
-/-- Faithful $4 \times 4$ Pauli spinor matrices over $\mathbb{Z}[i]$ for the 4 Majorana generators
-in the parity-ordered basis ($C_{\text{even}} = \{0, 1\}$ with $P = +1$, $C_{\text{odd}} = \{2, 3\}$ with $P = -1$):
-$$\gamma_0 = X \otimes I,\quad \gamma_1 = Y \otimes X,\quad \gamma_2 = Y \otimes Y,\quad \gamma_3 = Y \otimes Z,$$
-so that $P = -\gamma_0 \gamma_1 \gamma_2 \gamma_3 = Z \otimes I = \operatorname{diag}(1, 1, -1, -1)$! -/
+/-- Faithful $4 \times 4$ Pauli spinor matrices over $\mathbb{Z}[i]$ for the 4 Majorana generators ($\gamma_0 = X \otimes I, \gamma_1 = Y \otimes X, \gamma_2 = Y \otimes Y, \gamma_3 = Y \otimes Z$). -/
 @[expose] def spinorGammaNat (a : Nat) : GaussianMatrix where
   dim := 4
   rows := match a with
@@ -1486,79 +1143,7 @@ theorem perturbative_disorder_leakage_bound
   simp only [Nat.mul_zero, Nat.zero_mul, Nat.le_zero] at hBound
   exact hBound
 
-/-! ## 8. True Planar 4-Mode Clements Photonic MZI Mesh (`evalPlanarClements4x4`, `planarClements4x4_conserves_optical_power`) -/
-
-/-- Evaluate a single **Planar Odd Nearest-Neighbor Layer** on a 4-mode waveguide array with
-phase-matched outer reference waveguides:
-- Inner adjacent waveguide pair $(1, 2)$ is coupled by `evalDirectionalCoupler2x2 t kappa e1 e2`,
-- Outer waveguides $0$ and $3$ propagate through uncoupled phase-matched reference waveguides
-  (`evalDirectionalCoupler2x2 t kappa e0 ⟨0, 0⟩` and `evalDirectionalCoupler2x2 t kappa ⟨0, 0⟩ e3`,
-  i.e., zero non-planar $0 \leftrightarrow 3$ coupling!). -/
-def evalPlanarOddLayer4x4
-    (t kappa : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  let ref0 := evalDirectionalCoupler2x2 t kappa e0 ⟨0, 0⟩
-  let c12  := evalDirectionalCoupler2x2 t kappa e1 e2
-  let ref3 := evalDirectionalCoupler2x2 t kappa ⟨0, 0⟩ e3
-  (ref0.1, c12.1, c12.2, ref3.1)
-
-/-- Evaluate a **True Planar 4-Mode Clements Photonic Mesh (`evalPlanarClements4x4`)**:
-Alternates planar nearest-neighbor directional coupler layers `[(0, 1), (2, 3)]` (even layer) and
-`[(1, 2)]` (odd layer, with outer waveguides $0$ and $3$ completely uncoupled from each other —
-zero waveguide crossings!):
-1. **Layer 1 (Even Nearest-Neighbor Layer `[(0, 1), (2, 3)]`)**: couples $(0, 1)$ and $(2, 3)$,
-2. **Layer 2 (Odd Nearest-Neighbor Layer `[(1, 2)]`)**: couples $(1, 2)$ while outer modes $0$ and $3$
-   never interact (`0 ↔ 3` crossing-free). -/
-def evalPlanarClements4x4
-    (t kappa : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  let (m0, m1, m2, m3) := evalPhotonicArray4LayerEven t kappa t kappa e0 e1 e2 e3
-  evalPhotonicArray4LayerOdd t kappa m0 m1 m2 m3
-
-/-- Alias `evalClements4x4Mesh` for the planar 4-mode Clements mesh. -/
-abbrev evalClements4x4Mesh := evalPlanarClements4x4
-
-/-- **Theorem (`planarClements4x4_conserves_optical_power`)**:
-**Universal Planar 4-Mode Clements Mesh Optical Power Conservation Theorem**:
-For ALL coupler transmission/coupling parameters `t, kappa : Int` and ALL input optical fields
-`e0, e1, e2, e3 : ComplexField` ($\mathbb{Z}[i]$), proved by composing `directional_coupler_2x2_power_conservation`:
-1. **Planar 2-Layer Clements Mesh (`evalPlanarClements4x4`) Weighted Power Conservation**:
-   With CMT scale $s = t^2 + \kappa^2$, the planar Clements mesh (which couples `[(0, 1), (2, 3)]`
-   in Layer 1 and ONLY `[(1, 2)]` in Layer 2, with zero $0 \leftrightarrow 3$ crossing) satisfies:
-   $$s |E_{\text{out},0}|^2 + |E_{\text{out},1}|^2 + |E_{\text{out},2}|^2 + s |E_{\text{out},3}|^2
-     = s^2 \left(|E_0|^2 + |E_1|^2 + |E_2|^2 + |E_3|^2\right).$$
-2. **Unweighted Power Conservation at Normalized Scale ($t^2 + \kappa^2 = 1$)**:
-   Whenever $t^2 + \kappa^2 = 1$,
-   $$|E_{\text{out},0}|^2 + |E_{\text{out},1}|^2 + |E_{\text{out},2}|^2 + |E_{\text{out},3}|^2
-     = |E_0|^2 + |E_1|^2 + |E_2|^2 + |E_3|^2.$$
-3. **Strict Planar $0 \leftrightarrow 3$ Isolation**:
-   Outer output mode $0$ of `evalPlanarClements4x4 t kappa e0 e1 e2 e3` depends ONLY on inputs
-   $(e_0, e_1)$ and is completely independent of $(e_2, e_3)$, proving zero $0 \leftrightarrow 3$ crosstalk! -/
-theorem planarClements4x4_conserves_optical_power
-    (t kappa : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    (let s := t * t + kappa * kappa
-     let (p0, p1, p2, p3) := evalPlanarClements4x4 t kappa e0 e1 e2 e3
-     s * p0.normSq + p1.normSq + p2.normSq + s * p3.normSq =
-       s * (s * (e0.normSq + e1.normSq + e2.normSq + e3.normSq))) ∧
-    (t * t + kappa * kappa = 1 →
-     let (p0, p1, p2, p3) := evalPlanarClements4x4 t kappa e0 e1 e2 e3
-     p0.normSq + p1.normSq + p2.normSq + p3.normSq =
-       e0.normSq + e1.normSq + e2.normSq + e3.normSq) ∧
-    (∀ e2' e3' : ComplexField,
-      (evalPlanarClements4x4 t kappa e0 e1 e2 e3).1 =
-        (evalPlanarClements4x4 t kappa e0 e1 e2' e3').1) := by
-  have hBase := planarClements4Mesh_conserves_optical_power t kappa t kappa e0 e1 e2 e3
-  dsimp only [evalPlanarClements4x4]
-  refine ⟨hBase.1, ?_, fun _ _ => rfl⟩
-  intro hUnit
-  have h2 := hBase.2.1 hUnit
-  rw [hUnit, Int.one_mul] at h2
-  exact h2
-
-/-! ## 9. Symmetric `StrictOpenHypergraph` Equitable Quotient Compression & `quotientHypergraphSlot` (`quotientOpenHypergraph_intertwines_eval_and_adjoint`, `quotientHypergraph_moved_pin_blocks`) -/
+/-! ## 2. Symmetric `StrictOpenHypergraph` Equitable Quotient Compression & `quotientHypergraphSlot` (`quotientOpenHypergraph_intertwines_eval_and_adjoint`, `quotientHypergraph_moved_pin_blocks`) -/
 
 /-- Partition of a 4-channel parallel hardware/photonic/attention hypergraph into $r = 2$ equitable
 symmetry cells $C_0 = \{0, 1\}$ and $C_1 = \{2, 3\}$. -/

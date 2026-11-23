@@ -29,11 +29,9 @@ public import Obend.Hardware.HDL
 public import Obend.Hardware.Synth
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.Retiming
-public import Obend.Hardware.Photonics
 public import Obend.Hardware.PCB
 public import Obend.Hardware.ReductionMachine
 public import Obend.Hardware.PinoutEquiv
-public import Obend.Hardware.ThermalPassivity
 public import Obend.Hardware.SmallSignalMna
 public import Obend.Hardware.DigitalFilterAndArray
 public import Obend.Hardware.Magnetics
@@ -49,7 +47,6 @@ open Obend.Hardware.HDL
 open Obend.Hardware.Synth
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.Retiming
-open Obend.Hardware.Photonics
 open Obend.Hardware.PCB
 open Obend.Hardware.ReductionMachine
 open Obend.Hardware.PinoutEquiv
@@ -306,11 +303,9 @@ Every binary hardware certificate starts with:
 inductive HwCertDomain
   | pnr                 -- 1
   | retiming            -- 2
-  | photonics           -- 3
   | pcb                 -- 4
   | dpr                 -- 5
   | edaBomSwap          -- 6
-  | multiphysics        -- 7
   | analog2d            -- 8
   | dspBeamformer       -- 9
   | magnetics           -- 10
@@ -319,11 +314,9 @@ inductive HwCertDomain
 def HwCertDomain.toCode : HwCertDomain → Nat
   | .pnr => 1
   | .retiming => 2
-  | .photonics => 3
   | .pcb => 4
   | .dpr => 5
   | .edaBomSwap => 6
-  | .multiphysics => 7
   | .analog2d => 8
   | .dspBeamformer => 9
   | .magnetics => 10
@@ -331,11 +324,9 @@ def HwCertDomain.toCode : HwCertDomain → Nat
 def HwCertDomain.fromCode : Nat → Option HwCertDomain
   | 1 => some .pnr
   | 2 => some .retiming
-  | 3 => some .photonics
   | 4 => some .pcb
   | 5 => some .dpr
   | 6 => some .edaBomSwap
-  | 7 => some .multiphysics
   | 8 => some .analog2d
   | 9 => some .dspBeamformer
   | 10 => some .magnetics
@@ -468,15 +459,6 @@ def verifyBinaryHwCert (c : BinaryHwCert) : Bool :=
       ioLatencyShift := c.p3
     }
     checkRetimingCert macUnretimedGraph cert corner7nm_SS c.p5.toNat
-  | .photonics =>
-    -- p0: t, p1: kappa, p2: e1.re, p3: e1.im, p4: e2.re, p5: e2.im
-    let e1 : ComplexField := ⟨c.p2, c.p3⟩
-    let e2 : ComplexField := ⟨c.p4, c.p5⟩
-    let (o1, o2) := evalDirectionalCoupler2x2 c.p0 c.p1 e1 e2
-    let (barCross, _) := evalCascadedMzi2x2 c.p0 c.p0 ⟨1, 0⟩ e1 ⟨0, 0⟩
-    decide (o1.normSq + o2.normSq == (c.p0 * c.p0 + c.p1 * c.p1) * (e1.normSq + e2.normSq)) &&
-      decide (c.p0 * c.p0 + c.p1 * c.p1 > 0) &&
-      decide (barCross == ⟨0, 0⟩)
   | .pcb =>
     -- p0: widthUm, p1: heightUm, p2: copperThickUm, p3: erPermille, p4: z0ExtractedMilliOhm, p5: z0TargetMilliOhm
     checkSingleEndedZ0 c.p0.toNat c.p1.toNat c.p2.toNat c.p3.toNat c.p4.toNat c.p5.toNat 3000
@@ -511,14 +493,6 @@ def verifyBinaryHwCert (c : BinaryHwCert) : Bool :=
       defaultDatasheetCite256
       "procurement_scout"
       defaultEdaFacts == .admitted
-  | .multiphysics =>
-    -- p0: g01, p1: g12, p2: temp0, p3: temp1, p4: temp2, p5: alpha0
-    let edges : List Obend.Hardware.ThermalPassivity.ThermalEdge := [
-      { nodeU := 0, nodeV := 1, conductanceMwPerK := c.p0 },
-      { nodeU := 1, nodeV := 2, conductanceMwPerK := c.p1 }
-    ]
-    let temps : List Int := [c.p2, c.p3, c.p4]
-    decide (c.p0 ≥ 0 ∧ c.p1 ≥ 0 ∧ Obend.Hardware.ThermalPassivity.evalLaplacianQuadratic temps edges ≥ 0)
   | .analog2d =>
     -- p0: p0, p1: gx, p2: gy, p3: cxx, p4: cxy, p5: cyy
     decide (Obend.Hardware.SmallSignalMna.chiralityBalanced2DMismatch c.p0 c.p1 c.p2 c.p3 c.p4 c.p5 10 10 == 0) &&
@@ -539,9 +513,6 @@ def verifyBinaryHwCert (c : BinaryHwCert) : Bool :=
 
 def adder2nsPnrCert : BinaryHwCert :=
   { domain := .pnr, p0 := 0, p1 := 0, p2 := 0, p3 := 1, p4 := 5, p5 := 2000 }
-
-def coupler3To4PhotonicsCert : BinaryHwCert :=
-  { domain := .photonics, p0 := 3, p1 := 4, p2 := 10, p3 := -5, p4 := 2, p5 := 7 }
 
 def microstrip50OhmPcbCert : BinaryHwCert :=
   { domain := .pcb, p0 := 330, p1 := 152, p2 := 35, p3 := 3480, p4 := 50000, p5 := 50000 }
@@ -659,9 +630,8 @@ instance : BinaryCodec BinaryTapeCert where
   decodeBytes := decodeBinaryTapeCert
   decode_encode := decode_encode_binaryTapeCert
 
-/-- Verify a variable-length `BinaryTapeCert` across multi-element 2D FEMM meshes and
-    graph-Laplacian thermal passivity networks.
-    All fixed-arity `BinaryHwCert` domains (`.pnr`, `.retiming`, `.photonics`, `.pcb`, `.dpr`,
+/-- Verify a variable-length `BinaryTapeCert` across multi-element 2D FEMM meshes.
+    All fixed-arity `BinaryHwCert` domains (`.pnr`, `.retiming`, `.pcb`, `.dpr`,
     `.edaBomSwap`, `.analog2d`, `.dspBeamformer`) are strictly refused (`false`) when submitted
     as a `BinaryTapeCert` so they cannot bypass fixed-arity `verifyBinaryHwCert` checks. -/
 def verifyBinaryTapeCert (c : BinaryTapeCert) : Bool :=
@@ -670,21 +640,21 @@ def verifyBinaryTapeCert (c : BinaryTapeCert) : Bool :=
   decide (c.metric1.toNat > 0) &&
   c.words.all (fun w => decide (w.toNat > 0)) &&
   match c.domain with
-  | .magnetics | .multiphysics =>
+  | .magnetics =>
     decide (c.words.length ≥ 4) &&
     decide (c.metric1.toNat ≤ 5000000) &&
     decide ((c.words.foldl (fun acc w => acc + w.toNat) 0) == c.metric0.toNat)
   | _ =>
     false
 
-/-- **Universal No-Bypass Theorem Across All 8 Fixed-Arity Domains (`nonTapeDomain_tape_cert_refused`)**:
-Every `BinaryTapeCert` whose domain is neither `.magnetics` nor `.multiphysics` is unconditionally
+/-- **Universal No-Bypass Theorem Across All Fixed-Arity Domains (`nonTapeDomain_tape_cert_refused`)**:
+Every `BinaryTapeCert` whose domain is not `.magnetics` is unconditionally
 refused (`verifyBinaryTapeCert c = false`), regardless of its `metric0`, `metric1`, or `words` payload. -/
 theorem nonTapeDomain_tape_cert_refused (c : BinaryTapeCert)
-    (hNotMag : c.domain ≠ .magnetics) (hNotMulti : c.domain ≠ .multiphysics) :
+    (hNotMag : c.domain ≠ .magnetics) :
     verifyBinaryTapeCert c = false := by
   rcases c with ⟨dom, m0, m1, ws⟩
-  cases dom <;> simp [verifyBinaryTapeCert] at hNotMag hNotMulti ⊢
+  cases dom <;> simp [verifyBinaryTapeCert] at hNotMag ⊢
 
 /-- **No-Bypass Theorem for Fixed-Arity Domains (`pnr_tape_cert_bypass_refused`)**:
 Any `BinaryTapeCert` claiming domain `.pnr`, `.retiming`, `.pcb`, or `.analog2d` is unconditionally
@@ -694,10 +664,10 @@ theorem pnr_tape_cert_bypass_refused (m0 m1 : UInt32) (ws : List UInt32) :
     verifyBinaryTapeCert { domain := .retiming, metric0 := m0, metric1 := m1, words := ws } = false ∧
     verifyBinaryTapeCert { domain := .pcb, metric0 := m0, metric1 := m1, words := ws } = false ∧
     verifyBinaryTapeCert { domain := .analog2d, metric0 := m0, metric1 := m1, words := ws } = false :=
-  ⟨nonTapeDomain_tape_cert_refused _ (by intro h; cases h) (by intro h; cases h),
-   nonTapeDomain_tape_cert_refused _ (by intro h; cases h) (by intro h; cases h),
-   nonTapeDomain_tape_cert_refused _ (by intro h; cases h) (by intro h; cases h),
-   nonTapeDomain_tape_cert_refused _ (by intro h; cases h) (by intro h; cases h)⟩
+  ⟨nonTapeDomain_tape_cert_refused _ (by intro h; cases h),
+   nonTapeDomain_tape_cert_refused _ (by intro h; cases h),
+   nonTapeDomain_tape_cert_refused _ (by intro h; cases h),
+   nonTapeDomain_tape_cert_refused _ (by intro h; cases h)⟩
 
 /-- **CBOR Wire Injectivity for Fixed-Arity `BinaryHwCert` (`encodeBinaryHwCert_injective`)**:
 For EVERY two well-formed fixed-arity certificates `c1, c2 : BinaryHwCert`, identical RFC 8949
@@ -888,8 +858,8 @@ def obendHwCborProjectCell (raw : ByteArray) : ByteArray :=
       cellId := cert.domain.toCode
       kind := match cert.domain with
         | .pnr | .pcb | .analog2d => .hardwareLayout
-        | .retiming | .photonics | .dspBeamformer => .hardwareTiming
-        | .dpr | .edaBomSwap | .multiphysics | .magnetics => .hardwareSchematic
+        | .retiming | .dspBeamformer => .hardwareTiming
+        | .dpr | .edaBomSwap | .magnetics => .hardwareSchematic
       title := s!"obnb_hw_domain_{cert.domain.toCode}"
       primaryCount := cert.p0.toNat
       secondaryMetric := c_p5_nat cert
@@ -903,8 +873,8 @@ def obendHwCborProjectCell (raw : ByteArray) : ByteArray :=
         cellId := tapeCert.domain.toCode
         kind := match tapeCert.domain with
           | .pnr | .pcb | .analog2d => .hardwareLayout
-          | .retiming | .photonics | .dspBeamformer => .hardwareTiming
-          | .dpr | .edaBomSwap | .multiphysics | .magnetics => .hardwareSchematic
+          | .retiming | .dspBeamformer => .hardwareTiming
+          | .dpr | .edaBomSwap | .magnetics => .hardwareSchematic
         title := s!"obnb_hw_tape_{tapeCert.domain.toCode}"
         primaryCount := tapeCert.words.length
         secondaryMetric := tapeCert.metric0.toNat

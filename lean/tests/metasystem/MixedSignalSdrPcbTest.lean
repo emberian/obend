@@ -4,13 +4,9 @@ public import Obend.Tactic.Tooth
 public import Obend.Hardware.SmallSignalMna
 public import Obend.Hardware.DigitalFilterAndArray
 public import Obend.Hardware.PCB
-public import Obend.Hardware.Datasheet
-public import Obend.Hardware.Circuits
 import all Obend.Hardware.SmallSignalMna
 import all Obend.Hardware.DigitalFilterAndArray
 import all Obend.Hardware.PCB
-import all Obend.Hardware.Datasheet
-import all Obend.Hardware.Circuits
 
 /-!
 # Metasystem Test Suite — Mixed-Signal AMS Silicon, $N$-Bit SAR ADC, Synchronous SDR DSP & Hammerstad–Jensen PCB (`WS-N`)
@@ -30,12 +26,10 @@ negative refusal poles, and `#tooth` kernel mutation-killing probes (`0 sorry`) 
      `stepCordicTwoStage`, `cordic_twoStage_exact_gain_10x`,
    - `nco_phase_in_bounds`, `cic_register_width_sound`, `firSymmetric_folds_multipliers`,
    - `rollettStability_sound`, `ula_4elem_matched_beamformer_coherent`.
-3. `Obend.Hardware.PCB`, `Obend.Hardware.Datasheet` & `Obend.Hardware.Circuits`:
+3. `Obend.Hardware.PCB`:
    - Hammerstad–Jensen / Bahl–Garg fixed-point microstrip `microstripZ0MilliOhm`,
      `fxSqrt_enclosure`, `microstripEffWidthUm_ge_width`, `microstripEpsEffFx_enclosure_and_mono`,
-     `singleEndedZ0_sound`, `microstripZ0_reference_enclosure`,
-   - `ina_common_mode_cancelled_at_matched_bridge`, `buck_ccm_safe_prevents_core_saturation`,
-     `datasheet_fit_signoff_poles`.
+     `singleEndedZ0_sound`, `microstripZ0_reference_enclosure`.
 -/
 
 @[expose] public section
@@ -44,8 +38,6 @@ namespace Obend.Tests.Metasystem.MixedSignalSdrPcbTest
 open Obend.Hardware.SmallSignalMna
 open Obend.Hardware.DigitalFilterAndArray
 open Obend.Hardware.PCB
-open Obend.Hardware.Datasheet
-open Obend.Hardware.Circuits
 set_option autoImplicit false
 
 /-! ## 1. Parametric $N$-Bit SAR ADC & 2D Octuple Hessian-Canceling Array (`Obend.Hardware.SmallSignalMna`) -/
@@ -171,7 +163,7 @@ def stepCordicStage1BrokenSign (v : CordicVec) (_dirPos : Bool) : CordicVec :=
 #tooth Obend.Hardware.DigitalFilterAndArray.cordic_stage1_norm_identity by mutation
   Obend.Hardware.DigitalFilterAndArray.stepCordicStage1 := stepCordicStage1BrokenSign
 
-/-! ## 3. Hammerstad–Jensen Microstrip $Z_0$ & Mixed-Signal Datasheet Calibration (`PCB`, `Datasheet`, `Circuits`) -/
+/-! ## 3. Hammerstad–Jensen Microstrip $Z_0$ (`PCB`) -/
 
 example (a : Nat) :
     fxSqrt a * fxSqrt a ≤ a * fxS ∧
@@ -206,31 +198,10 @@ example :
     checkSingleEndedZ0 80 500 35 2200 50000 50000 3000 = false :=
   microstripZ0_reference_enclosure
 
-example (p : InaParams) (vDiffUv vCmUv deltaTC : Int)
-    (hTrim : p.gainCmRaw = p.trimCmCancel) :
-    evalInaOutputUv p vDiffUv vCmUv deltaTC =
-      p.gainDiff * (vDiffUv + p.vos0Uv + p.dVosDtUvPerC * deltaTC) :=
-  ina_common_mode_cancelled_at_matched_bridge p vDiffUv vCmUv deltaTC hTrim
-
-example (b : BuckSpec) (hOk : checkBuckCcmSafe b = true) :
-    evalBuckRippleMa b ≤ 2 * b.iLoadMa ∧
-    evalBuckPeakInductorMa b ≤ b.iSatMaxMa :=
-  buck_ccm_safe_prevents_core_saturation b hOk
-
-#guard checkDatasheetFitSignoff sn74ls00ToHct00FitCert == true
-#guard checkDatasheetFitSignoff badDirect74HcFitCert == false
-#guard checkDatasheetFitSignoff badUncalibratedDriftFitCert == false
-
 def fxSqrtBrokenPlusOne (a : Nat) : Nat := Nat.sqrt (a * fxS) + 1
 
 #tooth Obend.Hardware.PCB.fxSqrt_enclosure by mutation
   Obend.Hardware.PCB.fxSqrt := fxSqrtBrokenPlusOne
-
-def evalInaOutputBrokenLeak (p : InaParams) (vDiffUv vCmUv deltaTC : Int) : Int :=
-  p.gainDiff * (vDiffUv + p.vos0Uv + p.dVosDtUvPerC * deltaTC) + vCmUv
-
-#tooth Obend.Hardware.Circuits.ina_common_mode_cancelled_at_matched_bridge by mutation
-  Obend.Hardware.Circuits.evalInaOutputUv := evalInaOutputBrokenLeak
 
 end Obend.Tests.Metasystem.MixedSignalSdrPcbTest
 end

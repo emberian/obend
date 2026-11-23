@@ -230,7 +230,6 @@ import all Obend.Hardware.Accelerators
 import all Obend.Hardware.PinoutEquiv
 import all Obend.Hardware.SmallSignalMna
 import all Obend.Hardware.BalanceLawLowering
-import all Obend.Hardware.Circuits
 import all Obend.Hardware.Codec
 import all Obend.Hardware.PlaneSweepDrcLvs
 import all Obend.Hardware.DigitalFilterAndArray
@@ -249,18 +248,15 @@ import all Obend.Spec.BidirectionalSurfaceElab
 import all Obend.SymbolicZk.CompileToPiop
 import all Obend.SymbolicZk.CompileToPiopCore
 import all Obend.SymbolicZk.SkolemChaseCore
-import all Obend.Hardware.Datasheet
 import all Obend.Hardware.GeometryCAM
 import all Obend.Hardware.Judge
 import all Obend.Hardware.Magnetics
 import all Obend.Hardware.PCB
-import all Obend.Hardware.Photonics
 import all Obend.Hardware.PlaceRoute
 import all Obend.Hardware.Process
 import all Obend.Hardware.ReductionMachine
 import all Obend.Hardware.Retiming
 import all Obend.Hardware.Synth
-import all Obend.Hardware.ThermalPassivity
 import all Obend.Hardware.VerilateRunner
 import all Obend.Hardware.YosysLec
 import all Obend.Judge.Clearing

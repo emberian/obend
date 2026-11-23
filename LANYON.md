@@ -5,7 +5,7 @@ This document summarizes the mathematical specifications, machine-checked theore
 - hyperbolic balance laws, 1+1 Bona–Massó ADM/Z4c solvers, and a 3+1 Z4c constraint-propagation solver compiled by `#pde_solver` (§1.1, §1.2, §1.5);
 - continuum-to-discrete truncation order, periodic summation by parts, and Lax–Wendroff weak-form residual bounds for the compiled schemes, carried through to the Q32.32 word trajectory (§1.3);
 - $d$-dimensional Friedrichs symmetric-hyperbolic energy estimates with Kreiss–Oliger dissipation (§1.4);
-- Kung–Leiserson systolic retiming and time-multiplexed stencil marching, and GPU/RTL lowering with logic-equivalence checks (§1.6, §1.7);
+- GPU/RTL lowering with logic-equivalence checks and standalone CLI rollouts (§1.6, §1.7);
 - discrete exterior calculus, the discrete Hodge decomposition, Whitney forms, and Dirac open systems (§2);
 - open-hypergraph symmetry quotients and adjoint equality saturation (§3);
 - validated continuous analysis and Gröbner-basis completion (§4).
@@ -169,20 +169,7 @@ $$\partial_t \Theta - \beta^i \partial_i \Theta = -\alpha\, \partial_i Z^i - \ka
 - `bssnZ4cConstraint3D_constraint_sector_eq_z4c3d`: at every state $u$, the $5 \times 5$ block of the symbolic flux and source Jacobians of `BssnZ4cConstraint3D.spec` on the constraint variables equals `z4c3dFluxMat` and `z4c3dSourceMat` at lapse $\alpha = u_0$ with the solver's parameters (`bssnZ4c3dSolverParams`); and on any background with vanishing constraint variables the coupling block from the gauge variables into the constraint rows vanishes. Freezing a spatially uniform, constraint-free background thus gives the autonomous five-field linear system of the energy estimate.
 - `z4c3d_slab_reduction_matches_1d`: on a periodic grid of positive extents $[N_x, N_y, N_z]$, embedding a 1+1 `BonaMassoZ4c1D` state with $Z_i = H_{\text{ham}} = 0$ as a $(y, z)$-independent slab (`embedZ4cPlanarSlab`): the $x$-fluxes of the two specifications agree on the six shared components; one full three-dimensional Lie step agrees with one one-dimensional step on those components for arbitrary slab data; and if additionally $\Theta = 0$ initially, the $n$-step three-dimensional rollout equals the embedded $n$-step one-dimensional rollout in every component, for all $n$.
 
-### 1.6 Kung–Leiserson Systolic Retiming, Wavefront Throughput & Single-Cell Time-Multiplexed Marching (`lean/Obend/Hardware/SystolicDataflowThroughput.lean`)
-
-A `SystolicDataflowNet` is a synchronous graph (`SyncGraph` of `lean/Obend/Hardware/Retiming.lean`, edges weighted by register counts) with a word operation per node. Its clock-indexed stream semantics `streamValue` is defined by well-founded recursion on (time, topological rank) and is the unique solution of the local stream equations (`streamValue_unique`).
-
-- `positive_cycle_weight_preserved_and_deadlock_free`: if a rank function strictly increases along every zero-register edge (`checkZeroWeightTopological`), then every nonempty cycle carries at least one register, and its register count is unchanged by any retiming lag assignment. The first conjunct excludes combinational loops; the second is the Leiserson–Saxe cycle invariant.
-- `systolic_retiming_preserves_stream_semantics`: for a retiming with non-negative lags $r(v)$ and non-negative retimed edge weights, identical primary-input streams with zero input lag, common lag $L$ on primary outputs, and both the original and the retimed graph passing `checkZeroWeightTopological`, the retimed stream is the original stream delayed pointwise by the lag: $\operatorname{ret}(t + r(v), v) = \operatorname{orig}(t, v)$ at every node, hence $\operatorname{ret}(t + L, v) = \operatorname{orig}(t, v)$ at every output. The retimed network gates each node until its start cycle $r(v)$.
-- `systolic_wavefront_latency_and_throughput`: for $D>0$ and $s,x,\delta\in\mathbb{N}^D$, the schedule $t(x)=s\cdot x$ satisfies $t(x+\delta)\ge t(x)+1$ whenever every $s_i\ge1$ and $\sum_i\delta_i\ge1$. On the index box $0\le x_i\le K$ in $D$ dimensions the all-ones schedule reaches the far corner at $D K$, and with an $L$-stage pipeline the output latency is $D K + L$ (face corner: $(D - 1) K + L$). The $L$-stage pipeline `stepSystolicPipeline` has empty output before cycle $L$. For a nonempty input list, stage $j\le L$ contains item $k$ after $j$ stage operations at cycle $k+j$. The output delivers one transformed item per cycle from $L$ through $L+|xs|-1$, then drains.
-- `multiplexed_single_cell_matches_unrolled_array`: for an `AxisCell` (one shared RTL module with per-axis input encoding and output decoding, versus one dedicated module per axis) satisfying the one-step law `Equivariant`, issuing the $d N^d$ axis-major jobs of a $d$-dimensional cube to the single shared cell yields the same output stream as the bank of $d$ dedicated cells, equal to the specification flux at each job, in $d N^d + 1$ clock samples including the initial fill. The result is independent of initial register contents.
-- `euler_cube_stream`, `mhd_cube_stream`: the instances for `EulerGas3D` ($3 N^3 + 1$ samples) and `IdealMhd8Wave` ($2 N^2 + 1$ samples), with `Equivariant` discharged from `euler3d_single_systolic_cell_serves_all_3_axes` and `mhd8wave_single_systolic_cell_serves_both_axes` of §3.
-- `multiplexed_systolic_time_march_sound`: if the cell is equivariant, its flux equals the specification flux for every supported axis and input, and the specification covers all $d$ axes, then for any list of split-axis schedules, the sequence of all intermediate grids produced by driving the single multiplexed cell (carrying its actual register file across axis and step boundaries) equals the sequence produced by the dedicated bank, and equals the Lie-split word-level reference `lieMarch` built from `stepQ32Axis`. `euler_time_march` and `mhd_time_march` instantiate it for `EulerGas3D.spec` and `IdealMhd8Wave.spec` under every boundary policy.
-
-The cycle counts use the synchronous stream model.
-
-### 1.7 Silicon, Vulkan GPU, and Yosys+Bitwuzla LEC Verification
+### 1.6 Silicon, Vulkan GPU, and Yosys+Bitwuzla LEC Verification
 
 Stage 5 of `hardware/gpu/verify_gpu.sh` executes end-to-end hardware and shader checks against the compiled `Obend.Hardware.PdeSolvers` artifacts:
 
@@ -191,7 +178,7 @@ Stage 5 of `hardware/gpu/verify_gpu.sh` executes end-to-end hardware and shader 
 - **Yosys + Bitwuzla SMT-LIB2 Formal Equivalence**: Runs Yosys synthesis and Bitwuzla bit-precise equivalence checking between the emitted SystemVerilog (`emitModuleSV`) and Lean's `RtlModule` transition relation (`emitYosysLecSmt2`), proving `unsat` on `EulerGas3D_axis0` and `BonaMassoZ4c1D_axis0` and `sat` on a planted bit-0 fault. During Stage-5 bringup, this miter caught a genuine IEEE 1800-2017 §11.6.1 context-determined width propagation bug in `emitExprSV` (`lean/Obend/Hardware/HDL.lean`): `$signed(a)` inside `128'($signed(a))` widened compound 64-bit subtractions such as `64'd8589934592 - 64'(q)` in `reciprocalRtlExprs` to 128 bits *prior* to sign interpretation whenever `q[63] = 1`; enforcing inner self-determined width `128'($signed(64'(a)))` restored unconditional 64-bit equivalence.
 - **End-to-End 1+1 Bona–Massó / Z4c Relativity Application (`apps/relativity-z4c/`, `lean/Obend/Apps/RelativityZ4cApp.lean`)**: Connects a three-layer open-recursive `.obend` gauge/slicing specification (`BonaMassoSlicing.obend`, `Z4cConstraintDamping.obend`, `RelativityZ4cTop.obend`) via `#import_obend` directly to `BonaMassoZ4c1D.spec` and `BonaMassoZ4c1D.endToEnd_certified` (`relativityZ4c_obend_welds_to_bonaMassoZ4c1D`, `z4c_constraint_damping_contraction_sound`), bundled with Apples-with-Apples gauge-wave benchmarks, WGSL shaders, Yosys SMT2 LEC, Verilator cycle-accurate `wave.vcd` simulation (`apps/relativity-z4c/verify_relativity_z4c.sh`), and `crates/obend-gui` waveform inspection.
 
-### 1.8 Standalone CLI Rollouts, Receipts, and Artifact Emission (`lean/Obend/Analysis/NonlinearPdeCli.lean`)
+### 1.7 Standalone CLI Rollouts, Receipts, and Artifact Emission (`lean/Obend/Analysis/NonlinearPdeCli.lean`)
 
 `obend pde solve` and `obend pde check` (`runPdeCli`) execute exact rational (`"rat"`) or Q32.32 (`"q32"`) multi-D rollouts for any catalog solver or inline `(conservation-law ...)` S-expression under `periodic`, `transmissive`, or `reflective` boundaries, emit 256-bit `cSHAKE256` trajectory receipts (`pdeTrajectoryDigest_binding` with LEB128 length framing over every statement field), check untrusted surrogate trajectories against the `nonlinear_aposteriori_error_tube` bound, and write out WGSL kernels, SystemVerilog RTL, and Yosys SMT2 miters:
 
@@ -293,7 +280,7 @@ cd lean
 bounded() { SWARM_MEM_MAX=12G swarm-build timeout --kill-after=10s 600s "$@"; }
 bounded lake build Obend obend obend-emit-gpu obend-emit-sv Obend.Census Teeth
 
-# §1.1, §1.2, §1.7, §1.8, §4: compiler, accelerator bridge, CLI, OSPC prover
+# §1.1, §1.2, §1.6, §1.7, §4: compiler, accelerator bridge, CLI, OSPC prover
 bounded lake build metasystem.MetaprogPdeCompilerTest metasystem.PdeAcceleratorBridgeTest \
   metasystem.NonlinearPdeCliTest metasystem.CyberneticRadioAndOspcTest
 
@@ -304,9 +291,6 @@ bounded lake build Obend.Analysis.LaxWendroffDefs Obend.Analysis.LaxWendroffConv
 # §1.4, §1.5: symmetric-hyperbolic energy, 3+1 Z4c, BssnZ4cConstraint3D
 bounded lake build Obend.Analysis.SymmetricHyperbolicEnergy Obend.Analysis.RelativityBssnZ4c3D \
   metasystem.RelativityBssnZ4c3DTest
-
-# §1.6: systolic retiming and time-multiplexed marching
-bounded lake build Obend.Hardware.SystolicDataflowThroughput metasystem.SystolicDataflowThroughputTest
 
 # §2, §4: discrete Hodge decomposition, Whitney forms, Buchberger completion
 bounded lake build Obend.Geometry.DeRhamHodgeComplex Obend.Analysis.BuchbergerCompletion \
@@ -319,4 +303,4 @@ bounded cargo build --release --manifest-path ../hardware/gpu/runner/Cargo.toml
 bounded bash ../hardware/gpu/verify_gpu.sh --stage 5
 ```
 
-The eight `metasystem` modules live in `lean/tests/metasystem/`. The `Tests` library in `lean/lakefile.toml` includes them all.
+The seven `metasystem` modules live in `lean/tests/metasystem/`. The `Tests` library in `lean/lakefile.toml` includes them all.

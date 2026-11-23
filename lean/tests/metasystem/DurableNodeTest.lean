@@ -27,7 +27,6 @@ import all Obend.Consensus.Finality
 import all Obend.Digest.Cshake256.Seam
 import all Obend.Vault.UnifiedDeos
 import all Obend.Hardware.PinoutEquiv
-import all Obend.Hardware.Datasheet
 import all Obend.Doc.Merge
 import all Obend.Consensus.Epistemic
 import all Obend.Vault.Page

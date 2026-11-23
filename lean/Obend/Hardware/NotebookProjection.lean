@@ -17,13 +17,11 @@ public import Obend.Hardware.Synth
 public import Obend.Hardware.Process
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.PlaneSweepDrcLvs
-public import Obend.Hardware.Circuits
 public import Obend.Hardware.Retiming
 public import Obend.Leaf.Emit
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.Magnetics
 public import Obend.Hardware.OpenUSD
-public import Obend.Hardware.VerilateRunner
 public import Obend.Analysis.Hybrid
 public import Obend.Receipt.Merkle
 public section
@@ -37,7 +35,6 @@ open Obend.Hardware.Synth
 open Obend.Hardware.Process
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.PlaneSweepDrcLvs
-open Obend.Hardware.Circuits
 open Obend.Hardware.Retiming
 open Obend.Hardware.Magnetics
 
@@ -650,7 +647,6 @@ open Obend.Vault.HardwareProjection (dInt)
 open Obend.Hardware.Kinematics
 open Obend.Hardware.Magnetics
 open Obend.Hardware.OpenUSD
-open Obend.Hardware.VerilateRunner
 open Obend.Logic
 open Obend.Leaf
 open Obend.Analysis
@@ -710,7 +706,6 @@ def cncToolpathToData (spec : CncToolpathViewportSpec) : Data :=
   let coriolisPower := spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist
   let rStep1 := stepRuckigSegment spec.ruckigInit spec.jerkPulse spec.pulseDt
   let rStep2 := stepRuckigSegment rStep1 (-spec.jerkPulse) spec.pulseDt
-  let millBook := emit cnc5AxisMillComp
   .record [
     ("kind", .label "physical_cnc_5axis"),
     ("machine_name", .label spec.machineName),
@@ -720,9 +715,7 @@ def cncToolpathToData (spec : CncToolpathViewportSpec) : Data :=
     ("actual_tip_nm", vec3ToData actualTip),
     ("abbe_exact_cancelled", .boolean (actualTip == spec.pTarget)),
     ("coriolis_power", dInt coriolisPower),
-    ("ruckig_final_state", ruckigStateToData rStep2),
-    ("userspace_mill_slots", .natural millBook.slots.length),
-    ("userspace_mill_closed", .boolean millBook.closedB)
+    ("ruckig_final_state", ruckigStateToData rStep2)
   ]
 
 /-- Construct a `.obnb` `Doc.Content.cell` quotation for a 5-axis CNC kinematic toolpath. -/
@@ -819,18 +812,15 @@ structure StatorMultiphysicsViewportSpec where
 
 /-- Project a `StatorMultiphysicsViewportSpec` into canonical `Core.Data`. -/
 def statorMultiphysicsToData (spec : StatorMultiphysicsViewportSpec) : Data :=
-  let statorBook := emit lcDrivesStatorComp
   let femmCoEnergy := evalElementMagneticEnergyAreaScaled 1000000 spec.statorTriangle 10 (-4) 6
   let flowpipeSafe := verifyTrajectorySafety spec.ode spec.initBox spec.steps spec.safeBounds
   .record [
     ("kind", .label "physical_stator_multiphysics"),
     ("part_name", .label spec.partName),
-    ("stator_slot_count", .natural statorBook.slots.length),
-    ("stator_book_closed", .boolean statorBook.closedB),
     ("femm_coenergy_scaled", dInt femmCoEnergy),
     ("flowpipe_steps", .natural spec.steps),
     ("flowpipe_safe", .boolean flowpipeSafe),
-    ("status", .label (if flowpipeSafe && statorBook.closedB then "MULTIPHYSICS_CERTIFIED" else "UNSAFE"))
+    ("status", .label (if flowpipeSafe then "MULTIPHYSICS_CERTIFIED" else "UNSAFE"))
   ]
 
 /-- Construct a `.obnb` `Doc.Content.cell` quotation for coupled LC-drive stator multiphysics. -/
@@ -861,17 +851,14 @@ theorem physical_projection_deterministic
 /-- **Theorem (`physical_cnc_abbe_projection_sound`)**:
 For ANY `CncToolpathViewportSpec`, pre-compensating the CNC command by `evalAbbeCompensatedCmd3D`
 cancels the 21-parameter volumetric + Abbe lever-arm error (`abbe_volumetric_compensation_exact`),
-the Featherstone gyroscopic/Coriolis wrench performs zero mechanical work (`rnea_gyroscopic_coriolis_power_zero`),
-and `cnc5AxisMillComp` emits a closed `Leaf.Book`. -/
+and the Featherstone gyroscopic/Coriolis wrench performs zero mechanical work (`rnea_gyroscopic_coriolis_power_zero`). -/
 theorem physical_cnc_abbe_projection_sound (spec : CncToolpathViewportSpec) :
     evalUncompensatedTipPos3D
       (evalAbbeCompensatedCmd3D spec.pTarget spec.linErr spec.angErr spec.abbeArm)
       spec.linErr spec.angErr spec.abbeArm = spec.pTarget ∧
-    spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist = 0 ∧
-    (emit cnc5AxisMillComp).closedB = true := by
-  refine ⟨abbe_volumetric_compensation_exact spec.pTarget spec.linErr spec.angErr spec.abbeArm,
-    rnea_gyroscopic_coriolis_power_zero spec.twist spec.momentum,
-    by decide +kernel⟩
+    spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist = 0 :=
+  ⟨abbe_volumetric_compensation_exact spec.pTarget spec.linErr spec.angErr spec.abbeArm,
+    rnea_gyroscopic_coriolis_power_zero spec.twist spec.momentum⟩
 
 /-- Look up a named field inside a `Core.Data.record` payload. -/
 def lookupDataRecordField (d : Data) (key : String) : Option Data :=
@@ -999,8 +986,7 @@ theorem physical_openusd_lifecycle_fixture :
     (AffineForm1D.sub usd.sdfWallForm usd.sdfWallForm).toInterval = { lo := 0, hi := 0 } ∧
     checkPartLifecycleInvariant usd.minWallUm usd.maxTempMilliC
       (finalUsdState usd.initSample usd.timeSamples) = true ∧
-    verifyTrajectorySafety stator.ode stator.initBox stator.steps stator.safeBounds = true ∧
-    (emit lcDrivesStatorComp).closedB = true := by
+    verifyTrajectorySafety stator.ode stator.initBox stator.steps stator.safeBounds = true := by
   decide +kernel
 
 /-- **Theorem (`physical_projection_doc_noninterference`)**:
