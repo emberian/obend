@@ -4,6 +4,7 @@ import all Obend.Lower.Pancake.SpongeFrame
 import all Obend.Lower.Pancake.ByteMemory
 import all Obend.Digest.Cshake256.Fast
 public import Obend.Lower.Pancake.PancakeKeccak
+public import Obend.Lower.Pancake.LcnfFun
 import all Obend.Lower.Pancake.PancakeKeccak
 import all Obend.Lower.Pancake.WordBuffer
 import all Obend.Lower.Pancake.PanSem

@@ -24,6 +24,8 @@ Grounded verifiable-inference primitives over base-field `Goldilocks` ($p = 2^{6
 -/
 public import Obend.Digest.Cshake256
 public import Obend.Crypto.PCS
+public import Obend.Crypto.Tower256TracePack
+import Obend.Tactic.Tooth
 public section
 namespace Obend.SymbolicZk.ProvenZkmlGate
 open Obend.Apps.ZkNtt Obend.Crypto Obend.Digest.Cshake256 Obend.Digest.HashBytes Obend.Judge.Computational
@@ -1437,5 +1439,93 @@ theorem verifyMxfp4Sumcheck_sound {phase : TranscriptPhase} [CanSqueezeTranscrip
       · exact .inr (.inr hHitJ)
     · exact .inr (.inl hHitK)
   · exact .inl hHitB
+/-- Constructive inhabitedness witness for `verifyScheduledRound_sound` over `Goldilocks`,
+    separating a dishonest claimed sum (`2`) from the honest reference polynomial (`0`). -/
+private theorem verifyScheduledRound_sound_inhabited :
+    let tr := (bindInstance ByteArray.empty
+      (bindRelation "OBEND.EINSUMCHECK.WITNESS/v1" ByteArray.empty ByteArray.empty
+        (Transcript.newUnseeded ByteArray.empty))).transcript
+    let p : RoundPoly Goldilocks := ⟨[Goldilocks.ofNat 1, Goldilocks.ofNat 0]⟩
+    ∃ r nextClaim tr',
+      stepScheduledRound 2 (Goldilocks.ofNat 2) p tr = some (r, nextClaim, tr') ∧
+      p.coeffs.length ≤ 3 ∧
+      ((r : Goldilocks), tr') = absorbAndSqueezeRound p tr := by
+  intro tr p
+  let pStar : RoundPoly Goldilocks := ⟨[Goldilocks.ofNat 0, Goldilocks.ofNat 0]⟩
+  have hCond :
+      ((p.coeffs.drop (2 + 1)).isEmpty && degLePoly 2 p &&
+        decide (CommRingOps.add (evalPoly p CommRingOps.zero) (evalPoly p CommRingOps.one) =
+          Goldilocks.ofNat 2)) = true := by
+    decide
+  have hStar :
+      CommRingOps.add (evalPoly pStar CommRingOps.zero) (evalPoly pStar CommRingOps.one) =
+        Goldilocks.ofNat 0 := by
+    decide
+  have hStep :
+      stepScheduledRound 2 (Goldilocks.ofNat 2) p tr =
+        some ((absorbAndSqueezeRound p tr).1,
+              evalPoly p (absorbAndSqueezeRound p tr).1,
+              (absorbAndSqueezeRound p tr).2) := by
+    unfold stepScheduledRound
+    simp only [hCond, ↓reduceIte]
+  have hSound := verifyScheduledRound_sound hStep hStar (by decide)
+  exact ⟨_, _, _, hStep, hSound.1, hSound.2.1⟩
+
+/-- Executable `BitVec 256` trace-parity check for `BinaryTower256.TowerElem 8` elements. -/
+def checkTower256TraceBit (a : BinaryTower256.TowerElem 8) (expected : Bool) : Bool :=
+  Tower256TracePack.traceExec 8 (BinaryTower256.packTower 8 a) == expected
+
+/-- Compositional bridge uniting `Obend.Crypto.Tower256TracePack`'s 256-bit `Spec ↔ Exec`
+    trace-parity check (`traceExec_refines`), Vandermonde power-batching root bound
+    (`power_batching_roots_le`), and Frigo–shelat Fig. 2 single-mask ZK completeness
+    (`zk_single_mask_completeness`). -/
+theorem einSumcheck_tower256_single_mask_zk_sound
+    (claims : List (BinaryTower256.TowerElem 8 × BinaryTower256.TowerElem 8 × BinaryTower256.TowerElem 8))
+    (rMask a : BinaryTower256.TowerElem 8) (expected : Bool) (d : Nat)
+    (es deltas : List (BinaryTower256.TowerElem 8))
+    (hTrace : checkTower256TraceBit a expected = true)
+    (hnd : deltas.Nodup) (hlen : es.length ≤ d + 1)
+    (hnz : ∃ δ, RoundPoly.evalCoeffs es δ ≠ BinaryTower256.towerZero 8)
+    (hzero : ∀ δ ∈ deltas, RoundPoly.evalCoeffs es δ = BinaryTower256.towerZero 8) :
+    BinaryTower256.towerTrace 8 a = expected ∧
+    deltas.length ≤ d ∧
+    let U : BinaryTower256.TowerElem 8 × BinaryTower256.TowerElem 8 × BinaryTower256.TowerElem 8 →
+        BinaryTower256.TowerElem 8 :=
+      fun p => BinaryTower256.towerAdd 8 p.1 (Tower256TracePack.artinSchreier 8 p.2.1)
+    let A := BinaryTower256.towerAdd 8 rMask
+      (Tower256TracePack.listSum 8 (claims.map fun p => BinaryTower256.towerMul 8 p.2.2 p.2.1))
+    BinaryTower256.towerAdd 8
+        (Tower256TracePack.listSum 8
+          (claims.map fun p => BinaryTower256.towerMul 8 (Tower256TracePack.towerSq 8 p.2.2) (U p)))
+        (Tower256TracePack.towerSq 8 A) =
+      BinaryTower256.towerAdd 8
+        (BinaryTower256.towerAdd 8
+          (Tower256TracePack.listSum 8
+            (claims.map fun p => BinaryTower256.towerMul 8 (Tower256TracePack.towerSq 8 p.2.2) p.1))
+          (Tower256TracePack.listSum 8
+            (claims.map fun p => BinaryTower256.towerMul 8 (Tower256TracePack.towerSq 8 p.2.2) p.2.1)))
+        (Tower256TracePack.towerSq 8 rMask) := by
+  unfold checkTower256TraceBit at hTrace
+  rw [Tower256TracePack.traceExec_refines] at hTrace
+  exact ⟨beq_iff_eq.mp hTrace,
+    Tower256TracePack.power_batching_roots_le 8 d es deltas hnd hlen hnz hzero,
+    Tower256TracePack.zk_single_mask_completeness 8 claims rMask⟩
+
+private theorem einSumcheck_tower256_single_mask_zk_inhabited :
+    ∃ (a : BinaryTower256.TowerElem 8) (es deltas : List (BinaryTower256.TowerElem 8)),
+      checkTower256TraceBit a true = true ∧
+      deltas.Nodup ∧ es.length ≤ 256 ∧
+      BinaryTower256.towerTrace 8 a = true ∧ deltas.length ≤ 255 := by
+  obtain ⟨es, deltas, hnd, hlen, hnz, hzero⟩ := Tower256TracePack.power_batching_witness_T8
+  have hTr : checkTower256TraceBit (BinaryTower256.towerX 8) true = true := by
+    simp only [checkTower256TraceBit, Tower256TracePack.traceExec_refines, BinaryTower256.towerTrace_X]
+    rfl
+  have hS := einSumcheck_tower256_single_mask_zk_sound
+    [(BinaryTower256.towerX 8, BinaryTower256.towerOne 8, BinaryTower256.towerOne 8)]
+    (BinaryTower256.towerOne 8) (BinaryTower256.towerX 8) true 255 es deltas
+    hTr hnd hlen hnz hzero
+  exact ⟨BinaryTower256.towerX 8, es, deltas, hTr, hnd, hlen, hS.1, hS.2.1⟩
+
+#tooth einSumcheck_tower256_single_mask_zk_sound by mutation checkTower256TraceBit := fun _ _ => true
 end Obend.SymbolicZk.ProvenZkmlGate
 end
