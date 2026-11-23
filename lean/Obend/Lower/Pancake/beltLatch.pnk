@@ -1,0 +1,68 @@
+export fun stepBeltLatch(1 current, 1 candidate) {
+if ((lds 1 (current + 0)) == 1) {
+if ((lds 1 (current + 8)) == (lds 1 (candidate + 0))) {
+if ((lds 1 (current + 16)) == (lds 1 (candidate + 8))) {
+if ((lds 1 (current + 24)) == (lds 1 (candidate + 16))) {
+if ((lds 1 (current + 32)) == (lds 1 (candidate + 24))) {
+if ((lds 1 (current + 40)) == (lds 1 (candidate + 32))) {
+if ((lds 1 (current + 40)) <+ (lds 1 (candidate + 40))) {
+if ((lds 1 (current + 48)) == (lds 1 (candidate + 48))) {
+if ((lds 1 (current + 56)) == (lds 1 (candidate + 56))) {
+if ((lds 1 (current + 64)) == (lds 1 (candidate + 64))) {
+if ((lds 1 (current + 72)) == (lds 1 (candidate + 72))) {
+if ((lds 1 (current + 80)) == (lds 1 (candidate + 112))) {
+if ((lds 1 (current + 88)) == (lds 1 (candidate + 120))) {
+if ((lds 1 (current + 96)) == (lds 1 (candidate + 128))) {
+if ((lds 1 (current + 104)) == (lds 1 (candidate + 136))) {
+if ((lds 1 (candidate + 144)) == 1) {
+st (current + 40), < (lds 1 (candidate + 40)), (lds 1 (candidate + 80)), (lds 1 (candidate + 88)), (lds 1 (candidate + 96)), (lds 1 (candidate + 104)) >;
+return 0;
+} else {
+return 6;
+}
+} else {
+return 5;
+}
+} else {
+return 5;
+}
+} else {
+return 5;
+}
+} else {
+return 5;
+}
+} else {
+return 4;
+}
+} else {
+return 4;
+}
+} else {
+return 4;
+}
+} else {
+return 4;
+}
+} else {
+return 3;
+}
+} else {
+return 2;
+}
+} else {
+return 1;
+}
+} else {
+return 1;
+}
+} else {
+return 1;
+}
+} else {
+return 1;
+}
+} else {
+return 1;
+}
+}
