@@ -396,6 +396,13 @@ pub enum EpiphanyRefusal {
         last_seq: u64,
         attempted_seq: u64,
     },
+    /// A sensor frame attempted to use `u64::MAX`, risking monotone counter overflow/wraparound.
+    SensorSeqOverflow {
+        sensor_id: u64,
+        attempted_seq: u64,
+    },
+    /// A streaming scanline packet violated geometry, duplicate-line, or full-frame coverage rules.
+    ScanlineStreamViolation { reason: &'static str },
     /// A sealed sensor frame's 256-bit `OBEND.SHE.SENSOR_SEAL/v1` digest did not match.
     SealDigestMismatch { expected: Digest, actual: Digest },
     /// A purportedly redacted sensor frame still contained non-zero pixels inside a `redact_box`.
@@ -1664,6 +1671,12 @@ pub fn verify_sealed_frame(
             });
         }
     }
+    if frame.mono_seq == u64::MAX {
+        return Err(EpiphanyRefusal::SensorSeqOverflow {
+            sensor_id: frame.sensor_id,
+            attempted_seq: frame.mono_seq,
+        });
+    }
     let viewport = Viewport::new(frame.width, frame.height);
     if viewport.is_empty() {
         return Err(EpiphanyRefusal::InvalidGeometry {
@@ -1723,8 +1736,9 @@ impl SensorFrameSealer {
         self.last_seq_by_sensor.get(&sensor_id).copied()
     }
 
-    /// Enforce strict per-sensor monotonicity (`mono_seq > last_seq`), zero every pixel inside
-    /// `frame.redact_boxes`, and seal the redacted frame under `OBEND.SHE.SENSOR_SEAL/v1`.
+    /// Enforce strict per-sensor monotonicity (`mono_seq > last_seq`), refuse `u64::MAX`
+    /// overflow/wraparound, zero every pixel inside `frame.redact_boxes`, and seal the redacted
+    /// frame under `OBEND.SHE.SENSOR_SEAL/v1`.
     pub fn seal_frame(
         &mut self,
         frame: &RawSensorFrame,
@@ -1737,6 +1751,12 @@ impl SensorFrameSealer {
                     attempted_seq: frame.mono_seq,
                 });
             }
+        }
+        if frame.mono_seq == u64::MAX {
+            return Err(EpiphanyRefusal::SensorSeqOverflow {
+                sensor_id: frame.sensor_id,
+                attempted_seq: frame.mono_seq,
+            });
         }
         let redacted_tiles = redact_sensor_tiles(
             frame.width,
@@ -1776,4 +1796,342 @@ impl SensorFrameSealer {
         }
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Software Reference Mirrors of Open-FPGA Inline RTL Gates (`EmitSv` / `YosysLec`)
+// (Bit-exact parity with `Obend.Polis.EpiphanyCompositor` §6)
+// ---------------------------------------------------------------------------
+
+/// Pack an `Rgba` pixel into a 32-bit RGBA8888 word inside the 64-bit `RtlModule` carrier
+/// (`r | (g << 8) | (b << 16) | (a << 24)`), matching Lean `packRgba32`.
+pub const fn pack_rgba32(p: Rgba) -> u64 {
+    (p.r as u64) | ((p.g as u64) << 8) | ((p.b as u64) << 16) | ((p.a as u64) << 24)
+}
+
+/// Unpack the low 32 bits of a 64-bit RTL pixel word into `Rgba`.
+pub const fn unpack_rgba32(word: u64) -> Rgba {
+    Rgba::new(
+        (word & 0xFF) as u8,
+        ((word >> 8) & 0xFF) as u8,
+        ((word >> 16) & 0xFF) as u8,
+        ((word >> 24) & 0xFF) as u8,
+    )
+}
+
+/// Software cycle-exact reference mirror of `scanline_consent_mux` (`scanlineConsentMuxRtl`).
+/// Models the synthesizable 1-cycle pipelined open-FPGA mux (`py < consent_height ? chrome : belief`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScanlineConsentMuxRtlModel {
+    pub out_pixel_q: u64,
+    pub in_band_q: u64,
+}
+
+impl ScanlineConsentMuxRtlModel {
+    pub const fn new() -> Self {
+        Self {
+            out_pixel_q: 0,
+            in_band_q: 0,
+        }
+    }
+
+    /// Combinational output (`comb_pixel`) matching `evalModuleOutputs scanlineConsentMuxRtl`.
+    pub const fn eval_comb(py: u16, consent_height: u16, chrome_pixel: u32, belief_pixel: u32) -> u64 {
+        if py < consent_height {
+            chrome_pixel as u64
+        } else {
+            belief_pixel as u64
+        }
+    }
+
+    /// Synchronous rising-edge register step matching `stepModuleRegs scanlineConsentMuxRtl`.
+    pub fn step_clock(
+        &mut self,
+        rst: bool,
+        py: u16,
+        consent_height: u16,
+        chrome_pixel: u32,
+        belief_pixel: u32,
+    ) {
+        if rst {
+            self.out_pixel_q = 0;
+            self.in_band_q = 0;
+        } else if py < consent_height {
+            self.out_pixel_q = chrome_pixel as u64;
+            self.in_band_q = 1;
+        } else {
+            self.out_pixel_q = belief_pixel as u64;
+            self.in_band_q = 0;
+        }
+    }
+}
+
+/// Software cycle-exact reference mirror of `camera_scanline_roi_zeroer` (`cameraScanlineRoiZeroerRtl`).
+/// Models the synthesizable 1-cycle pipelined open-FPGA ROI zeroer (`[roi_x0, roi_x1) x [roi_y0, roi_y1)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CameraScanlineRoiZeroerRtlModel {
+    pub cap_pixel_q: u64,
+    pub redacted_q: u64,
+}
+
+impl CameraScanlineRoiZeroerRtlModel {
+    pub const fn new() -> Self {
+        Self {
+            cap_pixel_q: 0,
+            redacted_q: 0,
+        }
+    }
+
+    pub const fn in_roi_box(px: u16, py: u16, roi_x0: u16, roi_x1: u16, roi_y0: u16, roi_y1: u16) -> bool {
+        px >= roi_x0 && px < roi_x1 && py >= roi_y0 && py < roi_y1
+    }
+
+    /// Combinational output (`comb_scrubbed_pixel`) matching `evalModuleOutputs cameraScanlineRoiZeroerRtl`.
+    pub const fn eval_comb(
+        px: u16,
+        py: u16,
+        roi_x0: u16,
+        roi_x1: u16,
+        roi_y0: u16,
+        roi_y1: u16,
+        raw_pixel: u32,
+    ) -> u64 {
+        if Self::in_roi_box(px, py, roi_x0, roi_x1, roi_y0, roi_y1) {
+            0
+        } else {
+            raw_pixel as u64
+        }
+    }
+
+    /// Synchronous rising-edge register step matching `stepModuleRegs cameraScanlineRoiZeroerRtl`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_clock(
+        &mut self,
+        rst: bool,
+        px: u16,
+        py: u16,
+        roi_x0: u16,
+        roi_x1: u16,
+        roi_y0: u16,
+        roi_y1: u16,
+        raw_pixel: u32,
+    ) {
+        if rst {
+            self.cap_pixel_q = 0;
+            self.redacted_q = 0;
+        } else if Self::in_roi_box(px, py, roi_x0, roi_x1, roi_y0, roi_y1) {
+            self.cap_pixel_q = 0;
+            self.redacted_q = 1;
+        } else {
+            self.cap_pixel_q = raw_pixel as u64;
+            self.redacted_q = 0;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pure Software Streaming Scanline Sealer (`OBEND.SHE.SENSOR_SEAL/v1`)
+// (Byte-exact parity with `Obend.Polis.EpiphanyCompositor` §7 — untrusted I/O)
+// ---------------------------------------------------------------------------
+
+/// A single raw camera scanline packet arriving over an untrusted external I/O stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanlinePacket {
+    pub line_y: u32,
+    pub start_x: u32,
+    pub width: u32,
+    pub raw_pixels: Vec<Rgba>,
+}
+
+/// Immutable per-frame configuration pinned at `begin_frame` before any scanline is accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanlineStreamConfig {
+    pub sensor_id: u64,
+    pub mono_seq: u64,
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub redact_boxes: Vec<Rect>,
+}
+
+/// Pure software streaming scanline redactor and `OBEND.SHE.SENSOR_SEAL/v1` frame sealer.
+/// External camera streams are treated strictly as untrusted I/O; private ROI pixels are zeroed
+/// per scanline against the pinned `active_cfg.redact_boxes`, full contiguous scanline coverage is
+/// enforced at `finalize_and_seal`, and `u64::MAX` / replay / unfinished-frame seq reuse are refused.
+#[derive(Debug, Clone)]
+pub struct ScanlineStreamSealer {
+    active_cfg: Option<ScanlineStreamConfig>,
+    assembled_tiles: Vec<SensorTile>,
+    sealer: SensorFrameSealer,
+    started_seq_by_sensor: BTreeMap<u64, u64>,
+}
+
+impl Default for ScanlineStreamSealer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScanlineStreamSealer {
+    pub fn new() -> Self {
+        Self {
+            active_cfg: None,
+            assembled_tiles: Vec::new(),
+            sealer: SensorFrameSealer::new(),
+            started_seq_by_sensor: BTreeMap::new(),
+        }
+    }
+
+    pub fn assembled_tiles(&self) -> &[SensorTile] {
+        &self.assembled_tiles
+    }
+
+    pub fn sealer(&self) -> &SensorFrameSealer {
+        &self.sealer
+    }
+
+    /// Reset active frame buffers while preserving `sealer` and `started_seq_by_sensor` guards.
+    pub fn reset_frame(&mut self) {
+        self.active_cfg = None;
+        self.assembled_tiles.clear();
+    }
+
+    /// Pin an immutable `ScanlineStreamConfig` for the next monotone capture frame.
+    /// Refuses `u64::MAX`, sequence rollback, and restarting an unfinished frame under the same
+    /// `(sensor_id, mono_seq)`.
+    pub fn begin_frame(&mut self, cfg: ScanlineStreamConfig) -> Result<(), EpiphanyRefusal> {
+        let vp = Viewport::new(cfg.frame_width, cfg.frame_height);
+        if vp.is_empty() {
+            return Err(EpiphanyRefusal::ScanlineStreamViolation {
+                reason: "stream frame dimensions must be strictly positive",
+            });
+        }
+        if cfg.mono_seq == u64::MAX {
+            return Err(EpiphanyRefusal::SensorSeqOverflow {
+                sensor_id: cfg.sensor_id,
+                attempted_seq: cfg.mono_seq,
+            });
+        }
+        let highest = self
+            .sealer
+            .last_seq(cfg.sensor_id)
+            .into_iter()
+            .chain(self.started_seq_by_sensor.get(&cfg.sensor_id).copied())
+            .max();
+        if let Some(prev) = highest {
+            if cfg.mono_seq <= prev {
+                return Err(EpiphanyRefusal::SensorSeqRollback {
+                    sensor_id: cfg.sensor_id,
+                    last_seq: prev,
+                    attempted_seq: cfg.mono_seq,
+                });
+            }
+        }
+        self.reset_frame();
+        self.started_seq_by_sensor
+            .insert(cfg.sensor_id, cfg.mono_seq);
+        self.active_cfg = Some(cfg);
+        Ok(())
+    }
+
+    /// Ingest one raw scanline packet, scrub pixels inside pinned `active_cfg.redact_boxes` to
+    /// `Rgba::TRANSPARENT`, and append the post-redaction tile.
+    pub fn step_scanline(&mut self, pkt: &ScanlinePacket) -> Result<&SensorTile, EpiphanyRefusal> {
+        let cfg = self
+            .active_cfg
+            .as_ref()
+            .ok_or(EpiphanyRefusal::ScanlineStreamViolation {
+                reason: "scanline stream frame not initialized via begin_frame",
+            })?;
+        if pkt.width == 0
+            || pkt.line_y >= cfg.frame_height
+            || pkt
+                .start_x
+                .checked_add(pkt.width)
+                .is_none_or(|e| e > cfg.frame_width)
+            || pkt.raw_pixels.len() != pkt.width as usize
+        {
+            return Err(EpiphanyRefusal::ScanlineStreamViolation {
+                reason: "malformed scanline packet geometry",
+            });
+        }
+        if self.assembled_tiles.iter().any(|t| t.tile_y == pkt.line_y) {
+            return Err(EpiphanyRefusal::ScanlineStreamViolation {
+                reason: "duplicate scanline line_y within active frame",
+            });
+        }
+
+        let mut scrubbed = Vec::with_capacity(pkt.raw_pixels.len());
+        for (idx, &px) in pkt.raw_pixels.iter().enumerate() {
+            let gx = pkt.start_x + idx as u32;
+            let gy = pkt.line_y;
+            let out_px = if cfg.redact_boxes.iter().any(|b| b.contains(gx, gy)) {
+                Rgba::TRANSPARENT
+            } else {
+                px
+            };
+            scrubbed.push(out_px);
+        }
+
+        self.assembled_tiles.push(SensorTile {
+            tile_x: pkt.start_x,
+            tile_y: pkt.line_y,
+            tile_w: pkt.width,
+            tile_h: 1,
+            pixels: scrubbed,
+        });
+        Ok(self.assembled_tiles.last().expect("pushed scanline tile"))
+    }
+
+    /// Finalize the post-redaction scanline tiles into a `OBEND.SHE.SENSOR_SEAL/v1` sealed frame,
+    /// enforcing complete contiguous scanline coverage (`y = 0..frame_height`, `start_x = 0`,
+    /// `width = frame_width`) and strict per-sensor monotonicity + `u64::MAX` refusal.
+    pub fn finalize_and_seal(&mut self) -> Result<SealedSensorFrame, EpiphanyRefusal> {
+        let cfg = self
+            .active_cfg
+            .as_ref()
+            .ok_or(EpiphanyRefusal::ScanlineStreamViolation {
+                reason: "scanline stream frame not initialized via begin_frame",
+            })?
+            .clone();
+        let expected_lines = cfg.frame_height as usize;
+        let complete = self.assembled_tiles.len() == expected_lines
+            && self.assembled_tiles.iter().enumerate().all(|(y, t)| {
+                t.tile_x == 0
+                    && t.tile_y == y as u32
+                    && t.tile_w == cfg.frame_width
+                    && t.tile_h == 1
+            });
+        if !complete {
+            return Err(EpiphanyRefusal::ScanlineStreamViolation {
+                reason: "incomplete scanline frame coverage",
+            });
+        }
+        let frame = RawSensorFrame {
+            sensor_id: cfg.sensor_id,
+            mono_seq: cfg.mono_seq,
+            width: cfg.frame_width,
+            height: cfg.frame_height,
+            tiles: self.assembled_tiles.clone(),
+            redact_boxes: cfg.redact_boxes.clone(),
+        };
+        let sealed = self.sealer.seal_frame(&frame)?;
+        self.active_cfg = None;
+        self.assembled_tiles.clear();
+        Ok(sealed)
+    }
+}
+
+/// Verify a `SealedSensorFrame` against an externally trusted policy `required_redact_boxes`
+/// (preventing a malicious producer from stripping `redact_boxes` to `[]` before sealing).
+pub fn verify_sealed_frame_against_policy(
+    frame: &SealedSensorFrame,
+    required_redact_boxes: &[Rect],
+    last_seq: Option<u64>,
+) -> Result<(), EpiphanyRefusal> {
+    if frame.redact_boxes != required_redact_boxes {
+        return Err(EpiphanyRefusal::InvalidGeometry {
+            reason: "sealed frame redact_boxes does not match trusted policy ROI",
+        });
+    }
+    verify_sealed_frame(frame, last_seq)
 }
