@@ -248,6 +248,7 @@ public import Obend.Lower.Transport
 public import Obend.Lower.Fragment
 public import Obend.Lower.Inductive
 public import Obend.Lower.LCNF
+public import Obend.Lower.Pancake.BeltLatch
 public import Obend.Lower.Pancake.PancakeCshake256
 public import Obend.Lower.Pancake.PanSem
 public import Obend.Lower.Pancake.CondSClk
