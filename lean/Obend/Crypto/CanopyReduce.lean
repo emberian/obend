@@ -2,6 +2,7 @@ module
 public import Obend.Crypto.PikkuFoldLayered
 public import Obend.Crypto.PCS
 import all Obend.Crypto.PikkuFoldLayered
+import all Obend.Crypto.GameSoundness
 
 public section
 namespace Obend.Crypto.Fast.Canopy
@@ -280,6 +281,32 @@ def canopyMul (a b : Goldilocks) : Goldilocks := Goldilocks.ofNat (a.val*b.val)
 theorem canopyMul_eq (a b : Goldilocks) : canopyMul a b = Goldilocks.mul a b := by
   apply Goldilocks.ext
   exact (Goldilocks.mul_val a b).symm
+
+def canopySub (a b : Goldilocks) : Goldilocks :=
+  Goldilocks.ofNat (a.val + Obend.Apps.ZkNtt.goldilocksPrime - b.val)
+
+theorem canopySub_eq (a b : Goldilocks) : canopySub a b = Goldilocks.sub a b := by
+  apply Goldilocks.ext; exact (Goldilocks.sub_val a b).symm
+
+set_option warn.classDefReducibility false in
+def canopyRingOps : CommRingOps Goldilocks where
+  zero := Goldilocks.zero
+  one := Goldilocks.one
+  add := Goldilocks.add
+  mul := canopyMul
+  neg := canopySub Goldilocks.zero
+  sub := canopySub
+
+def mleEvalCanopyExec (evals rs : Array Goldilocks) : Goldilocks :=
+  @mleEvalExec Goldilocks canopyRingOps evals rs
+
+theorem mleEvalCanopyExec_eq_mleEvalExec (evals rs : Array Goldilocks) :
+    mleEvalCanopyExec evals rs = mleEvalExec evals rs := by
+  have hMul : canopyMul = Goldilocks.mul := by funext a b; exact canopyMul_eq a b
+  have hSub : canopySub = Goldilocks.sub := by funext a b; exact canopySub_eq a b
+  have hOps : canopyRingOps = Goldilocks.instCommRingOpsGoldilocks := by
+    unfold canopyRingOps Goldilocks.instCommRingOpsGoldilocks; rw [hMul, hSub]; rfl
+  unfold mleEvalCanopyExec; rw [hOps]
 
 def rowScale {w : Nat} (c : Goldilocks) (row : Sized Goldilocks w) : Sized Goldilocks w :=
   Sized.ofFn fun i => canopyMul c (row.spec i)
@@ -684,5 +711,781 @@ def extractDualDiscrepancy {m : Nat} (cfg : Config) (β : Nat)
   else
     exact .inl (verifyBatchCanopy_binding_collision cfg digest qs p _ hp hOpen j
       (by simpa only [recover_exact_row, encodeWitness, Sized.spec_ofFn] using he))
+
+/-! ## Sublinear Query-Sampled `CanopySuccinctOpening` Verifier, `PcsSoundnessRegime` & `CollisionAmong` -/
+
+theorem HashCollisionPair.ne_toList (w : HashCollisionPair) :
+    w.x.data.toList ≠ w.y.data.toList :=
+  fun h => w.different (byteArray_eq_of_toList_eq h)
+
+theorem HashCollisionPair.toCollisionAmong {S : List UInt8 → Prop}
+    (w : HashCollisionPair) (hx : S w.x.data.toList) (hy : S w.y.data.toList) :
+    Obend.Digest.HashBytes.CollisionAmong deployedCanopyHash32.eval S :=
+  ⟨w.x.data.toList, w.y.data.toList, hx, hy, w.ne_toList,
+   congrArg Obend.Digest.HashBytes.ofBE w.equalHash⟩
+
+/-- Exact list of 65-byte internal Merkle node preimages hashed along a `climb` path. -/
+def climbFrames : (h : Nat) → Nat → Digest32 → Path h → List (List UInt8)
+  | 0, _, _, _ => []
+  | h + 1, idx, value, p =>
+    (if idx % 2 = 0 then merkleNodePreimage value (pathHead p)
+     else merkleNodePreimage (pathHead p) value) ::
+      climbFrames h (idx / 2) (joinAt idx value (pathHead p)) (pathTail p)
+
+theorem climb_collision_mem_frames :
+    ∀ (h idx : Nat) (x y : Digest32) (p q : Path h) (hne : x ≠ y)
+      (heq : climb h idx x p = climb h idx y q),
+      let w := climb_collision h idx x y p q hne heq
+      w.x.data.toList ∈ climbFrames h idx x p ∧ w.y.data.toList ∈ climbFrames h idx y q
+  | 0, _, _, _, _, _, hne, heq => False.elim (hne heq)
+  | h + 1, idx, x, y, p, q, hne, heq => by
+    dsimp only [climb_collision, climbFrames]
+    if hn : joinAt idx x (pathHead p) = joinAt idx y (pathHead q) then
+      if even : idx % 2 = 0 then
+        simp only [hn, even, ↓reduceDIte, ↓reduceIte]; dsimp only [collisionOfDigest]
+        rw [Native.bytesOfList_toList, Native.bytesOfList_toList]
+        exact ⟨List.Mem.head _, List.Mem.head _⟩
+      else
+        simp only [hn, even, ↓reduceDIte, ↓reduceIte]; dsimp only [collisionOfDigest]
+        rw [Native.bytesOfList_toList, Native.bytesOfList_toList]
+        exact ⟨List.Mem.head _, List.Mem.head _⟩
+    else
+      simp only [hn, ↓reduceDIte]
+      have ih := climb_collision_mem_frames h (idx / 2) _ _ (pathTail p) (pathTail q) hn heq
+      exact ⟨List.mem_cons_of_mem _ ih.1, List.mem_cons_of_mem _ ih.2⟩
+
+/-- Exact internal-node preimage frames above `cap : Level t`. -/
+def capFrames {t : Nat} (cap : Level t) : List (List UInt8) :=
+  (List.finRange (2 ^ t)).flatMap fun ci =>
+    climbFrames t ci.val (cap.spec ci)
+      (openPath t 0 ⟨cap.coeffs, by simpa using cap.size_eq⟩ ⟨ci.val, by simp⟩)
+
+/-- Exact finite set of Merkle leaf, bottom-path, and cap-subtree preimage frames for `BatchOpening`. -/
+def canopyBatchFrames (cfg : Config) (qs : Array (Query cfg)) (p : BatchOpening cfg qs) :
+    List (List UInt8) :=
+  capFrames p.cap ++
+    (List.finRange qs.size).flatMap fun j =>
+      let idx := qs[j.val]
+      rowPreimage idx.val (p.rows.spec j).coeffs ::
+        climbFrames cfg.bottomDepth idx.val (hashRow idx.val (p.rows.spec j).coeffs) (p.paths.spec j)
+
+/-- Term-mode `0 Classical` batch-query collision extractor with exact `canopyBatchFrames` membership. -/
+def extractBatchQueryCollision (cfg : Config) (digest : Digest32) (qs : Array (Query cfg))
+    (p q : BatchOpening cfg qs) (hp : verifyBatchCanopy cfg digest qs p = true)
+    (hq : verifyBatchCanopy cfg digest qs q = true) (j : Fin qs.size)
+    (hne : p.rows.spec j ≠ q.rows.spec j) : HashCollisionPair :=
+  let idx := qs[j.val]
+  let x := evalDigest32 deployedCanopyHash32 (rowPreimage idx.val (p.rows.spec j).coeffs)
+  let y := evalDigest32 deployedCanopyHash32 (rowPreimage idx.val (q.rows.spec j).coeffs)
+  if hxy : x = y then
+    collisionOfDigest (rowPreimage idx.val (p.rows.spec j).coeffs)
+      (rowPreimage idx.val (q.rows.spec j).coeffs)
+      (fun h => hne (by
+        have hh := (rowPreimage_injective h).2
+        cases hp' : p.rows.spec j; cases hq' : q.rows.spec j
+        simp only [hp', hq'] at hh; cases hh; rfl)) hxy
+  else
+    let ci := capIndex cfg.bottomDepth cfg.capDepth idx
+    if hc : p.cap.spec ci = q.cap.spec ci then
+      climb_collision cfg.bottomDepth idx.val x y (p.paths.spec j) (q.paths.spec j) hxy
+        ((accepted_query cfg digest qs p hp j).trans
+          (hc.trans (accepted_query cfg digest qs q hq j).symm))
+    else
+      let pp := openPath cfg.capDepth 0 ⟨p.cap.coeffs, by simpa using p.cap.size_eq⟩ ⟨ci.val, by simp⟩
+      let qp := openPath cfg.capDepth 0 ⟨q.cap.coeffs, by simpa using q.cap.size_eq⟩ ⟨ci.val, by simp⟩
+      climb_collision cfg.capDepth ci.val (p.cap.spec ci) (q.cap.spec ci) pp qp hc
+        ((openRoot_complete cfg.capDepth p.cap ci).trans
+          (((by simp only [verifyBatchCanopy, Bool.and_eq_true, decide_eq_true_eq] at hp; exact hp.1 :
+              root cfg.capDepth p.cap = digest).trans
+            (by simp only [verifyBatchCanopy, Bool.and_eq_true, decide_eq_true_eq] at hq; exact hq.1.symm)).trans
+            (openRoot_complete cfg.capDepth q.cap ci).symm))
+
+theorem extractBatchQueryCollision_mem_frames (cfg : Config) (digest : Digest32)
+    (qs : Array (Query cfg)) (p q : BatchOpening cfg qs)
+    (hp : verifyBatchCanopy cfg digest qs p = true)
+    (hq : verifyBatchCanopy cfg digest qs q = true) (j : Fin qs.size)
+    (hne : p.rows.spec j ≠ q.rows.spec j) :
+    let w := extractBatchQueryCollision cfg digest qs p q hp hq j hne
+    w.x.data.toList ∈ canopyBatchFrames cfg qs p ∧
+    w.y.data.toList ∈ canopyBatchFrames cfg qs q := by
+  dsimp only [extractBatchQueryCollision, canopyBatchFrames]
+  if hxy : evalDigest32 deployedCanopyHash32 (rowPreimage (qs[j.val]).val (p.rows.spec j).coeffs) =
+           evalDigest32 deployedCanopyHash32 (rowPreimage (qs[j.val]).val (q.rows.spec j).coeffs) then
+    simp only [hxy, ↓reduceDIte]; dsimp only [collisionOfDigest]
+    rw [Native.bytesOfList_toList, Native.bytesOfList_toList]
+    exact ⟨List.mem_append_right _ (List.mem_flatMap.2 ⟨j, List.mem_finRange _, List.Mem.head _⟩),
+           List.mem_append_right _ (List.mem_flatMap.2 ⟨j, List.mem_finRange _, List.Mem.head _⟩)⟩
+  else
+    simp only [hxy, ↓reduceDIte]
+    if hc : p.cap.spec (capIndex cfg.bottomDepth cfg.capDepth qs[j.val]) =
+            q.cap.spec (capIndex cfg.bottomDepth cfg.capDepth qs[j.val]) then
+      simp only [hc, ↓reduceDIte]
+      have hSub := climb_collision_mem_frames cfg.bottomDepth (qs[j.val]).val
+        (evalDigest32 deployedCanopyHash32 (rowPreimage (qs[j.val]).val (p.rows.spec j).coeffs))
+        (evalDigest32 deployedCanopyHash32 (rowPreimage (qs[j.val]).val (q.rows.spec j).coeffs))
+        (p.paths.spec j) (q.paths.spec j) hxy
+        ((accepted_query cfg digest qs p hp j).trans
+          (hc.trans (accepted_query cfg digest qs q hq j).symm))
+      exact ⟨List.mem_append_right _ (List.mem_flatMap.2 ⟨j, List.mem_finRange _, List.mem_cons_of_mem _ hSub.1⟩),
+             List.mem_append_right _ (List.mem_flatMap.2 ⟨j, List.mem_finRange _, List.mem_cons_of_mem _ hSub.2⟩)⟩
+    else
+      simp only [hc, ↓reduceDIte]
+      let ci := capIndex cfg.bottomDepth cfg.capDepth qs[j.val]
+      let pp := openPath cfg.capDepth 0 ⟨p.cap.coeffs, by simpa using p.cap.size_eq⟩ ⟨ci.val, by simp⟩
+      let qp := openPath cfg.capDepth 0 ⟨q.cap.coeffs, by simpa using q.cap.size_eq⟩ ⟨ci.val, by simp⟩
+      have hSub := climb_collision_mem_frames cfg.capDepth ci.val (p.cap.spec ci) (q.cap.spec ci) pp qp hc
+        ((openRoot_complete cfg.capDepth p.cap ci).trans
+          (((by simp only [verifyBatchCanopy, Bool.and_eq_true, decide_eq_true_eq] at hp; exact hp.1 :
+              root cfg.capDepth p.cap = digest).trans
+            (by simp only [verifyBatchCanopy, Bool.and_eq_true, decide_eq_true_eq] at hq; exact hq.1.symm)).trans
+            (openRoot_complete cfg.capDepth q.cap ci).symm))
+      exact ⟨List.mem_append_left _ (List.mem_flatMap.2 ⟨ci, List.mem_finRange _, hSub.1⟩),
+             List.mem_append_left _ (List.mem_flatMap.2 ⟨ci, List.mem_finRange _, hSub.2⟩)⟩
+
+/-- Code-based PCS query-sampling & proximity-gap parameter profile. -/
+structure PcsCodeParams where
+  domain : DomainKind
+  logRateInv : Nat
+  numQueries : Nat
+  logDomainSize : Nat
+  regime : ProximityRegime
+  targetSecurityBits : Nat
+  distanceNumerator : Nat
+  distanceDenominator : Nat
+  deriving DecidableEq, Repr
+
+/-- Sound proximity-distance inequality (`ePrint 2026/2424`: `.binaryAdditive` restricted to UDR;
+    `.primeField` supports strict Johnson $(1 - \delta)^2 > R$; `.capacityBound` never assumed without proof). -/
+@[expose] def regimeDistance (p : PcsCodeParams) : Prop :=
+  ValidProximityConfig p.domain p.regime ∧
+  match p.regime with
+  | .uniqueDecodingRadius =>
+    2 * p.distanceNumerator * 2 ^ p.logRateInv < p.distanceDenominator * (2 ^ p.logRateInv - 1)
+  | .johnsonBound =>
+    p.domain = .primeField ∧
+    p.distanceDenominator ^ 2 < (p.distanceDenominator - p.distanceNumerator) ^ 2 * 2 ^ p.logRateInv
+  | .capacityBound => False
+
+def checkRegimeDistanceB (p : PcsCodeParams) : Bool :=
+  checkProximityConfig p.domain p.regime &&
+  match p.regime with
+  | .uniqueDecodingRadius =>
+    decide (2 * p.distanceNumerator * 2 ^ p.logRateInv < p.distanceDenominator * (2 ^ p.logRateInv - 1))
+  | .johnsonBound =>
+    decide (p.domain = .primeField) &&
+    decide (p.distanceDenominator ^ 2 < (p.distanceDenominator - p.distanceNumerator) ^ 2 * 2 ^ p.logRateInv)
+  | .capacityBound => false
+
+/-- **Quantitative PCS Soundness Regime (`PcsSoundnessRegime`)**:
+    Certifies rate, domain size, non-empty query budget, proximity radius, and exact
+    query-evasion security floor $(1 - \delta)^Q \le 2^{-\lambda}$. -/
+@[expose] def PcsSoundnessRegime (p : PcsCodeParams) : Prop :=
+  0 < p.logRateInv ∧ p.logRateInv ≤ p.logDomainSize ∧
+  0 < p.numQueries ∧
+  0 < p.distanceNumerator ∧ p.distanceNumerator < p.distanceDenominator ∧
+  regimeDistance p ∧
+  (p.distanceDenominator - p.distanceNumerator) ^ p.numQueries * 2 ^ p.targetSecurityBits ≤
+    p.distanceDenominator ^ p.numQueries
+
+def checkPcsSoundnessRegime (p : PcsCodeParams) : Bool :=
+  decide (0 < p.logRateInv) && decide (p.logRateInv ≤ p.logDomainSize) &&
+  decide (0 < p.numQueries) &&
+  decide (0 < p.distanceNumerator) && decide (p.distanceNumerator < p.distanceDenominator) &&
+  checkRegimeDistanceB p &&
+  decide ((p.distanceDenominator - p.distanceNumerator) ^ p.numQueries * 2 ^ p.targetSecurityBits ≤
+    p.distanceDenominator ^ p.numQueries)
+
+theorem checkPcsSoundnessRegime_iff (p : PcsCodeParams) :
+    checkPcsSoundnessRegime p = true ↔ PcsSoundnessRegime p := by
+  have hReg : checkRegimeDistanceB p = true ↔ regimeDistance p := by
+    cases hr : p.regime <;>
+      simp [checkRegimeDistanceB, regimeDistance, hr, checkProximityConfig_iff, Bool.and_eq_true, decide_eq_true_eq]
+  simp only [checkPcsSoundnessRegime, PcsSoundnessRegime, Bool.and_eq_true, decide_eq_true_eq, hReg, and_assoc]
+
+theorem checkPcsSoundnessRegime_refuses_binary_non_udr (p : PcsCodeParams)
+    (hDom : p.domain = .binaryAdditive) (hReg : p.regime ≠ .uniqueDecodingRadius) :
+    checkPcsSoundnessRegime p = false := by
+  apply Bool.eq_false_iff.mpr
+  intro hOk
+  have hValid := ((checkPcsSoundnessRegime_iff p).mp hOk).2.2.2.2.2.1.1
+  rw [hDom] at hValid
+  exact binaryAdditive_refuses_non_udr p.regime hReg hValid
+
+theorem pcs_sampling_bound (p : PcsCodeParams) (h : checkPcsSoundnessRegime p = true) :
+    (p.distanceDenominator - p.distanceNumerator) ^ p.numQueries * 2 ^ p.targetSecurityBits ≤
+      p.distanceDenominator ^ p.numQueries :=
+  ((checkPcsSoundnessRegime_iff p).mp h).2.2.2.2.2.2
+
+/-- Inhabited 128-bit Canopy Goldilocks Johnson-bound PCS parameter set ($R = 1/4$, $\delta = 1/4$, $Q = 320$). -/
+def defaultCanopy128Params : PcsCodeParams :=
+  ⟨.primeField, 2, 320, 20, .johnsonBound, 128, 1, 4⟩
+
+set_option exponentiation.threshold 512 in
+theorem defaultCanopy128Params_valid (u : Unit) :
+    checkPcsSoundnessRegime defaultCanopy128Params = true := by
+  cases u; decide
+
+/-- Configuration tying Canopy's `capDepth`-pruned Merkle commitment to `PcsCodeParams` and `(rowVars, colVars)`. -/
+structure SuccinctCanopyConfig where
+  cfg : Config
+  pcsParams : PcsCodeParams
+  rowVars : Nat
+  colVars : Nat
+  hWidth : cfg.width = 2 * (2 ^ rowVars)
+  hLogDom : pcsParams.logDomainSize = cfg.bottomDepth + cfg.capDepth
+  hDomainEq : pcsParams.domain = cfg.domain
+  hRegimeEq : pcsParams.regime = cfg.regime
+
+abbrev succinctDomainSize (scfg : SuccinctCanopyConfig) : Nat :=
+  2 ^ (scfg.cfg.bottomDepth + scfg.cfg.capDepth)
+
+theorem succinctDomainSize_pos (scfg : SuccinctCanopyConfig) :
+    0 < succinctDomainSize scfg :=
+  Nat.pow_pos (by decide)
+
+/-- **Table-Free Sublinear `CanopySuccinctOpening`**:
+    Contains ONLY the $2^{\text{capDepth}}$ Merkle subtree cap, the $2^{\text{colVars}}$ folded
+    row messages `(uEval, uProx)`, and the `numQueries` sampled coset-pair columns + `bottomDepth`
+    Merkle paths (never shipping the $2^v$ polynomial table!). -/
+structure CanopySuccinctOpening (scfg : SuccinctCanopyConfig) where
+  cap : Level scfg.cfg.capDepth
+  uEval : Sized Goldilocks (2 ^ scfg.colVars)
+  uProx : Sized Goldilocks (2 ^ scfg.colVars)
+  openedPairs : Sized (Sized Goldilocks scfg.cfg.width) scfg.pcsParams.numQueries
+  paths : Sized (Path scfg.cfg.bottomDepth) scfg.pcsParams.numQueries
+
+def goldPow : Nat → Goldilocks → Goldilocks
+  | 0, _ => Goldilocks.one
+  | k + 1, x => canopyMul x (goldPow k x)
+
+def vandermondeVec (w : Nat) (x : Goldilocks) : Sized Goldilocks w :=
+  Sized.ofFn fun i => goldPow i.val x
+
+/-- Reed–Solomon univariate evaluation of message vector `u` at field point `x`. -/
+def rsEval {w : Nat} (u : Sized Goldilocks w) (x : Goldilocks) : Goldilocks :=
+  evalRow (vandermondeVec w x) u
+
+def cosetPointEven (q : Nat) : Goldilocks := Goldilocks.ofNat (2 * q + 1)
+def cosetPointOdd (q : Nat) : Goldilocks := Goldilocks.ofNat (2 * q + 2)
+
+/-- Expected coset-pair butterfly fold `P_u(x_even(q)) + α · P_u(x_odd(q))` at query index `q`. -/
+def expectedCosetFold {w : Nat} (α : Goldilocks) (u : Sized Goldilocks w) (q : Nat) : Goldilocks :=
+  Goldilocks.add (rsEval u (cosetPointEven q)) (canopyMul α (rsEval u (cosetPointOdd q)))
+
+/-- Unboxed $O(2^v)$ Lagrange tensor row weights without calling `hypercube`. -/
+def eqWeightsVec : (v : Nat) → List Goldilocks → Sized Goldilocks (2 ^ v)
+  | 0, _ => ⟨#[Goldilocks.one], rfl⟩
+  | v + 1, r :: rs =>
+    let sub := eqWeightsVec v rs
+    let oneSubR := canopySub Goldilocks.one r
+    Sized.ofFn fun i =>
+      let base := sub.spec ⟨i.val / 2, by have := i.isLt; have := pow_step v; omega⟩
+      if i.val % 2 = 0 then canopyMul oneSubR base else canopyMul r base
+  | v + 1, [] =>
+    let sub := eqWeightsVec v []
+    Sized.ofFn fun i =>
+      if i.val % 2 = 0 then sub.spec ⟨i.val / 2, by have := i.isLt; have := pow_step v; omega⟩
+      else Goldilocks.zero
+
+/-- Weighted linear combination of matrix rows $\sum_{r < R} w_r \cdot M[r] \in \mathbb{F}^K$. -/
+def combineMatrixRows {rowW colW : Nat}
+    (weights : Sized Goldilocks rowW) (mat : Sized (Sized Goldilocks colW) rowW) :
+    Sized Goldilocks colW :=
+  (Array.ofFn fun r : Fin rowW => r).foldl
+    (fun acc r => FastGoldilocksRing.addFast (rowScale (weights.spec r) (mat.spec r)) acc)
+    (FastGoldilocksRing.zeroFast colW)
+
+private theorem rsEval_combineMatrixRows {rowW colW : Nat}
+    (weights : Sized Goldilocks rowW) (mat : Sized (Sized Goldilocks colW) rowW) (x : Goldilocks) :
+    rsEval (combineMatrixRows weights mat) x =
+      evalRow weights (Sized.ofFn fun r => rsEval (mat.spec r) x) := by
+  unfold combineMatrixRows rsEval
+  have hHom := Array.foldl_hom (evalRow (vandermondeVec colW x))
+    (xs := Array.ofFn fun r : Fin rowW => r)
+    (init := FastGoldilocksRing.zeroFast colW)
+    (g₁ := fun acc r => FastGoldilocksRing.addFast (rowScale (weights.spec r) (mat.spec r)) acc)
+    (g₂ := fun acc r => Goldilocks.add acc
+      (canopyMul (weights.spec r) (evalRow (vandermondeVec colW x) (mat.spec r))))
+    (fun acc r => by
+      rw [evalRow_linear]
+      exact LawfulCommRing.add_comm _ _)
+  rw [evalRow_zero] at hHom
+  rw [← hHom]
+  change _ = (Array.ofFn fun i : Fin rowW =>
+      canopyMul (weights.spec i) ((Sized.ofFn fun r => evalRow (vandermondeVec colW x) (mat.spec r)).spec i)).foldl
+    Goldilocks.add Goldilocks.zero
+  have hMap : (Array.ofFn fun i : Fin rowW =>
+        canopyMul (weights.spec i) ((Sized.ofFn fun r => evalRow (vandermondeVec colW x) (mat.spec r)).spec i)) =
+      (Array.ofFn fun r : Fin rowW => r).map (fun r =>
+        canopyMul (weights.spec r) (evalRow (vandermondeVec colW x) (mat.spec r))) := by
+    simp only [Sized.spec_ofFn, Array.map_ofFn]; rfl
+  rw [hMap, Array.foldl_map]
+
+/-- Reed–Solomon coset-pair encoding of a $2^{\text{rowVars}} \times 2^{\text{colVars}}$ matrix at leaf `q`. -/
+def encodeLeafCosetPair {rowW colW : Nat}
+    (mat : Sized (Sized Goldilocks colW) rowW) (q : Nat) : Sized Goldilocks (2 * rowW) :=
+  Sized.ofFn fun i =>
+    let r : Fin rowW := ⟨i.val / 2, by have := i.isLt; omega⟩
+    if i.val % 2 = 0 then rsEval (mat.spec r) (cosetPointEven q)
+    else rsEval (mat.spec r) (cosetPointOdd q)
+
+/-- Full Canopy coset-pair table commitment matrix for an honest $2^{\text{rowVars}} \times 2^{\text{colVars}}$ polynomial. -/
+def encodeCanopyMatrix (scfg : SuccinctCanopyConfig)
+    (mat : Sized (Sized Goldilocks (2 ^ scfg.colVars)) (2 ^ scfg.rowVars)) : Table scfg.cfg :=
+  Sized.ofFn fun q =>
+    let pair := encodeLeafCosetPair mat q.val
+    ⟨pair.coeffs, pair.size_eq.trans scfg.hWidth.symm⟩
+
+theorem evalRow_ifold_encodeLeaf {rowW colW : Nat}
+    (weights : Sized Goldilocks rowW) (mat : Sized (Sized Goldilocks colW) rowW)
+    (α : Goldilocks) (q : Nat) :
+    evalRow weights (ifold α (encodeLeafCosetPair mat q)) =
+      expectedCosetFold α (combineMatrixRows weights mat) q := by
+  have hFoldEq : ifold α (encodeLeafCosetPair mat q) =
+      FastGoldilocksRing.addFast
+        (rowScale α (Sized.ofFn fun r => rsEval (mat.spec r) (cosetPointOdd q)))
+        (Sized.ofFn fun r => rsEval (mat.spec r) (cosetPointEven q)) := by
+    apply Sized.ext; funext r
+    simp only [ifold, encodeLeafCosetPair, FastGoldilocksRing.addFast, rowScale, Sized.spec_ofFn]
+    have hEven : (2 * r.val) % 2 = 0 := by omega
+    have hOdd : (2 * r.val + 1) % 2 = 1 := by omega
+    have hDivE : (2 * r.val) / 2 = r.val := by omega
+    have hDivO : (2 * r.val + 1) / 2 = r.val := by omega
+    simp only [hEven, hOdd, ↓reduceIte, show (1 : Nat) = 0 ↔ False by decide]
+    have hrE : (⟨(2 * r.val) / 2, by have := r.isLt; omega⟩ : Fin rowW) = r := Fin.ext hDivE
+    have hrO : (⟨(2 * r.val + 1) / 2, by have := r.isLt; omega⟩ : Fin rowW) = r := Fin.ext hDivO
+    rw [hrE, hrO]
+    exact LawfulCommRing.add_comm _ _
+  rw [hFoldEq, evalRow_linear, ← rsEval_combineMatrixRows, ← rsEval_combineMatrixRows]
+  unfold expectedCosetFold
+  exact LawfulCommRing.add_comm _ _
+
+/-- Bind relation + `(scfg, comm, claim, cap)` into `.instanceBound` and derive `(β, α, cAcc, qs)`. -/
+def deriveCanopySuccinctChallenges (scfg : SuccinctCanopyConfig)
+    (comm : Digest32) (claim : EvalClaim Goldilocks (scfg.rowVars + scfg.colVars))
+    (cap : Level scfg.cfg.capDepth)
+    (uEval uProx : Sized Goldilocks (2 ^ scfg.colVars)) :
+    Goldilocks × Goldilocks × Goldilocks × Array (Query scfg.cfg) × Transcript .instanceBound :=
+  let cfgBytes := Native.bytesOfList
+    (leb128 scfg.cfg.bottomDepth ++ leb128 scfg.cfg.capDepth ++ leb128 scfg.cfg.width ++
+     leb128 scfg.pcsParams.numQueries ++ leb128 scfg.rowVars ++ leb128 scfg.colVars)
+  let trRel := bindRelation "OBEND.CANOPY.SUCCINCT.PCS/v1"
+    cfgBytes (canopyOpenFrame comm claim) (Transcript.newUnseeded ByteArray.empty)
+  let bTr := bindInstance (encodeCapDigests cap) trRel
+  let (β, tr₁) := squeezeGoldilocks bTr.transcript
+  let (α, tr₂) := squeezeGoldilocks tr₁
+  let uPayload := encodeFrame
+    (Native.bytesOfList (encodeRowList uEval.coeffs.toList))
+    (Native.bytesOfList (encodeRowList uProx.coeffs.toList))
+    ByteArray.empty
+  let tr₃ := absorbMsg "canopy/succinct/u_rows".toUTF8 uPayload tr₂
+  let (cAcc, tr₄) := squeezeGoldilocks tr₃
+  let (qs, trFinal) := squeezeQueryIndices scfg.pcsParams.numQueries
+    (succinctDomainSize scfg) (succinctDomainSize_pos scfg) tr₄
+  (β, α, cAcc, qs, trFinal)
+
+theorem deriveCanopySuccinctChallenges_qs_size (scfg : SuccinctCanopyConfig)
+    (comm : Digest32) (claim : EvalClaim Goldilocks (scfg.rowVars + scfg.colVars))
+    (cap : Level scfg.cfg.capDepth)
+    (uEval uProx : Sized Goldilocks (2 ^ scfg.colVars)) :
+    (deriveCanopySuccinctChallenges scfg comm claim cap uEval uProx).2.2.2.1.size =
+      scfg.pcsParams.numQueries := by
+  unfold deriveCanopySuccinctChallenges
+  exact squeezeQueryIndices_size _ _ _ _
+
+def succinctToBatchOpening (scfg : SuccinctCanopyConfig)
+    (qs : Array (Query scfg.cfg)) (hQs : qs.size = scfg.pcsParams.numQueries)
+    (prf : CanopySuccinctOpening scfg) : BatchOpening scfg.cfg qs where
+  cap := prf.cap
+  rows := ⟨prf.openedPairs.coeffs, prf.openedPairs.size_eq.trans hQs.symm⟩
+  paths := ⟨prf.paths.coeffs, prf.paths.size_eq.trans hQs.symm⟩
+
+/-- Core algebraic + `capDepth`-pruned Merkle check on explicit sampled queries `qs`. -/
+def verifyCanopySuccinctCore (scfg : SuccinctCanopyConfig)
+    (comm : Digest32) (claim : EvalClaim Goldilocks (scfg.rowVars + scfg.colVars))
+    (prf : CanopySuccinctOpening scfg)
+    (β α cAcc : Goldilocks) (qs : Array (Query scfg.cfg))
+    (hQs : qs.size = scfg.pcsParams.numQueries) : Bool :=
+  let zRow := claim.point.take scfg.rowVars
+  let zCol := (claim.point.drop scfg.rowVars).toArray
+  let weightsEval := eqWeightsVec scfg.rowVars zRow
+  let weightsProx := vandermondeVec (2 ^ scfg.rowVars) β
+  let batch := succinctToBatchOpening scfg qs hQs prf
+  let paired := pairedRows (w := 2 ^ scfg.rowVars) scfg.cfg scfg.hWidth batch.rows
+  let accFolded := ifold α (iacc cAcc paired)
+  let expectedAccEval := (Array.ofFn fun j : Fin qs.size => qs[j.val]).foldl
+    (fun acc q => Goldilocks.add (canopyMul cAcc acc) (expectedCosetFold α prf.uEval q.val))
+    Goldilocks.zero
+  let expectedAccProx := (Array.ofFn fun j : Fin qs.size => qs[j.val]).foldl
+    (fun acc q => Goldilocks.add (canopyMul cAcc acc) (expectedCosetFold α prf.uProx q.val))
+    Goldilocks.zero
+  let perQueryOk := (Array.ofFn fun j : Fin qs.size =>
+    let pairJ : Sized Goldilocks (2 * (2 ^ scfg.rowVars)) :=
+      ⟨(batch.rows.spec j).coeffs, (batch.rows.spec j).size_eq.trans scfg.hWidth⟩
+    let foldedJ := ifold α pairJ
+    let qVal := qs[j.val].val
+    decide (evalRow weightsEval foldedJ = expectedCosetFold α prf.uEval qVal) &&
+    decide (evalRow weightsProx foldedJ = expectedCosetFold α prf.uProx qVal)).all id
+  checkPcsSoundnessRegime scfg.pcsParams &&
+  decide (mleEvalCanopyExec prf.uEval.coeffs zCol = claim.expectedVal) &&
+  verifyBatchCanopy scfg.cfg comm qs batch &&
+  perQueryOk &&
+  decide (evalRow weightsEval accFolded = expectedAccEval) &&
+  decide (evalRow weightsProx accFolded = expectedAccProx)
+
+/-- **Sublinear Query-Sampled Canopy Opening Verifier (`verifyCanopySuccinctOpening`)**:
+    1. Enforces `checkPcsSoundnessRegime scfg.pcsParams == true`,
+    2. Derives `(β, α, cAcc)` and `numQueries` Fiat–Shamir query indices from `Transcript` after
+       absorbing `(comm, claim, prf.cap)` and `(prf.uEval, prf.uProx)`,
+    3. Checks sublinear `mleEvalCanopyExec prf.uEval.coeffs zCol == claim.expectedVal` in $O(2^{\text{colVars}})$,
+    4. Verifies `capDepth`-pruned Merkle paths + per-query `ifold` & Horner `iacc` coset-pair fold equations
+       strictly on the `numQueries` sampled leaves (never receiving the $2^v$ table!). -/
+def verifyCanopySuccinctOpening (scfg : SuccinctCanopyConfig)
+    (comm : Digest32) (claim : EvalClaim Goldilocks (scfg.rowVars + scfg.colVars))
+    (prf : CanopySuccinctOpening scfg) : Bool × Transcript .instanceBound :=
+  let ch := deriveCanopySuccinctChallenges scfg comm claim prf.cap prf.uEval prf.uProx
+  let hQs := deriveCanopySuccinctChallenges_qs_size scfg comm claim prf.cap prf.uEval prf.uProx
+  (verifyCanopySuccinctCore scfg comm claim prf ch.1 ch.2.1 ch.2.2.1 ch.2.2.2.1 hQs, ch.2.2.2.2)
+
+/-- Honest prover producing a sublinear `CanopySuccinctOpening` for `encodeCanopyMatrix scfg mat`. -/
+def proveCanopySuccinctOpening (scfg : SuccinctCanopyConfig)
+    (mat : Sized (Sized Goldilocks (2 ^ scfg.colVars)) (2 ^ scfg.rowVars))
+    (pt : List Goldilocks) (hPt : pt.length = scfg.rowVars + scfg.colVars) :
+    EvalClaim Goldilocks (scfg.rowVars + scfg.colVars) × CanopySuccinctOpening scfg :=
+  let table := encodeCanopyMatrix scfg mat
+  let comm := commit scfg.cfg table
+  let cap := reduceLevels scfg.cfg.bottomDepth scfg.cfg.capDepth (leaves scfg.cfg table)
+  let zRow := pt.take scfg.rowVars
+  let zCol := (pt.drop scfg.rowVars).toArray
+  let uEval := combineMatrixRows (eqWeightsVec scfg.rowVars zRow) mat
+  let claim : EvalClaim Goldilocks (scfg.rowVars + scfg.colVars) :=
+    ⟨pt, hPt, mleEvalCanopyExec uEval.coeffs zCol⟩
+  let cfgBytes := Native.bytesOfList
+    (leb128 scfg.cfg.bottomDepth ++ leb128 scfg.cfg.capDepth ++ leb128 scfg.cfg.width ++
+     leb128 scfg.pcsParams.numQueries ++ leb128 scfg.rowVars ++ leb128 scfg.colVars)
+  let trRel := bindRelation "OBEND.CANOPY.SUCCINCT.PCS/v1"
+    cfgBytes (canopyOpenFrame comm claim) (Transcript.newUnseeded ByteArray.empty)
+  let bTr := bindInstance (encodeCapDigests cap) trRel
+  let (β, _) := squeezeGoldilocks bTr.transcript
+  let uProx := combineMatrixRows (vandermondeVec (2 ^ scfg.rowVars) β) mat
+  let ch := deriveCanopySuccinctChallenges scfg comm claim cap uEval uProx
+  let hQs := deriveCanopySuccinctChallenges_qs_size scfg comm claim cap uEval uProx
+  let batch := openBatchCanopy scfg.cfg table ch.2.2.2.1
+  (claim,
+   { cap := cap
+     uEval := uEval
+     uProx := uProx
+     openedPairs := ⟨batch.rows.coeffs, batch.rows.size_eq.trans hQs⟩
+     paths := ⟨batch.paths.coeffs, batch.paths.size_eq.trans hQs⟩ })
+
+private theorem batchOpening_eta {cfg : Config} {qs : Array (Query cfg)}
+    (b : BatchOpening cfg qs) (h1 : b.rows.coeffs.size = qs.size) (h2 : b.paths.coeffs.size = qs.size) :
+    ({ cap := b.cap, rows := ⟨b.rows.coeffs, h1⟩, paths := ⟨b.paths.coeffs, h2⟩ } : BatchOpening cfg qs) = b := by
+  rcases b with ⟨_, ⟨_, _⟩, ⟨_, _⟩⟩; rfl
+
+private theorem pairAt_openBatch_encodeCanopyMatrix (scfg : SuccinctCanopyConfig)
+    (mat : Sized (Sized Goldilocks (2 ^ scfg.colVars)) (2 ^ scfg.rowVars))
+    (qs : Array (Query scfg.cfg)) (j : Fin qs.size) :
+    (⟨((openBatchCanopy scfg.cfg (encodeCanopyMatrix scfg mat) qs).rows.spec j).coeffs,
+      ((openBatchCanopy scfg.cfg (encodeCanopyMatrix scfg mat) qs).rows.spec j).size_eq.trans scfg.hWidth⟩ :
+        Sized Goldilocks (2 * (2 ^ scfg.rowVars))) =
+      encodeLeafCosetPair mat (qs[j.val]'j.isLt).val := by
+  apply Sized.ext; funext k
+  simp only [openBatchCanopy, encodeCanopyMatrix, Sized.spec_ofFn]
+
+private theorem foldRows_openBatch_encodeCanopyMatrix (scfg : SuccinctCanopyConfig)
+    (mat : Sized (Sized Goldilocks (2 ^ scfg.colVars)) (2 ^ scfg.rowVars))
+    (α : Goldilocks) (qs : Array (Query scfg.cfg)) :
+    (foldRows α (pairedRows (w := 2 ^ scfg.rowVars) scfg.cfg scfg.hWidth
+      (openBatchCanopy scfg.cfg (encodeCanopyMatrix scfg mat) qs).rows)).coeffs =
+      (Array.ofFn fun j : Fin qs.size => qs[j.val]).map
+        (fun q => ifold α (encodeLeafCosetPair mat q.val)) := by
+  have hRows : (openBatchCanopy scfg.cfg (encodeCanopyMatrix scfg mat) qs).rows.coeffs =
+      Array.ofFn (fun j : Fin qs.size =>
+        (⟨(encodeLeafCosetPair mat qs[j.val].val).coeffs,
+          (encodeLeafCosetPair mat qs[j.val].val).size_eq.trans scfg.hWidth.symm⟩ :
+          Sized Goldilocks scfg.cfg.width)) := by
+    simp only [openBatchCanopy, encodeCanopyMatrix, Sized.spec_ofFn]; rfl
+  simp only [foldRows, pairedRows, hRows, Array.map_ofFn]
+  congr 1
+
+private theorem perQuery_openBatch_encodeCanopyMatrix (scfg : SuccinctCanopyConfig)
+    (mat : Sized (Sized Goldilocks (2 ^ scfg.colVars)) (2 ^ scfg.rowVars))
+    (wEval wProx : Sized Goldilocks (2 ^ scfg.rowVars))
+    (α : Goldilocks) (qs : Array (Query scfg.cfg)) :
+    (Array.ofFn fun j : Fin qs.size =>
+      let pairJ : Sized Goldilocks (2 * (2 ^ scfg.rowVars)) :=
+        ⟨((openBatchCanopy scfg.cfg (encodeCanopyMatrix scfg mat) qs).rows.spec j).coeffs,
+          ((openBatchCanopy scfg.cfg (encodeCanopyMatrix scfg mat) qs).rows.spec j).size_eq.trans scfg.hWidth⟩
+      let foldedJ := ifold α pairJ
+      let qVal := qs[j.val].val
+      decide (evalRow wEval foldedJ = expectedCosetFold α (combineMatrixRows wEval mat) qVal) &&
+      decide (evalRow wProx foldedJ = expectedCosetFold α (combineMatrixRows wProx mat) qVal)).all id = true := by
+  apply Array.all_eq_true.mpr
+  intro i hi
+  have hiq : i < qs.size := by simpa only [Array.size_ofFn] using hi
+  rw [arrayOfFn_get _ ⟨i, hiq⟩]
+  dsimp only [id]
+  simp only [Bool.and_eq_true, decide_eq_true_eq,
+    pairAt_openBatch_encodeCanopyMatrix scfg mat qs ⟨i, hiq⟩]
+  exact ⟨evalRow_ifold_encodeLeaf wEval mat α (qs[i]'hiq).val,
+         evalRow_ifold_encodeLeaf wProx mat α (qs[i]'hiq).val⟩
+
+private theorem accFolded_openBatch_encodeCanopyMatrix (scfg : SuccinctCanopyConfig)
+    (mat : Sized (Sized Goldilocks (2 ^ scfg.colVars)) (2 ^ scfg.rowVars))
+    (weights : Sized Goldilocks (2 ^ scfg.rowVars))
+    (α cAcc : Goldilocks) (qs : Array (Query scfg.cfg)) :
+    evalRow weights (ifold α (iacc cAcc (pairedRows (w := 2 ^ scfg.rowVars) scfg.cfg scfg.hWidth
+      (openBatchCanopy scfg.cfg (encodeCanopyMatrix scfg mat) qs).rows))) =
+    (Array.ofFn fun j : Fin qs.size => qs[j.val]).foldl
+      (fun acc q => Goldilocks.add (canopyMul cAcc acc)
+        (expectedCosetFold α (combineMatrixRows weights mat) q.val))
+      Goldilocks.zero := by
+  rw [ifold_iacc, evalRow_iacc, foldRows_openBatch_encodeCanopyMatrix scfg mat α qs, Array.foldl_map]
+  congr 1; funext acc q
+  rw [evalRow_ifold_encodeLeaf weights mat α q.val]
+
+/-- **Completeness of `verifyCanopySuccinctOpening` (`verifyCanopySuccinctOpening_complete`)**:
+    Under `checkPcsSoundnessRegime scfg.pcsParams = true`, every honest `proveCanopySuccinctOpening`
+    is accepted by `verifyCanopySuccinctOpening`. -/
+theorem verifyCanopySuccinctOpening_complete (scfg : SuccinctCanopyConfig)
+    (hRegime : checkPcsSoundnessRegime scfg.pcsParams = true)
+    (mat : Sized (Sized Goldilocks (2 ^ scfg.colVars)) (2 ^ scfg.rowVars))
+    (pt : List Goldilocks) (hPt : pt.length = scfg.rowVars + scfg.colVars) :
+    let table := encodeCanopyMatrix scfg mat
+    let (claim, prf) := proveCanopySuccinctOpening scfg mat pt hPt
+    (verifyCanopySuccinctOpening scfg (commit scfg.cfg table) claim prf).1 = true := by
+  let table := encodeCanopyMatrix scfg mat
+  let comm := commit scfg.cfg table
+  let claim := (proveCanopySuccinctOpening scfg mat pt hPt).1
+  let prf := (proveCanopySuccinctOpening scfg mat pt hPt).2
+  let ch := deriveCanopySuccinctChallenges scfg comm claim prf.cap prf.uEval prf.uProx
+  let qs := ch.2.2.2.1
+  let hQs := deriveCanopySuccinctChallenges_qs_size scfg comm claim prf.cap prf.uEval prf.uProx
+  let zRow := pt.take scfg.rowVars
+  let zCol := (pt.drop scfg.rowVars).toArray
+  let wEval := eqWeightsVec scfg.rowVars zRow
+  have hClaimPt : claim.point = pt := rfl
+  have hUeval : prf.uEval = combineMatrixRows wEval mat := rfl
+  have hClaimVal : claim.expectedVal = mleEvalCanopyExec prf.uEval.coeffs zCol := rfl
+  have hUprox : prf.uProx = combineMatrixRows (vandermondeVec (2 ^ scfg.rowVars) ch.1) mat := rfl
+  have hBatch : succinctToBatchOpening scfg qs hQs prf = openBatchCanopy scfg.cfg table qs :=
+    batchOpening_eta (openBatchCanopy scfg.cfg table qs) _ _
+  change verifyCanopySuccinctCore scfg comm claim prf ch.1 ch.2.1 ch.2.2.1 qs hQs = true
+  unfold verifyCanopySuccinctCore
+  dsimp only
+  simp only [hBatch, hClaimPt, hClaimVal, hUeval, hUprox, Bool.and_eq_true, decide_eq_true_eq]
+  exact ⟨⟨⟨⟨⟨hRegime, rfl⟩, verifyBatchCanopy_complete scfg.cfg table qs⟩,
+    perQuery_openBatch_encodeCanopyMatrix scfg mat wEval (vandermondeVec (2 ^ scfg.rowVars) ch.1) ch.2.1 qs⟩,
+    accFolded_openBatch_encodeCanopyMatrix scfg mat wEval ch.2.1 ch.2.2.1 qs⟩,
+    accFolded_openBatch_encodeCanopyMatrix scfg mat (vandermondeVec (2 ^ scfg.rowVars) ch.1) ch.2.1 ch.2.2.1 qs⟩
+
+/-- Exact finite set of Merkle preimage frames queried by `verifyCanopySuccinctOpening`. -/
+def canopySuccinctFrames (scfg : SuccinctCanopyConfig)
+    (comm : Digest32) (claim : EvalClaim Goldilocks (scfg.rowVars + scfg.colVars))
+    (prf : CanopySuccinctOpening scfg) : List (List UInt8) :=
+  let ch := deriveCanopySuccinctChallenges scfg comm claim prf.cap prf.uEval prf.uProx
+  let hQs := deriveCanopySuccinctChallenges_qs_size scfg comm claim prf.cap prf.uEval prf.uProx
+  canopyBatchFrames scfg.cfg ch.2.2.2.1 (succinctToBatchOpening scfg ch.2.2.2.1 hQs prf)
+
+private def findRowMismatch {cfg : Config} (qs : Array (Query cfg))
+    (rowsA rowsB : Sized (Sized Goldilocks cfg.width) qs.size) :
+    (k : Nat) → k ≤ qs.size →
+    Option { j : Fin qs.size // rowsA.spec j ≠ rowsB.spec j }
+  | 0, _ => none
+  | k + 1, hk =>
+    let j : Fin qs.size := ⟨k, hk⟩
+    if hNe : rowsA.spec j ≠ rowsB.spec j then
+      some ⟨j, hNe⟩
+    else
+      findRowMismatch qs rowsA rowsB k (Nat.le_of_succ_le hk)
+
+private theorem findRowMismatch_none_imp_eq {cfg : Config} (qs : Array (Query cfg))
+    (rowsA rowsB : Sized (Sized Goldilocks cfg.width) qs.size) :
+    ∀ (k : Nat) (hk : k ≤ qs.size),
+      findRowMismatch qs rowsA rowsB k hk = none →
+      ∀ (j : Fin qs.size), j.val < k → rowsA.spec j = rowsB.spec j
+  | 0, _, _, j, hj => by omega
+  | k + 1, hk, hNone, j, hj => by
+    unfold findRowMismatch at hNone
+    if hNe : rowsA.spec ⟨k, hk⟩ ≠ rowsB.spec ⟨k, hk⟩ then
+      simp [hNe] at hNone
+    else
+      simp only [hNe, ↓reduceDIte] at hNone
+      have hEqK : rowsA.spec ⟨k, hk⟩ = rowsB.spec ⟨k, hk⟩ := Decidable.of_not_not hNe
+      if hjk : j.val = k then
+        have hjFin : j = ⟨k, hk⟩ := Fin.ext hjk
+        rw [hjFin]; exact hEqK
+      else
+        exact findRowMismatch_none_imp_eq qs rowsA rowsB k (Nat.le_of_succ_le hk) hNone j (by omega)
+
+/-- **Constructive `0 Classical` Succinct Opening Extractor (`extractCanopySuccinctCollisionOrAgree`)**:
+    Given a committed Canopy oracle `refTable : Table scfg.cfg` (`comm = commit scfg.cfg refTable`)
+    and ANY accepted `CanopySuccinctOpening` `prf`, constructively (`PSum`, `0 Classical.choice`) returns:
+    - **`.inl`**: `checkPcsSoundnessRegime scfg.pcsParams = true`, `mleEvalExec prf.uEval.coeffs zCol = claim.expectedVal`,
+      AND at every Fiat–Shamir sampled query `j`, the opened coset pair equals `refTable.spec qs[j]` and
+      satisfies both `uEval` and `uProx` `ifold` coset-pair fold equations; OR
+    - **`.inr`**: an explicit `HashCollisionPair` witnessing scoped `CollisionAmong deployedCanopyHash32.eval`
+      over the finite Merkle frames of `prf` and the queried `refTable` paths! -/
+def extractCanopySuccinctCollisionOrAgree (scfg : SuccinctCanopyConfig)
+    (refTable : Table scfg.cfg)
+    (claim : EvalClaim Goldilocks (scfg.rowVars + scfg.colVars))
+    (prf : CanopySuccinctOpening scfg)
+    (hAcc : (verifyCanopySuccinctOpening scfg (commit scfg.cfg refTable) claim prf).1 = true) :
+    let comm := commit scfg.cfg refTable
+    let ch := deriveCanopySuccinctChallenges scfg comm claim prf.cap prf.uEval prf.uProx
+    let β := ch.1; let α := ch.2.1; let qs := ch.2.2.2.1
+    let zRow := claim.point.take scfg.rowVars
+    let zCol := (claim.point.drop scfg.rowVars).toArray
+    let wEval := eqWeightsVec scfg.rowVars zRow
+    let wProx := vandermondeVec (2 ^ scfg.rowVars) β
+    PSum
+      (checkPcsSoundnessRegime scfg.pcsParams = true ∧
+       mleEvalCanopyExec prf.uEval.coeffs zCol = claim.expectedVal ∧
+       ∀ (j : Fin qs.size),
+         let leafRef : Sized Goldilocks (2 * (2 ^ scfg.rowVars)) :=
+           ⟨(refTable.spec (qs[j.val]'j.isLt)).coeffs, (refTable.spec (qs[j.val]'j.isLt)).size_eq.trans scfg.hWidth⟩
+         evalRow wEval (ifold α leafRef) = expectedCosetFold α prf.uEval (qs[j.val]'j.isLt).val ∧
+         evalRow wProx (ifold α leafRef) = expectedCosetFold α prf.uProx (qs[j.val]'j.isLt).val)
+      { _pair : HashCollisionPair //
+        Obend.Digest.HashBytes.CollisionAmong deployedCanopyHash32.eval
+          (fun m => m ∈ canopySuccinctFrames scfg comm claim prf ++
+                        canopyBatchFrames scfg.cfg qs (openBatchCanopy scfg.cfg refTable qs)) } :=
+  let comm := commit scfg.cfg refTable
+  let ch := deriveCanopySuccinctChallenges scfg comm claim prf.cap prf.uEval prf.uProx
+  let β := ch.1
+  let α := ch.2.1
+  let qs := ch.2.2.2.1
+  let hQs := deriveCanopySuccinctChallenges_qs_size scfg comm claim prf.cap prf.uEval prf.uProx
+  let batchPrf := succinctToBatchOpening scfg qs hQs prf
+  let batchRef := openBatchCanopy scfg.cfg refTable qs
+  have hCore : verifyCanopySuccinctCore scfg comm claim prf β α ch.2.2.1 qs hQs = true := hAcc
+  have hBatchPrf : verifyBatchCanopy scfg.cfg comm qs batchPrf = true := by
+    simp only [verifyCanopySuccinctCore, Bool.and_eq_true] at hCore
+    exact hCore.1.1.1.2
+  have hBatchRef : verifyBatchCanopy scfg.cfg comm qs batchRef = true :=
+    verifyBatchCanopy_complete scfg.cfg refTable qs
+  match hSearch : findRowMismatch qs batchPrf.rows batchRef.rows qs.size (Nat.le_refl _) with
+  | some ⟨j, hNe⟩ =>
+    let w := extractBatchQueryCollision scfg.cfg comm qs batchPrf batchRef hBatchPrf hBatchRef j hNe
+    have hMem := extractBatchQueryCollision_mem_frames scfg.cfg comm qs batchPrf batchRef hBatchPrf hBatchRef j hNe
+    .inr ⟨w, w.toCollisionAmong
+      (List.mem_append_left _ hMem.1)
+      (List.mem_append_right _ hMem.2)⟩
+  | none =>
+    .inl (by
+      have hAllEq := findRowMismatch_none_imp_eq qs batchPrf.rows batchRef.rows qs.size (Nat.le_refl _) hSearch
+      unfold verifyCanopySuccinctCore at hCore
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hCore
+      rcases hCore with ⟨⟨⟨⟨⟨hReg, hMle⟩, _⟩, hPerQ⟩, _⟩, _⟩
+      refine ⟨hReg, hMle, fun j => ?_⟩
+      have hRowEq : batchPrf.rows.spec j = refTable.spec (qs[j.val]'j.isLt) :=
+        (hAllEq j j.isLt).trans (recover_exact_row scfg.cfg refTable qs j)
+      have hQj := Array.all_eq_true.mp hPerQ j.val (by rw [Array.size_ofFn]; exact j.isLt)
+      rw [arrayOfFn_get _ j] at hQj
+      dsimp only [id] at hQj
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hQj
+      have hCastEq : (⟨(batchPrf.rows.spec j).coeffs, (batchPrf.rows.spec j).size_eq.trans scfg.hWidth⟩ :
+            Sized Goldilocks (2 * (2 ^ scfg.rowVars))) =
+          ⟨(refTable.spec (qs[j.val]'j.isLt)).coeffs, (refTable.spec (qs[j.val]'j.isLt)).size_eq.trans scfg.hWidth⟩ := by
+        apply Sized.ext; funext k
+        exact congrArg (fun r => r.spec ⟨k.val, by rw [scfg.hWidth]; exact k.isLt⟩) hRowEq
+      rw [← hCastEq]
+      exact hQj)
+
+/-- Boolean predicate marking whether leaf `q` of `refTable` agrees with the `ifold` coset-pair
+    equations of `(uEval, uProx)` under challenges `(β, α)`. -/
+def leafAgreesWithFold (scfg : SuccinctCanopyConfig)
+    (refTable : Table scfg.cfg) (zRow : List Goldilocks) (β α : Goldilocks)
+    (uEval uProx : Sized Goldilocks (2 ^ scfg.colVars))
+    (q : Fin (succinctDomainSize scfg)) : Bool :=
+  let wEval := eqWeightsVec scfg.rowVars zRow
+  let wProx := vandermondeVec (2 ^ scfg.rowVars) β
+  let leafRef : Sized Goldilocks (2 * (2 ^ scfg.rowVars)) :=
+    ⟨(refTable.spec q).coeffs, (refTable.spec q).size_eq.trans scfg.hWidth⟩
+  let folded := ifold α leafRef
+  decide (evalRow wEval folded = expectedCosetFold α uEval q.val) &&
+  decide (evalRow wProx folded = expectedCosetFold α uProx q.val)
+
+/-- **Quantitative Query-Sampling Soundness under `PcsSoundnessRegime` (`verifyCanopySuccinctOpening_query_soundness`)**:
+    Suppose `checkPcsSoundnessRegime scfg.pcsParams = true` and a committed oracle `refTable`
+    agrees with `(uEval, uProx)` on at most `(1 - δ)` of the coset-pair domain
+    (`agreeCount * d ≤ (d - n) * D` where `δ = n / d`). Then:
+    1. **Sublinear Evasion Security**: Across `numQueries` uniform queries from `uniformQueriesDist`,
+       the probability that all sampled queries land on agreeing leaves is `≤ 1 / 2 ^ targetSecurityBits`!
+    2. **Deterministic Collision Extraction on Hit**: Whenever `verifyCanopySuccinctCore` accepts `prf`
+       on a query vector `qs` that hits any disagreeing coset-pair leaf (`∃ j, leafAgreesWithFold ... qs[j] = false`),
+       it yields a scoped `CollisionAmong deployedCanopyHash32.eval` witness! -/
+theorem verifyCanopySuccinctOpening_query_soundness (scfg : SuccinctCanopyConfig)
+    (hRegime : checkPcsSoundnessRegime scfg.pcsParams = true)
+    (refTable : Table scfg.cfg)
+    (claim : EvalClaim Goldilocks (scfg.rowVars + scfg.colVars))
+    (β α cAcc : Goldilocks)
+    (uEval uProx : Sized Goldilocks (2 ^ scfg.colVars))
+    (hFar :
+      ((List.finRange (succinctDomainSize scfg)).filter
+        (leafAgreesWithFold scfg refTable (claim.point.take scfg.rowVars) β α uEval uProx)).length *
+        scfg.pcsParams.distanceDenominator ≤
+      (scfg.pcsParams.distanceDenominator - scfg.pcsParams.distanceNumerator) * succinctDomainSize scfg) :
+    GameSoundness.RatProb.le
+      ((uniformQueriesDist (succinctDomainSize scfg) (succinctDomainSize_pos scfg)
+          scfg.pcsParams.numQueries).probEvent
+        (fun qs => qs.all (leafAgreesWithFold scfg refTable (claim.point.take scfg.rowVars) β α uEval uProx)))
+      ⟨1, 2 ^ scfg.pcsParams.targetSecurityBits, Nat.pow_pos (by decide)⟩ ∧
+    ∀ (prf : CanopySuccinctOpening scfg)
+      (qs : Array (Query scfg.cfg)) (hQs : qs.size = scfg.pcsParams.numQueries),
+      prf.uEval = uEval → prf.uProx = uProx →
+      verifyCanopySuccinctCore scfg (commit scfg.cfg refTable) claim prf β α cAcc qs hQs = true →
+      (∃ j : Fin qs.size,
+        leafAgreesWithFold scfg refTable (claim.point.take scfg.rowVars) β α uEval uProx qs[j.val] = false) →
+      Obend.Digest.HashBytes.CollisionAmong deployedCanopyHash32.eval
+        (fun m => m ∈ canopyBatchFrames scfg.cfg qs (succinctToBatchOpening scfg qs hQs prf) ++
+                      canopyBatchFrames scfg.cfg qs (openBatchCanopy scfg.cfg refTable qs)) := by
+  have hP := (checkPcsSoundnessRegime_iff scfg.pcsParams).mp hRegime
+  have hDenPos : 0 < scfg.pcsParams.distanceDenominator := by
+    have := hP.2.2.2.1; have := hP.2.2.2.2.1; omega
+  have hSample := pcs_sampling_bound scfg.pcsParams hRegime
+  refine ⟨?_, ?_⟩
+  · refine GameSoundness.RatProb.le_trans
+      (uniformQueriesDist_miss_prob_le
+        (succinctDomainSize scfg) (succinctDomainSize_pos scfg)
+        (leafAgreesWithFold scfg refTable (claim.point.take scfg.rowVars) β α uEval uProx)
+        (scfg.pcsParams.distanceDenominator - scfg.pcsParams.distanceNumerator)
+        scfg.pcsParams.distanceDenominator hDenPos hFar scfg.pcsParams.numQueries)
+      ?_
+    unfold GameSoundness.RatProb.le
+    dsimp only
+    simpa only [Nat.one_mul] using hSample
+  · intro prf qs hQs huE huP hCore ⟨j, hBad⟩
+    let comm := commit scfg.cfg refTable
+    let batchPrf := succinctToBatchOpening scfg qs hQs prf
+    let batchRef := openBatchCanopy scfg.cfg refTable qs
+    have hBatchPrf : verifyBatchCanopy scfg.cfg comm qs batchPrf = true := by
+      simp only [verifyCanopySuccinctCore, Bool.and_eq_true] at hCore
+      exact hCore.1.1.1.2
+    have hBatchRef : verifyBatchCanopy scfg.cfg comm qs batchRef = true :=
+      verifyBatchCanopy_complete scfg.cfg refTable qs
+    if hNe : batchPrf.rows.spec j ≠ batchRef.rows.spec j then
+      let w := extractBatchQueryCollision scfg.cfg comm qs batchPrf batchRef hBatchPrf hBatchRef j hNe
+      have hMem := extractBatchQueryCollision_mem_frames scfg.cfg comm qs batchPrf batchRef hBatchPrf hBatchRef j hNe
+      exact w.toCollisionAmong (List.mem_append_left _ hMem.1) (List.mem_append_right _ hMem.2)
+    else
+      exfalso
+      have hRowEq : batchPrf.rows.spec j = refTable.spec qs[j.val] :=
+        (Decidable.of_not_not hNe).trans (recover_exact_row scfg.cfg refTable qs j)
+      simp only [verifyCanopySuccinctCore, Bool.and_eq_true] at hCore
+      have hPerQ := hCore.1.1.2
+      have hQj := Array.all_eq_true.mp hPerQ j.val (by simp)
+      rw [arrayOfFn_get _ j] at hQj
+      have hCastEq : (⟨(batchPrf.rows.spec j).coeffs, (batchPrf.rows.spec j).size_eq.trans scfg.hWidth⟩ :
+            Sized Goldilocks (2 * (2 ^ scfg.rowVars))) =
+          ⟨(refTable.spec qs[j.val]).coeffs, (refTable.spec qs[j.val]).size_eq.trans scfg.hWidth⟩ := by
+        apply Sized.ext; funext k
+        exact congrArg (fun r => r.spec ⟨k.val, by rw [scfg.hWidth]; exact k.isLt⟩) hRowEq
+      unfold leafAgreesWithFold at hBad
+      rw [← hCastEq, ← huE, ← huP] at hBad
+      dsimp only [id, batchPrf] at hQj hBad
+      rw [hQj] at hBad
+      cases hBad
 
 end Obend.Crypto.Fast.Canopy

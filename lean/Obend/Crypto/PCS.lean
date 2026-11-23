@@ -59,7 +59,7 @@ inductive ValidProximityConfig : DomainKind → ProximityRegime → Prop where
   | binaryUDR : ValidProximityConfig .binaryAdditive .uniqueDecodingRadius
 
 /-- Executable checker for `ValidProximityConfig`. -/
-def checkProximityConfig (dom : DomainKind) (reg : ProximityRegime) : Bool :=
+@[expose] def checkProximityConfig (dom : DomainKind) (reg : ProximityRegime) : Bool :=
   match dom, reg with
   | .primeField, _ => true
   | .binaryAdditive, .uniqueDecodingRadius => true
@@ -1241,6 +1241,203 @@ theorem toyInjectiveHash32_no_boundedCollision {maxBytes : Nat} (hMax : maxBytes
 example : BindingSoundAt 0 (canopyMerklePCS toyInjectiveHash32) :=
   canopyMerklePCS_bindingSoundAt_of_boundedCollisionFree toyInjectiveHash32
     (toyInjectiveHash32_no_boundedCollision (by decide))
+
+/-! ## 6. Succinct Fiat–Shamir Query Sampling, Scoped `CollisionAmong` & Query-Evasion Bounds -/
+
+/-- Deterministically squeeze one Fiat–Shamir query index in `Fin domainSize` from `Transcript`. -/
+def squeezeQueryIndex {phase : TranscriptPhase} [CanSqueezeTranscript phase]
+    (domainSize : Nat) (hPos : 0 < domainSize) (tr : Transcript phase) :
+    Fin domainSize × Transcript phase :=
+  let (w, tr') := squeezeChallenge256 tr
+  let raw := ofBE (w.val.data.toList.take 8)
+  (⟨raw % domainSize, Nat.mod_lt raw hPos⟩, tr')
+
+private def squeezeQueryIndicesGo {phase : TranscriptPhase} [CanSqueezeTranscript phase]
+    (domainSize : Nat) (hPos : 0 < domainSize) :
+    (rem : Nat) → Array (Fin domainSize) → Transcript phase →
+    Array (Fin domainSize) × Transcript phase
+  | 0, acc, tr => (acc, tr)
+  | rem + 1, acc, tr =>
+    let (q, tr') := squeezeQueryIndex domainSize hPos tr
+    squeezeQueryIndicesGo domainSize hPos rem (acc.push q) tr'
+
+/-- Squeeze `numQueries` Fiat–Shamir query indices in `Fin domainSize` sequentially from `Transcript`. -/
+def squeezeQueryIndices {phase : TranscriptPhase} [CanSqueezeTranscript phase]
+    (numQueries domainSize : Nat) (hPos : 0 < domainSize) (tr : Transcript phase) :
+    Array (Fin domainSize) × Transcript phase :=
+  squeezeQueryIndicesGo domainSize hPos numQueries (Array.emptyWithCapacity numQueries) tr
+
+private theorem squeezeQueryIndicesGo_size {phase : TranscriptPhase} [CanSqueezeTranscript phase]
+    (domainSize : Nat) (hPos : 0 < domainSize) :
+    ∀ (rem : Nat) (acc : Array (Fin domainSize)) (tr : Transcript phase),
+      (squeezeQueryIndicesGo domainSize hPos rem acc tr).1.size = acc.size + rem
+  | 0, acc, _ => by simp [squeezeQueryIndicesGo]
+  | rem + 1, acc, tr => by
+    simp only [squeezeQueryIndicesGo, squeezeQueryIndicesGo_size domainSize hPos rem _ _, Array.size_push]
+    omega
+
+theorem squeezeQueryIndices_size {phase : TranscriptPhase} [CanSqueezeTranscript phase]
+    (numQueries domainSize : Nat) (hPos : 0 < domainSize) (tr : Transcript phase) :
+    (squeezeQueryIndices numQueries domainSize hPos tr).1.size = numQueries := by
+  unfold squeezeQueryIndices
+  rw [squeezeQueryIndicesGo_size]
+  simp
+
+/-- Bridge any `HashCollisionWitness` whose messages satisfy `S` to scoped `CollisionAmong H S`. -/
+theorem hashCollisionWitness_to_collisionAmong {H : Hash} {maxBytes : Nat}
+    {S : List UInt8 → Prop} (w : HashCollisionWitness H maxBytes)
+    (hA : S w.msgA) (hB : S w.msgB) :
+    CollisionAmong H S :=
+  ⟨w.msgA, w.msgB, hA, hB, w.distinct, w.sameDigest⟩
+
+/-- Scoped `CollisionAmong` reduction for `extractCanopyDoubleOpenCollision` over queried Merkle frames. -/
+theorem extractCanopyDoubleOpen_collisionAmong (H : Hash32)
+    {phase₁ phase₂ : TranscriptPhase} [CanSqueezeTranscript phase₁] [CanSqueezeTranscript phase₂]
+    {v : Nat} {comm : CanopyCommitment}
+    {c₁ c₂ : EvalClaim Goldilocks v} {π₁ π₂ : CanopyOpeningProof}
+    {tr₁ : Transcript phase₁} {tr₂ : Transcript phase₂}
+    (hPt : c₁.point = c₂.point)
+    (hAcc₁ : (canopyVerifyEval H v comm c₁ π₁ tr₁).1 = true)
+    (hAcc₂ : (canopyVerifyEval H v comm c₂ π₂ tr₂).1 = true)
+    (hDisagree : c₁.expectedVal ≠ c₂.expectedVal) :
+    CollisionAmong H.eval
+      (fun m => m ∈ canopyOpeningFrames H v π₁ ++ canopyOpeningFrames H v π₂) := by
+  have hMem := extractCanopyDoubleOpenCollision_mem_frames H hPt hAcc₁ hAcc₂ hDisagree
+  exact hashCollisionWitness_to_collisionAmong
+    (extractCanopyDoubleOpenCollision H hPt hAcc₁ hAcc₂ hDisagree)
+    (List.mem_append_left _ hMem.1)
+    (List.mem_append_right _ hMem.2)
+
+private theorem eventMass_const_false {α : Type} :
+    ∀ (xs : List (α × Nat)), GameSoundness.eventMass (fun _ => false) xs = 0
+  | [] => rfl
+  | (_, _) :: xs => by simp [GameSoundness.eventMass, eventMass_const_false xs]
+
+/-- Exact multiplicative probability rule for independent conjunction on `FinDist.prod`. -/
+theorem probEvent_prod_and {α β : Type}
+    (d₁ : GameSoundness.FinDist α) (d₂ : GameSoundness.FinDist β)
+    (p₁ : α → Bool) (p₂ : β → Bool) :
+    GameSoundness.RatProb.eqv
+      ((GameSoundness.FinDist.prod d₁ d₂).probEvent (fun ab => p₁ ab.1 && p₂ ab.2))
+      (GameSoundness.RatProb.mul (d₁.probEvent p₁) (d₂.probEvent p₂)) := by
+  let k : α → GameSoundness.FinDist (α × β) := fun a => d₂.map (fun b => (a, b))
+  let P : α × β → Bool := fun ab => p₁ ab.1 && p₂ ab.2
+  let T := GameSoundness.weightSum d₂.support
+  let E₂ := GameSoundness.eventMass p₂ d₂.support
+  have hInv : ∀ (xs : List (α × Nat)),
+      GameSoundness.eventMass P (GameSoundness.bindRaw xs k).1 * T =
+        GameSoundness.eventMass p₁ xs * E₂ * (GameSoundness.bindRaw xs k).2 := by
+    intro xs
+    induction xs with
+    | nil => simp [GameSoundness.bindRaw, GameSoundness.eventMass]
+    | cons hd rest ih =>
+      rcases hd with ⟨a, w⟩
+      have hTa : (k a).totalWeight = T := GameSoundness.FinDist.weightSum_map (fun b => (a, b)) d₂.support
+      have hEa : GameSoundness.eventMass P (k a).support = (if p₁ a then E₂ else 0) := by
+        dsimp only [k, GameSoundness.FinDist.map]
+        rw [GameSoundness.FinDist.eventMass_map]
+        cases hp : p₁ a
+        · rw [show (P ∘ fun b => (a, b)) = (fun _ => false) by funext b; simp [P, hp]]
+          exact eventMass_const_false d₂.support
+        · rw [show (P ∘ fun b => (a, b)) = p₂ by funext b; simp [P, hp]]
+          rfl
+      simp only [GameSoundness.bindRaw, GameSoundness.eventMass_append,
+        GameSoundness.eventMass_scaleSupport, hTa, hEa, GameSoundness.eventMass]
+      rw [Nat.add_mul]
+      have hTerm2 : T * GameSoundness.eventMass P (GameSoundness.bindRaw rest k).1 * T =
+          GameSoundness.eventMass p₁ rest * E₂ * (T * (GameSoundness.bindRaw rest k).2) := by
+        calc T * GameSoundness.eventMass P (GameSoundness.bindRaw rest k).1 * T
+          _ = T * (GameSoundness.eventMass P (GameSoundness.bindRaw rest k).1 * T) := by ac_rfl
+          _ = T * (GameSoundness.eventMass p₁ rest * E₂ * (GameSoundness.bindRaw rest k).2) := by rw [ih]
+          _ = GameSoundness.eventMass p₁ rest * E₂ * (T * (GameSoundness.bindRaw rest k).2) := by ac_rfl
+      rw [hTerm2]
+      cases p₁ a
+      · simp
+      · simp only [↓reduceIte, Nat.add_mul]
+        have h1 : w * (GameSoundness.bindRaw rest k).2 * E₂ * T =
+            w * E₂ * (T * (GameSoundness.bindRaw rest k).2) := by ac_rfl
+        rw [h1]
+  unfold GameSoundness.RatProb.eqv GameSoundness.RatProb.mul
+    GameSoundness.FinDist.probEvent GameSoundness.FinDist.prod
+    GameSoundness.FinDist.bind GameSoundness.FinDist.totalWeight
+  dsimp only
+  rw [GameSoundness.bindRaw_weightSum]
+  change GameSoundness.eventMass P (GameSoundness.bindRaw d₁.support k).1 *
+      (GameSoundness.weightSum d₁.support * T) =
+    GameSoundness.eventMass p₁ d₁.support * E₂ *
+      (GameSoundness.weightSum d₁.support * (GameSoundness.bindRaw d₁.support k).2)
+  calc GameSoundness.eventMass P (GameSoundness.bindRaw d₁.support k).1 *
+        (GameSoundness.weightSum d₁.support * T)
+    _ = GameSoundness.weightSum d₁.support *
+        (GameSoundness.eventMass P (GameSoundness.bindRaw d₁.support k).1 * T) := by ac_rfl
+    _ = GameSoundness.weightSum d₁.support *
+        (GameSoundness.eventMass p₁ d₁.support * E₂ * (GameSoundness.bindRaw d₁.support k).2) := by
+      rw [hInv d₁.support]
+    _ = GameSoundness.eventMass p₁ d₁.support * E₂ *
+        (GameSoundness.weightSum d₁.support * (GameSoundness.bindRaw d₁.support k).2) := by ac_rfl
+
+theorem ratProb_mul_le_mul {a₁ a₂ b₁ b₂ : GameSoundness.RatProb}
+    (ha : GameSoundness.RatProb.le a₁ a₂) (hb : GameSoundness.RatProb.le b₁ b₂) :
+    GameSoundness.RatProb.le (GameSoundness.RatProb.mul a₁ b₁) (GameSoundness.RatProb.mul a₂ b₂) := by
+  unfold GameSoundness.RatProb.le GameSoundness.RatProb.mul at *
+  dsimp only
+  calc a₁.num * b₁.num * (a₂.den * b₂.den)
+    _ = (a₁.num * a₂.den) * (b₁.num * b₂.den) := by ac_rfl
+    _ ≤ (a₂.num * a₁.den) * (b₂.num * b₁.den) := Nat.mul_le_mul ha hb
+    _ = a₂.num * b₂.num * (a₁.den * b₁.den) := by ac_rfl
+
+/-- Uniform independent distribution over `numQueries` query indices in `Fin domainSize`. -/
+def uniformQueriesDist (domainSize : Nat) (hPos : 0 < domainSize) :
+    (numQueries : Nat) → GameSoundness.FinDist (List (Fin domainSize))
+  | 0 => GameSoundness.FinDist.pure []
+  | k + 1 =>
+    let single := GameSoundness.FinDist.uniform (List.finRange domainSize)
+      (fun h => by have := congrArg List.length h; simp at this; omega)
+    (GameSoundness.FinDist.prod single (uniformQueriesDist domainSize hPos k)).map
+      (fun p => p.1 :: p.2)
+
+/-- **Quantitative $Q$-Query Evasion Bound (`uniformQueriesDist_miss_prob_le`)**:
+    If at most `rem / den` of the `domainSize` indices satisfy `isGood`
+    (`((List.finRange domainSize).filter isGood).length * den ≤ rem * domainSize`), then
+    `numQueries` independent uniform queries all land in `isGood` with probability `≤ (rem / den) ^ numQueries`. -/
+theorem uniformQueriesDist_miss_prob_le
+    (domainSize : Nat) (hPos : 0 < domainSize)
+    (isGood : Fin domainSize → Bool) (rem den : Nat) (hDen : 0 < den)
+    (hGood : ((List.finRange domainSize).filter isGood).length * den ≤ rem * domainSize) :
+    ∀ (numQueries : Nat),
+      GameSoundness.RatProb.le
+        ((uniformQueriesDist domainSize hPos numQueries).probEvent (fun qs => qs.all isGood))
+        ⟨rem ^ numQueries, den ^ numQueries, Nat.pow_pos hDen⟩
+  | 0 => by
+    unfold uniformQueriesDist GameSoundness.RatProb.le GameSoundness.FinDist.probEvent
+      GameSoundness.FinDist.pure GameSoundness.FinDist.totalWeight
+    simp [GameSoundness.eventMass, GameSoundness.weightSum]
+  | k + 1 => by
+    let single := GameSoundness.FinDist.uniform (List.finRange domainSize)
+      (fun h => by have := congrArg List.length h; simp at this; omega)
+    have hMap : ((uniformQueriesDist domainSize hPos (k + 1)).probEvent (fun qs => qs.all isGood)) =
+        (GameSoundness.FinDist.prod single (uniformQueriesDist domainSize hPos k)).probEvent
+          (fun p => isGood p.1 && p.2.all isGood) := by
+      change ((GameSoundness.FinDist.prod single (uniformQueriesDist domainSize hPos k)).map
+          (fun p => p.1 :: p.2)).probEvent (fun qs => qs.all isGood) = _
+      rw [GameSoundness.FinDist.probEvent_map]
+      congr 1
+    rw [hMap]
+    have hProd := probEvent_prod_and single (uniformQueriesDist domainSize hPos k)
+      isGood (fun qs => qs.all isGood)
+    have hSingle : GameSoundness.RatProb.le (single.probEvent isGood) ⟨rem, den, hDen⟩ := by
+      unfold GameSoundness.RatProb.le GameSoundness.FinDist.probEvent
+        GameSoundness.FinDist.totalWeight
+      dsimp only [single, GameSoundness.FinDist.uniform]
+      rw [GameSoundness.uniform_eventMass, GameSoundness.uniform_weightSum, List.length_finRange]
+      exact hGood
+    have ih := uniformQueriesDist_miss_prob_le domainSize hPos isGood rem den hDen hGood k
+    have hMul := ratProb_mul_le_mul hSingle ih
+    refine GameSoundness.RatProb.le_congr (GameSoundness.RatProb.eqv_symm hProd) ?_ hMul
+    unfold GameSoundness.RatProb.eqv GameSoundness.RatProb.mul
+    dsimp only
+    rw [Nat.pow_succ rem k, Nat.pow_succ den k]
+    ac_rfl
 
 end Obend.Crypto
 end

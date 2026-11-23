@@ -517,6 +517,46 @@ def malformedShares : List (PartialDecryptionShare 4) :=
 #tooth Obend.Crypto.darkBazaar_sable_rlwe_smudge_clearing_conserves by mutation
   Obend.Crypto.settleAssetConserved := fun _ _ => ConservedValue.zero
 
+-- Witness-free ZK `DarkBazaar` Epoch Clearing (`DarkBazaarZkEpochBatch` & `verifyAndClearDarkBazaarZkEpoch`)
+def zkBdlopParams : BdlopParams 2 4 :=
+  { matrix := Sized.ofFn fun i => Sized.ofFn fun j => ((2 * i.val + j.val + 1) : Int)
+    q := 65537, bWit := 4, bChal := 2, bMask := 24, bResp := 16 }
+def zkSecW : FastIntPoly 4 := ⟨#[1, -1, 2, 0], rfl⟩
+def zkMaskY : FastIntPoly 4 := ⟨#[3, -2, 1, 4], rfl⟩
+def zkMkt : Market := { currency := 1, goods := 2, epsilon := 0 }
+def zkSpecProvisional : CommittedZkOrderSpec 2 4 :=
+  { account := 77, side := .bid, bdlopComm := bdlopCommit zkBdlopParams zkSecW
+    zkProof := ⟨zeroVec 2, zeroVec 4⟩ }
+def zkRealProof : MaskedSameOpeningProof 2 4 :=
+  (proveMaskedSameOpening? zkBdlopParams (zkOrderStmtContext zkMkt zkSpecProvisional) zkSecW zkMaskY).getD
+    ⟨zeroVec 2, zeroVec 4⟩
+def zkOrder0 : CommittedZkOrderSpec 2 4 := { zkSpecProvisional with zkProof := zkRealProof }
+
+def zkZeroCt : RlweCiphertext 4 := rlweEncrypt bazaarRlweParams (mkPoly4 1 0 1 0) (mkPoly4 3 1 4 1) (zeroVec 4) (zeroVec 4)
+def zkShare0 := computePartialShare bazaarRlweParams 1 (mkPoly4 1 0 0 0) zkZeroCt.c1 (mkPoly4 5 (-3) 2 1)
+def zkShare1 := computePartialShare bazaarRlweParams 2 (mkPoly4 0 0 1 0) zkZeroCt.c1 (mkPoly4 (-2) 4 (-1) 0)
+def zkShare2 := computePartialShare bazaarRlweParams 3 (zeroVec 4) zkZeroCt.c1 (mkPoly4 1 1 0 (-2))
+
+def zkBatch0 : DarkBazaarZkEpochBatch 2 4 bazaarThresholdCfg :=
+  { epochNullifier := 9001
+    bdlopParams := zkBdlopParams
+    market := zkMkt
+    zkOrders := [zkOrder0]
+    encryptedOrders := [zkZeroCt]
+    thresholdShares := [zkShare0, zkShare1, zkShare2]
+    clearedOrders := [{ account := 77, side := .bid, qty := 0, total := 0 }]
+    transfers := []
+    kktCert := { price := 1, potentials := (0, 0), slacks := [1] } }
+
+#guard (verifyAndClearDarkBazaarZkEpoch bazaarThresholdCfg zkBatch0).isOk == true
+#guard (stepDarkBazaarZkEpoch bazaarThresholdCfg (DarkBazaarState.init 6) zkBatch0).isOk == true
+#guard (verifyAndClearDarkBazaarZkEpoch bazaarThresholdCfg
+         { zkBatch0 with zkOrders := [{ zkOrder0 with zkProof := ⟨zkOrder0.zkProof.tY, mkPoly4 99 0 0 0⟩ }] }).isOk == false
+
+-- Tooth 7: Bypassing `verifyZkOrderProofBatch` breaks `verifyAndClearDarkBazaarZkEpoch_sound`
+#tooth Obend.Crypto.verifyAndClearDarkBazaarZkEpoch_sound by mutation
+  Obend.Crypto.verifyZkOrderProofBatch := fun _ _ _ => true
+
 -- ============================================================================
 -- 4. Imported-Tree Axiom Audit, `0 noncomputable` & `0` Closed-Theorem Census
 -- ============================================================================

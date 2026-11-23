@@ -383,57 +383,38 @@ theorem IsPrimeNat.pow_sub_one_mod {q a : Nat} (hq : IsPrimeNat q) (hna : ¬ (q 
     obtain ⟨hj1, hj2⟩ := mem_posRange_iff.1 hj
     have hq2 := hq.1
     if hijLe : i ≤ j then
-      have hdvd : q ∣ a * (j - i) := by
-        have hmul : a * j - a * i = a * (j - i) := (Nat.mul_sub a j i).symm
-        rw [← hmul]
-        exact sub_dvd_of_mod_eq (Nat.mul_le_mul_left a hijLe) hij.symm
+      have hdvd : q ∣ a * (j - i) :=
+        Nat.mul_sub a j i ▸ sub_dvd_of_mod_eq (Nat.mul_le_mul_left a hijLe) hij.symm
       have hdvdDiff : q ∣ (j - i) := hq.dvd_mul hdvd hna
-      if hdiff0 : j - i = 0 then omega
-      else
-        have hle := Nat.le_of_dvd (by omega) hdvdDiff
-        omega
+      if hdiff0 : j - i = 0 then omega else have := Nat.le_of_dvd (by omega) hdvdDiff; omega
     else
-      have hjiLe : j ≤ i := by omega
-      have hdvd : q ∣ a * (i - j) := by
-        have hmul : a * i - a * j = a * (i - j) := (Nat.mul_sub a i j).symm
-        rw [← hmul]
-        exact sub_dvd_of_mod_eq (Nat.mul_le_mul_left a hjiLe) hij
+      have hdvd : q ∣ a * (i - j) :=
+        Nat.mul_sub a i j ▸ sub_dvd_of_mod_eq (Nat.mul_le_mul_left a (by omega)) hij
       have hdvdDiff : q ∣ (i - j) := hq.dvd_mul hdvd hna
-      if hdiff0 : i - j = 0 then omega
-      else
-        have hle := Nat.le_of_dvd (by omega) hdvdDiff
-        omega
+      if hdiff0 : i - j = 0 then omega else have := Nat.le_of_dvd (by omega) hdvdDiff; omega
   have hNodupMap : (L.map f).Nodup := by
     have hsubNd : ∀ {xs : List Nat}, xs.Nodup → (∀ z ∈ xs, z ∈ L) → (xs.map f).Nodup := by
-      intro xs hnd hxs
-      induction hnd with
+      intro xs hnd hxs; induction hnd with
       | nil => exact .nil
-      | @cons x rest hrel hndRest ih =>
+      | @cons x rest hrel _ ih =>
         refine .cons (fun b hb heq => ?_) (ih (fun z hz => hxs z (.tail _ hz)))
         obtain ⟨y, hy, rfl⟩ := List.mem_map.1 hb
-        have hxy := hInjOn x y (hxs x (.head _)) (hxs y (.tail _ hy)) heq
-        exact hrel y hy hxy
+        exact hrel y hy (hInjOn x y (hxs x (.head _)) (hxs y (.tail _ hy)) heq)
     exact hsubNd (posRange_nodup (q - 1)) (fun z hz => hz)
   have hProdEq : listProd (L.map f) = listProd L :=
     listProd_eq_of_nodup_subset hNodupMap (posRange_nodup (q - 1)) (by simp) hMem
   have hModEq : (a ^ (q - 1) * listProd L) % q = (listProd L) % q := by
     rw [← listProd_map_mul_mod a q (q - 1), hProdEq]
-  have haPos : 1 ≤ a := by
-    if ha0 : a = 0 then subst ha0; exact False.elim (hna (Nat.dvd_zero q))
-    else omega
-  have hpowPos : 1 ≤ a ^ (q - 1) := one_le_pow_of_pos haPos (q - 1)
+  have haPos : 1 ≤ a := if ha0 : a = 0 then by subst ha0; exact False.elim (hna (Nat.dvd_zero q)) else by omega
   have hdvdMul : q ∣ (a ^ (q - 1) - 1) * listProd L := by
-    have hsub : a ^ (q - 1) * listProd L - listProd L = (a ^ (q - 1) - 1) * listProd L := by
-      rw [Nat.sub_mul, Nat.one_mul]
-    rw [← hsub]
-    exact sub_dvd_of_mod_eq (Nat.le_mul_of_pos_left _ hpowPos) hModEq
-  have hnotF : ¬ (q ∣ listProd L) :=
-    not_dvd_listProd_posRange hq (by have := hq.1; omega)
+    rw [Nat.sub_mul, Nat.one_mul]
+    exact sub_dvd_of_mod_eq (Nat.le_mul_of_pos_left _ (one_le_pow_of_pos haPos (q - 1))) hModEq
   have hdvdPow : q ∣ (a ^ (q - 1) - 1) :=
-    hq.dvd_mul (Nat.mul_comm (a ^ (q - 1) - 1) (listProd L) ▸ hdvdMul) hnotF
+    hq.dvd_mul (Nat.mul_comm (a ^ (q - 1) - 1) (listProd L) ▸ hdvdMul)
+      (not_dvd_listProd_posRange hq (by have := hq.1; omega))
   obtain ⟨k, hk⟩ := hdvdPow
-  have hEq : a ^ (q - 1) = q * k + 1 := by omega
-  rw [hEq, Nat.mul_add_mod, Nat.mod_eq_of_lt hq.1]
+  have hPowPos := one_le_pow_of_pos haPos (q - 1)
+  rw [show a ^ (q - 1) = q * k + 1 by omega, Nat.mul_add_mod, Nat.mod_eq_of_lt hq.1]
 
 private theorem pow_mod_eq_one_of_eq_one {a q : Nat} (hq : 2 ≤ q) (ha : a % q = 1) :
     ∀ k : Nat, (a ^ k) % q = 1
@@ -492,9 +473,7 @@ theorem goldilocksPrime_dvd_cases (d : Nat) (hd : d ∣ goldilocksPrime) :
   else
     exfalso
     obtain ⟨e, he⟩ := hd
-    have hdPos : 2 ≤ d := by
-      if hd0 : d = 0 then subst hd0; simp [goldilocksPrime] at he
-      else omega
+    have hdPos : 2 ≤ d := by if hd0 : d = 0 then subst hd0; simp [goldilocksPrime] at he else omega
     have hePos : 2 ≤ e := by
       if he0 : e = 0 then subst he0; simp [goldilocksPrime] at he
       else if he1 : e = 1 then subst he1; simp at he; exact False.elim (hdp he.symm)
@@ -513,30 +492,22 @@ theorem goldilocksPrime_dvd_cases (d : Nat) (hd : d ∣ goldilocksPrime) :
     obtain ⟨hqPrime, hqDvdM, hqLeM⟩ := minDivisor_isPrime hm2
     rw [hqDef] at hqPrime hqDvdM hqLeM
     have hqDvdP : q ∣ goldilocksPrime := Nat.dvd_trans hqDvdM hmDvd
-    have hqSq : q * q < (2 ^ 32) * (2 ^ 32) := by
-      have hpLt : goldilocksPrime < (2 ^ 32) * (2 ^ 32) := by decide
-      exact Nat.lt_of_le_of_lt (Nat.le_trans (Nat.mul_le_mul hqLeM hqLeM) hmSq) hpLt
+    have hqSq : q * q < (2 ^ 32) * (2 ^ 32) :=
+      Nat.lt_of_le_of_lt (Nat.le_trans (Nat.mul_le_mul hqLeM hqLeM) hmSq) (by decide)
     have hqLt32 : q < 2 ^ 32 := by
-      if hge : 2 ^ 32 ≤ q then
-        have hsqGe := Nat.mul_le_mul hge hge
-        omega
-      else omega
+      if hge : 2 ^ 32 ≤ q then have := Nat.mul_le_mul hge hge; omega else omega
     have hqGe3 : 3 ≤ q := by
       have hq2 := hqPrime.1
       if hqEq2 : q = 2 then
-        obtain ⟨k, hk⟩ := hqDvdP
-        have hodd : goldilocksPrime % 2 = 1 := by decide
-        rw [hqEq2] at hk
-        omega
+        obtain ⟨k, hk⟩ := hqDvdP; have hodd : goldilocksPrime % 2 = 1 := by decide
+        rw [hqEq2] at hk; omega
       else omega
     have hqNotDvd7 : ¬ (q ∣ 7) := by
       intro hd7
       have hle7 : q ≤ 7 := Nat.le_of_dvd (by decide) hd7
-      have hrem : goldilocksPrime % 3 ≠ 0 ∧ goldilocksPrime % 5 ≠ 0 ∧ goldilocksPrime % 7 ≠ 0 := by
-        decide
+      have hrem : goldilocksPrime % 3 ≠ 0 ∧ goldilocksPrime % 5 ≠ 0 ∧ goldilocksPrime % 7 ≠ 0 := by decide
       obtain ⟨k, hk⟩ := hqDvdP
-      have hcases : q = 3 ∨ q = 4 ∨ q = 5 ∨ q = 6 ∨ q = 7 := by omega
-      rcases hcases with rfl | rfl | rfl | rfl | rfl
+      rcases (by omega : q = 3 ∨ q = 4 ∨ q = 5 ∨ q = 6 ∨ q = 7) with rfl | rfl | rfl | rfl | rfl
       · exact hrem.1 (by omega)
       · rcases hqPrime.2 2 ⟨2, rfl⟩ with h | h <;> omega
       · exact hrem.2.1 (by omega)
@@ -545,51 +516,37 @@ theorem goldilocksPrime_dvd_cases (d : Nat) (hd : d ∣ goldilocksPrime) :
     let half := (goldilocksPrime - 1) / 2
     have hEuler := goldilocksEuler_modPow () rfl
     have hHalfPlusOneDvdP : goldilocksPrime ∣ (7 ^ half + 1) := by
-      have hdiv := Nat.div_add_mod (7 ^ half) goldilocksPrime
-      rw [hEuler] at hdiv
+      have hdiv := Nat.div_add_mod (7 ^ half) goldilocksPrime; rw [hEuler] at hdiv
       refine ⟨(7 ^ half) / goldilocksPrime + 1, ?_⟩
       have hpPos : 1 ≤ goldilocksPrime := by decide
-      rw [Nat.mul_add, Nat.mul_one]
-      omega
+      rw [Nat.mul_add, Nat.mul_one]; omega
     have hHalfPlusOneDvdQ : q ∣ (7 ^ half + 1) := Nat.dvd_trans hqDvdP hHalfPlusOneDvdP
     have hHalfModQ : (7 ^ half) % q = q - 1 := by
       obtain ⟨t, ht⟩ := hHalfPlusOneDvdQ
       have htPos : 1 ≤ t := by
-        if ht0 : t = 0 then
-          rw [ht0, Nat.mul_zero] at ht
-          exact False.elim (Nat.succ_ne_zero (7 ^ half) ht)
+        if ht0 : t = 0 then rw [ht0, Nat.mul_zero] at ht; exact False.elim (Nat.succ_ne_zero _ ht)
         else omega
       have hEq : 7 ^ half = q * (t - 1) + (q - 1) := by
         rw [Nat.mul_sub, Nat.mul_one]
-        have hq1 : q ≤ q * t := by
-          have h := Nat.mul_le_mul_left q htPos
-          rwa [Nat.mul_one] at h
+        have hq1 : q ≤ q * t := by simpa [Nat.mul_one] using Nat.mul_le_mul_left q htPos
         omega
       rw [hEq, Nat.mul_add_mod, Nat.mod_eq_of_lt (by omega)]
     have hPm1ModQ : (7 ^ (goldilocksPrime - 1)) % q = 1 := by
       have h2half : goldilocksPrime - 1 = 2 * half := by decide
       rw [h2half, pow_two_mul, Nat.mul_mod, hHalfModQ]
-      obtain ⟨q2, hq2Eq⟩ : ∃ q2, q = q2 + 3 := ⟨q - 3, by omega⟩
-      have hsq : (q - 1) * (q - 1) = q * (q - 2) + 1 := by
-        rw [hq2Eq]
-        have ha : q2 + 3 - 1 = q2 + 2 := by omega
-        have hb : q2 + 3 - 2 = q2 + 1 := by omega
-        rw [ha, hb]
-        simp only [Nat.mul_add, Nat.add_mul]
-        omega
+      obtain ⟨q2, rfl⟩ : ∃ q2, q = q2 + 3 := ⟨q - 3, by omega⟩
+      have hsq : (q2 + 3 - 1) * (q2 + 3 - 1) = (q2 + 3) * (q2 + 3 - 2) + 1 := by
+        rw [show q2 + 3 - 1 = q2 + 2 by omega, show q2 + 3 - 2 = q2 + 1 by omega]
+        simp only [Nat.mul_add, Nat.add_mul]; omega
       rw [hsq, Nat.mul_add_mod, Nat.mod_eq_of_lt hqPrime.1]
     have hQm1ModQ : (7 ^ (q - 1)) % q = 1 := hqPrime.pow_sub_one_mod hqNotDvd7
     obtain ⟨g, hgDef⟩ : ∃ g, Nat.gcd (goldilocksPrime - 1) (q - 1) = g := ⟨_, rfl⟩
-    have hgPow : (7 ^ g) % q = 1 := by
-      rw [← hgDef]
-      exact pow_gcd_mod_eq_one hqPrime.1 (goldilocksPrime - 1) (q - 1) hPm1ModQ hQm1ModQ
+    have hgPow : (7 ^ g) % q = 1 :=
+      hgDef ▸ pow_gcd_mod_eq_one hqPrime.1 (goldilocksPrime - 1) (q - 1) hPm1ModQ hQm1ModQ
     have hgNotDvdHalf : ¬ (g ∣ half) := by
       rintro ⟨u, hu⟩
-      have h1 : (7 ^ half) % q = 1 := by
-        rw [hu, Nat.pow_mul]
-        exact pow_mod_eq_one_of_eq_one hqPrime.1 hgPow u
-      rw [hHalfModQ] at h1
-      omega
+      have h1 : (7 ^ half) % q = 1 := hu ▸ Nat.pow_mul 7 g u ▸ pow_mod_eq_one_of_eq_one hqPrime.1 hgPow u
+      rw [hHalfModQ] at h1; omega
     obtain ⟨c, hc⟩ := hgDef ▸ Nat.gcd_dvd_left (goldilocksPrime - 1) (q - 1)
     have hcOdd : c % 2 = 1 := by
       if hce : c % 2 = 0 then
@@ -597,8 +554,7 @@ theorem goldilocksPrime_dvd_cases (d : Nat) (hd : d ∣ goldilocksPrime) :
         have h2half : goldilocksPrime - 1 = 2 * half := by decide
         have hmul : 2 * half = 2 * (g * c') := by
           rw [← h2half, hc, hc', ← Nat.mul_assoc, Nat.mul_comm g 2, Nat.mul_assoc]
-        have hhalfEq : half = g * c' := by omega
-        exact False.elim (hgNotDvdHalf ⟨c', hhalfEq⟩)
+        exact False.elim (hgNotDvdHalf ⟨c', by omega⟩)
       else omega
     have h2pow32DvdPm1 : 2 ^ 32 ∣ (goldilocksPrime - 1) := ⟨2 ^ 32 - 1, by decide⟩
     rw [hc] at h2pow32DvdPm1
@@ -1443,31 +1399,24 @@ theorem verifySumcheck_sound_dichotomy
       ExistsRoundRootHit v tbl rounds tr
   | 0, tbl, claimedSum, [], _, claim, _, hVer, hFalse => by
     simp only [verifySumcheck, Option.some.injEq, Prod.mk.injEq] at hVer
-    rcases hVer with ⟨rfl, rfl⟩
-    left
-    simpa [hypercubeSum_zero] using hFalse
-  | 0, _, _, _ :: _, _, _, _, hVer, _ => by
-    cases hVer
-  | _ + 1, _, _, [], _, _, _, hVer, _ => by
-    cases hVer
+    rcases hVer with ⟨rfl, rfl⟩; left; simpa [hypercubeSum_zero] using hFalse
+  | 0, _, _, _ :: _, _, _, _, hVer, _ => by cases hVer
+  | _ + 1, _, _, [], _, _, _, hVer, _ => by cases hVer
   | v + 1, tbl, claimedSum, p :: ps, tr, claim, trFinal, hVer, hFalse => by
     simp only [verifySumcheck] at hVer
     cases hRound : verifySumcheckRound maxDeg claimedSum p tr with
     | none => rw [hRound] at hVer; cases hVer
     | some stepOut =>
       rcases stepOut with ⟨r, nextClaim, tr'⟩
-      rw [hRound] at hVer
-      dsimp only at hVer
+      rw [hRound] at hVer; dsimp only at hVer
       cases hRec : verifySumcheck maxDeg v nextClaim ps tr' with
       | none => rw [hRec] at hVer; cases hVer
       | some recOut =>
         rcases recOut with ⟨subClaim, trEnd⟩
-        rw [hRec] at hVer
-        simp only [Option.some.injEq, Prod.mk.injEq] at hVer
+        rw [hRec] at hVer; simp only [Option.some.injEq, Prod.mk.injEq] at hVer
         rcases hVer with ⟨rfl, rfl⟩
         have hStepEq : (r, tr') = absorbAndSqueezeRound p tr := by
-          unfold verifySumcheckRound at hRound
-          split at hRound
+          unfold verifySumcheckRound at hRound; split at hRound
           · simp only [Option.some.injEq, Prod.mk.injEq] at hRound
             exact Prod.ext hRound.1.symm hRound.2.2.symm
           · cases hRound
@@ -1475,16 +1424,71 @@ theorem verifySumcheck_sound_dichotomy
         rcases hDich with hNextFalse | hHit0
         · rcases verifySumcheck_sound_dichotomy maxDeg v (foldFirstVar tbl r)
               nextClaim ps tr' subClaim trEnd hRec hNextFalse with hEvalFalse | hLaterHit
-          · left
-            simpa only [mleEval_foldFirstVar] using hEvalFalse
-          · right
-            dsimp only [ExistsRoundRootHit]
-            rw [← hStepEq]
-            exact .inr hLaterHit
-        · right
-          dsimp only [ExistsRoundRootHit]
-          rw [← hStepEq]
-          exact .inl hHit0
+          · exact .inl (by simpa only [mleEval_foldFirstVar] using hEvalFalse)
+          · right; dsimp only [ExistsRoundRootHit]; rw [← hStepEq]; exact .inr hLaterHit
+        · right; dsimp only [ExistsRoundRootHit]; rw [← hStepEq]; exact .inl hHit0
+
+/-- Unboxed $O(2^{v-r})$ honest Sumcheck round polynomial over `Array R` (`0` `hypercube` / `List` allocations). -/
+def honestRoundPolyExec {R : Type} [CommRingOps R] (v : Nat) (evals : Array R) : RoundPoly R :=
+  let (s₀, s₁) := evenOddPrefixSumsExec v evals
+  ⟨[s₀, CommRingOps.sub s₁ s₀]⟩
+
+/-- **Exact `Spec ↔ Exec` Equivalence for `honestRoundPolyExec` (`honestRoundPolyExec_eq_honestRoundPoly`)**:
+    Single-pass `Array` round-polynomial construction agrees identically with `honestRoundPoly`. -/
+theorem honestRoundPolyExec_eq_honestRoundPoly {R : Type} [LawfulCommRing R]
+    (v : Nat) (evals : Array R) :
+    honestRoundPolyExec v evals = honestRoundPoly v evals.toList := by
+  unfold honestRoundPolyExec honestRoundPoly
+  rw [evenOddPrefixSumsExec_eq]
+
+/-- Unboxed $O(2^v)$-total-work Fiat–Shamir Sumcheck prover over `Array R`
+    folding via `honestRoundPolyExec` and `foldTableExec` (`0` `hypercube` calls). -/
+def honestSumcheckProverExec {R : Type} [CommRingOps R] [TranscriptChallenge R]
+    {phase : TranscriptPhase} [CanSqueezeTranscript phase] :
+    (numVars : Nat) → Array R → Transcript phase →
+    List (RoundPoly R) × EvalClaim R numVars × Transcript phase
+  | 0, evals, tr =>
+    ([], ⟨[], rfl, if h : 0 < evals.size then evals[0]'h else CommRingOps.zero⟩, tr)
+  | v + 1, evals, tr =>
+    let p := honestRoundPolyExec v evals
+    let (r, tr') := absorbAndSqueezeRound p tr
+    let evals' := foldTableExec evals r
+    let (restPolys, subClaim, trFinal) := honestSumcheckProverExec v evals' tr'
+    (p :: restPolys,
+     ⟨r :: subClaim.point, congrArg Nat.succ subClaim.point_len, subClaim.expectedVal⟩,
+     trFinal)
+
+theorem honestSumcheckProverExec_eq_honestSumcheckProver
+    {R : Type} [LawfulCommRing R] [TranscriptChallenge R]
+    {phase : TranscriptPhase} [CanSqueezeTranscript phase] :
+    ∀ (v : Nat) (evals : Array R) (tr : Transcript phase),
+      honestSumcheckProverExec v evals tr = honestSumcheckProver v evals.toList tr
+  | 0, evals, tr => by
+    simp only [honestSumcheckProverExec, honestSumcheckProver, mleEval_nil]
+    congr 2; congr 1
+    cases hL : evals.toList with
+    | nil =>
+      have h0 : evals.size = 0 := by rw [← Array.length_toList, hL]; rfl
+      simp [h0]
+    | cons x xs =>
+      have hPos : 0 < evals.size := by rw [← Array.length_toList, hL]; simp
+      have hGet : evals[0]'hPos = x := by
+        rw [← Array.getElem_toList (xs := evals) (i := 0) (by omega)]; simp [hL]
+      simp [hPos, hGet]
+  | v + 1, evals, tr => by
+    unfold honestSumcheckProverExec honestSumcheckProver
+    dsimp only
+    rw [honestRoundPolyExec_eq_honestRoundPoly]
+    let p := honestRoundPoly v evals.toList
+    let step := absorbAndSqueezeRound p tr
+    have ih := honestSumcheckProverExec_eq_honestSumcheckProver v (foldTableExec evals step.1) step.2
+    rw [foldTableExec_toList] at ih
+    cases hExec : honestSumcheckProverExec v (foldTableExec evals step.1) step.2 with
+    | mk ps rest =>
+      rcases rest with ⟨sc, trF⟩
+      rw [hExec] at ih
+      dsimp only [p, step] at ih ⊢
+      rw [← ih]
 
 end Obend.Crypto
 end

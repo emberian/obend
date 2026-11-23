@@ -300,11 +300,48 @@ def wrapUnsafeQuery : SameOpeningQuery :=
 #guard verifySameOpening wrapUnsafeQuery emptyBookClearingWitness == .refused .modulusWraparoundUnsafe []
 #guard privateConvexSameOpeningJudge.refutes .modulusWraparoundUnsafe == true
 
--- Private refusal indices (`bitzRangeExceeded 0` vs `dualCommitmentMismatch 1` vs `nonzeroPrimalDualGap`)
--- collapse to the exact same `.privateWitnessRejected` public ZK verdict!
-#guard toPublicZkVerdict (.refused (.bitzRangeExceeded 0) []) == .privateWitnessRejected
-#guard toPublicZkVerdict (.refused (.dualCommitmentMismatch 1) []) == .privateWitnessRejected
-#guard toPublicZkVerdict (.refused (.nonzeroPrimalDualGap 15 10) []) == .privateWitnessRejected
+-- Witness-free Masked Schnorr/BDLOP Commitment-Opening (`MaskedSameOpeningProof` & `verifyMaskedSameOpening`)
+def demoBdlopMat : IntMatrix 2 4 :=
+  Sized.ofFn fun i => Sized.ofFn fun j => ((3 * (i.val + 1) + 5 * (j.val + 1)) : Int)
+def demoBdlopParams : BdlopParams 2 4 :=
+  { matrix := demoBdlopMat, q := 65537, bWit := 3, bChal := 1000, bMask := 8000, bResp := 4000 }
+def demoSecretW : FastIntPoly 4 := ⟨#[2, -1, 3, -2], rfl⟩
+def demoMaskY : FastIntPoly 4 := ⟨#[4, -3, 2, -1], rfl⟩
+def demoTw := bdlopCommit demoBdlopParams demoSecretW
+
+#guard checkBdlopSafeParams demoBdlopParams == true
+#guard (proveMaskedSameOpening? demoBdlopParams "order-ctx-0".toUTF8 demoSecretW demoMaskY).isSome == true
+
+def demoMaskedPrf : MaskedSameOpeningProof 2 4 :=
+  (proveMaskedSameOpening? demoBdlopParams "order-ctx-0".toUTF8 demoSecretW demoMaskY).getD
+    ⟨zeroVec 2, zeroVec 4⟩
+
+#guard verifyMaskedSameOpening demoBdlopParams "order-ctx-0".toUTF8 demoTw demoMaskedPrf == true
+#guard verifyMaskedSameOpening demoBdlopParams "order-ctx-tampered".toUTF8 demoTw demoMaskedPrf == false
+#guard verifyMaskedSameOpening demoBdlopParams "order-ctx-0".toUTF8 demoTw
+         ⟨demoMaskedPrf.tY, ⟨#[4001, 0, 0, 0], rfl⟩⟩ == false
+
+-- 2-Transcript Special Soundness (`extractMaskedSameOpening_2transcript`) recovers `demoSecretW` directly!
+def demoTy2 : FastIntPoly 2 := bdlopCommit demoBdlopParams demoMaskY
+def demoZ_c1 : FastIntPoly 4 := foldWitness 2 demoMaskY demoSecretW
+def demoZ_c2 : FastIntPoly 4 := foldWitness (-1) demoMaskY demoSecretW
+
+#guard verifyMaskedSameOpeningCore demoBdlopParams demoTw ⟨demoTy2, demoZ_c1⟩ 2 == true
+#guard verifyMaskedSameOpeningCore demoBdlopParams demoTw ⟨demoTy2, demoZ_c2⟩ (-1) == true
+#guard recoverWitnessFrom2Transcripts 2 (-1) demoZ_c1 demoZ_c2 == demoSecretW
+
+-- Exact zero-slack (`tvDist ≤ RatProb.zero`) Honest-Verifier Zero-Knowledge instantiation
+def tinyBdlopParams : BdlopParams 1 1 :=
+  { matrix := Sized.ofFn fun _ => ⟨#[5], rfl⟩, q := 97, bWit := 1, bChal := 1, bMask := 3, bResp := 2 }
+def tinyW : FastIntPoly 1 := ⟨#[1], rfl⟩
+example : RatProb.le
+    (tvDist
+      (realMaskedSameOpeningDist tinyBdlopParams 1 tinyW
+        (safeMasks_ne_nil tinyBdlopParams (by decide) (by decide) (by decide)))
+      (simMaskedSameOpeningDist tinyBdlopParams (bdlopCommit tinyBdlopParams tinyW) 1))
+    RatProb.zero :=
+  (maskedSameOpening_honestVerifierZK tinyBdlopParams (bdlopCommit tinyBdlopParams tinyW) 1 tinyW
+    (by decide) (by decide) (by decide) rfl).2.2.2
 
 -- ============================================================================
 -- 6. `#tooth` Mutation Kills Across All Upgraded Cryptographic Invariants (16 Probes)
@@ -349,13 +386,22 @@ def wrapUnsafeQuery : SameOpeningQuery :=
       transfers := [{ source := 1, destination := 2, asset := 1, amount := 5 }]
       kktCert := { price := 1, potentials := (0, 0), slacks := [] } }
 
--- 6.10 Leaking trader 0's `BitZ` range failure into `.accepted` breaks `toPublicZkVerdict_hides_private_index`
-#tooth Obend.Crypto.toPublicZkVerdict_hides_private_index by mutation
-  Obend.Crypto.toPublicZkVerdict := fun v =>
-    match v with
-    | .ok => .accepted
-    | .refused (.bitzRangeExceeded 0) _ => .accepted
-    | _ => .privateWitnessRejected
+-- 6.10 Dropping challenge-scaled `c · tW` in `bdlopCombine` breaks `verifyMaskedSameOpening_complete`
+#tooth Obend.Crypto.verifyMaskedSameOpening_complete by mutation
+  Obend.Crypto.bdlopCombine := fun _ tY _ _ => tY
+
+-- 6.10b Returning constant zero `(tY=0, z=0)` in `simMaskedSameOpeningDist` breaks `maskedSameOpening_honestVerifierZK`
+#tooth Obend.Crypto.maskedSameOpening_honestVerifierZK by mutation
+  Obend.Crypto.simMaskedSameOpeningDist := fun {rows cols} _ _ _ =>
+    FinDist.pure ⟨zeroVec rows, zeroVec cols⟩
+
+-- 6.10c Rejecting valid succinct Canopy openings breaks `verifyCanopySuccinctOpening_complete`
+#tooth Obend.Crypto.Fast.Canopy.verifyCanopySuccinctOpening_complete by mutation
+  Obend.Crypto.Fast.Canopy.verifyCanopySuccinctCore := fun _ _ _ _ _ _ _ _ _ => false
+
+-- 6.10d Bypassing `checkPcsSoundnessRegime` breaks `verifyCanopySuccinctOpening_query_soundness`
+#tooth Obend.Crypto.Fast.Canopy.verifyCanopySuccinctOpening_query_soundness by mutation
+  Obend.Crypto.Fast.Canopy.checkPcsSoundnessRegime := fun _ => true
 
 -- 6.11 Returning a constant zero view `(t=0, z=0)` in `maskedAjtaiSimulator` breaks `maskedAjtai_statistical_zk`
 #tooth Obend.Crypto.maskedAjtai_statistical_zk by mutation
@@ -398,26 +444,34 @@ run_cmd do
                    ``Obend.Crypto.GameSoundness.reduceBindToMSIS,
                    ``Obend.Crypto.GameSoundness.extractFromForkingTree,
                    ``Obend.Crypto.maskedAjtaiSimulator,
-                   ``Obend.Crypto.reduceMaskedForkStep] do
+                   ``Obend.Crypto.reduceMaskedForkStep,
+                   ``Obend.Crypto.simMaskedSameOpeningDist,
+                   ``Obend.Crypto.recoverWitnessFrom2Transcripts] do
     if Lean.isNoncomputable env pureDecl then
       throwError m!"{pureDecl} is noncomputable!"
     let axs ← collectAxioms pureDecl
     for ax in axs do
       if ax == ``Classical.choice || !Obend.AssertAxioms.standard.contains ax then
         throwError m!"{pureDecl} depends on Classical.choice or non-standard axiom {ax}: {axs.toList}"
-  -- PSum / Subtype proof-carrying extractors: executable Type branching (isNoncomputable == false) & standard axioms only
+  -- PSum / Subtype proof-carrying extractors: executable Type branching (isNoncomputable == false) & 0 Classical.choice
   for decl in [``Obend.Crypto.GameSoundness.pigeonhole_short_kernel_construct,
                ``Obend.Crypto.canopyMerklePCS_extractDoubleOpenOrEq,
                ``Obend.Crypto.extractSaltedDictionaryCollisionBoth,
                ``Obend.Crypto.Fast.extractFenziSafeFoldCollisionOrEq,
                ``Obend.Crypto.Fast.Canopy.extractCanopyTranscriptCollisionOrEq,
-               ``Obend.Crypto.Fast.Canopy.verifyCanopyCommitAndReduceTranscript_binding] do
+               ``Obend.Crypto.Fast.Canopy.verifyCanopyCommitAndReduceTranscript_binding,
+               ``Obend.Crypto.Fast.Canopy.extractCanopySuccinctCollisionOrAgree,
+               ``Obend.Crypto.extractMaskedSameOpening_2transcript] do
     if Lean.isNoncomputable env decl then
       throwError m!"{decl} is noncomputable (must be constructive executable Type data!)"
     let axs ← collectAxioms decl
     for ax in axs do
       unless Obend.AssertAxioms.standard.contains ax do
         throwError m!"{decl} depends on non-standard axiom {ax}: {axs.toList}"
+    if decl == ``Obend.Crypto.Fast.Canopy.extractCanopySuccinctCollisionOrAgree ||
+       decl == ``Obend.Crypto.extractMaskedSameOpening_2transcript then
+      if axs.contains ``Classical.choice then
+        throwError m!"{decl} depends on Classical.choice: {axs.toList}"
   for (name, _) in env.constants.map₁.toList do
     if Obend.AssertAxioms.packageModule? env name |>.any (fun m => Obend.AssertAxioms.directoryOf m == `Obend.Crypto) then
       if Lean.isNoncomputable env name then
