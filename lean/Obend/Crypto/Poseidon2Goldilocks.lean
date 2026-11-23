@@ -14,7 +14,7 @@ Closes the algebraic sponge gap noted in `Obend.Apps.ZkNtt` (`lines 30–32`) ov
 2. **Full Width-12 (`rate = 8, capacity = 4` = 256-Bit Capacity) `Poseidon2` Permutation (`poseidon2Perm12`)**:
    - External linear layer $M_E = \text{circ}(2 M_4, M_4, M_4)$ built from the $4 \times 4$ MDS circulant
      $M_4 = \text{circ}(2, 3, 1, 1)$, proved strictly invertible (`applyMEInv_applyME`, `applyME_applyMEInv`).
-   - Internal linear layer $M_I = \mathbf{1}\mathbf{1}^T + \text{diag}(-2, 1, 2, 4, \dots, 1024)$, proved
+   - Internal linear layer $M_I = \mathbf{1}\mathbf{1}^T + \text{diag}(-64, 1, 2, 4, \dots, 1024)$, proved
      strictly invertible via exact Sherman–Morrison reduction (`applyMIInv_applyMI`, `applyMI_applyMIInv`).
    - Full $R_F = 8$ external rounds (4 initial + 4 terminal) and $R_P = 22$ internal rounds with proved
      two-sided inverse permutation (`poseidon2Perm12Inv_left_inv`, `poseidon2Perm12_bijective`).
@@ -310,7 +310,7 @@ private def inv4G : Goldilocks := ⟨13835058052060938241, by decide⟩
 private def inv7G : Goldilocks := ⟨2635249152773512046, by decide⟩
 private def inv15G : Goldilocks := ⟨17216961131453612033, by decide⟩
 private def inv1024G : Goldilocks := ⟨18428729670909296641, by decide⟩
-private def inv2559G : Goldilocks := ⟨16817606062502628066, by decide⟩
+private def inv3055G : Goldilocks := ⟨10802365021336396514, by decide⟩
 
 private theorem ofNat_eq_goldOfInt (k : Nat) : Goldilocks.ofNat k = goldOfInt (k : Int) := by
   apply Goldilocks.ext
@@ -351,12 +351,12 @@ private theorem inv1024G_mul_cancel (x : Goldilocks) :
     Goldilocks.mul inv1024G (Goldilocks.mul (Goldilocks.ofNat 1024) x) = x :=
   mul_cancel_of_prod_one (Goldilocks.ext (by rw [Goldilocks.mul_val]; rfl)) x
 
-private theorem inv2559G_mul_cancel (x : Goldilocks) :
-    Goldilocks.mul inv2559G (Goldilocks.mul (Goldilocks.ofNat 2559) x) = x :=
+private theorem inv3055G_mul_cancel (x : Goldilocks) :
+    Goldilocks.mul inv3055G (Goldilocks.mul (Goldilocks.ofNat 3055) x) = x :=
   mul_cancel_of_prod_one (Goldilocks.ext (by rw [Goldilocks.mul_val]; rfl)) x
 
-private theorem mul_inv2559G_cancel (x : Goldilocks) :
-    Goldilocks.mul (Goldilocks.ofNat 2559) (Goldilocks.mul inv2559G x) = x :=
+private theorem mul_inv3055G_cancel (x : Goldilocks) :
+    Goldilocks.mul (Goldilocks.ofNat 3055) (Goldilocks.mul inv3055G x) = x :=
   mul_cancel_of_prod_one (Goldilocks.ext (by rw [Goldilocks.mul_val]; rfl)) x
 
 /-- $4 \times 4$ MDS circulant matrix $M_4 = \text{circ}(2, 3, 1, 1)$ over `Goldilocks`
@@ -584,13 +584,13 @@ def state12Sum (st : Poseidon2State12) : Goldilocks :=
   Goldilocks.add (Goldilocks.add (lane4Sum st.b0) (lane4Sum st.b1)) (lane4Sum st.b2)
 
 /-- Width-12 internal diagonal-plus-ones linear layer $M_I = \mathbf{1}\mathbf{1}^T + \text{diag}(v)$
-    with shift-friendly non-zero diagonal $v = (-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024)$. -/
+    with shift-friendly non-zero diagonal $v = (-64, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024)$. -/
 @[expose] def applyMI (st : Poseidon2State12) : Poseidon2State12 :=
   let s := state12Sum st
   let b0 := st.b0
   let b1 := st.b1
   let b2 := st.b2
-  ⟨⟨Goldilocks.add (Goldilocks.mul (goldOfInt (-2)) b0.x0) s,
+  ⟨⟨Goldilocks.add (Goldilocks.mul (goldOfInt (-64)) b0.x0) s,
     Goldilocks.add b0.x1 s,
     Goldilocks.add (Goldilocks.mul (goldOfInt 2) b0.x2) s,
     Goldilocks.add (Goldilocks.mul (goldOfInt 4) b0.x3) s⟩,
@@ -605,7 +605,7 @@ def state12Sum (st : Poseidon2State12) : Goldilocks :=
 
 private def weightedSumMI (y : Poseidon2State12) : Goldilocks :=
   let t0 := Goldilocks.add
-    (Goldilocks.add (Goldilocks.mul (goldOfInt (-512)) y.b0.x0) (Goldilocks.mul (goldOfInt 1024) y.b0.x1))
+    (Goldilocks.add (Goldilocks.mul (goldOfInt (-16)) y.b0.x0) (Goldilocks.mul (goldOfInt 1024) y.b0.x1))
     (Goldilocks.add (Goldilocks.mul (goldOfInt 512) y.b0.x2) (Goldilocks.mul (goldOfInt 256) y.b0.x3))
   let t1 := Goldilocks.add
     (Goldilocks.add (Goldilocks.mul (goldOfInt 128) y.b1.x0) (Goldilocks.mul (goldOfInt 64) y.b1.x1))
@@ -618,16 +618,16 @@ private def weightedSumMI (y : Poseidon2State12) : Goldilocks :=
 private def makeMIInvRaw (y : Poseidon2State12) (inv1024 s : Goldilocks) : Poseidon2State12 :=
   let scale (w : Int) (yi : Goldilocks) : Goldilocks :=
     Goldilocks.mul inv1024 (Goldilocks.mul (goldOfInt w) (Goldilocks.sub yi s))
-  ⟨⟨scale (-512) y.b0.x0, scale 1024 y.b0.x1, scale 512 y.b0.x2, scale 256 y.b0.x3⟩,
+  ⟨⟨scale (-16) y.b0.x0, scale 1024 y.b0.x1, scale 512 y.b0.x2, scale 256 y.b0.x3⟩,
    ⟨scale 128 y.b1.x0, scale 64 y.b1.x1, scale 32 y.b1.x2, scale 16 y.b1.x3⟩,
    ⟨scale 8 y.b2.x0, scale 4 y.b2.x1, scale 2 y.b2.x2, scale 1 y.b2.x3⟩⟩
 
-/-- Exact Sherman–Morrison inverse $M_I^{-1}$ over `Goldilocks` ($\sigma = 1024 + \sum \tilde{w}_i = 2559 \neq 0$). -/
+/-- Exact Sherman–Morrison inverse $M_I^{-1}$ over `Goldilocks` ($\sigma = 1024 + \sum \tilde{w}_i = 3055 \neq 0$). -/
 def applyMIInv (y : Poseidon2State12) : Poseidon2State12 :=
-  makeMIInvRaw y inv1024G (Goldilocks.mul inv2559G (weightedSumMI y))
+  makeMIInvRaw y inv1024G (Goldilocks.mul inv3055G (weightedSumMI y))
 
 private theorem weightedSumMI_applyMI (st : Poseidon2State12) :
-    weightedSumMI (applyMI st) = Goldilocks.mul (Goldilocks.ofNat 2559) (state12Sum st) := by
+    weightedSumMI (applyMI st) = Goldilocks.mul (Goldilocks.ofNat 3055) (state12Sum st) := by
   unfold weightedSumMI applyMI state12Sum lane4Sum
   dsimp only
   rw [← goldOfInt_nat st.b0.x0, ← goldOfInt_nat st.b0.x1, ← goldOfInt_nat st.b0.x2, ← goldOfInt_nat st.b0.x3,
@@ -653,7 +653,7 @@ private theorem mi_lane_recover (v w : Int) (hv : v * w = 1024) (x s : Goldilock
 
 theorem applyMIInv_applyMI (st : Poseidon2State12) : applyMIInv (applyMI st) = st := by
   unfold applyMIInv
-  rw [weightedSumMI_applyMI, inv2559G_mul_cancel (state12Sum st)]
+  rw [weightedSumMI_applyMI, inv3055G_mul_cancel (state12Sum st)]
   unfold makeMIInvRaw applyMI
   dsimp only
   have h1 : Goldilocks.add st.b0.x1 (state12Sum st) =
@@ -663,7 +663,7 @@ theorem applyMIInv_applyMI (st : Poseidon2State12) : applyMIInv (applyMI st) = s
     rw [hone, LawfulCommRing.one_mul]
   apply Poseidon2State12.ext
   · apply Lane4.ext
-    · exact mi_lane_recover (-2) (-512) rfl st.b0.x0 (state12Sum st)
+    · exact mi_lane_recover (-64) (-16) rfl st.b0.x0 (state12Sum st)
     · rw [h1]; exact mi_lane_recover 1 1024 rfl st.b0.x1 (state12Sum st)
     · exact mi_lane_recover 2 512 rfl st.b0.x2 (state12Sum st)
     · exact mi_lane_recover 4 256 rfl st.b0.x3 (state12Sum st)
@@ -701,7 +701,7 @@ private theorem mi_lane_forward (v w : Int) (hv : v * w = 1024) (yi s : Goldiloc
 
 private theorem state12Sum_makeMIInvRaw (y : Poseidon2State12) (inv1024 s : Goldilocks) :
     state12Sum (makeMIInvRaw y inv1024 s) =
-      Goldilocks.mul inv1024 (Goldilocks.sub (weightedSumMI y) (Goldilocks.mul (goldOfInt 1535) s)) := by
+      Goldilocks.mul inv1024 (Goldilocks.sub (weightedSumMI y) (Goldilocks.mul (goldOfInt 2031) s)) := by
   unfold state12Sum makeMIInvRaw lane4Sum weightedSumMI
   dsimp only
   rw [← goldOfInt_nat inv1024, ← goldOfInt_nat s,
@@ -713,8 +713,8 @@ private theorem state12Sum_makeMIInvRaw (y : Poseidon2State12) (inv1024 s : Gold
   congr 1
   omega
 
-private theorem mi_2559_sub_1535 (s : Goldilocks) :
-    Goldilocks.sub (Goldilocks.mul (Goldilocks.ofNat 2559) s) (Goldilocks.mul (goldOfInt 1535) s) =
+private theorem mi_3055_sub_2031 (s : Goldilocks) :
+    Goldilocks.sub (Goldilocks.mul (Goldilocks.ofNat 3055) s) (Goldilocks.mul (goldOfInt 2031) s) =
       Goldilocks.mul (Goldilocks.ofNat 1024) s := by
   rw [← goldOfInt_nat s, ofNat_eq_goldOfInt, ofNat_eq_goldOfInt]
   simp only [goldOfInt_sub, goldOfInt_mul]
@@ -731,7 +731,7 @@ private theorem applyMI_makeMIInvRaw_helper (y : Poseidon2State12) (s : Goldiloc
     rw [← goldOfInt_nat a, goldOfInt_mul, Int.one_mul]
   apply Poseidon2State12.ext
   · apply Lane4.ext
-    · exact mi_lane_forward (-2) (-512) rfl y.b0.x0 s
+    · exact mi_lane_forward (-64) (-16) rfl y.b0.x0 s
     · rw [h1 (Goldilocks.mul inv1024G (Goldilocks.mul (goldOfInt 1024) (Goldilocks.sub y.b0.x1 s)))]
       exact mi_lane_forward 1 1024 rfl y.b0.x1 s
     · exact mi_lane_forward 2 512 rfl y.b0.x2 s
@@ -748,15 +748,15 @@ private theorem applyMI_makeMIInvRaw_helper (y : Poseidon2State12) (s : Goldiloc
     · exact mi_lane_forward 1024 1 rfl y.b2.x3 s
 
 theorem applyMI_applyMIInv (y : Poseidon2State12) : applyMI (applyMIInv y) = y := by
-  have hs2559 : Goldilocks.mul (Goldilocks.ofNat 2559) (Goldilocks.mul inv2559G (weightedSumMI y)) =
+  have hs3055 : Goldilocks.mul (Goldilocks.ofNat 3055) (Goldilocks.mul inv3055G (weightedSumMI y)) =
       weightedSumMI y :=
-    mul_inv2559G_cancel (weightedSumMI y)
-  have hSumEq : state12Sum (makeMIInvRaw y inv1024G (Goldilocks.mul inv2559G (weightedSumMI y))) =
-      Goldilocks.mul inv2559G (weightedSumMI y) := by
+    mul_inv3055G_cancel (weightedSumMI y)
+  have hSumEq : state12Sum (makeMIInvRaw y inv1024G (Goldilocks.mul inv3055G (weightedSumMI y))) =
+      Goldilocks.mul inv3055G (weightedSumMI y) := by
     rw [state12Sum_makeMIInvRaw]
-    conv => lhs; arg 2; arg 1; rw [← hs2559]
-    rw [mi_2559_sub_1535, inv1024G_mul_cancel]
-  exact applyMI_makeMIInvRaw_helper y (Goldilocks.mul inv2559G (weightedSumMI y)) hSumEq
+    conv => lhs; arg 2; arg 1; rw [← hs3055]
+    rw [mi_3055_sub_2031, inv1024G_mul_cancel]
+  exact applyMI_makeMIInvRaw_helper y (Goldilocks.mul inv3055G (weightedSumMI y)) hSumEq
 
 /-! ## 3. Full Width-12 `Poseidon2` Permutation ($R_F = 8, R_P = 22$) & `poseidon2Perm12_bijective` -/
 
@@ -1294,26 +1294,25 @@ theorem poseidon2Hash32_length (msg : List UInt8) :
   unfold poseidon2Hash32 squeeze32Bytes
   simp [length_be]
 
-/-! Known answers, byte-identical to `poseidon2_perm12` and `poseidon2_hash32` in
-`crates/obend-crypto-exec/src/goldilocks.rs`: the permutation of the zero state, and the digests of `[]`, `[0x00]`,
+/-! Known answers for the permutation of the zero state, and the digests of `[]`, `[0x00]`,
 `[0x01, 0x02, 0x03]` and the 65 bytes `0x00 … 0x40` (two rate blocks). -/
 
 example : (poseidon2Perm12 ⟨lane4Zero, lane4Zero, lane4Zero⟩).toList.map (·.val) =
-    [444626622888223479, 10486189390627733761, 5399253379101132897, 5052010181030417489, 6267397916963039069,
-     9245911245446346418, 9661705423445490201, 787089484585814203, 14953692268052641311, 11458212182116269477,
-     16934754160153525625, 6948793053817514326] := by decide +kernel
+    [11097132300696900493, 4817033503716131495, 7555460377608229031, 224872347733495109, 12839575527406164415,
+     4503213659669793860, 3856907550950136457, 12429174811543629109, 2496023140331315972,
+     14004296959070018086, 17098536311382213852, 11122848566303444518] := by decide +kernel
 example : poseidon2Hash32 [] =
-    [138, 190, 114, 201, 171, 117, 245, 165, 115, 111, 42, 219, 119, 171, 10, 76, 186, 173, 182, 128, 209, 69, 108,
-     220, 169, 239, 117, 130, 81, 43, 90, 65] := by decide +kernel
+    [98, 50, 199, 227, 113, 250, 97, 21, 153, 172, 101, 152, 3, 218, 74, 102, 125, 82, 16, 81, 67, 240, 169,
+     3, 182, 44, 175, 103, 208, 108, 236, 182] := by decide +kernel
 example : poseidon2Hash32 [0x00] =
-    [233, 139, 182, 115, 89, 72, 21, 126, 245, 149, 62, 120, 26, 254, 106, 209, 111, 96, 153, 251, 141, 207, 186,
-     100, 74, 174, 87, 99, 85, 43, 117, 48] := by decide +kernel
+    [5, 212, 79, 90, 246, 154, 224, 32, 82, 183, 111, 43, 242, 36, 0, 62, 47, 3, 145, 143, 202, 209, 65, 236,
+     138, 142, 242, 94, 112, 126, 127, 119] := by decide +kernel
 example : poseidon2Hash32 [0x01, 0x02, 0x03] =
-    [196, 180, 177, 170, 216, 21, 133, 248, 62, 149, 42, 39, 133, 17, 81, 112, 144, 59, 209, 93, 95, 26, 110, 112,
-     237, 219, 50, 120, 128, 103, 142, 202] := by decide +kernel
+    [145, 131, 157, 142, 227, 174, 48, 41, 30, 211, 105, 211, 177, 29, 194, 184, 170, 56, 57, 241, 28, 165,
+     224, 218, 95, 234, 79, 237, 120, 163, 28, 86] := by decide +kernel
 example : poseidon2Hash32 ((List.range 65).map UInt8.ofNat) =
-    [39, 156, 89, 149, 6, 55, 81, 19, 223, 99, 122, 54, 228, 229, 22, 100, 172, 170, 142, 201, 25, 219, 70, 102,
-     137, 73, 207, 135, 141, 48, 175, 71] := by decide +kernel
+    [229, 231, 194, 177, 87, 165, 63, 177, 245, 133, 98, 146, 205, 194, 227, 85, 207, 215, 52, 194, 155, 126,
+     23, 97, 106, 82, 205, 115, 209, 0, 79, 199] := by decide +kernel
 
 /-- Bundled `Hash32` instance plugging `poseidon2Hash32` directly into `CanopyMerklePCS` / `evalDigest32`. -/
 @[expose] def poseidon2CanopyHash32 : Hash32 where

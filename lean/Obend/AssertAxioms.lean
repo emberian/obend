@@ -7,7 +7,7 @@ module
 the importing module can see. It fails on any constant resting on `sorryAx` or on a declared
 axiom, and on any package `axiom` declaration; only Lean's three standard axioms (`propext`,
 `Classical.choice`, `Quot.sound`) pass silently. The compiler trust (`native_decide`'s auxiliary
-`…._native…` axioms) is admitted only as a counted exception, reported per directory in the verdict:
+`…._native…` axioms) is replayed once per distinct oracle and counted, reported per directory in the verdict:
 `native_decide` is a deliberate tool in this tree (the `*_compiled` facts), each such theorem
 re-run by `#assert_compiled` (`Obend/AssertCompiled.lean`). `Obend/Census.lean` runs it over the
 whole library. Its importer must see the bodies: under a plain `module` import a non-exposed
@@ -34,14 +34,38 @@ open Lean Elab Command
 /-- The axioms a kernel-checked theorem may rest on. -/
 meta def standard : List Name := [``propext, ``Classical.choice, ``Quot.sound]
 
-/-- The compiler trust `native_decide` adds; counted (not refused) by
-`#assert_axioms_tree`. Since Lean v4.30 each
+/-- Candidate oracles for replay. Since Lean v4.30 each
 `native_decide` proof is an auxiliary axiom `<theorem>._native.native_decide.ax_…`
 (`Lean.Meta.nativeEqTrue`); v4.35 removed the older global axioms
 `Lean.ofReduceBool` and `Lean.trustCompiler`, so the `_native` component is the
 whole compiled-trust set. -/
 meta def isCompilerTrust (axiomName : Name) : Bool :=
   axiomName.components.any (· == `_native)
+
+/-- The Boolean claim a `native_decide`/`bv_decide` oracle axiom makes, if its type has the shape
+that machinery emits. `Lean.Meta.nativeEqTrue` builds the axiom type as
+`mkApp3 (mkConst ``Eq [1]) (mkConst ``Bool) e (mkConst ``Bool.true)` for a CLOSED `e : Bool` it has
+just watched evaluate to `true`; this returns that `e`.
+
+Returning the CLAIM rather than a yes/no about the name is the whole point: it is what lets the
+caller go and re-run `e` for itself. A type that is not of this shape is not a compiled-evaluation
+claim at all and there is nothing to re-run — which is a refusal, not a pass. -/
+meta def _root_.Obend.AssertCompiled.nativeOracleClaim? (type : Lean.Expr) : Option Lean.Expr :=
+  match type.eq? with
+  | some (α, lhs, rhs) =>
+      if α.isConstOf ``Bool && rhs.isConstOf ``Bool.true then some lhs else none
+  | none => none
+
+/-- Replay a monomorphic native oracle. Both census commands use this check. -/
+meta def replayOracle (name : Name) : CommandElabM Unit := do
+  let some (.axiomInfo info) := (← getEnv).find? name
+    | throwError "{name} is not an axiom declaration"
+  unless info.levelParams.isEmpty do
+    throwError "{name} has universe parameters"
+  let some claim := Obend.AssertCompiled.nativeOracleClaim? info.type
+    | throwError "{name} does not assert a closed Bool equal to true"
+  let b ← liftTermElabM <| unsafe Meta.evalExpr Bool (mkConst ``Bool) claim (checkMeta := false)
+  unless b do throwError "{name} evaluates to false"
 
 /-- A `computed_fields` override: the compiled implementation Lean generates for
 an inductive with a `computed_field` (`Noun.mug`, N-MUG). It is a definition
@@ -60,8 +84,7 @@ meta def packageRoots : List Name :=
 
 /-- The module a constant was declared in, when it is one of this package's. -/
 meta def packageModule? (env : Environment) (constant : Name) : Option Name := do
-  let index ← env.getModuleIdxFor? constant
-  let module ← env.header.moduleNames[index.toNat]?
+  let module := (env.getModuleIdxFor? constant >>= fun i => env.header.moduleNames[i.toNat]?).getD env.mainModule
   if packageRoots.contains module.getRoot then some module else none
 
 /-- The directory a module is reported under: its first two components (`Obend.Core`), or the
@@ -111,15 +134,19 @@ meta def theoremCensus : MetaM (Array (Name × Nat × Array Name)) := do
 elab "#assert_axioms_tree" : command => do
   let env ← getEnv
   let mut compiledByDir : NameMap Nat := {}
-  let mut overrides := 0
+  let mut overrides : Nat := 0
   let mut offenders : Array (Name × List Name) := #[]
-  for (constant, info) in env.constants.map₁.toList do
+  let mut replayed : NameSet := {}
+  let locals := if packageRoots.contains env.mainModule.getRoot then env.constants.map₂.toList else []
+  for (constant, info) in env.constants.map₁.toList ++ locals do
     let some module := packageModule? env constant | continue
-    if info matches .axiomInfo _ then
-      unless isCompilerTrust constant do offenders := offenders.push (constant, [constant])
-      continue
-    let axioms ← liftCoreM <| collectAxioms constant
-    let outside := axioms.toList.filter (fun axiomName => !standard.contains axiomName)
+    let outside ← if info matches .axiomInfo _ then pure [constant] else do
+      let axs ← liftCoreM <| collectAxioms constant
+      pure (axs.toList.filter (fun a => !standard.contains a))
+    for a in outside do
+      if isCompilerTrust a && !replayed.contains a then
+        replayOracle a
+        replayed := replayed.insert a
     if outside.isEmpty then continue
     if outside.all isCompilerTrust then
       let dir := directoryOf module
@@ -130,7 +157,7 @@ elab "#assert_axioms_tree" : command => do
     throwError m!"#assert_axioms_tree: {offenders.size} package constants rest on axioms outside the standard three and the compiler trust (first 20): {offenders.toList.take 20}"
   let compiled := compiledByDir.toList.toArray.qsort (fun a b => a.1.toString < b.1.toString)
     |>.map (fun (d, n) => m!"{d} {n}")
-  logInfo m!"#assert_axioms_tree: no package constant rests on sorryAx or a declared axiom; compiled trust (native_decide/bv_decide, each re-run by #assert_compiled) by directory: {MessageData.joinSep compiled.toList m!", "}; computed_fields overrides (lcProof, compiled code only): {overrides}"
+  logInfo m!"#assert_axioms_tree: no package constant rests on sorryAx or a declared axiom; compiled trust (native_decide/bv_decide, {replayed.size} distinct oracles replayed) by directory: {MessageData.joinSep compiled.toList m!", "}; computed_fields overrides (lcProof, compiled code only): {overrides}"
 
 end Obend.AssertAxioms
 
