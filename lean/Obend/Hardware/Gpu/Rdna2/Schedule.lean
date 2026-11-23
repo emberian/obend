@@ -413,13 +413,25 @@ private def storeConst7Words : Array UInt32 :=
 private def storeConst7Prog : Program :=
   (decodeProgFast storeConst7Words).toOption.getD #[]
 
-set_option maxRecDepth 2000000 in
+private instance : DecidableEq Encoding := fun a b =>
+  if h : a.name = b.name ∧ a.order = b.order ∧ a.bitCount = b.bitCount ∧ a.mask = b.mask ∧
+      a.identifiers = b.identifiers ∧ a.conditions = b.conditions ∧ a.fields = b.fields then
+    isTrue (by cases a; cases b; obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ := h; rfl)
+  else
+    isFalse (fun heq => by subst heq; exact h ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩)
+
+private instance : DecidableEq Inst := fun a b =>
+  if h : a.inst = b.inst ∧ a.enc = b.enc ∧ a.ie = b.ie ∧ a.fields = b.fields ∧ a.words = b.words then
+    isTrue (by cases a; cases b; obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := h; rfl)
+  else
+    isFalse (fun heq => by subst heq; exact h ⟨rfl, rfl, rfl, rfl, rfl⟩)
+
 private theorem decodeProgram_storeConst7 :
     decodeProgram storeConst7Words = .ok storeConst7Prog := by
   apply decodeProgram_eq_fast_ok
   unfold storeConst7Prog
   have hOk : (decodeProgFast storeConst7Words).isOk = true := by
-    set_option cbv.maxSteps 5000000 in cbv
+    decide +kernel
   cases h : decodeProgFast storeConst7Words with
   | error e => rw [h] at hOk; cases hOk
   | ok p => rfl
@@ -661,9 +673,8 @@ private def sc7_i10 : Inst := mkCompactInst "S_ENDPGM" true false "ENC_SOPP" [] 
 private def sc7Compact : Program :=
   #[some sc7_i0, some sc7_i1, some sc7_i2, none, some sc7_i4, some sc7_i5, some sc7_i6, some sc7_i7, none, some sc7_i9, some sc7_i10]
 
-set_option maxRecDepth 2000000 in
 private theorem storeConst7Prog_strip : storeConst7Prog.map (Option.map stripInst) = sc7Compact := by
-  set_option cbv.maxSteps 5000000 in cbv
+  decide +kernel
 
 private theorem list_mapM_eq_some {α β : Type} (f : α → Option β) (g : α → β) (xs : List α)
     (h : ∀ x ∈ xs, f x = some (g x)) : xs.mapM f = some (xs.map g) := by

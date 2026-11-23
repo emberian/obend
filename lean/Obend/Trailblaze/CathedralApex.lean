@@ -4427,8 +4427,7 @@ private theorem executeRdna2AddDispatch_eq :
       Bind.bind, Option.bind, Pure.pure, List.drop, List.append_nil]
     rfl
   rw [executeRdna2SliceReduction_of_decode _ _ hd]
-  set_option cbv.maxSteps 1000000 in
-  cbv
+  decide +kernel
 
 private theorem checkRdna2DispatchEnvelope_inhabited :
     ∃ d : ClusterGov.Rdna2WavefrontDispatch,
