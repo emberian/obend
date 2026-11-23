@@ -4573,8 +4573,8 @@ private theorem step0_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
         Obend.Hardware.Gpu.Rdna2.Dom.ite) (List.range Obend.Hardware.Gpu.Rdna2.lanes) with
   | none =>
     rw [Obend.Hardware.Gpu.Rdna2.GWave.fail_eq, Obend.Hardware.Gpu.Rdna2.GWave.fail_eq]
-    simp only [s1', s2', hha, her, hha2, her2, Option.isSome_none, Bool.false_eq_true, ↓reduceIte]
-    exact ⟨h.1, rfl, rfl, rfl, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2⟩
+    simp only [her, her2, Option.isSome_none, Bool.false_eq_true, ↓reduceIte]
+    exact ⟨h.1, rfl, h.2.2.1, rfl, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2⟩
   | some rs =>
     have hrs : ∀ p ∈ rs, p.1 < 64 := by
       have hm' : ((List.range Obend.Hardware.Gpu.Rdna2.lanes).mapM fun l =>
@@ -4584,7 +4584,7 @@ private theorem step0_addEnd_sim {s1 s2 : Obend.Hardware.Gpu.Rdna2.WaveState}
                (Obend.Hardware.Gpu.Rdna2.Dom.add (Obend.Hardware.Gpu.Rdna2.src0 src) (Obend.Hardware.Gpu.Rdna2.src1 src))
                (Obend.Hardware.Gpu.Rdna2.readVgpr s1' 0 l)).map fun v => (l, v)) = some rs := by
         rw [← hm]; apply list_mapM_congr_mem; intro l _; rw [Obend.Hardware.Gpu.Rdna2.laneStep_eq]
-        split <;> simp [Option.map_map]
+        split <;> simp [Option.map_map, Function.comp]
       exact list_mapM_fst_lt (fun x hx => by unfold Obend.Hardware.Gpu.Rdna2.lanes at hx; exact List.mem_range.mp hx) hm'
     exact writeLanes0_vgpr128Sim rs hrs h'
 
