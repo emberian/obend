@@ -3,16 +3,14 @@ module
 public import Obend.Tactic.Tooth
 public import Obend.Analysis.Equitable
 public import Obend.Analysis.QuantumWalk
-public import Obend.Hardware.Photonics
 public import Obend.Hardware.QuantumMatter
 import Obend.Teeth.Hardware.CliffordKernel
 import all Obend.Analysis.Equitable
 import all Obend.Analysis.QuantumWalk
-import all Obend.Hardware.Photonics
 import all Obend.Hardware.QuantumMatter
 
 /-!
-# Metasystem Test Suite — Quantum Walks, Spectral Synthesis, Planar Clements Photonics & Clifford $Cl_4$ Majorana Algebra (`WS-E`)
+# Metasystem Test Suite — Quantum Walks, Spectral Synthesis & Clifford $Cl_4$ Majorana Algebra (`WS-E`)
 
 Comprehensive universal theorem checks, boundary & negative refutation tests, `#tooth`
 kernel mutation-killing probes, and `#print axioms` verification (`0 sorryAx`, `0 Classical.choice`)
@@ -28,11 +26,7 @@ across:
    - `synthesizeSylvesterProjector`, `synthesizeSylvesterProjectorPoly`,
      `checkSpectralDecomposition`, `checkSpectralDecomposition_sound`,
    - `evalTaylorPropagator`, `propagatorTaylorStep`, `continuous_time_taylor_propagator_intertwines`.
-3. `Obend.Hardware.Photonics` & `Obend.Hardware.QuantumMatter` (Coupler Ratios & Planar Clements Mesh):
-   - `couplerKrawtchouk375`, `couplerRealizesQuotientRatio`, `synthesizeKrawtchoukPhotonicCouplers`,
-     `compileEquitableToPhotonicArray_ratio_sound`,
-   - `evalPlanarClements4Mesh`, `planarClements4Mesh_conserves_optical_power`.
-4. `Obend.Hardware.QuantumMatter` (Clifford $Cl_4$ Majorana Algebra & Parity Eigenspace Protection):
+3. `Obend.Hardware.QuantumMatter` (Clifford $Cl_4$ Majorana Algebra & Parity Eigenspace Protection):
    - `cliffordSign`, `cliffordMul`, `clifford_majorana_algebra_laws`,
    - `commutesWithParity`, `isEvenBladeSupported`, `clifford_commutesWithParity_iff_even_blades`,
    - `cliffordToTetronMatrix`, `cliffordParityQuotient`,
@@ -45,7 +39,6 @@ namespace Obend.Tests.Metasystem.QuantumCliffordClementsTest
 
 open Obend.Judge.SOS
 open Obend.Analysis
-open Obend.Hardware.Photonics
 open Obend.Hardware.QuantumMatter
 set_option autoImplicit false
 
@@ -225,81 +218,7 @@ def brokenSynthesizeSylvesterProjector (Q : IntMatrix) (_ : List Int) (_ : Nat) 
   by mutation Obend.Analysis.synthesizeSylvesterProjector := brokenSynthesizeSylvesterProjector
 
 
-/-! ## 3. Pillar 3 Tests: Coupler-to-Quotient Ratio Synthesis & Planar Clements 4-Mode Mesh -/
-
--- 3.1 Exact Coupler-to-Quotient Ratio Verification (`couplerRealizesQuotientRatio`, `synthesizeKrawtchoukPhotonicCouplers_realizes_ratio`)
-def testCouplerKrawtchouk375 : CouplerRatioSpec where
-  couplerName   := "dc_krawtchouk_375"
-  gapNm         := 225
-  couplingLenUm := 11
-  tSqPpm        := 625000
-  kappaSqPpm    := 375000
-
-def testCoupler360 : CouplerRatioSpec where
-  couplerName   := "dc_360"
-  gapNm         := 230
-  couplingLenUm := 10
-  tSqPpm        := 640000
-  kappaSqPpm    := 360000
-
-example : couplerRealizesQuotientRatio hypercubeQ3Quotient
-    [testCouplerKrawtchouk375, coupler3dBRatio, testCouplerKrawtchouk375] = true := rfl
-
-example (Q : Nat → Nat → Int) (dim : Nat) (scale : Int) :
-    couplerRealizesQuotientRatio Q (synthesizeKrawtchoukPhotonicCouplers Q dim scale) = true :=
-  synthesizeKrawtchoukPhotonicCouplers_realizes_ratio Q dim scale
-
--- Negative refusal poles: uniform 1:1:1 couplers and 36:50:36 couplers are strictly refused!
-example : couplerRealizesQuotientRatio hypercubeQ3Quotient
-    [coupler3dBRatio, coupler3dBRatio, coupler3dBRatio] = false := rfl
-
-example : couplerRealizesQuotientRatio hypercubeQ3Quotient
-    [testCoupler360, coupler3dBRatio, testCoupler360] = false := rfl
-
-example :
-    checkEquitablePartition hypercubeQ3Matrix 4 hypercubeQ3Part hypercubeQ3Quotient = true ∧
-    couplerRealizesQuotientRatio hypercubeQ3Quotient
-      (synthesizeKrawtchoukPhotonicCouplers hypercubeQ3Quotient 4 125000) = true :=
-  ⟨rfl, synthesizeKrawtchoukPhotonicCouplers_realizes_ratio hypercubeQ3Quotient 4 125000⟩
-
--- 3.2 Planar Clements 4-Mode Nearest-Neighbor Mesh (`evalPlanarClements4Mesh`, `planarClements4Mesh_conserves_optical_power`)
--- Zero-input boundary case
-example (t1 k1 t2 k2 : Int) :
-    evalPlanarClements4Mesh t1 k1 t2 k2 ⟨0, 0⟩ ⟨0, 0⟩ ⟨0, 0⟩ ⟨0, 0⟩ =
-      (⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩) := by
-  simp [evalPlanarClements4Mesh, evalPhotonicArray4LayerEven, evalPhotonicArray4LayerOdd,
-    evalDirectionalCoupler2x2]
-
--- Planar locality test: changing input `e3` on waveguide 3 has ZERO effect on output mode 0
--- in `evalPlanarClements4Mesh`, unlike non-planar `evalPhotonicArray4Mesh2Step`!
-theorem planarClements_mode0_independent_of_mode3
-    (t1 k1 t2 k2 : Int) (e0 e1 e2 e3 e3' : ComplexField) :
-    (evalPlanarClements4Mesh t1 k1 t2 k2 e0 e1 e2 e3).1 =
-      (evalPlanarClements4Mesh t1 k1 t2 k2 e0 e1 e2 e3').1 :=
-  rfl
-
--- Contrast with non-planar `evalPhotonicArray4Mesh2Step`, where mode 0 DOES depend on mode 3
-example :
-    (evalPhotonicArray4Mesh2Step 1 1 ⟨1, 0⟩ ⟨0, 0⟩ ⟨0, 0⟩ ⟨0, 0⟩).1 ≠
-      (evalPhotonicArray4Mesh2Step 1 1 ⟨1, 0⟩ ⟨0, 0⟩ ⟨0, 0⟩ ⟨1, 0⟩).1 := by
-  decide
-
--- `#tooth` mutation probes for Pillar 3
-def brokenSynthesizeKrawtchoukPhotonicCouplers (_ : Nat → Nat → Int) (dim : Nat) (_ : Int) : List CouplerRatioSpec :=
-  List.replicate (dim - 1) coupler3dBRatio
-
-#tooth Obend.Hardware.QuantumMatter.synthesizeKrawtchoukPhotonicCouplers_realizes_ratio
-  by mutation Obend.Hardware.QuantumMatter.synthesizeKrawtchoukPhotonicCouplers := brokenSynthesizeKrawtchoukPhotonicCouplers
-
-def brokenEvalPlanarClements4Mesh (t1 k1 _ _ : Int) (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  (e0, e1, e2, { re := e3.re + t1 + k1 + 1, im := e3.im })
-
-#tooth Obend.Hardware.QuantumMatter.planarClements4Mesh_conserves_optical_power
-  by mutation Obend.Hardware.QuantumMatter.evalPlanarClements4Mesh := brokenEvalPlanarClements4Mesh
-
-
-/-! ## 4. Pillar 4 Tests: Clifford Algebra $Cl_4$ & Majorana Parity Eigenspace Protection -/
+/-! ## 3. Clifford Algebra $Cl_4$ & Majorana Parity Eigenspace Protection -/
 
 -- 4.1 Majorana generator relations: γ_a^2 = 1, {γ_a, γ_b} = 0 (a ≠ b), P = -γ_0 γ_1 γ_2 γ_3, P^2 = 1
 theorem clifford_parity_eq_neg_gamma_product :
@@ -390,8 +309,6 @@ def brokenIsEvenBladeSupported (_ : CliffordElem) : Bool :=
 #print axioms Obend.Analysis.checkSpectralDecomposition_sound
 #print axioms Obend.Analysis.continuous_time_taylor_propagator_intertwines
 #print axioms Obend.Analysis.continuous_time_taylor_propagator_intertwines_unpartitioned
-#print axioms Obend.Hardware.QuantumMatter.planarClements4Mesh_conserves_optical_power
-#print axioms Obend.Hardware.QuantumMatter.synthesizeKrawtchoukPhotonicCouplers_realizes_ratio
 #print axioms Obend.Hardware.QuantumMatter.clifford_majorana_algebra_laws
 #print axioms Obend.Hardware.QuantumMatter.clifford_commutesWithParity_iff_even_blades
 #print axioms Obend.Hardware.QuantumMatter.clifford_commutesWithParity_zero_offblock_and_leakage

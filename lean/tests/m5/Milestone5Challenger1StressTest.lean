@@ -10,7 +10,6 @@ import Obend.Hardware.Synth
 import Obend.Hardware.Process
 import Obend.Hardware.PlaceRoute
 import Obend.Hardware.PlaneSweepDrcLvs
-import Obend.Hardware.Circuits
 import all Obend.Vault.Json
 meta import Obend.Vault.Json
 meta import Obend.Doc.Structured
@@ -22,7 +21,6 @@ meta import Obend.Hardware.Synth
 meta import Obend.Hardware.Process
 meta import Obend.Hardware.PlaceRoute
 meta import Obend.Hardware.PlaneSweepDrcLvs
-meta import Obend.Hardware.Circuits
 import Lean.Data.Json
 
 open Obend.Doc
@@ -33,7 +31,6 @@ open Obend.Hardware.Synth
 open Obend.Hardware.Process
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.PlaneSweepDrcLvs
-open Obend.Hardware.Circuits
 open Obend.Vault.Json
 open Lean (Json toJson fromJson?)
 

@@ -4,8 +4,8 @@ module
 
 Tests both the positive and negative poles of `Obend.Hardware` across surviving hardware & physical
 modules (`Silicon`, `Process`, `HDL`, `Types`, `Compiler`, `Synth`,
-`Retiming`, `PlaceRoute`, `DRC`, `Analog`, `Datasheet`, `Circuits`, `Device.Wafer`, `Photonics`,
-`PCB`, `ReductionMachine`, `DSP`, `AgenticEDA`, `Magnetics`, `CurrentLoop`, `ThermalPassivity`,
+`Retiming`, `PlaceRoute`, `DRC`, `Analog`, `Device.Wafer`,
+`PCB`, `ReductionMachine`, `DSP`, `PinoutEquiv`, `Magnetics`, `CurrentLoop`,
 `Accelerators`, `GeometryCAM`, `Kinematics`, `OpenUSD`, `OpenHypergraph`,
 `QuantumMatter`, `Codec`, `Judge`, and `Apps.SiliconKernelVerilator`).
 -/
@@ -31,18 +31,14 @@ import all Obend.Hardware.Retiming
 import all Obend.Hardware.PlaceRoute
 import all Obend.Hardware.PlaneSweepDrcLvs
 import all Obend.Hardware.SmallSignalMna
-import all Obend.Hardware.Datasheet
-import all Obend.Hardware.Circuits
 import all Obend.Hardware.Device.Sky130Diode
 import all Obend.Hardware.Device.Wafer
-import all Obend.Hardware.Photonics
 import all Obend.Hardware.PCB
 import all Obend.Hardware.ReductionMachine
 import all Obend.Hardware.DigitalFilterAndArray
 import all Obend.Hardware.PinoutEquiv
 import all Obend.Hardware.Magnetics
 import all Obend.Hardware.CurrentLoop
-import all Obend.Hardware.ThermalPassivity
 import all Obend.Hardware.Accelerators
 import all Obend.Hardware.GeometryCAM
 import all Obend.Hardware.Kinematics
@@ -60,10 +56,9 @@ open Obend.Hardware.Silicon Obend.Hardware.Process
 open Obend.Hardware.HDL Obend.Hardware.Types
 open Obend.Hardware.Compiler Obend.Hardware.Synth Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.PlaneSweepDrcLvs Obend.Hardware.SmallSignalMna
-open Obend.Hardware.Datasheet Obend.Hardware.Circuits
-open Obend.Hardware.Photonics Obend.Hardware.PCB
+open Obend.Hardware.PCB
 open Obend.Hardware.ReductionMachine Obend.Hardware.DigitalFilterAndArray Obend.Hardware.PinoutEquiv
-open Obend.Hardware.Magnetics Obend.Hardware.CurrentLoop Obend.Hardware.ThermalPassivity
+open Obend.Hardware.Magnetics Obend.Hardware.CurrentLoop
 open Obend.Hardware.Accelerators Obend.Hardware.GeometryCAM
 open Obend.Hardware.Kinematics Obend.Hardware.OpenUSD
 open Obend.Hardware.OpenHypergraph Obend.Hardware.QuantumMatter Obend.Analysis
@@ -126,23 +121,10 @@ example :
     checkTrenchFillVoidFree ⟨200, 50, 20, 60⟩ = false :=
   ⟨rfl, rfl⟩
 
-/-- Direct `SN74LS00` TTL $\to$ `CD74HC00` CMOS interfacing ($\text{NM}_H = -800\,\text{mV}$) and
-uncalibrated model drift ($\varepsilon_\infty = 620\,\text{mV} > 25\,\text{mV}$) are refused. -/
+/-- Unstable feedback LNA ($K < 1$) is refused by `checkRollettUnconditionalStability`. -/
 example :
-    checkLogicInterface sn74ls00Datasheet.logic cd74hc00Datasheet.logic 0 400 = false ∧
-    checkModelCalibration uncalibratedDrifted74ls00Preds sn74ls00Datasheet.transferCurve 25 = false ∧
-    checkDatasheetFitSignoff sn74ls00ToHct00FitCert = true ∧
-    checkDatasheetFitSignoff badDirect74HcFitCert = false ∧
-    checkDatasheetFitSignoff badUncalibratedDriftFitCert = false :=
-  ⟨rfl, rfl, rfl, rfl, rfl⟩
-
-/-- `SN74LS00` fanout overload (`25 > 10`), synchronous Buck inductor saturation (`3691 mA > 3500 mA`),
-and unstable feedback LNA ($K < 1$) are refused. -/
-example :
-    checkTtlFanout sn74ls00TotemParams 25 = false ∧
-    checkBuckCcmSafe overloadedSaturatingBuckSpec = false ∧
     checkRollettUnconditionalStability unstableFeedbackLnaSParams = false :=
-  ⟨rfl, rfl, rfl⟩
+  rfl
 
 /-! ## 2. End-to-End Compilation of `Obend.Leaf.emit (comp 1)` to `RtlModule` -/
 
@@ -278,19 +260,12 @@ def mutantCheckRtlSynthAcceptAll (_grade : Nat) (_expectedName : String) (_m : R
 
 #tooth Obend.Hardware.Judge.badLoopRtlModule_refused by mutation Obend.Hardware.Judge.checkRtlSynth := mutantCheckRtlSynthAcceptAll
 
-/-- 23. Broken `checkLogicInterface` in `Obend.Hardware.Datasheet` that forgets to verify `noiseMarginHigh`. -/
+/-- 23. Broken `checkLogicInterface` in `Obend.Hardware.PinoutEquiv` that forgets to verify `noiseMarginHigh`. -/
 def mutantCheckLogicInterfaceIgnoreHigh (drv rcv : LogicFamilySpec) (_pullupBoostMv minMarginMv : Int) : Bool :=
   decide (minMarginMv ≤ noiseMarginLow drv rcv) &&
   decide (drv.volMaxMv < rcv.vihMinMv)
 
-#tooth Obend.Hardware.Datasheet.checkLogicInterface_guarantees_valid_thresholds by mutation Obend.Hardware.Datasheet.checkLogicInterface := mutantCheckLogicInterfaceIgnoreHigh
-
-/-- 24. Broken `evalInaOutputUv` in `Obend.Hardware.Circuits` that forgets to apply `trimCmCancel`. -/
-def evalInaOutputUvNoTrim (p : InaParams) (vDiffUv vCmUv deltaTC : Int) : Int :=
-  p.gainDiff * (vDiffUv + p.vos0Uv + p.dVosDtUvPerC * deltaTC) +
-  p.gainCmRaw * vCmUv
-
-#tooth Obend.Hardware.Circuits.ina_common_mode_cancelled_at_matched_bridge by mutation Obend.Hardware.Circuits.evalInaOutputUv := evalInaOutputUvNoTrim
+#tooth Obend.Hardware.PinoutEquiv.checkLogicInterface_guarantees_valid_thresholds by mutation Obend.Hardware.PinoutEquiv.checkLogicInterface := mutantCheckLogicInterfaceIgnoreHigh
 
 /-- 25. Broken `WaferState.anneal` in `Obend.Hardware.Device` that leaves every profile's variance unchanged. -/
 def annealNoDiffusion (w : Obend.Hardware.Device.WaferState) (_d : Obend.Hardware.Device.Diffusivities)
@@ -300,12 +275,6 @@ def annealNoDiffusion (w : Obend.Hardware.Device.WaferState) (_d : Obend.Hardwar
 
 -- 26. Broken `sqrtEnclosure` in `Obend.Hardware.Device` that sets `lo = v + 1` (violating `lo^2 ≤ v`).
 #tooth Obend.Hardware.Device.sqrtEnclosure_spec by mutation Obend.Hardware.Device.sqrtEnclosure := (fun (v : Obend.Analysis.CanonicalRat) (_iters : optParam Nat 48) => (⟨v + 1, v + 1⟩ : Obend.Analysis.Interval))
-
-/-- 27. Broken `evalPhaseShifter2x2` in `Obend.Hardware.Photonics` that negates `e1` regardless of `phasePhasor` (breaking zero-phase pure-cross MZI interference). -/
-def evalPhaseShifter2x2BrokenFlip (_phasePhasor : ComplexField) (e1 e2 : ComplexField) : ComplexField × ComplexField :=
-  ({ re := -e1.re, im := -e1.im }, e2)
-
-#tooth Obend.Hardware.Photonics.cascaded_mzi_zero_phase_pure_cross by mutation Obend.Hardware.Photonics.evalPhaseShifter2x2 := evalPhaseShifter2x2BrokenFlip
 
 /-- 28. Broken `fxSqrt` in `Obend.Hardware.PCB` that returns `0` (violating `a * fxS < (fxSqrt a + 1)^2` and positivity). -/
 def fxSqrtZero (_a : Nat) : Nat := 0
@@ -359,13 +328,6 @@ def stepBhPicardUnnormalized (nuLinear kSat _omegaPermille nuCur bSq : Int) : In
   nuCur + evalNonlinearReluctivity nuLinear kSat bSq
 
 #tooth Obend.Hardware.Magnetics.stepBhPicardReluctivity_fixed_point by mutation Obend.Hardware.Magnetics.stepBhPicardReluctivity := stepBhPicardUnnormalized
-
-/-- 35. Broken `evalEdgeQuadratic` in `Obend.Hardware.ThermalPassivity` that negates conductance `-g * (ti - tj)^2` (violating passive Laplacian dissipation). -/
-def evalEdgeQuadraticAntiPassive (tempsMk : List Int) (e : ThermalEdge) : Int :=
-  let dT := tempsMk.getD e.nodeU 0 - tempsMk.getD e.nodeV 0
-  0 - e.conductanceMwPerK * (dT * dT)
-
-#tooth Obend.Hardware.ThermalPassivity.laplacian_quadratic_passive_universal by mutation Obend.Hardware.ThermalPassivity.evalEdgeQuadratic := evalEdgeQuadraticAntiPassive
 
 /-- 36. Broken `rtlPiStep` in `Obend.Hardware.CurrentLoop` that drops proportional and integral error terms (`v = intMv`). -/
 def rtlPiStepDead (_kpMilli _kiMilli _errMa intMv : Int) : Int × Int :=
@@ -501,17 +463,6 @@ def cborDecodeU32ListDropHead : Nat → List UInt8 → Option (List UInt32 × Li
 def cellRowSumZero (_H : Nat → Nat → Int) (_cellJ : List Nat) (_u : Nat) : Int := 0
 
 #tooth Obend.Analysis.equitable_handshake_identity by mutation Obend.Analysis.cellRowSum := cellRowSumZero
-
-/-- 52. Broken `evalPhotonicArray4LayerEven` in `Obend.Hardware.QuantumMatter` that duplicates `c01.1` on waveguide 1. -/
-def evalPhotonicArray4LayerEvenDuplicatePort
-    (t01 k01 t23 k23 : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  let c01 := evalDirectionalCoupler2x2 t01 k01 e0 e1
-  let c23 := evalDirectionalCoupler2x2 t23 k23 e2 e3
-  (c01.1, c01.1, c23.1, c23.2)
-
-#tooth Obend.Hardware.QuantumMatter.photonic_ctqw_array_power_conserved by mutation Obend.Hardware.QuantumMatter.evalPhotonicArray4LayerEven := evalPhotonicArray4LayerEvenDuplicatePort
 
 /-- 53. Broken mutant of `runVerilatorCoSimModel` in `Obend.Apps.SiliconKernelVerilator` that fails to refuse `#tooth` mutants (`toothMutantRefused := false`). -/
 def runVerilatorCoSimModelAcceptMutant : Obend.Apps.SiliconKernelVerilator.VerilatorCoSimTrace :=

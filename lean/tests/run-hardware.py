@@ -9,7 +9,7 @@
     `obend-emit-sv` are present.
   * Verilator `-Wall` lint + cycle-accurate simulation (`Verilated::randReset(2)`, VCD trace) of
     `hardware/sim/tb_top.sv` + `sim_main.cpp` and standalone multi-clock `obend_width_probe.sv`.
-  * Obend CLI Hardware Judge receipts (`hw-pnr-bitstream@1`, `hw-retime-sta@1`, `datasheet-fit@1`,
+  * Obend CLI Hardware Judge receipts (`hw-pnr-bitstream@1`, `hw-retime-sta@1`,
     `agentic-eda-swap@1`), binary RFC 8949 CBOR (`hw-binary-cbor@1` Tag 0x0BED + variable-length
     0x9A `hw-binary-tape-cbor@1`), sequential `obend lower` FSM synthesis, and live compiler-emitted
     SystemVerilog (`obend hardware emit-sv`) co-simulation when `.lake/build/bin/obend` is built.
@@ -165,14 +165,6 @@ with tempfile.TemporaryDirectory(prefix="obend_run_hw_") as work_dir:
               r_ret.returncode == 0 and r_ret_bad.returncode == 3,
               r_ret.stdout + r_ret_bad.stderr)
 
-        ds_receipt = os.path.join(work_dir, "datasheet_receipt.json")
-        r_ds = subprocess.run([OBEND_BIN, "hardware", "datasheet-check", "--mode", "calibrated", "--out", ds_receipt], capture_output=True, text=True)
-        r_ds_ver = subprocess.run([OBEND_BIN, "verify", ds_receipt], capture_output=True, text=True)
-        r_ds_bad = subprocess.run([OBEND_BIN, "hardware", "datasheet-check", "--mode", "74ls_to_74hc_direct"], capture_output=True, text=True)
-        check("obend hardware datasheet-check + obend verify (datasheet-fit@1 calibrated & 74LS->74HC direct refused)",
-              r_ds.returncode == 0 and r_ds_ver.returncode == 0 and r_ds_bad.returncode == 3,
-              r_ds.stdout + r_ds_ver.stdout + r_ds_bad.stderr)
-
         eda_receipt = os.path.join(work_dir, "eda_vault_receipt.json")
         r_eda = subprocess.run([OBEND_BIN, "hardware", "eda-vault-check", "--mode", "golden", "--out", eda_receipt], capture_output=True, text=True)
         r_eda_ver = subprocess.run([OBEND_BIN, "verify", eda_receipt], capture_output=True, text=True)
@@ -206,7 +198,7 @@ with tempfile.TemporaryDirectory(prefix="obend_run_hw_") as work_dir:
         # 6. Binary RFC 8949 CBOR (hw-binary-cbor@1, Tag 0x0BED) + .obnb Core.Data + Rust FFI Interop Checks
         cbor_bin_path = os.path.join(work_dir, "hw_cert.cbor")
         obnb_cell_path = os.path.join(work_dir, "hw_cell.obnb")
-        for dom in ["pnr", "photonics", "pcb", "dpr", "eda", "magnetics"]:
+        for dom in ["pnr", "pcb", "dpr", "eda", "magnetics"]:
             r_cbor = subprocess.run(
                 [OBEND_BIN, "hardware", "verify-cbor", "--domain", dom, "--out-bin", cbor_bin_path, "--out-obnb", obnb_cell_path],
                 capture_output=True, text=True,

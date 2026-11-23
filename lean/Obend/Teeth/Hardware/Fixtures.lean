@@ -13,7 +13,6 @@ import Obend.Hardware.GeometryCAM
 import Obend.Hardware.Kinematics
 import Obend.Hardware.OpenUSD
 import Obend.Hardware.Retiming
-import Obend.Hardware.Circuits
 import Obend.Hardware.NotebookProjection
 
 set_option autoImplicit false
@@ -22,7 +21,6 @@ set_option autoImplicit false
 namespace Obend.Hardware.PinoutEquiv
 open Obend.Vault
 open Obend.Spec.Law (LawExpr Facts)
-open Obend.Hardware.Datasheet
 /-- Fixture check (`defaultAgenticBomSwap_admitted_and_overbudget_refused`):
 1. `defaultEdaLaws` enforces 4 `.obend` smart-contract invariants (`drc_zero`, `thermal_cap`,
    `rf_vswr_cap`, `bom_budget`),
@@ -186,18 +184,6 @@ example :
      | none => false) = true := by
   decide +kernel
 end Obend.Hardware.Retiming
-
--- Relocated concrete Buck & DatasheetFit fixtures from Obend/Hardware/Circuits.lean
-namespace Obend.Hardware.Circuits
-example :
-    evalBuckSteadyVoutMv buck12vTo5v2aSpec = 5004 ∧
-    checkBuckCcmSafe buck12vTo5v2aSpec = true ∧
-    checkBuckCcmSafe overloadedSaturatingBuckSpec = false ∧
-    checkDatasheetFitSignoff sn74ls00ToHct00FitCert = true ∧
-    checkDatasheetFitSignoff badDirect74HcFitCert = false ∧
-    checkDatasheetFitSignoff badUncalibratedDriftFitCert = false :=
-  ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
-end Obend.Hardware.Circuits
 
 -- Relocated concrete 20-op SSA tape pruning & right-branch compaction fixtures from Obend/Hardware/GeometryCAM.lean
 namespace Obend.Hardware.GeometryCAM

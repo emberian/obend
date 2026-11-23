@@ -67,7 +67,6 @@ def usage : String :=
   "             | genealogy act (write CELL N | revert | forget) [--as NAME] [--says TEXT]   (in a directory holding genealogy.json)\n" ++
   "       obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json] | analyze replay PAGE@FILE --world DIR\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf\n" ++
-  "       obend tapeout [FILE.obend] [--entry NAME] [--mode pipelined|seq|comb] [--out-sv FILE.sv] [--out-librelane FILE.json] [--out-receipt RECEIPT.json]\n" ++
   "       obend verilate <FILE.obend> [--top NAME] [--vectors N] [--cycles C] [--vcd OUT.vcd]"
 def usage64 : IO UInt32 := do IO.eprintln usage; return 64
 
@@ -1378,7 +1377,6 @@ def dispatch (args : List String) : IO UInt32 :=
           ((Obend.Receipt.Cli.main? ("verify" :: path :: rest)).getD usage64)
   | "analyze" :: _ => (Obend.Analysis.Cli.main? args).getD usage64
   | "lower" :: _ => (Obend.Lower.Cli.main? args).getD usage64
-  | "tapeout" :: rest => Obend.Hardware.Cli.cmdTapeout rest
   | _ => if ["amend", "custody", "bazaar", "mpc", "pde", "notebook"].contains (args.headD "") then refuseUsage (args.headD "")
     else ((Obend.Receipt.Cli.main? args).orElse fun _ => (Obend.Ledger.Cli.main? args).orElse fun _ =>
       (Obend.Hardware.Cli.main? args).orElse fun _ => (Obend.Judge.GenealogyCli.main? args).orElse fun _ =>

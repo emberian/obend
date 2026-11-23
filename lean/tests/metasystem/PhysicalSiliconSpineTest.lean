@@ -6,13 +6,11 @@ public import Obend.Hardware.Synth
 public import Obend.Hardware.Retiming
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.PlaneSweepDrcLvs
-public import Obend.Hardware.TapeoutPipeline
 import all Obend.Hardware.Silicon
 import all Obend.Hardware.Synth
 import all Obend.Hardware.Retiming
 import all Obend.Hardware.PlaceRoute
 import all Obend.Hardware.PlaneSweepDrcLvs
-import all Obend.Hardware.TapeoutPipeline
 
 /-!
 # Metasystem Test Suite — End-to-End Silicon Physical Implementation Spine (`WS-I`)
@@ -32,10 +30,8 @@ kernel mutation-killing probes, and `#print axioms` verification (`0 sorryAx`) a
 3. `Obend.Hardware.PlaneSweepDrcLvs`:
    - `LayoutBox2D`, `checkBoxSpacing2D`, `checkViaEnclosure2D`,
    - `boxSpacing2D_disjoint`, `viaEnclosure2D_contained`.
-4. `Obend.Hardware.Silicon` & `Obend.Hardware.TapeoutPipeline`:
-   - `checkAllChannelHops`, `checkAllChannelHops_sound`,
-   - `compileCompositionToSiliconTapeout`, `compileCompositionToSiliconTapeout_sound`,
-   - `reference_obend_module_silicon_tapeout_verified` & stage-by-stage negative refusal poles.
+4. `Obend.Hardware.Silicon`:
+   - `checkAllChannelHops`, `checkAllChannelHops_sound`.
 -/
 
 @[expose] public section
@@ -48,7 +44,6 @@ open Obend.Hardware.Synth
 open Obend.Hardware.Retiming
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.PlaneSweepDrcLvs
-open Obend.Hardware.TapeoutPipeline
 set_option autoImplicit false
 
 /-! ## 1. Constructive Leiserson–Saxe Retiming, Order-Independent DAG Longest Path & Cycle Invariance -/
@@ -214,7 +209,7 @@ example :
     checkViaEnclosure2D 15 viaOverhang boxA = false := by
   decide +kernel
 
-/-! ## 4. Barrel-Shift `Synth` Equivalence & Netlist-Bound `TapeoutPipeline` Negative Poles -/
+/-! ## 4. Barrel-Shift `Synth` Equivalence -/
 
 /-- Concrete barrel-shift `RtlModule` testing `.shl`, `.lshr`, `.ashr` (including ≥ 64 saturating shifts!)
 under `synthesizeModuleToBels` vs `evalModuleOutputs`. -/
@@ -257,28 +252,6 @@ example :
   exact ⟨hWf, (synthesizeModuleToBels_valid_and_ff_count barrelShiftTestRtl).1,
     hSmall, h63, h63.trans hRtl63⟩
 
-/-- Stage-by-stage negative refusal poles across `compileCompositionToSiliconTapeout`:
-1. `referenceCleanroomTcadComp` passes (`.isOk = true`),
-2. Unretimeable graph (`testUnretimeableGraph`) is refused,
-3. Colliding BEL PnR certificate (`collidingBelPnrCert`) is refused,
-4. Netlist cell-count mismatch (`validAdderPnrCert` with 2 cells vs synthesized >2 BELs) is refused,
-5. Overlapping 2D metal boxes are refused,
-6. Overhanging 2D via is refused,
-7. Overclocked 10 GHz (`clockPeriodPs = 100 ps`) envelope timing is refused. -/
-example :
-    (compileCompositionToSiliconTapeout referenceTapeoutConfig referenceCleanroomTcadComp [referenceTapeoutIsarCert]).isOk = true ∧
-    (compileCompositionToSiliconTapeout { referenceTapeoutConfig with syncGraph := testUnretimeableGraph } referenceCleanroomTcadComp []).isOk = false ∧
-    (compileCompositionToSiliconTapeout { referenceTapeoutConfig with pnrCert? := some collidingBelPnrCert } referenceCleanroomTcadComp []).isOk = false ∧
-    (compileCompositionToSiliconTapeout { referenceTapeoutConfig with pnrCert? := some validAdderPnrCert } referenceCleanroomTcadComp []).isOk = false ∧
-    (compileCompositionToSiliconTapeout
-      { referenceTapeoutConfig with metalBoxB := { layerId := 1, xMinNm := 20, yMinNm := 0, xMaxNm := 120, yMaxNm := 100 } }
-      referenceCleanroomTcadComp []).isOk = false ∧
-    (compileCompositionToSiliconTapeout
-      { referenceTapeoutConfig with viaBox := { layerId := 2, xMinNm := 2, yMinNm := 10, xMaxNm := 46, yMaxNm := 46 } }
-      referenceCleanroomTcadComp []).isOk = false ∧
-    (compileCompositionToSiliconTapeout { referenceTapeoutConfig with clockPeriodPs := 100 } referenceCleanroomTcadComp []).isOk = false := by
-  decide +kernel
-
 /-! ## 5. `#tooth` Kernel Mutation-Killing Probes & Axiom Audit -/
 
 def solveVerifiedRetimingBrokenSkipCheck (_fuel : Nat) (_g : SyncGraph) (_maxCombDelayPs : Nat) : Option RetimingCert :=
@@ -307,7 +280,6 @@ def downstreamCapFfDropRight : SteinerTree → Nat
 #print axioms Obend.Hardware.PlaceRoute.steiner_fanout_buffer_insertion_reduces_elmore_delay
 #print axioms Obend.Hardware.PlaneSweepDrcLvs.boxSpacing2D_disjoint
 #print axioms Obend.Hardware.PlaneSweepDrcLvs.viaEnclosure2D_contained
-#print axioms Obend.Hardware.TapeoutPipeline.compileCompositionToSiliconTapeout_sound
 
 end Obend.Tests.Metasystem.PhysicalSiliconSpineTest
 end

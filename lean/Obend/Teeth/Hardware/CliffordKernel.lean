@@ -22,7 +22,6 @@ set_option autoImplicit false
 set_option maxHeartbeats 1600000
 
 namespace Obend.Hardware.QuantumMatter
-open Obend.Hardware.Photonics
 open Obend.Hardware.OpenHypergraph
 open Obend.Leaf
 open Obend.Slot

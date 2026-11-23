@@ -22,7 +22,6 @@ import all Obend.Core.Ty
 import all Obend.Crypto.FastRing
 import all Obend.Crypto.Multilinear
 import all Obend.Hardware.Accelerators
-import all Obend.Hardware.Circuits
 import all Obend.Hardware.Codec
 import all Obend.Hardware.Compiler
 import all Obend.Hardware.GeometryCAM
@@ -30,7 +29,6 @@ import all Obend.Hardware.HDL
 import all Obend.Hardware.Kinematics
 import all Obend.Hardware.Magnetics
 import all Obend.Hardware.OpenHypergraph
-import all Obend.Hardware.Photonics
 import all Obend.Hardware.QuantumMatter
 import all Obend.Hardware.ReductionMachine
 import all Obend.Hardware.Synth
@@ -97,14 +95,9 @@ private def compactSsaTapeTruncateOnlyMutant (tape : List SsaTapeOp) (rootReg : 
 
 end Obend_Hardware_GeometryCAM
 
-/-! ## Extracted from `Obend.Hardware.{Circuits,Codec,Magnetics,Synth}` (8 teeth) -/
+/-! ## Extracted from `Obend.Hardware.{Codec,Magnetics,Synth}` (6 teeth) -/
 section Obend_Hardware_UniversalTeeth
-open Obend.Hardware.Circuits Obend.Hardware.Codec Obend.Hardware.Magnetics Obend.Hardware.Synth
-
-#tooth datasheetFitSignoff_domain_sound by mutation checkDatasheetFitSignoff := fun _ => true
-
-#tooth ina_common_mode_invariance_iff by mutation
-  evalInaOutputUv := fun p vDiff _ deltaTC => p.gainDiff * (vDiff + p.vos0Uv + p.dVosDtUvPerC * deltaTC)
+open Obend.Hardware.Codec Obend.Hardware.Magnetics Obend.Hardware.Synth
 
 #tooth nonTapeDomain_tape_cert_refused by mutation verifyBinaryTapeCert := fun _ => true
 
@@ -175,10 +168,9 @@ private def layerHypergraphCsrEmptyBug (_g : StrictOpenHypergraph) : List (List 
 
 end Obend_Hardware_OpenHypergraph
 
-/-! ## Extracted from `Obend.Hardware.QuantumMatter` (5 teeth) -/
+/-! ## Extracted from `Obend.Hardware.QuantumMatter` (4 teeth) -/
 section Obend_Hardware_QuantumMatter
 open Obend.Hardware.QuantumMatter Obend.Hardware.QuantumMatter.CliffordElem
-open Obend.Hardware.Photonics
 open Obend.Hardware.OpenHypergraph
 open Obend.Leaf
 open Obend.Slot
@@ -198,16 +190,6 @@ private def evalDuhamelLeakageRecurrenceDropPrevBug (opNorm epsBreak : Nat) : Na
   | k + 1 => epsBreak * (opNorm ^ k)
 
 #tooth perturbative_disorder_leakage_bound by mutation evalDuhamelLeakageRecurrence := evalDuhamelLeakageRecurrenceDropPrevBug
-
-/-- Broken `evalPlanarClements4x4` that zeroes out mode 1 in the odd layer (violating power conservation). -/
-private def evalPlanarClements4x4LossyBug
-    (t kappa : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  let (m0, _m1, m2, m3) := evalPhotonicArray4LayerEven t kappa t kappa e0 e1 e2 e3
-  (m0, ⟨0, 0⟩, m2, m3)
-
-#tooth planarClements4x4_conserves_optical_power by mutation evalPlanarClements4x4 := evalPlanarClements4x4LossyBug
 
 /-- Broken `quotientOpenHypergraph` that swaps cell weights $W_0$ and $W_1$. -/
 private def quotientOpenHypergraphSwapWeightsBug (W0 W1 : Int) (op2 : OpticOp) : StrictOpenHypergraph :=

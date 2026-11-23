@@ -34,7 +34,6 @@ import all Obend.Hardware.HDL
 import all Obend.Hardware.Kinematics
 import all Obend.Hardware.OpenHypergraph
 import all Obend.Hardware.OpenUSD
-import all Obend.Hardware.Photonics
 import all Obend.Hardware.Process
 import all Obend.Hardware.QuantumMatter
 import all Obend.Hardware.Silicon

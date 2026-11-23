@@ -138,7 +138,6 @@ import all Obend.Hardware.ArrayKernel
 import all Obend.Hardware.ArrayKernelOwnership
 import all Obend.Hardware.ArrayKernelUnique
 import all Obend.Hardware.ArrayTyping
-import all Obend.Hardware.Circuits
 import all Obend.Hardware.Codec
 import all Obend.Hardware.Compiler
 import all Obend.Hardware.PlaneSweepDrcLvs
@@ -161,7 +160,6 @@ import all Obend.Spec.BidirectionalSurfaceElab
 import all Obend.SymbolicZk.CompileToPiop
 import all Obend.SymbolicZk.CompileToPiopCore
 import all Obend.SymbolicZk.SkolemChaseCore
-import all Obend.Hardware.Datasheet
 import all Obend.Hardware.GeometryCAM
 import all Obend.Hardware.Gpu
 import all Obend.Hardware.Gpu.ArrayEmit
@@ -211,13 +209,11 @@ import all Obend.Hardware.MultiDStencilGpuSource
 import all Obend.Hardware.MultiDStencilTile
 import all Obend.Hardware.OpenHypergraph
 import all Obend.Hardware.PCB
-import all Obend.Hardware.Photonics
 import all Obend.Hardware.PlaceRoute
 import all Obend.Hardware.Process
 import all Obend.Hardware.ReductionMachine
 import all Obend.Hardware.Retiming
 import all Obend.Hardware.Synth
-import all Obend.Hardware.ThermalPassivity
 import all Obend.Hardware.Types
 import all Obend.Hardware.VerilateRunner
 import all Obend.Hardware.YosysLec

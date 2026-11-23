@@ -914,20 +914,6 @@ theorem = "sybilSplit_non_amplifying"
 description = "Min-cut bounded epistemic vouching refuses Sybil split amplification while judged refutations slash backing stake conserving total market value."
 
 [[apex]]
-id = "hardware-awsf2-pcie-fabulous-hotswap-safe"
-subsystem = "Hardware"
-module = "Obend.Hardware.AwsF2Shell"
-theorem = "f2_pcie_fabulous_hotswap_stutter_safe"
-description = "AWS EC2 F2 VU47P `cl_obend` shell port bindings, BAR0-clamped FABulous overlay bitstream hot-swap stutter safety, and RapidWright/OpenPDK DRC signoff."
-
-[[apex]]
-id = "hardware-tapeout-obend-module-sound"
-subsystem = "Hardware"
-module = "Obend.Hardware.TapeoutPipeline"
-theorem = "compileObendModuleToSiliconTapeout_sound"
-description = "Netlist-derived Place-and-Route + `cSHAKE256`-bound SystemVerilog emission + timing/DRC signoff from `.obend` source modules to silicon tapeout."
-
-[[apex]]
 id = "hardware-circuit-dae-passivity-enclosure"
 subsystem = "Hardware"
 module = "Obend.Hardware.CircuitDae"
@@ -1170,13 +1156,6 @@ subsystem = "Vault"
 module = "Obend.Vault.WorldTree"
 theorem = "verifyExpVerkleOpening_binds_or_collision"
 description = "Exponential-arity Verkle forest (`O(log log N)` opening depth) + elastic bounded-probe open-addressed hash table (`verifyAbsence_sound_or_collision`, `ChunkedWorld` snapshot refusal)."
-
-[[apex]]
-id = "hardware-symplectic-vehicle-6dof"
-subsystem = "Hardware"
-module = "Obend.Hardware.SymplecticVehicle6Dof"
-theorem = "se3Vehicle6DofJudge_sound"
-description = "Exact rational Cayley `SO(3)`/`SE(3)` symplectic 6-DOF vehicle mechanics, SPD composite inertia, propellant/staging momentum conservation, and multi-turn `Judge` certificate."
 
 [[apex]]
 id = "hardware-wddl-power-glitch-immunity"
@@ -1808,7 +1787,7 @@ id = "hardware-quantum-matter-hypergraph-intertwiner"
 subsystem = "Hardware"
 module = "Obend.Hardware.QuantumMatter"
 theorem = "quotientOpenHypergraph_intertwines_eval_and_adjoint"
-description = "Equitable open-hypergraph symmetry quotient intertwining (`quotientOpenHypergraph_intertwines_eval_and_adjoint`), Clifford parity-sector protection, and planar Clements optical power conservation."
+description = "Equitable open-hypergraph symmetry quotient intertwining (`quotientOpenHypergraph_intertwines_eval_and_adjoint`) and Clifford parity-sector protection (`symmetry_preserving_noise_zero_leakage`)."
 
 [[apex]]
 id = "core-cubical-face-ideal4-boundary-proper"
@@ -2130,20 +2109,6 @@ theorem = "endToEnd_q32_silicon_weak_form_bound"
 description = "End-to-end continuum-to-Q32 silicon weak-form certificate welding `EndToEndPdeCert` (`q32_scheme_trajectory_error_tube`, Lie/Strang fused GPU kernel sweeps, and systolic RTL DAG refinement) to `lax_wendroff_weak_residual_bound`."
 
 [[apex]]
-id = "hardware-systolic-retiming-and-wavefront-throughput"
-subsystem = "Hardware"
-module = "Obend.Hardware.SystolicDataflowThroughput"
-theorem = "systolic_retiming_preserves_stream_semantics"
-description = "Karp–Miller positive-cycle causality (`positive_cycle_weight_preserved_and_deadlock_free`), multi-node Leiserson–Saxe stream retiming equivalence (`systolic_retiming_preserves_stream_semantics`), and II = 1 `(D - 1) * K + L` wavefront throughput (`systolic_wavefront_latency_and_throughput`)."
-
-[[apex]]
-id = "hardware-multiplexed-systolic-single-cell-and-time-march"
-subsystem = "Hardware"
-module = "Obend.Hardware.SystolicDataflowThroughput"
-theorem = "multiplexed_systolic_time_march_sound"
-description = "Time-multiplexed single symmetry-reduced `EulerGas3D`/`IdealMhd8Wave` systolic RTL cell matches the unrolled d-cell array in `d * N^d + 1` cycles (`multiplexed_single_cell_matches_unrolled_array`) and across multi-step Lie-split `stepQ32Axis` time-marching (`multiplexed_systolic_time_march_sound`)."
-
-[[apex]]
 id = "crypto-wire-domain-tags-cshake-binding"
 subsystem = "Crypto"
 module = "Obend.Crypto.WireDomainTags"
@@ -2276,33 +2241,6 @@ target_module = "Obend.Hardware.OspcProver"
 target_theorem = "ospc_4tile_fabulous_ecp5_refines_spec"
 wave = "Wave 5"
 description = "Clock-domain-indexed `RtlSignal dom iv w` + OSPC 4-Tile prover refined through `FABulous`/ECP5 bitstream decoder and isolated `obend-hw-dpi`."
-
-[[planned_apex]]
-id = "pillar3-zkvm-dual-spine-umem-verkle"
-pillar = "Pillar 3: Obend.ZkVm"
-subsystem = "Vault"
-target_module = "Obend.ZkVm.DualSpine"
-target_theorem = "zkvm_leaf_book_umem_expverkle_sound"
-wave = "Wave 4C"
-description = "`Leaf.Book` × `UMem` Exponential Verkle (`ChunkedWorld` O(1) mmap snapshots) proved over Fenzi-safe `FenziTranscript` + `Magnetar`/`PikkuFold`."
-
-[[planned_apex]]
-id = "pillar4-darkbazaar-zkml-bolt-tulva-clearing"
-pillar = "Pillar 4: Obend.DarkBazaar"
-subsystem = "Analysis"
-target_module = "Obend.DarkBazaar.Settlement"
-target_theorem = "darkBazaar_sable_tulva_bitz_clearing_conserves"
-wave = "Wave 4C"
-description = "End-to-end `LeanCert` `TaylorModel` -> `Sable` 31-bit zkML -> `BOLT-FHE` -> `Tulva` smudged threshold decryption -> `BitZ` `MintSafeQuantization` clearing."
-
-[[planned_apex]]
-id = "pillar5-governance-zkstripe-automata-cluster"
-pillar = "Pillar 5: Obend.Governance"
-subsystem = "Consensus"
-target_module = "Obend.Governance.ClusterStack"
-target_theorem = "governance_zkstripe_13automata_ozaki_corrigibility_sound"
-wave = "Wave 4D"
-description = "`Tower256` `zkStripe` + 13-family CBOR `AutomataCert` + 4-hop `tlsn` `CallTree` + Ozaki base-13 GPU cluster + `svenvs` demonic corrigibility."
 
 [[planned_apex]]
 id = "pillar6-firmament-sel4-microkit-outbox"

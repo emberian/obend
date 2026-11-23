@@ -56,9 +56,8 @@ structure Vec3 where
 /-- Zero 3D vector $(0, 0, 0)$. -/
 def Vec3.zero : Vec3 := { x := 0, y := 0, z := 0 }
 
-/-- Componentwise 3D vector addition $\mathbf{a} + \mathbf{b}$. Exposed: `SymplecticVehicle6Dof`
-unfolds it to carry sums across its exact rational embedding (`fromKinematics_add`). -/
-@[expose] def Vec3.add (a b : Vec3) : Vec3 where
+/-- Componentwise 3D vector addition $\mathbf{a} + \mathbf{b}$. -/
+def Vec3.add (a b : Vec3) : Vec3 where
   x := a.x + b.x
   y := a.y + b.y
   z := a.z + b.z

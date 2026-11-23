@@ -17,7 +17,6 @@ module
 public import Obend.Core.Data
 public import Obend.Vault.Page
 public import Obend.Vault.Law
-public import Obend.Hardware.Datasheet
 public import Obend.Doc.Merge
 public import Obend.Codec.DetCbor
 import all Obend.Codec.DetCbor
@@ -31,11 +30,58 @@ set_option autoImplicit false
 
 open Obend.Vault
 open Obend.Spec.Law (LawExpr Facts)
-open Obend.Hardware.Datasheet
 open Obend.Codec.DetCbor
 open Obend.Digest.HashBytes
 
 /-! ## 1. IPC-7351B $D_4$-Invariant Pad/Electrical/Rail Drop-In Bijection -/
+
+/-- DC voltage and current operating envelope of an IC I/O family (millivolts $\text{mV}$, microamps $\mu\text{A}$). -/
+structure LogicFamilySpec where
+  familyName : String
+  vccMinMv   : Int
+  vccNomMv   : Int
+  vccMaxMv   : Int
+  vihMinMv   : Int
+  vilMaxMv   : Int
+  vohMinMv   : Int
+  volMaxMv   : Int
+  iihMaxUa   : Int
+  iilMaxUa   : Int
+  iohMaxUa   : Int
+  iolMaxUa   : Int
+  deriving DecidableEq, Repr
+
+/-- High-state DC noise margin $\text{NM}_H = (V_{OH,\min}^{\text{drv}} + \Delta V_{\text{pullup}}) - V_{IH,\min}^{\text{rcv}}$ (in $\text{mV}$). -/
+@[expose] def noiseMarginHigh (drv rcv : LogicFamilySpec) (pullupBoostMv : Int) : Int :=
+  (drv.vohMinMv + pullupBoostMv) - rcv.vihMinMv
+
+/-- Low-state DC noise margin $\text{NM}_L = V_{IL,\max}^{\text{rcv}} - V_{OL,\max}^{\text{drv}}$ (in $\text{mV}$). -/
+@[expose] def noiseMarginLow (drv rcv : LogicFamilySpec) : Int :=
+  rcv.vilMaxMv - drv.volMaxMv
+
+/-- Verify that driver logic family `drv` safely drives receiver logic family `rcv` with pull-up boost `pullupBoostMv`
+and minimum required noise immunity `minMarginMv`. -/
+@[expose] def checkLogicInterface (drv rcv : LogicFamilySpec) (pullupBoostMv minMarginMv : Int) : Bool :=
+  decide (minMarginMv ≤ noiseMarginHigh drv rcv pullupBoostMv) &&
+  decide (minMarginMv ≤ noiseMarginLow drv rcv) &&
+  decide (drv.volMaxMv < rcv.vihMinMv)
+
+/-- Whenever `checkLogicInterface drv rcv pullupBoostMv minMarginMv = true`, both high and low noise margins
+meet `minMarginMv` and $V_{OL,\max}^{\text{drv}} < V_{IH,\min}^{\text{rcv}}$. -/
+theorem checkLogicInterface_guarantees_valid_thresholds
+    (drv rcv : LogicFamilySpec) (pullupBoostMv minMarginMv : Int)
+    (hOk : checkLogicInterface drv rcv pullupBoostMv minMarginMv = true) :
+    rcv.vihMinMv + minMarginMv ≤ drv.vohMinMv + pullupBoostMv ∧
+    drv.volMaxMv + minMarginMv ≤ rcv.vilMaxMv ∧
+    drv.volMaxMv < rcv.vihMinMv := by
+  dsimp only [checkLogicInterface] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true] at hOk
+  rw [decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq] at hOk
+  have h1 : minMarginMv ≤ drv.vohMinMv + pullupBoostMv - rcv.vihMinMv := hOk.1.1
+  have h2 : minMarginMv ≤ rcv.vilMaxMv - drv.volMaxMv := hOk.1.2
+  have h3 : drv.volMaxMv < rcv.vihMinMv := hOk.2
+  refine ⟨by omega, by omega, h3⟩
+
 inductive PinClass where
   | powerIn (railMv minMv maxMv : Int) | powerOut (railMv maxLoadMa : Int) | gnd
   | bidirIo (logic : LogicFamilySpec) | diffPos (pairId : Nat) | diffNeg (pairId : Nat)

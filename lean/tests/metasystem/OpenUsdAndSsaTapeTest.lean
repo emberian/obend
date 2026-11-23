@@ -359,7 +359,6 @@ theorem test_wire_token_boundary_and_decoders :
     extractNatField "{\"max_fanout\": 99, \"mode\": \"calibrated\"}" "fanout" = none ∧
     extractNatField "max_fanout=99,mode=calibrated" "fanout" = none ∧
     extractIntField "{\"extra_minMarginMv\": -500}" "minMarginMv" = none ∧
-    (decodeDatasheetFitCert "mode=calibrated").isOk = false ∧
     (decodeAgenticEdaCert "mode=golden").isOk = false ∧
     (decodeRtlSynthCert "{\"module\": \"m\"}").isOk = false ∧
     (decodePnrCert "{\"mode\": \"valid\"}").isOk = false ∧
@@ -427,7 +426,6 @@ def pruneFRepTapeForgotNeg (B : Box3D) (e : FRepExpr) : FRepExpr :=
 def verifyBinaryTapeCertPermissive (c : BinaryTapeCert) : Bool :=
   match c.domain with
   | .magnetics    => decide (c.words.length ≥ 3 ∧ c.metric0 > 0 ∧ c.metric1 ≤ 5000000)
-  | .multiphysics => decide (c.words.length ≥ 2 ∧ c.metric0 > 0)
   | _             => decide (c.words.length ≥ 1)
 
 #tooth Obend.Hardware.Codec.pnr_tape_cert_bypass_refused by mutation Obend.Hardware.Codec.verifyBinaryTapeCert := verifyBinaryTapeCertPermissive
