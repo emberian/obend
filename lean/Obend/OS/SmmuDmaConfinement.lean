@@ -587,7 +587,7 @@ private theorem walkSmmuV3Stage2Detail_ok {m : SmmuManifest} {arenaBase : UInt64
                 simp only [hpDef, smmuAddrLimit48, pageSize] at hd2 hoff hIova48 ⊢; omega
               rw [hWalk (p * pageSize) (Nat.lt_of_lt_of_le (Nat.lt_add_of_pos_right (by decide)) hp48),
                 specLeafAt_iff_lookup (iova := p * pageSize) (len := pageSize) hDisj hRegs (by decide)
-                  (by rw [Nat.mul_mod_left, Nat.zero_add]; exact Nat.le_refl _) hp48] at hWP
+                  (by rw [Nat.mul_mod_left, Nat.zero_add]; exact Nat.le_refl _)] at hWP
               cases hLP : lookupDmaRegion pt.regions (p * pageSize) pageSize with
               | none => rw [hLP] at hWP; cases hWP
               | some rp =>
@@ -673,7 +673,7 @@ theorem walkSmmuV3Stage2_refines_spec {cfg : ChokepointSmmuConfig} {arenaBase : 
                 refine Bool.eq_false_iff.mpr fun hCont => ?_
                 have hW0' := hW0
                 rw [hWalk iova (by omega), specLeafAt_iff_lookup (iova := iova) (len := 1) hDisj hRegs (by decide)
-                  (Nat.succ_le_of_lt (Nat.mod_lt iova (by decide))) (by omega)] at hW0'
+                  (Nat.succ_le_of_lt (Nat.mod_lt iova (by decide)))] at hW0'
                 cases hL0 : lookupDmaRegion pt.regions iova 1 with
                 | none => rw [hL0] at hW0'; cases hW0'
                 | some reg₀ =>
@@ -705,7 +705,7 @@ theorem walkSmmuV3Stage2_refines_spec {cfg : ChokepointSmmuConfig} {arenaBase : 
                     simp only [smmuAddrLimit48, pageSize] at hpBMul hSpill hpBLe hdLast hIova48 ⊢; omega
                   rw [hWalk (pB * pageSize) (Nat.lt_of_lt_of_le (Nat.lt_add_of_pos_right (by decide)) hpB48),
                     specLeafAt_iff_lookup (iova := pB * pageSize) (len := pageSize) hDisj hRegs (by decide)
-                      (by rw [Nat.mul_mod_left, Nat.zero_add]; exact Nat.le_refl _) hpB48] at hWP
+                      (by rw [Nat.mul_mod_left, Nat.zero_add]; exact Nat.le_refl _)] at hWP
                   cases hLP : lookupDmaRegion pt.regions (pB * pageSize) pageSize with
                   | none => rw [hLP] at hWP; cases hWP
                   | some reg₁ =>

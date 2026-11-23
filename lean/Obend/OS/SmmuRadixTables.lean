@@ -176,8 +176,7 @@ theorem nodup_streamId_eq {streams : List Stage2IoPageTable} (hNodup : (streams.
     · exact ih hNodup.2 ha' hb'
 theorem translateStage2Dma_skip_implies_contract_violation (m : SmmuManifest) (sid : StreamId)
     (iova len : Nat) (acc : DmaAccess) (err : SmmuDmaFault)
-    (hErr : translateStage2Dma m sid iova len acc = .error err) (hDeny : m.defaultDeny = true)
-    (_hNodup : (m.streams.map Stage2IoPageTable.streamId).Nodup) :
+    (hErr : translateStage2Dma m sid iova len acc = .error err) (hDeny : m.defaultDeny = true) :
     sid = 0 ∨ sid = wildcardStreamId ∨ len = 0 ∨ (∀ pt ∈ m.streams, pt.streamId ≠ sid) ∨
       ∃ pt ∈ m.streams, pt.streamId = sid ∧ (RegionsIovaDisjoint pt.regions →
         ∀ reg ∈ pt.regions, ¬ (reg.iova.toNat ≤ iova ∧ iova + len ≤ reg.iova.toNat + reg.size.toNat ∧ reg.perm.permits acc = true)) := by
@@ -1074,8 +1073,7 @@ theorem compiledArena_root_and_walk {m : SmmuManifest} {arenaBase : UInt64} {max
     simp only [hLt, ↓reduceIte]; rw [mkStreamTableSte_some hSome hvPos hL0Lt hL0Al]
 theorem specLeafAt_iff_lookup {m : SmmuManifest} {regs : List Stage2DmaRegion}
     (hDisj : RegionsIovaDisjoint regs) (hRegs : ∀ r ∈ regs, regionAlignedInPoolB m r = true)
-    {iova len : Nat} (hLenPos : 0 < len) (hPage : (iova % pageSize) + len ≤ pageSize)
-    (_hIova48 : iova + len ≤ smmuAddrLimit48) :
+    {iova len : Nat} (hLenPos : 0 < len) (hPage : (iova % pageSize) + len ≤ pageSize) :
     (if regionsTouchWindow regs ((iova / l0WinSize) * l0WinSize) l0WinSize &&
         regionsTouchWindow regs ((iova / l1WinSize) * l1WinSize) l1WinSize then specLeafAt regs iova else none) =
       (lookupDmaRegion regs iova len).map fun r =>
@@ -1236,7 +1234,7 @@ theorem checkContigPages_of_region {m : SmmuManifest} {arena : SmmuV3RadixArena}
     dsimp only [checkContigPages]
     rw [hWalk (nextPage * pageSize) (Nat.lt_of_lt_of_le (Nat.lt_add_of_pos_right hPagePos) hPage48),
       specLeafAt_iff_lookup (iova := nextPage * pageSize) (len := pageSize) hDisj hRegs hPagePos
-        (by rw [Nat.mul_mod_left, Nat.zero_add]; exact Nat.le_refl _) hPage48, hFind]
+        (by rw [Nat.mul_mod_left, Nat.zero_add]; exact Nat.le_refl _), hFind]
     dsimp only [Option.map]
     have hLoNP : reg.iova.toNat ≤ nextPage * pageSize := Nat.le_trans hLo (Nat.le_of_lt hGt)
     have hPaEq : (reg.paddr.toNat + (nextPage * pageSize - reg.iova.toNat) ==
@@ -1446,7 +1444,7 @@ theorem walkSmmuV3Stage2_agrees_on_region {m : SmmuManifest} {arenaBase : UInt64
     | some r' => obtain ⟨hm', _, _⟩ := lookupDmaRegion_some hf; rw [hDisj r' hm' reg hregMem (by omega) (by omega)]
   have hW0 := hWalk iova (by omega)
   rw [specLeafAt_iff_lookup (iova := iova) (len := 1) hDisj hRegs (by decide)
-    (Nat.succ_le_of_lt (Nat.mod_lt iova (by decide))) (by omega), hLook0] at hW0
+    (Nat.succ_le_of_lt (Nat.mod_lt iova (by decide))), hLook0] at hW0
   dsimp only [Option.map] at hW0
   have hEndMult : (reg.iova.toNat + reg.size.toNat) % pageSize = 0 := by
     cases hg : reg.granule <;> simp only [hg, PageGranule.byteSize, pageSize] at hrIA hrSA ⊢ <;> omega
