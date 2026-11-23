@@ -42,7 +42,7 @@ pub fn apply_me(state: &mut [Goldilocks; 12]) {
     poseidon2_apply_me(state);
 }
 
-/// Internal diagonal-plus-ones linear layer $M_I = \mathbf{1}\mathbf{1}^T + \text{diag}(-2, 1, 2, 4, \dots, 1024)$.
+/// Internal diagonal-plus-ones linear layer $M_I = \mathbf{1}\mathbf{1}^T + \text{diag}(-64, 1, 2, 4, \dots, 1024)$.
 #[inline]
 pub fn apply_mi(state: &mut [Goldilocks; 12]) {
     poseidon2_apply_mi(state);

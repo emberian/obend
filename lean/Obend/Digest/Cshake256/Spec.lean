@@ -279,6 +279,19 @@ requires the empty-customization case to be exactly SHAKE256. -/
   let suffix : UInt8 := if shakeCompatible then 0x1f else 0x04
   squeeze32 (absorbPadded (padForRate framed suffix))
 
+/-- The padded absorption stream for general SP 800-185 function names. -/
+def paddedMessage (name custom input : List UInt8) : List UInt8 :=
+  if name = [] ∧ custom = [] then padForRate input 0x1f
+  else padForRate (bytepad (encodeString name ++ encodeString custom) rateBytes ++ input) 0x04
+
+/-- General cSHAKE256 with a 256-bit output. -/
+def namedBytes (name custom input : List UInt8) : List UInt8 :=
+  squeeze32 (absorbPadded (paddedMessage name custom input))
+
+theorem namedBytes_empty_name (custom input : List UInt8) :
+    namedBytes [] custom input = cshake256Bytes custom input := by
+  cases custom <;> simp [namedBytes, paddedMessage, cshake256Bytes, customizationPrefix]
+
 /-- The linear absorber leaves every cSHAKE output identical to the original
 indexed definition, for every customization and input byte list. -/
 theorem cshake256Bytes_eq_indexed (customization input : List UInt8) :

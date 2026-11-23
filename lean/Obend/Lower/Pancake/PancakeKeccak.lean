@@ -113,10 +113,12 @@ private theorem chiIota_agrees (s : Cshake256.State) (rc : Word) (i : Fin 25) :
   · simp only [runStage, chiIotaStage, chiIota, h, ↓reduceIte, Expr.value, read_xy,
       BitVec.xor_allOnes, at_other _ _ i (Ne.symm h), chi_lane]
 
-def rounds (p : String) : List Word → PStmt
-  | [] => .ret (.const 0)
+def roundsThen (p : String) (next : PStmt) : List Word → PStmt
+  | [] => next
   | rc :: cs => .seq (lowerStage p thetaStage)
-      (.seq (lowerStage p rhoPiStage) (.seq (lowerStage p (chiIotaStage rc)) (rounds p cs)))
+      (.seq (lowerStage p rhoPiStage) (.seq (lowerStage p (chiIotaStage rc)) (roundsThen p next cs)))
+
+def rounds (p : String) := roundsThen p (.ret (.const 0))
 
 def roundFunction (cs : List Word) : PFun :=
   ⟨"keccakF1600", [("base", .One)], rounds "base" cs, true⟩
@@ -154,15 +156,15 @@ private theorem chiIota_eq_round (src : Cshake256.State) (rc : Word) :
     chiIota (Cshake256.rhoPi (Cshake256.theta src)) rc = Cshake256.round src rc := by
   unfold chiIota Cshake256.round; rfl
 
-private theorem rounds_correct {τ : Type} (cs : List Word) (s : PanState τ) (p : String)
+theorem roundsThen_correct {τ : Type} (cs : List Word) (s : PanState τ) (p : String) (next : PStmt)
     (b : Word) (hp : s.locals p = some (.word b)) (hm : Mapped s b)
     (src : Cshake256.State) (reads : ∀ i : Fin 25, s.memory (address b i) = lanes src i) :
-    ∃ t, evaluate (rounds p cs) s = (.ret (.word 0), t) ∧
-      (∀ i : Fin 25, t.memory (address b i) = lanes (cs.foldl Cshake256.round src) i) ∧
-      ∀ a, (∀ i : Fin 25, a ≠ address b i) → t.memory a = s.memory a := by
+    ∃ m, evaluate (roundsThen p next cs) s = evaluate next {s with memory := m} ∧
+      (∀ i : Fin 25, m (address b i) = lanes (cs.foldl Cshake256.round src) i) ∧
+      ∀ a, (∀ i : Fin 25, a ≠ address b i) → m a = s.memory a := by
   induction cs generalizing s src with
   | nil =>
-    exact ⟨empty_locals s, evaluate_ret _ _ , reads, fun _ _ => rfl⟩
+    exact ⟨s.memory, rfl, reads, fun _ _ => rfl⟩
   | cons rc cs ih =>
     obtain ⟨m₁, h₁, r₁, f₁⟩ := stage_step s p b hp hm src (Cshake256.theta src) reads thetaStage (theta_agrees src)
     obtain ⟨m₂, h₂, r₂, f₂⟩ := stage_step {s with memory := m₁} p b hp hm (Cshake256.theta src) (Cshake256.rhoPi (Cshake256.theta src)) r₁ rhoPiStage
@@ -170,8 +172,11 @@ private theorem rounds_correct {τ : Type} (cs : List Word) (s : PanState τ) (p
     obtain ⟨m₃, h₃, r₃, f₃⟩ := stage_step {s with memory := m₂} p b hp hm (Cshake256.rhoPi (Cshake256.theta src)) (Cshake256.round src rc) r₂ (chiIotaStage rc)
       (fun i => (chiIota_agrees _ rc i).trans (by rw [chiIota_eq_round]))
     obtain ⟨t, ht, rt, ft⟩ := ih {s with memory := m₃} hp hm (Cshake256.round src rc) r₃
-    simp only [List.foldl_cons, rounds]
-    exact ⟨t, seq3_eval h₁ h₂ h₃ ht, rt, fun a ha => (ft a ha).trans ((f₃ a ha).trans ((f₂ a ha).trans (f₁ a ha)))⟩
+    simp only [List.foldl_cons, roundsThen]
+    refine ⟨t, ?_, rt, fun a ha => (ft a ha).trans ((f₃ a ha).trans ((f₂ a ha).trans (f₁ a ha)))⟩
+    generalize hu : evaluate next {s with memory := t} = result
+    cases result with
+    | mk res u => exact seq3_eval h₁ h₂ h₃ (ht.trans hu)
 
 /-- All 24 rounds, for any mapped input buffer, preserving every other memory address. -/
 theorem pancakeKeccakF1600_correct {τ : Type} (s : PanState τ) (b : Word) (src : Cshake256.State)
@@ -179,8 +184,9 @@ theorem pancakeKeccakF1600_correct {τ : Type} (s : PanState τ) (b : Word) (src
     (reads : ∀ i : Fin 25, s.memory (address b i) = lanes src i) :
     ∃ t, evaluate kernel.body s = (.ret (.word 0), t) ∧
       (∀ i : Fin 25, t.memory (address b i) = lanes (keccakF1600Words src) i) ∧
-      ∀ a, (∀ i : Fin 25, a ≠ address b i) → t.memory a = s.memory a :=
-  rounds_correct Cshake256.roundConstants s "base" b hp hm src reads
+      ∀ a, (∀ i : Fin 25, a ≠ address b i) → t.memory a = s.memory a := by
+  obtain ⟨m, h, r, f⟩ := roundsThen_correct Cshake256.roundConstants s "base" (.ret (.const 0)) b hp hm src reads
+  exact ⟨_, h.trans (evaluate_ret _ _), r, f⟩
 
 /-- Concrete syntax of a straight-line buffer kernel. Each store takes exactly 25
     grammatical word expressions; the final statement returns a word. -/
@@ -231,7 +237,8 @@ private theorem rounds_grammar (cs : List Word) :
     refine ⟨_, ?_, .stage _ (fun i => (printed_field thetaStage i).2)
       (.stage _ (fun i => (printed_field rhoPiStage i).2)
         (.stage _ (fun i => (printed_field (chiIotaStage rc) i).2) grammar))⟩
-    simp [rounds, stmtText, print_stage, hs]
+    change stmtText ["base"] (.seq _ (.seq _ (.seq _ (rounds "base" cs)))) = _
+    simp [stmtText, print_stage, hs]
 
 /-- Grammar derivation for the actual emitted function, down to every lane expression. -/
 theorem kernel_text_grammar (cs : List Word) {src : String} (h : emitPnkFun (roundFunction cs) = some src) :
