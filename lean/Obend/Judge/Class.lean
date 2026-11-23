@@ -245,6 +245,48 @@ theorem not_trivial (F : Format) {r : Nat} (le : F.badGrade ≤ r) : F.judge.che
   obtain ⟨k, p, h⟩ := F.refused_above le
   rw [h]; exact fun e => by cases e
 
+private theorem checkBytes_inhabited :
+    ∃ (F : Format) (r : Nat) (obj cert : String),
+      0 < r ∧ F.checkBytes r obj cert = .ok := by
+  let J : Judge (Nat × Nat) Nat :=
+    { Clause := Bool
+    , Meaning := fun p _ => p.1 < p.2
+    , check := fun _ p k =>
+        if p.1 + k + 1 = p.2 then .ok
+        else if p.2 ≤ p.1 then .refused true [0]
+        else .refused false [1]
+    , sound := fun {r o c} h => (by
+        split at h
+        · omega
+        · split at h <;> cases h)
+    , refutes := id
+    , refuted := fun {r o c k p} h href => (by
+        split at h
+        · cases h
+        · split at h
+          · omega
+          · cases h; cases href)
+    , Fragment := fun p => p.1 < p.2
+    , complete := fun {o} hF _ =>
+        ⟨o.2 - o.1 - 1, 1, by
+          have hEq : o.1 + (o.2 - o.1 - 1) + 1 = o.2 := by omega
+          simp [hEq]⟩
+    , mono := fun _ _ => rfl }
+  let F : Format :=
+    { name := "nat_gap_witness"
+    , version := "1"
+    , Obj := Nat × Nat
+    , Cert := Nat
+    , judge := J
+    , decodeObj := fun s => if s == "2<5" then .ok (2, 5) else .error "bad"
+    , decodeCert := fun s => if s == "2" then .ok 2 else .error "bad"
+    , trust := .kernel
+    , regime := .decidable
+    , bad := ((5, 2), 0)
+    , badGrade := 0
+    , bad_refused := ⟨true, [0], rfl⟩ }
+  exact ⟨F, 1, "2<5", "2", by decide, rfl⟩
+
 end Judge.Format
 
 /-- A judge whose checker accepts everything cannot be registered: no planted certificate of it is

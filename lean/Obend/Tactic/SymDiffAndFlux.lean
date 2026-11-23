@@ -1444,4 +1444,22 @@ macro "sym_jacobian_frechet" : tactic =>
             | assumption
             | exact checkExprDomainSafe_implies_denomNonzero [] _ _ (by decide +kernel) (domainValid_nil _)))
 
+private theorem checkSymmetrizerReflective_inhabited :
+    ∃ (dom : List PosTarget) (m : Nat) (H jac : List (List FluxExpr)),
+      0 < m ∧ 0 < dom.length ∧ checkSymmetrizerReflective dom m H jac = true :=
+  ⟨[.stateVar 0], 2,
+    [[.const 2, .const 0], [.const 0, .const 3]],
+    [[.const 0, .mul (.const 3) (.var 0)], [.mul (.const 2) (.var 0), .const 0]],
+    by decide, by decide, by decide +kernel⟩
+
+private theorem checkPdeQ32Intervals_inhabited :
+    ∃ spec : ConservationLawSpec,
+      0 < (specializeFluxSweep spec).axisFluxDags.length ∧ checkPdeQ32Intervals spec = true := by
+  let spec : ConservationLawSpec :=
+    { name := "toy_2var", coords := ["x"], vars := ["u", "v"], params := [], domain := []
+    , fluxes := [[.add (.var 0) (.var 1), .mul (.var 0) (.var 1)]]
+    , aMax := 4, cfl := 1 / 2, limiter := .firstOrder, sources := []
+    , stateBox := [(1, 2), (1, 2)], wavespeedWeights := [1, 1] }
+  exact ⟨spec, by decide +kernel, by decide +kernel⟩
+
 end Obend.Tactic.SymDiffAndFlux

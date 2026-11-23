@@ -12,9 +12,14 @@ import all Obend.Judge.VpaComplementAndJson
 import all Obend.Judge.DecoAndCallTree
 public import Obend.Hardware.Gpu.Rdna2.Semantics
 import all Obend.Hardware.Gpu.Rdna2.Semantics
+import all Obend.Hardware.Gpu.Rdna2.Decode
 import Init.Data.List.Sublist
 import Init.Data.String.Lemmas
+import all Init.Data.String.Basic
+import all Init.Data.String.Defs
 import all Init.Data.String.Legacy
+import all Init.Data.Repr
+import all Init.Data.ToString.Basic
 public import Obend.Run.HyperLaw
 public import Obend.Hardware.OspcProver
 import all Obend.Hardware.OspcProver
@@ -3618,6 +3623,806 @@ theorem checkOspcInRackFpgaReceipt_inhabited
        decide (st1.currentClaim = stFinal.currentClaim)) = true
   rw [hRun]
   simp [inst, hSeedEq, hRt1]
+
+private theorem fixtureSessionView_checkView (head body : ByteArray)
+    (hStart : Obend.Judge.DecoAndCallTree.bodyStart head = some head.size)
+    (hJson : Obend.Judge.VpaJson.jsonAccepting
+      (Obend.Judge.VpaJson.specRunJson body.data.toList Obend.Judge.VpaJson.JState.init) = true) :
+    Obend.Judge.DecoAndCallTree.checkView (ZkStripe.fixtureSessionView head body) = true := by
+  unfold Obend.Judge.DecoAndCallTree.checkView ZkStripe.fixtureSessionView
+  dsimp only [List.range, List.range.loop, List.map, List.getD, List.getElem?_cons_zero,
+    List.getElem?_cons_succ, Option.getD_some, List.length_cons, List.length_nil]
+  have hCount : (Obend.Judge.VpaJson.spanMerkleRoot Obend.Judge.Commit.cshakeHasher
+      Obend.Judge.VpaJson.spanTag [head, body]).count = 2 := rfl
+  have hInc0 := Obend.Judge.VpaJson.verifySpanMerkleInclusion_complete
+    Obend.Judge.Commit.cshakeHasher Obend.Judge.VpaJson.spanTag [head, body] 0 (by simp)
+  have hInc1 := Obend.Judge.VpaJson.verifySpanMerkleInclusion_complete
+    Obend.Judge.Commit.cshakeHasher Obend.Judge.VpaJson.spanTag [head, body] 1 (by simp)
+  dsimp only [List.getElem_cons_zero, List.getElem_cons_succ] at hInc0 hInc1
+  change decide (2 = (Obend.Judge.VpaJson.spanMerkleRoot Obend.Judge.Commit.cshakeHasher
+      Obend.Judge.VpaJson.spanTag [head, body]).count) &&
+    (Obend.Judge.VpaJson.verifySpanMerkleInclusion Obend.Judge.Commit.cshakeHasher
+      Obend.Judge.VpaJson.spanTag
+      (Obend.Judge.VpaJson.spanMerkleRoot Obend.Judge.Commit.cshakeHasher
+        Obend.Judge.VpaJson.spanTag [head, body])
+      head (Obend.Judge.VpaJson.spanMerkleProof Obend.Judge.Commit.cshakeHasher
+        Obend.Judge.VpaJson.spanTag [head, body] 0) &&
+     (Obend.Judge.VpaJson.verifySpanMerkleInclusion Obend.Judge.Commit.cshakeHasher
+        Obend.Judge.VpaJson.spanTag
+        (Obend.Judge.VpaJson.spanMerkleRoot Obend.Judge.Commit.cshakeHasher
+          Obend.Judge.VpaJson.spanTag [head, body])
+        body (Obend.Judge.VpaJson.spanMerkleProof Obend.Judge.Commit.cshakeHasher
+          Obend.Judge.VpaJson.spanTag [head, body] 1) && true)) &&
+    (decide (Obend.Judge.DecoAndCallTree.bodyStart head = some head.size) &&
+      (false || Obend.Judge.VpaJson.jsonAccepting
+        (Obend.Judge.VpaJson.specRunJson body.data.toList Obend.Judge.VpaJson.JState.init))) = true
+  rw [hCount, hInc0, hInc1, hStart, hJson]
+  simp
+
+private theorem recordCommit_ghash_irrel
+    (h : Obend.Judge.DecoAndCallTree.SessionHeader)
+    (req resp : Obend.Judge.DecoAndCallTree.TranscriptView)
+    (ct : List Obend.Crypto.BinaryTower256.Tower128)
+    (lb g1 g2 : Obend.Crypto.BinaryTower256.Tower128) :
+    Obend.Judge.DecoAndCallTree.recordCommit ⟨h, req, resp, ct, lb, g1⟩ =
+      Obend.Judge.DecoAndCallTree.recordCommit ⟨h, req, resp, ct, lb, g2⟩ := rfl
+
+private theorem fixtureReqBodyJson :
+    Obend.Judge.VpaJson.jsonAccepting
+      (Obend.Judge.VpaJson.specRunJson "{}".toUTF8.data.toList Obend.Judge.VpaJson.JState.init) = true := by
+  decide +kernel
+
+private theorem fixtureRespHeadStart :
+    Obend.Judge.DecoAndCallTree.bodyStart "HTTP/1.1 200 OK\r\n\r\n".toUTF8 =
+      some "HTTP/1.1 200 OK\r\n\r\n".toUTF8.size := by
+  decide +kernel
+
+private theorem fixtureSessionAttestation_checkDeco
+    (n : HttpsSessionNode) (epoch : Nat)
+    (p : Obend.Judge.DecoAndCallTree.DecoPolicy)
+    (ledger : Obend.Judge.DecoAndCallTree.SessionLedger)
+    (hNonceFresh : (n.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedNonces)
+    (hIntentFresh : (n.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedIntents)
+    (hNoncePos : 0 < (n.serverDomain ++ toString epoch).toUTF8.size)
+    (hKey : Obend.Judge.DecoAndCallTree.sessionKey p
+      (n.serverDomain ++ toString epoch).toUTF8 = some ZkStripe.fixtureSessionKey)
+    (hNotary : (⟨(be 32 n.notaryKey.toNat).toArray⟩ : ByteArray) ∈ p.notaries)
+    (hHost : n.serverDomain.toUTF8 ∈ p.hosts)
+    (hMin : p.minTime ≤ 1) (hMax : 1 ≤ p.maxTime)
+    (hSec : p.secretRequestSlots = [])
+    (hReqStart : Obend.Judge.DecoAndCallTree.bodyStart
+      ⟨(n.redactedRequest.take (n.redactedRequest.length - 2)).toArray⟩ =
+      some (⟨(n.redactedRequest.take (n.redactedRequest.length - 2)).toArray⟩ : ByteArray).size)
+    (hRespJson : Obend.Judge.VpaJson.jsonAccepting
+      (Obend.Judge.VpaJson.specRunJson n.redactedResponse Obend.Judge.VpaJson.JState.init) = true) :
+    Obend.Judge.DecoAndCallTree.checkDecoAttestation p ledger
+      (ZkStripe.fixtureSessionAttestation n epoch) = true := by
+  rw [Obend.Judge.DecoAndCallTree.checkDecoAttestation_iff_relation]
+  refine ⟨⟨hNonceFresh, hIntentFresh, hNoncePos, hNoncePos⟩, ?_, ?_, ?_⟩
+  · refine ⟨⟨ZkStripe.fixtureSessionKey, hKey, by change 128 * 0 < 2 ^ 64; decide, rfl, ?_⟩,
+      hNotary, hHost, hMin, hMax, fun _ hi => by rw [hSec] at hi; cases hi⟩
+    unfold ZkStripe.fixtureSessionAttestation
+    dsimp only
+    rw [recordCommit_ghash_irrel _ _ _ _ _ _ (Obend.Crypto.BinaryTower256.towerZero 7)]
+  · exact fixtureSessionView_checkView _ _ hReqStart fixtureReqBodyJson
+  · exact fixtureSessionView_checkView _ _ fixtureRespHeadStart hRespJson
+
+private theorem fixtureHop_viewReq (head : List UInt8) :
+    Obend.Judge.DecoAndCallTree.viewBytes
+      (ZkStripe.fixtureSessionView ⟨head.toArray⟩ "{}".toUTF8).slots =
+      head ++ [123, 125] := by
+  unfold ZkStripe.fixtureSessionView
+  dsimp only [List.range, List.range.loop, List.map, List.getD, List.getElem?_cons_zero,
+    List.getElem?_cons_succ, Option.getD_some, Obend.Judge.DecoAndCallTree.viewBytes,
+    Obend.Judge.DecoAndCallTree.SpanSlot.shown]
+  have hBraces : "{}".toUTF8.data.toList = [123, 125] := by decide +kernel
+  rw [hBraces]
+  simp
+
+private theorem fixtureHop_viewResp (body : List UInt8) :
+    Obend.Judge.DecoAndCallTree.viewBytes
+      (ZkStripe.fixtureSessionView "HTTP/1.1 200 OK\r\n\r\n".toUTF8 ⟨body.toArray⟩).slots.tail =
+      body := by
+  unfold ZkStripe.fixtureSessionView
+  dsimp only [List.range, List.range.loop, List.map, List.getD, List.getElem?_cons_zero,
+    List.getElem?_cons_succ, Option.getD_some, List.tail_cons,
+    Obend.Judge.DecoAndCallTree.viewBytes, Obend.Judge.DecoAndCallTree.SpanSlot.shown]
+  simp
+
+private def hop0 : HttpsSessionNode :=
+  .mk ZkStripe.fixtureNotaryKey "api.stripe.com"
+    ([71, 69, 84, 32, 47, 118, 49] ++ [13, 10, 13, 10, 123, 125]) (ZkStripe.utf8Bytes "{\"v\":1}")
+    [.mk ZkStripe.fixtureNotaryKey "auth.obend.org"
+      ([71, 69, 84, 32, 47, 116, 111, 107] ++ [13, 10, 13, 10, 123, 125])
+      (ZkStripe.utf8Bytes "{\"tok\":\"ok}v1\"}")
+      [.mk ZkStripe.fixtureNotaryKey "registry.hf.co"
+        ([71, 69, 84, 32, 47, 109, 97, 110] ++ [13, 10, 13, 10, 123, 125]) [123, 125]
+        [.mk ZkStripe.fixtureNotaryKey "cdn.dataset.org"
+          ([71, 69, 84, 32, 47, 115, 104, 100] ++ [13, 10, 13, 10, 123, 125]) [91, 52, 50, 93] []]]]
+
+private def hop1 : HttpsSessionNode :=
+  .mk ZkStripe.fixtureNotaryKey "auth.obend.org"
+    ([71, 69, 84, 32, 47, 116, 111, 107] ++ [13, 10, 13, 10, 123, 125])
+    (ZkStripe.utf8Bytes "{\"tok\":\"ok}v1\"}")
+    [.mk ZkStripe.fixtureNotaryKey "registry.hf.co"
+      ([71, 69, 84, 32, 47, 109, 97, 110] ++ [13, 10, 13, 10, 123, 125]) [123, 125]
+      [.mk ZkStripe.fixtureNotaryKey "cdn.dataset.org"
+        ([71, 69, 84, 32, 47, 115, 104, 100] ++ [13, 10, 13, 10, 123, 125]) [91, 52, 50, 93] []]]
+
+private def hop2 : HttpsSessionNode :=
+  .mk ZkStripe.fixtureNotaryKey "registry.hf.co"
+    ([71, 69, 84, 32, 47, 109, 97, 110] ++ [13, 10, 13, 10, 123, 125]) [123, 125]
+    [.mk ZkStripe.fixtureNotaryKey "cdn.dataset.org"
+      ([71, 69, 84, 32, 47, 115, 104, 100] ++ [13, 10, 13, 10, 123, 125]) [91, 52, 50, 93] []]
+
+private def hop3 : HttpsSessionNode :=
+  .mk ZkStripe.fixtureNotaryKey "cdn.dataset.org"
+    ([71, 69, 84, 32, 47, 115, 104, 100] ++ [13, 10, 13, 10, 123, 125]) [91, 52, 50, 93] []
+
+private theorem allSessionNodes_validFourHop :
+    allSessionNodes ZkStripe.validFourHopCallTree = [hop0, hop1, hop2, hop3] := rfl
+
+private theorem fixtureFourHop_checkDeco_of_distinct (epoch : Nat)
+    (ledger : Obend.Judge.DecoAndCallTree.SessionLedger)
+    (hNe01 : (hop0.serverDomain ++ toString epoch).toUTF8 ≠ (hop1.serverDomain ++ toString epoch).toUTF8)
+    (hNe02 : (hop0.serverDomain ++ toString epoch).toUTF8 ≠ (hop2.serverDomain ++ toString epoch).toUTF8)
+    (hNe03 : (hop0.serverDomain ++ toString epoch).toUTF8 ≠ (hop3.serverDomain ++ toString epoch).toUTF8)
+    (hNe12 : (hop1.serverDomain ++ toString epoch).toUTF8 ≠ (hop2.serverDomain ++ toString epoch).toUTF8)
+    (hNe13 : (hop1.serverDomain ++ toString epoch).toUTF8 ≠ (hop3.serverDomain ++ toString epoch).toUTF8)
+    (hNe23 : (hop2.serverDomain ++ toString epoch).toUTF8 ≠ (hop3.serverDomain ++ toString epoch).toUTF8)
+    (hP0 : 0 < (hop0.serverDomain ++ toString epoch).toUTF8.size)
+    (hP1 : 0 < (hop1.serverDomain ++ toString epoch).toUTF8.size)
+    (hP2 : 0 < (hop2.serverDomain ++ toString epoch).toUTF8.size)
+    (hP3 : 0 < (hop3.serverDomain ++ toString epoch).toUTF8.size) :
+    let v := fixtureSessionVerifiers epoch
+    ((hop0.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedNonces →
+     (hop0.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedIntents →
+     Obend.Judge.DecoAndCallTree.checkDecoAttestation v.policy ledger
+       (ZkStripe.fixtureSessionAttestation hop0 epoch) = true) ∧
+    ((hop1.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedNonces →
+     (hop1.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedIntents →
+     Obend.Judge.DecoAndCallTree.checkDecoAttestation v.policy ledger
+       (ZkStripe.fixtureSessionAttestation hop1 epoch) = true) ∧
+    ((hop2.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedNonces →
+     (hop2.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedIntents →
+     Obend.Judge.DecoAndCallTree.checkDecoAttestation v.policy ledger
+       (ZkStripe.fixtureSessionAttestation hop2 epoch) = true) ∧
+    ((hop3.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedNonces →
+     (hop3.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedIntents →
+     Obend.Judge.DecoAndCallTree.checkDecoAttestation v.policy ledger
+       (ZkStripe.fixtureSessionAttestation hop3 epoch) = true) := by
+  intro v
+  have hMin : v.policy.minTime ≤ 1 := by change 0 ≤ 1; decide
+  have hMax : 1 ≤ v.policy.maxTime := by change 1 ≤ 10; decide
+  refine ⟨fun hN hI => ?_, fun hN hI => ?_, fun hN hI => ?_, fun hN hI => ?_⟩
+  · exact fixtureSessionAttestation_checkDeco hop0 epoch v.policy ledger hN hI hP0
+      (by simp only [v, fixtureSessionVerifiers, Obend.Judge.DecoAndCallTree.sessionKey,
+        allSessionNodes_validFourHop, List.map_cons, List.map_nil, List.find?_cons,
+        decide_true, Option.map_some])
+      (by exact List.mem_cons_self)
+      (by simp [v, fixtureSessionVerifiers, allSessionNodes_validFourHop])
+      hMin hMax rfl (by decide +kernel) (by decide +kernel)
+  · exact fixtureSessionAttestation_checkDeco hop1 epoch v.policy ledger hN hI hP1
+      (by simp only [v, fixtureSessionVerifiers, Obend.Judge.DecoAndCallTree.sessionKey,
+        allSessionNodes_validFourHop, List.map_cons, List.map_nil, List.find?_cons,
+        decide_eq_false hNe01, decide_true, Option.map_some])
+      (by exact List.mem_cons_self)
+      (by simp [v, fixtureSessionVerifiers, allSessionNodes_validFourHop])
+      hMin hMax rfl (by decide +kernel) (by decide +kernel)
+  · exact fixtureSessionAttestation_checkDeco hop2 epoch v.policy ledger hN hI hP2
+      (by simp only [v, fixtureSessionVerifiers, Obend.Judge.DecoAndCallTree.sessionKey,
+        allSessionNodes_validFourHop, List.map_cons, List.map_nil, List.find?_cons,
+        decide_eq_false hNe02, decide_eq_false hNe12, decide_true, Option.map_some])
+      (by exact List.mem_cons_self)
+      (by simp [v, fixtureSessionVerifiers, allSessionNodes_validFourHop])
+      hMin hMax rfl (by decide +kernel) (by decide +kernel)
+  · exact fixtureSessionAttestation_checkDeco hop3 epoch v.policy ledger hN hI hP3
+      (by simp only [v, fixtureSessionVerifiers, Obend.Judge.DecoAndCallTree.sessionKey,
+        allSessionNodes_validFourHop, List.map_cons, List.map_nil, List.find?_cons,
+        decide_eq_false hNe03, decide_eq_false hNe13, decide_eq_false hNe23,
+        decide_true, Option.map_some])
+      (by exact List.mem_cons_self)
+      (by simp [v, fixtureSessionVerifiers, allSessionNodes_validFourHop])
+      hMin hMax rfl (by decide +kernel) (by decide +kernel)
+
+private theorem fixtureFourHop_consume_of_distinct (epoch : Nat)
+    (ledger : Obend.Judge.DecoAndCallTree.SessionLedger)
+    (hNe01 : (hop0.serverDomain ++ toString epoch).toUTF8 ≠ (hop1.serverDomain ++ toString epoch).toUTF8)
+    (hNe02 : (hop0.serverDomain ++ toString epoch).toUTF8 ≠ (hop2.serverDomain ++ toString epoch).toUTF8)
+    (hNe03 : (hop0.serverDomain ++ toString epoch).toUTF8 ≠ (hop3.serverDomain ++ toString epoch).toUTF8)
+    (hNe12 : (hop1.serverDomain ++ toString epoch).toUTF8 ≠ (hop2.serverDomain ++ toString epoch).toUTF8)
+    (hNe13 : (hop1.serverDomain ++ toString epoch).toUTF8 ≠ (hop3.serverDomain ++ toString epoch).toUTF8)
+    (hNe23 : (hop2.serverDomain ++ toString epoch).toUTF8 ≠ (hop3.serverDomain ++ toString epoch).toUTF8)
+    (hP0 : 0 < (hop0.serverDomain ++ toString epoch).toUTF8.size)
+    (hP1 : 0 < (hop1.serverDomain ++ toString epoch).toUTF8.size)
+    (hP2 : 0 < (hop2.serverDomain ++ toString epoch).toUTF8.size)
+    (hP3 : 0 < (hop3.serverDomain ++ toString epoch).toUTF8.size)
+    (hN0 : (hop0.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedNonces)
+    (hI0 : (hop0.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedIntents)
+    (hN1 : (hop1.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedNonces)
+    (hI1 : (hop1.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedIntents)
+    (hN2 : (hop2.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedNonces)
+    (hI2 : (hop2.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedIntents)
+    (hN3 : (hop3.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedNonces)
+    (hI3 : (hop3.serverDomain ++ toString epoch).toUTF8 ∉ ledger.consumedIntents) :
+    ∃ lFinal : Obend.Judge.DecoAndCallTree.SessionLedger,
+      consumeSessionNodes (fixtureSessionVerifiers epoch) ledger
+        (allSessionNodes ZkStripe.validFourHopCallTree) = some lFinal ∧
+      lFinal.consumedNonces =
+        (hop3.serverDomain ++ toString epoch).toUTF8 ::
+        (hop2.serverDomain ++ toString epoch).toUTF8 ::
+        (hop1.serverDomain ++ toString epoch).toUTF8 ::
+        (hop0.serverDomain ++ toString epoch).toUTF8 :: ledger.consumedNonces ∧
+      lFinal.consumedIntents =
+        (hop3.serverDomain ++ toString epoch).toUTF8 ::
+        (hop2.serverDomain ++ toString epoch).toUTF8 ::
+        (hop1.serverDomain ++ toString epoch).toUTF8 ::
+        (hop0.serverDomain ++ toString epoch).toUTF8 :: ledger.consumedIntents := by
+  let v := fixtureSessionVerifiers epoch
+  let a0 := ZkStripe.fixtureSessionAttestation hop0 epoch
+  let a1 := ZkStripe.fixtureSessionAttestation hop1 epoch
+  let a2 := ZkStripe.fixtureSessionAttestation hop2 epoch
+  let a3 := ZkStripe.fixtureSessionAttestation hop3 epoch
+  have hD0 : Obend.Judge.DecoAndCallTree.checkDecoAttestation v.policy ledger a0 = true :=
+    (fixtureFourHop_checkDeco_of_distinct epoch ledger hNe01 hNe02 hNe03 hNe12 hNe13 hNe23
+      hP0 hP1 hP2 hP3).1 hN0 hI0
+  let l1 := Obend.Judge.DecoAndCallTree.consume ledger a0
+  have hD1 : Obend.Judge.DecoAndCallTree.checkDecoAttestation v.policy l1 a1 = true :=
+    (fixtureFourHop_checkDeco_of_distinct epoch l1 hNe01 hNe02 hNe03 hNe12 hNe13 hNe23
+      hP0 hP1 hP2 hP3).2.1
+      (fun hMem => by
+        dsimp only [l1, Obend.Judge.DecoAndCallTree.consume, a0, ZkStripe.fixtureSessionAttestation] at hMem
+        rw [List.mem_cons] at hMem
+        rcases hMem with h | h
+        · exact hNe01 h.symm
+        · exact hN1 h)
+      (fun hMem => by
+        dsimp only [l1, Obend.Judge.DecoAndCallTree.consume, a0, ZkStripe.fixtureSessionAttestation] at hMem
+        rw [List.mem_cons] at hMem
+        rcases hMem with h | h
+        · exact hNe01 h.symm
+        · exact hI1 h)
+  let l2 := Obend.Judge.DecoAndCallTree.consume l1 a1
+  have hD2 : Obend.Judge.DecoAndCallTree.checkDecoAttestation v.policy l2 a2 = true :=
+    (fixtureFourHop_checkDeco_of_distinct epoch l2 hNe01 hNe02 hNe03 hNe12 hNe13 hNe23
+      hP0 hP1 hP2 hP3).2.2.1
+      (fun hMem => by
+        dsimp only [l2, l1, Obend.Judge.DecoAndCallTree.consume, a0, a1, ZkStripe.fixtureSessionAttestation] at hMem
+        rw [List.mem_cons, List.mem_cons] at hMem
+        rcases hMem with h | h | h
+        · exact hNe12 h.symm
+        · exact hNe02 h.symm
+        · exact hN2 h)
+      (fun hMem => by
+        dsimp only [l2, l1, Obend.Judge.DecoAndCallTree.consume, a0, a1, ZkStripe.fixtureSessionAttestation] at hMem
+        rw [List.mem_cons, List.mem_cons] at hMem
+        rcases hMem with h | h | h
+        · exact hNe12 h.symm
+        · exact hNe02 h.symm
+        · exact hI2 h)
+  let l3 := Obend.Judge.DecoAndCallTree.consume l2 a2
+  have hD3 : Obend.Judge.DecoAndCallTree.checkDecoAttestation v.policy l3 a3 = true :=
+    (fixtureFourHop_checkDeco_of_distinct epoch l3 hNe01 hNe02 hNe03 hNe12 hNe13 hNe23
+      hP0 hP1 hP2 hP3).2.2.2
+      (fun hMem => by
+        dsimp only [l3, l2, l1, Obend.Judge.DecoAndCallTree.consume, a0, a1, a2, ZkStripe.fixtureSessionAttestation] at hMem
+        rw [List.mem_cons, List.mem_cons, List.mem_cons] at hMem
+        rcases hMem with h | h | h | h
+        · exact hNe23 h.symm
+        · exact hNe13 h.symm
+        · exact hNe03 h.symm
+        · exact hN3 h)
+      (fun hMem => by
+        dsimp only [l3, l2, l1, Obend.Judge.DecoAndCallTree.consume, a0, a1, a2, ZkStripe.fixtureSessionAttestation] at hMem
+        rw [List.mem_cons, List.mem_cons, List.mem_cons] at hMem
+        rcases hMem with h | h | h | h
+        · exact hNe23 h.symm
+        · exact hNe13 h.symm
+        · exact hNe03 h.symm
+        · exact hI3 h)
+  have hH01 : ("api.stripe.com" : String).toUTF8 ≠ ("auth.obend.org" : String).toUTF8 := by decide +kernel
+  have hH02 : ("api.stripe.com" : String).toUTF8 ≠ ("registry.hf.co" : String).toUTF8 := by decide +kernel
+  have hH03 : ("api.stripe.com" : String).toUTF8 ≠ ("cdn.dataset.org" : String).toUTF8 := by decide +kernel
+  have hH12 : ("auth.obend.org" : String).toUTF8 ≠ ("registry.hf.co" : String).toUTF8 := by decide +kernel
+  have hH13 : ("auth.obend.org" : String).toUTF8 ≠ ("cdn.dataset.org" : String).toUTF8 := by decide +kernel
+  have hH23 : ("registry.hf.co" : String).toUTF8 ≠ ("cdn.dataset.org" : String).toUTF8 := by decide +kernel
+  have hM0 : ZkStripe.sessionMatch v ledger hop0 a0 = true := by
+    unfold ZkStripe.sessionMatch
+    rw [hD0]
+    simp only [a0, ZkStripe.fixtureSessionAttestation, fixtureHop_viewReq, fixtureHop_viewResp,
+      Bool.and_true]
+    decide +kernel
+  have hM1 : ZkStripe.sessionMatch v l1 hop1 a1 = true := by
+    unfold ZkStripe.sessionMatch
+    rw [hD1]
+    simp only [a1, ZkStripe.fixtureSessionAttestation, fixtureHop_viewReq, fixtureHop_viewResp,
+      Bool.and_true]
+    decide +kernel
+  have hM2 : ZkStripe.sessionMatch v l2 hop2 a2 = true := by
+    unfold ZkStripe.sessionMatch
+    rw [hD2]
+    simp only [a2, ZkStripe.fixtureSessionAttestation, fixtureHop_viewReq, fixtureHop_viewResp,
+      Bool.and_true]
+    decide +kernel
+  have hM3 : ZkStripe.sessionMatch v l3 hop3 a3 = true := by
+    unfold ZkStripe.sessionMatch
+    rw [hD3]
+    simp only [a3, ZkStripe.fixtureSessionAttestation, fixtureHop_viewReq, fixtureHop_viewResp,
+      Bool.and_true]
+    decide +kernel
+  have hAtts : v.attestations = [a0, a1, a2, a3] := rfl
+  have hF0 : v.attestations.find? (ZkStripe.sessionMatch v ledger hop0) = some a0 := by
+    rw [hAtts]; simp [hM0]
+  have hF1 : v.attestations.find? (ZkStripe.sessionMatch v l1 hop1) = some a1 := by
+    rw [hAtts]
+    have hSkip0 : ZkStripe.sessionMatch v l1 hop1 a0 = false := by
+      have hH : decide (a0.header.host = hop1.serverDomain.toUTF8) = false := decide_eq_false hH01
+      unfold ZkStripe.sessionMatch
+      rw [hH]
+      simp
+    simp [hSkip0, hM1]
+  have hF2 : v.attestations.find? (ZkStripe.sessionMatch v l2 hop2) = some a2 := by
+    rw [hAtts]
+    have hSkip0 : ZkStripe.sessionMatch v l2 hop2 a0 = false := by
+      have hH : decide (a0.header.host = hop2.serverDomain.toUTF8) = false := decide_eq_false hH02
+      unfold ZkStripe.sessionMatch
+      rw [hH]
+      simp
+    have hSkip1 : ZkStripe.sessionMatch v l2 hop2 a1 = false := by
+      have hH : decide (a1.header.host = hop2.serverDomain.toUTF8) = false := decide_eq_false hH12
+      unfold ZkStripe.sessionMatch
+      rw [hH]
+      simp
+    simp [hSkip0, hSkip1, hM2]
+  have hF3 : v.attestations.find? (ZkStripe.sessionMatch v l3 hop3) = some a3 := by
+    rw [hAtts]
+    have hSkip0 : ZkStripe.sessionMatch v l3 hop3 a0 = false := by
+      have hH : decide (a0.header.host = hop3.serverDomain.toUTF8) = false := decide_eq_false hH03
+      unfold ZkStripe.sessionMatch
+      rw [hH]
+      simp
+    have hSkip1 : ZkStripe.sessionMatch v l3 hop3 a1 = false := by
+      have hH : decide (a1.header.host = hop3.serverDomain.toUTF8) = false := decide_eq_false hH13
+      unfold ZkStripe.sessionMatch
+      rw [hH]
+      simp
+    have hSkip2 : ZkStripe.sessionMatch v l3 hop3 a2 = false := by
+      have hH : decide (a2.header.host = hop3.serverDomain.toUTF8) = false := decide_eq_false hH23
+      unfold ZkStripe.sessionMatch
+      rw [hH]
+      simp
+    simp [hSkip0, hSkip1, hSkip2, hM3]
+  refine ⟨Obend.Judge.DecoAndCallTree.consume l3 a3, ?_, rfl, rfl⟩
+  rw [allSessionNodes_validFourHop]
+  show consumeSessionNodes v ledger [hop0, hop1, hop2, hop3] = _
+  simp only [consumeSessionNodes, hF0, hF1, hF2, hF3, Bind.bind, Option.bind_some, l1, l2, l3]
+
+private theorem fixtureFourHop_audit_of_distinct (epoch : Nat)
+    (hNe01 : (hop0.serverDomain ++ toString epoch).toUTF8 ≠ (hop1.serverDomain ++ toString epoch).toUTF8)
+    (hNe02 : (hop0.serverDomain ++ toString epoch).toUTF8 ≠ (hop2.serverDomain ++ toString epoch).toUTF8)
+    (hNe03 : (hop0.serverDomain ++ toString epoch).toUTF8 ≠ (hop3.serverDomain ++ toString epoch).toUTF8)
+    (hNe12 : (hop1.serverDomain ++ toString epoch).toUTF8 ≠ (hop2.serverDomain ++ toString epoch).toUTF8)
+    (hNe13 : (hop1.serverDomain ++ toString epoch).toUTF8 ≠ (hop3.serverDomain ++ toString epoch).toUTF8)
+    (hNe23 : (hop2.serverDomain ++ toString epoch).toUTF8 ≠ (hop3.serverDomain ++ toString epoch).toUTF8)
+    (hP0 : 0 < (hop0.serverDomain ++ toString epoch).toUTF8.size)
+    (hP1 : 0 < (hop1.serverDomain ++ toString epoch).toUTF8.size)
+    (hP2 : 0 < (hop2.serverDomain ++ toString epoch).toUTF8.size)
+    (hP3 : 0 < (hop3.serverDomain ++ toString epoch).toUTF8.size) :
+    let pol : ZkStripePolicy := { defaultZkStripePolicy with verifiers := fixtureSessionVerifiers epoch }
+    ZkStripe.auditNodes pol ZkStripe.validFourHopCallTree = .ok () ∧
+    ZkStripe.auditChildren pol ZkStripe.validFourHopCallTree.children = .ok () ∧
+    ZkStripe.auditZkStripeCallTree pol ZkStripe.validFourHopCallTree = .ok () := by
+  intro pol
+  have hD := fixtureFourHop_checkDeco_of_distinct epoch ⟨[], []⟩
+    hNe01 hNe02 hNe03 hNe12 hNe13 hNe23 hP0 hP1 hP2 hP3
+  have hAuth0 : ZkStripe.checkSessionAuthentication pol.verifiers hop0.notaryKey hop0.serverDomain
+      hop0.redactedRequest hop0.redactedResponse = true := by
+    simp only [ZkStripe.checkSessionAuthentication, List.any_eq_true]
+    refine ⟨ZkStripe.fixtureSessionAttestation hop0 epoch, by
+      simp [pol, fixtureSessionVerifiers, allSessionNodes_validFourHop], ?_⟩
+    have hDeco := hD.1 (by simp) (by simp)
+    rw [show pol.verifiers = fixtureSessionVerifiers epoch from rfl]
+    rw [show (fixtureSessionVerifiers epoch).ledger = ⟨[], []⟩ from rfl]
+    rw [hDeco]
+    simp only [ZkStripe.fixtureSessionAttestation, fixtureHop_viewReq, fixtureHop_viewResp,
+      Bool.and_true]
+    decide +kernel
+  have hAuth1 : ZkStripe.checkSessionAuthentication pol.verifiers hop1.notaryKey hop1.serverDomain
+      hop1.redactedRequest hop1.redactedResponse = true := by
+    simp only [ZkStripe.checkSessionAuthentication, List.any_eq_true]
+    refine ⟨ZkStripe.fixtureSessionAttestation hop1 epoch, by
+      simp [pol, fixtureSessionVerifiers, allSessionNodes_validFourHop], ?_⟩
+    have hDeco := hD.2.1 (by simp) (by simp)
+    rw [show pol.verifiers = fixtureSessionVerifiers epoch from rfl]
+    rw [show (fixtureSessionVerifiers epoch).ledger = ⟨[], []⟩ from rfl]
+    rw [hDeco]
+    simp only [ZkStripe.fixtureSessionAttestation, fixtureHop_viewReq, fixtureHop_viewResp,
+      Bool.and_true]
+    decide +kernel
+  have hAuth2 : ZkStripe.checkSessionAuthentication pol.verifiers hop2.notaryKey hop2.serverDomain
+      hop2.redactedRequest hop2.redactedResponse = true := by
+    simp only [ZkStripe.checkSessionAuthentication, List.any_eq_true]
+    refine ⟨ZkStripe.fixtureSessionAttestation hop2 epoch, by
+      simp [pol, fixtureSessionVerifiers, allSessionNodes_validFourHop], ?_⟩
+    have hDeco := hD.2.2.1 (by simp) (by simp)
+    rw [show pol.verifiers = fixtureSessionVerifiers epoch from rfl]
+    rw [show (fixtureSessionVerifiers epoch).ledger = ⟨[], []⟩ from rfl]
+    rw [hDeco]
+    simp only [ZkStripe.fixtureSessionAttestation, fixtureHop_viewReq, fixtureHop_viewResp,
+      Bool.and_true]
+    decide +kernel
+  have hAuth3 : ZkStripe.checkSessionAuthentication pol.verifiers hop3.notaryKey hop3.serverDomain
+      hop3.redactedRequest hop3.redactedResponse = true := by
+    simp only [ZkStripe.checkSessionAuthentication, List.any_eq_true]
+    refine ⟨ZkStripe.fixtureSessionAttestation hop3 epoch, by
+      simp [pol, fixtureSessionVerifiers, allSessionNodes_validFourHop], ?_⟩
+    have hDeco := hD.2.2.2 (by simp) (by simp)
+    rw [show pol.verifiers = fixtureSessionVerifiers epoch from rfl]
+    rw [show (fixtureSessionVerifiers epoch).ledger = ⟨[], []⟩ from rfl]
+    rw [hDeco]
+    simp only [ZkStripe.fixtureSessionAttestation, fixtureHop_viewReq, fixtureHop_viewResp,
+      Bool.and_true]
+    decide +kernel
+  have hNode3 : ZkStripe.auditNodes pol hop3 = .ok () := by
+    unfold ZkStripe.auditNodes
+    change (if !decide (hop3.notaryKey ∈ defaultZkStripePolicy.trustedNotaryKeys) then _ else
+      if !ZkStripe.checkHopCanonicalBounds hop3.serverDomain hop3.redactedRequest hop3.redactedResponse then _ else
+      if !ZkStripe.matchesBytes defaultZkStripePolicy.allowedRequestRe hop3.redactedRequest then _ else
+      if !ZkStripe.matchesBytes defaultZkStripePolicy.allowedResponseRe hop3.redactedResponse then _ else
+      if !Obend.Judge.VpaJson.runFullJsonGrammar ⟨hop3.redactedResponse.toArray⟩ then _ else
+      if !ZkStripe.checkSessionAuthentication pol.verifiers hop3.notaryKey hop3.serverDomain
+          hop3.redactedRequest hop3.redactedResponse then _ else
+      ZkStripe.auditChildren pol []) = .ok ()
+    have h1 : decide (hop3.notaryKey ∈ defaultZkStripePolicy.trustedNotaryKeys) = true := by decide +kernel
+    have h2 : ZkStripe.checkHopCanonicalBounds hop3.serverDomain hop3.redactedRequest hop3.redactedResponse = true := by decide +kernel
+    have h3 : ZkStripe.matchesBytes defaultZkStripePolicy.allowedRequestRe hop3.redactedRequest = true := by decide +kernel
+    have h4 : ZkStripe.matchesBytes defaultZkStripePolicy.allowedResponseRe hop3.redactedResponse = true := by decide +kernel
+    have h5 : Obend.Judge.VpaJson.runFullJsonGrammar ⟨hop3.redactedResponse.toArray⟩ = true := by decide +kernel
+    rw [h1, h2, h3, h4, h5, hAuth3]
+    rfl
+  have hNode2 : ZkStripe.auditNodes pol hop2 = .ok () := by
+    unfold ZkStripe.auditNodes
+    change (if !decide (hop2.notaryKey ∈ defaultZkStripePolicy.trustedNotaryKeys) then _ else
+      if !ZkStripe.checkHopCanonicalBounds hop2.serverDomain hop2.redactedRequest hop2.redactedResponse then _ else
+      if !ZkStripe.matchesBytes defaultZkStripePolicy.allowedRequestRe hop2.redactedRequest then _ else
+      if !ZkStripe.matchesBytes defaultZkStripePolicy.allowedResponseRe hop2.redactedResponse then _ else
+      if !Obend.Judge.VpaJson.runFullJsonGrammar ⟨hop2.redactedResponse.toArray⟩ then _ else
+      if !ZkStripe.checkSessionAuthentication pol.verifiers hop2.notaryKey hop2.serverDomain
+          hop2.redactedRequest hop2.redactedResponse then _ else
+      ZkStripe.auditChildren pol [hop3]) = .ok ()
+    have h1 : decide (hop2.notaryKey ∈ defaultZkStripePolicy.trustedNotaryKeys) = true := by decide +kernel
+    have h2 : ZkStripe.checkHopCanonicalBounds hop2.serverDomain hop2.redactedRequest hop2.redactedResponse = true := by decide +kernel
+    have h3 : ZkStripe.matchesBytes defaultZkStripePolicy.allowedRequestRe hop2.redactedRequest = true := by decide +kernel
+    have h4 : ZkStripe.matchesBytes defaultZkStripePolicy.allowedResponseRe hop2.redactedResponse = true := by decide +kernel
+    have h5 : Obend.Judge.VpaJson.runFullJsonGrammar ⟨hop2.redactedResponse.toArray⟩ = true := by decide +kernel
+    have hCh : ZkStripe.auditChildren pol [hop3] = .ok () := by
+      simp [ZkStripe.auditChildren, hNode3]
+    rw [h1, h2, h3, h4, h5, hAuth2, hCh]
+    rfl
+  have hNode1 : ZkStripe.auditNodes pol hop1 = .ok () := by
+    unfold ZkStripe.auditNodes
+    change (if !decide (hop1.notaryKey ∈ defaultZkStripePolicy.trustedNotaryKeys) then _ else
+      if !ZkStripe.checkHopCanonicalBounds hop1.serverDomain hop1.redactedRequest hop1.redactedResponse then _ else
+      if !ZkStripe.matchesBytes defaultZkStripePolicy.allowedRequestRe hop1.redactedRequest then _ else
+      if !ZkStripe.matchesBytes defaultZkStripePolicy.allowedResponseRe hop1.redactedResponse then _ else
+      if !Obend.Judge.VpaJson.runFullJsonGrammar ⟨hop1.redactedResponse.toArray⟩ then _ else
+      if !ZkStripe.checkSessionAuthentication pol.verifiers hop1.notaryKey hop1.serverDomain
+          hop1.redactedRequest hop1.redactedResponse then _ else
+      ZkStripe.auditChildren pol [hop2]) = .ok ()
+    have h1 : decide (hop1.notaryKey ∈ defaultZkStripePolicy.trustedNotaryKeys) = true := by decide +kernel
+    have h2 : ZkStripe.checkHopCanonicalBounds hop1.serverDomain hop1.redactedRequest hop1.redactedResponse = true := by decide +kernel
+    have h3 : ZkStripe.matchesBytes defaultZkStripePolicy.allowedRequestRe hop1.redactedRequest = true := by decide +kernel
+    have h4 : ZkStripe.matchesBytes defaultZkStripePolicy.allowedResponseRe hop1.redactedResponse = true := by decide +kernel
+    have h5 : Obend.Judge.VpaJson.runFullJsonGrammar ⟨hop1.redactedResponse.toArray⟩ = true := by decide +kernel
+    have hCh : ZkStripe.auditChildren pol [hop2] = .ok () := by
+      simp [ZkStripe.auditChildren, hNode2]
+    rw [h1, h2, h3, h4, h5, hAuth1, hCh]
+    rfl
+  have hChildren : ZkStripe.auditChildren pol ZkStripe.validFourHopCallTree.children = .ok () := by
+    change ZkStripe.auditChildren pol [hop1] = .ok ()
+    simp [ZkStripe.auditChildren, hNode1]
+  have hNode0 : ZkStripe.auditNodes pol ZkStripe.validFourHopCallTree = .ok () := by
+    change (if !decide (hop0.notaryKey ∈ defaultZkStripePolicy.trustedNotaryKeys) then _ else
+      if !ZkStripe.checkHopCanonicalBounds hop0.serverDomain hop0.redactedRequest hop0.redactedResponse then _ else
+      if !ZkStripe.matchesBytes defaultZkStripePolicy.allowedRequestRe hop0.redactedRequest then _ else
+      if !ZkStripe.matchesBytes defaultZkStripePolicy.allowedResponseRe hop0.redactedResponse then _ else
+      if !Obend.Judge.VpaJson.runFullJsonGrammar ⟨hop0.redactedResponse.toArray⟩ then _ else
+      if !ZkStripe.checkSessionAuthentication pol.verifiers hop0.notaryKey hop0.serverDomain
+          hop0.redactedRequest hop0.redactedResponse then _ else
+      ZkStripe.auditChildren pol ZkStripe.validFourHopCallTree.children) = .ok ()
+    have h1 : decide (hop0.notaryKey ∈ defaultZkStripePolicy.trustedNotaryKeys) = true := by decide +kernel
+    have h2 : ZkStripe.checkHopCanonicalBounds hop0.serverDomain hop0.redactedRequest hop0.redactedResponse = true := by decide +kernel
+    have h3 : ZkStripe.matchesBytes defaultZkStripePolicy.allowedRequestRe hop0.redactedRequest = true := by decide +kernel
+    have h4 : ZkStripe.matchesBytes defaultZkStripePolicy.allowedResponseRe hop0.redactedResponse = true := by decide +kernel
+    have h5 : Obend.Judge.VpaJson.runFullJsonGrammar ⟨hop0.redactedResponse.toArray⟩ = true := by decide +kernel
+    rw [h1, h2, h3, h4, h5, hAuth0, hChildren]
+    rfl
+  have hTree : ZkStripe.auditZkStripeCallTree pol ZkStripe.validFourHopCallTree = .ok () := by
+    unfold ZkStripe.auditZkStripeCallTree
+    rw [hNode0]
+    have hProg : ZkStripe.buildCallTreeProgram pol ZkStripe.validFourHopCallTree =
+        ZkStripe.buildCallTreeProgram defaultZkStripePolicy ZkStripe.validFourHopCallTree := rfl
+    have hWf : (Obend.Reasons.statusIn
+        (Obend.Reasons.wf (ZkStripe.buildCallTreeProgram pol ZkStripe.validFourHopCallTree))
+        pol.targetConclusion == .supported) = true := by
+      rw [hProg]
+      change (Obend.Reasons.statusIn
+        (Obend.Reasons.wf (ZkStripe.buildCallTreeProgram defaultZkStripePolicy ZkStripe.validFourHopCallTree))
+        defaultZkStripePolicy.targetConclusion == .supported) = true
+      decide +kernel
+    obtain ⟨_, hCons, _, _⟩ := fixtureFourHop_consume_of_distinct epoch ⟨[], []⟩
+      hNe01 hNe02 hNe03 hNe12 hNe13 hNe23 hP0 hP1 hP2 hP3
+      (by simp) (by simp) (by simp) (by simp) (by simp) (by simp) (by simp) (by simp)
+    dsimp only
+    rw [hWf]
+    simp only [↓reduceIte]
+    change (match consumeSessionNodes (fixtureSessionVerifiers epoch) ⟨[], []⟩
+      (allSessionNodes ZkStripe.validFourHopCallTree) with | some _ => Except.ok () | none => _) = Except.ok ()
+    rw [hCons]
+  exact ⟨hNode0, hChildren, hTree⟩
+
+private theorem auditNodes_children_calltree_inhabited :
+    ∃ (pol : ZkStripePolicy) (tree : HttpsSessionNode),
+      0 < tree.children.length ∧
+      ZkStripe.auditNodes pol tree = .ok () ∧
+      ZkStripe.auditChildren pol tree.children = .ok () ∧
+      ZkStripe.auditZkStripeCallTree pol tree = .ok () := by
+  have h := fixtureFourHop_audit_of_distinct 0
+    (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel)
+  exact ⟨defaultZkStripePolicy, ZkStripe.validFourHopCallTree, by decide, h.1, h.2.1, h.2.2⟩
+
+set_option maxRecDepth 100000 in
+private theorem checkCathedralTurn_sample1 :
+    checkCathedralTurn sampleCathedralTurn = true := by
+  apply checkCathedralTurn_complete sampleCathedralTurn [120, 30, 7]
+  · exact (fixtureFourHop_audit_of_distinct 0
+      (by decide +kernel) (by decide +kernel) (by decide +kernel)
+      (by decide +kernel) (by decide +kernel) (by decide +kernel)
+      (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel)).2.2
+  · decide +kernel
+  · rfl
+  · rfl
+  · rfl
+  · decide +kernel
+  · exact checkInRackFpgaReceipt_canonical_inhabited _ _ _ _ _
+  · exact checkOspcInRackFpgaReceipt_inhabited _ _ _ _ _
+  · decide +kernel
+  · decide +kernel
+
+set_option maxRecDepth 100000 in
+private theorem checkCathedralTurn_sample2 :
+    checkCathedralTurn sampleSecondCathedralTurn = true := by
+  apply checkCathedralTurn_complete sampleSecondCathedralTurn [120, 30, 7]
+  · exact (fixtureFourHop_audit_of_distinct 1
+      (by decide +kernel) (by decide +kernel) (by decide +kernel)
+      (by decide +kernel) (by decide +kernel) (by decide +kernel)
+      (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel)).2.2
+  · decide +kernel
+  · rfl
+  · rfl
+  · rfl
+  · decide +kernel
+  · exact checkInRackFpgaReceipt_canonical_inhabited _ _ _ _ _
+  · exact checkOspcInRackFpgaReceipt_inhabited _ _ _ _ _
+  · decide +kernel
+  · decide +kernel
+
+private theorem checkCathedralTurn_ospc_some (turn : CathedralGovernanceTurn)
+    (w : OspcInRackProverWitness)
+    (hTurn : checkCathedralTurn turn = true)
+    (hWit : turn.ospcWitness = some w) :
+    checkOspcInRackFpgaReceipt turn.hashFn (callTreeDigest turn.hashFn turn.batchCallTree)
+      turn.clusterCtx.step w turn.fpgaReceipt = true := by
+  unfold checkCathedralTurn auditCathedralTurn at hTurn
+  cases hZk : auditZkStripeCallTree turn.zkPolicy turn.batchCallTree with
+  | error e => rw [hZk] at hTurn; cases hTurn
+  | ok u =>
+    rw [hZk] at hTurn; dsimp only at hTurn
+    cases hCan : checkCanonicalSessionTree turn.hashFn turn.batchCallTree
+    · rw [hCan] at hTurn; cases hTurn
+    · rw [hCan] at hTurn; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hTurn
+      cases hBytes : decide (callTreeDigestBytes turn.hashFn turn.batchCallTree = turn.committedTreeDigestBytes)
+      · rw [hBytes] at hTurn; cases hTurn
+      · rw [hBytes] at hTurn; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hTurn
+        cases hWeld : decide (callTreeDigest turn.hashFn turn.batchCallTree = turn.clusterCtx.step.batchCallTreeRoot)
+        · rw [hWeld] at hTurn; cases hTurn
+        · rw [hWeld] at hTurn; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hTurn
+          cases hCl : auditClusterStep turn.clusterCtx with
+          | error e => rw [hCl] at hTurn; cases hTurn
+          | ok rs =>
+            rw [hCl] at hTurn; dsimp only at hTurn
+            cases hPhys : checkPhysicalEnergyEnvelope turn.physicalEnvelope
+            · rw [hPhys] at hTurn; cases hTurn
+            · rw [hPhys] at hTurn; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hTurn
+              cases hFpga : checkInRackFpgaReceipt turn.hashFn
+                  (callTreeDigest turn.hashFn turn.batchCallTree)
+                  turn.clusterCtx.step turn.fpgaReceipt
+              · rw [hFpga] at hTurn; cases hTurn
+              · rw [hFpga] at hTurn; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hTurn
+                cases hOspc : checkCathedralOspcOpt turn.hashFn
+                    (callTreeDigest turn.hashFn turn.batchCallTree)
+                    turn.clusterCtx.step turn.ospcWitness turn.fpgaReceipt
+                · rw [hOspc] at hTurn; cases hTurn
+                · unfold checkCathedralOspcOpt at hOspc
+                  rw [hWit] at hOspc
+                  exact hOspc
+
+private theorem checkCathedralOspcTurn_and_trace_inhabited :
+    ∃ (init stFinal : CathedralTraceState) (t₁ t₂ : CathedralOspcTurn),
+      checkCathedralOspcTurn t₁ = true ∧
+      checkCathedralOspcTurn t₂ = true ∧
+      runCathedralOspcTrace init [t₁, t₂] = some stFinal := by
+  have hWit1 : ∃ w1, sampleCathedralTurn.ospcWitness = some w1 := ⟨_, rfl⟩
+  have hWit2 : ∃ w2, sampleSecondCathedralTurn.ospcWitness = some w2 := ⟨_, rfl⟩
+  obtain ⟨w1, hw1⟩ := hWit1
+  obtain ⟨w2, hw2⟩ := hWit2
+  have hOspc1 : checkOspcInRackFpgaReceipt sampleCathedralTurn.hashFn
+      (callTreeDigest sampleCathedralTurn.hashFn sampleCathedralTurn.batchCallTree)
+      sampleCathedralTurn.clusterCtx.step w1 sampleCathedralTurn.fpgaReceipt = true :=
+    checkCathedralTurn_ospc_some sampleCathedralTurn w1 checkCathedralTurn_sample1 hw1
+  have hOspc2 : checkOspcInRackFpgaReceipt sampleSecondCathedralTurn.hashFn
+      (callTreeDigest sampleSecondCathedralTurn.hashFn sampleSecondCathedralTurn.batchCallTree)
+      sampleSecondCathedralTurn.clusterCtx.step w2 sampleSecondCathedralTurn.fpgaReceipt = true :=
+    checkCathedralTurn_ospc_some sampleSecondCathedralTurn w2 checkCathedralTurn_sample2 hw2
+  let t1 : CathedralOspcTurn := ⟨sampleCathedralTurn, w1⟩
+  let t2 : CathedralOspcTurn := ⟨sampleSecondCathedralTurn, w2⟩
+  have hTurn1 : checkCathedralOspcTurn t1 = true := by
+    simp [checkCathedralOspcTurn, t1, checkCathedralTurn_sample1, hOspc1]
+  have hTurn2 : checkCathedralOspcTurn t2 = true := by
+    simp [checkCathedralOspcTurn, t2, checkCathedralTurn_sample2, hOspc2]
+  obtain ⟨l1, hCons1, hL1N, hL1I⟩ := fixtureFourHop_consume_of_distinct 0 ⟨[], []⟩
+    (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by simp) (by simp) (by simp) (by simp) (by simp) (by simp) (by simp) (by simp)
+  obtain ⟨l2, hCons2, _, _⟩ := fixtureFourHop_consume_of_distinct 1 l1
+    (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by rw [hL1N]; decide +kernel) (by rw [hL1I]; decide +kernel)
+    (by rw [hL1N]; decide +kernel) (by rw [hL1I]; decide +kernel)
+    (by rw [hL1N]; decide +kernel) (by rw [hL1I]; decide +kernel)
+    (by rw [hL1N]; decide +kernel) (by rw [hL1I]; decide +kernel)
+  let st1 : CathedralTraceState :=
+    { weightsRoot        := sampleCathedralTurn.clusterCtx.step.nextWeightsRoot
+    , lastEpoch          := sampleCathedralTurn.fpgaReceipt.epoch
+    , usedFlops          := sampleInitTraceState.usedFlops + sampleCathedralTurn.clusterCtx.step.flopsUsed
+    , remFlopsBudget     := sampleInitTraceState.remFlopsBudget - sampleCathedralTurn.clusterCtx.step.flopsUsed
+    , remHiddenOpsBudget := sampleInitTraceState.remHiddenOpsBudget - sampleCathedralTurn.physicalEnvelope.hiddenOpsCap
+    , decoLedger         := l1 }
+  let st2 : CathedralTraceState :=
+    { weightsRoot        := sampleSecondCathedralTurn.clusterCtx.step.nextWeightsRoot
+    , lastEpoch          := sampleSecondCathedralTurn.fpgaReceipt.epoch
+    , usedFlops          := st1.usedFlops + sampleSecondCathedralTurn.clusterCtx.step.flopsUsed
+    , remFlopsBudget     := st1.remFlopsBudget - sampleSecondCathedralTurn.clusterCtx.step.flopsUsed
+    , remHiddenOpsBudget := st1.remHiddenOpsBudget - sampleSecondCathedralTurn.physicalEnvelope.hiddenOpsCap
+    , decoLedger         := l2 }
+  have hStep1 : stepCathedralTrace sampleInitTraceState sampleCathedralTurn = some st1 := by
+    unfold stepCathedralTrace
+    rw [checkCathedralTurn_sample1]
+    have hCond : (true &&
+        decide (sampleCathedralTurn.clusterCtx.step.prevWeightsRoot = sampleInitTraceState.weightsRoot) &&
+        decide (sampleInitTraceState.lastEpoch < sampleCathedralTurn.fpgaReceipt.epoch) &&
+        decide (sampleCathedralTurn.clusterCtx.step.flopsUsed ≤ sampleInitTraceState.remFlopsBudget) &&
+        decide (sampleCathedralTurn.physicalEnvelope.hiddenOpsCap ≤ sampleInitTraceState.remHiddenOpsBudget)) = true := by
+      change (true && decide (0x11112222 = 0x11112222) && decide (0 < 1) &&
+        decide (7500000 ≤ 20000000) && decide (4 ≤ 10)) = true
+      decide
+    rw [hCond]
+    simp only [↓reduceIte]
+    have hVer1 : sampleCathedralTurn.zkPolicy.verifiers = fixtureSessionVerifiers 0 := rfl
+    have hTree1 : sampleCathedralTurn.batchCallTree = ZkStripe.validFourHopCallTree := rfl
+    have hLed1 : sampleInitTraceState.decoLedger = ⟨[], []⟩ := rfl
+    rw [hVer1, hTree1, hLed1, hCons1]
+    rfl
+  have hStep2 : stepCathedralTrace st1 sampleSecondCathedralTurn = some st2 := by
+    unfold stepCathedralTrace
+    rw [checkCathedralTurn_sample2]
+    have hCond : (true &&
+        decide (sampleSecondCathedralTurn.clusterCtx.step.prevWeightsRoot = st1.weightsRoot) &&
+        decide (st1.lastEpoch < sampleSecondCathedralTurn.fpgaReceipt.epoch) &&
+        decide (sampleSecondCathedralTurn.clusterCtx.step.flopsUsed ≤ st1.remFlopsBudget) &&
+        decide (sampleSecondCathedralTurn.physicalEnvelope.hiddenOpsCap ≤ st1.remHiddenOpsBudget)) = true := by
+      change (true && decide (0x33334444 = 0x33334444) && decide (1 < 2) &&
+        decide (6000000 ≤ 20000000 - 7500000) && decide (4 ≤ 10 - 4)) = true
+      rfl
+    rw [hCond]
+    simp only [↓reduceIte]
+    have hVer2 : sampleSecondCathedralTurn.zkPolicy.verifiers = fixtureSessionVerifiers 1 := rfl
+    have hTree2 : sampleSecondCathedralTurn.batchCallTree = ZkStripe.validFourHopCallTree := rfl
+    have hLed2 : st1.decoLedger = l1 := rfl
+    rw [hVer2, hTree2, hLed2, hCons2]
+    rfl
+  refine ⟨sampleInitTraceState, st2, t1, t2, hTurn1, hTurn2, ?_⟩
+  unfold runCathedralOspcTrace stepCathedralOspcTrace
+  dsimp only [t1]
+  rw [hOspc1]
+  simp only [↓reduceIte, hStep1]
+  unfold runCathedralOspcTrace stepCathedralOspcTrace
+  dsimp only [t2]
+  rw [hOspc2]
+  simp only [↓reduceIte, hStep2]
+  rfl
+
+private def rdnaEndInst : Obend.Hardware.Gpu.Rdna2.Inst :=
+  ⟨⟨"S_ENDPGM", false, false, true, false, [⟨"ENC_SOPP", "default", 1, []⟩]⟩,
+    Obend.Hardware.Gpu.Rdna2.enc_ENC_SOPP, ⟨"ENC_SOPP", "default", 1, []⟩,
+    [("ENCODING", 383), ("OP", 1), ("SIMM16", 0)], [0xbf810000]⟩
+
+private def rdnaAddInst : Obend.Hardware.Gpu.Rdna2.Inst :=
+  ⟨⟨"V_ADD_NC_U32", false, false, false, false,
+    [
+      ⟨"ENC_VOP2", "default", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_INST_LITERAL", "has_lit", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_VOP_SDWA", "has_sdwa", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"VSRC0", "OPR_SRC_SIMPLE", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_SRC_SIMPLE", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_VOP_DPP8", "has_dpp8", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"VSRC0", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_VOP_DPP16", "has_dpp16", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"VSRC0", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"ENC_VOP3", "default", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SRC1", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP3_INST_LITERAL", "has_lit_0", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SRC1", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP3_INST_LITERAL", "has_lit_1", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP3_INST_LITERAL", "has_lit_0_has_lit_1", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+    Obend.Hardware.Gpu.Rdna2.enc_ENC_VOP2,
+    ⟨"ENC_VOP2", "default", 37,
+      [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩,
+       ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩,
+       ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+    [("ENCODING", 0), ("OP", 37), ("SRC0", 256), ("VDST", 0), ("VSRC1", 1)], [0x4a000300]⟩
+
+private theorem rdnaStartsWith_eval (s p : String) :
+    s.startsWith p = decide (p.toList <+: s.toList) := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [String.startsWith_string_iff, decide_eq_true_eq]
+
+private theorem rdnaDrop_eval (s : String) (n : Nat) :
+    (s.drop n).toString = String.ofList (s.toList.drop n) := by
+  rw [String.Slice.toString_eq]
+  apply String.toList_injective
+  exact String.toList_copy_drop.trans String.toList_ofList.symm
+
+attribute [local cbv_eval] rdnaStartsWith_eval rdnaDrop_eval
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
+private theorem decodeRdnaEndInst :
+    ClusterGov.decodeRdnaSliceInst [0xbf810000] = some (rdnaEndInst, 1) := by rfl
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
+private theorem decodeRdnaAddInst :
+    ClusterGov.decodeRdnaSliceInst [0x4a000300, 0xbf810000] = some (rdnaAddInst, 1) := by rfl
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
+private theorem checkRdna2DispatchEnvelope_inhabited :
+    ∃ d : ClusterGov.Rdna2WavefrontDispatch,
+      2 ≤ d.workgroupSlices.size ∧
+      ClusterGov.checkRdna2DispatchEnvelope d = true := by
+  refine ⟨ClusterGov.rdna2AddDispatch, by decide, ?_⟩
+  simp only [ClusterGov.checkRdna2DispatchEnvelope, Bool.and_eq_true, decide_eq_true_eq,
+    ← Array.all_toList]
+  refine ⟨⟨⟨⟨⟨by decide +kernel, by decide +kernel⟩, by decide +kernel⟩, by decide +kernel⟩,
+    by decide +kernel⟩, ⟨?_, by decide +kernel⟩⟩
+  have hd : ClusterGov.decodeRdnaSliceProgram ClusterGov.rdna2AddDispatch.shaderIsaWords.size
+      ClusterGov.rdna2AddDispatch.shaderIsaWords.toList = some [some rdnaAddInst, some rdnaEndInst] := by
+    change ClusterGov.decodeRdnaSliceProgram 2 [0x4a000300, 0xbf810000] = _
+    simp only [ClusterGov.decodeRdnaSliceProgram, decodeRdnaAddInst, decodeRdnaEndInst,
+      Bind.bind, Option.bind, Pure.pure, List.drop, List.append_nil]
+    rfl
+  rw [ClusterGov.executeRdna2SliceReduction, hd]
+  set_option cbv.maxSteps 1000000 in
+  cbv
 
 end Obend.Trailblaze.CathedralApex
 

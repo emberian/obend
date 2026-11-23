@@ -39,4 +39,11 @@ theorem insertUnique_sound (addresses : List Address) (seen : Std.HashSet Addres
 theorem checkUnique_sound (addresses : List Address) (h : checkUnique addresses = true) :
     addresses.Nodup := (insertUnique_sound addresses ∅ h).1
 
+private theorem insertUnique_checkUnique_inhabited :
+    ∃ (seen : Std.HashSet Address) (addresses : List Address),
+      0 < addresses.length ∧ insertUnique seen addresses = true ∧ checkUnique addresses = true := by
+  refine ⟨(∅ : Std.HashSet Address).insert (0, 0), [(0, 1), (1, 0), (1, 1)], by decide, ?_, ?_⟩
+  · simp [insertUnique, Std.HashSet.contains_insert, Std.HashSet.contains_empty]
+  · simp [checkUnique, insertUnique, Std.HashSet.contains_insert, Std.HashSet.contains_empty]
+
 end Obend.Hardware.ArrayKernel.Unique

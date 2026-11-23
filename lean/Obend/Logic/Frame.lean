@@ -486,5 +486,26 @@ theorem apply_of_resolver_extends {R R' : Resolver}
       exact replay_of_resolver_extends hext second h
 end
 
+private theorem wellFormed_and_claimCheck_inhabited :
+    ∃ (k : Nat) (o : ClaimObj) (steps : List RStep),
+      0 < o.arity ∧ 0 < steps.length ∧
+      o.wellFormed = true ∧ claimCheck k o steps = .ok := by
+  let baseLayer : Layer :=
+    { name := "Base"
+    , metadata := .record []
+    , fields := [("limit", .nat 10)] }
+  let refinedLayer : Layer :=
+    { name := "Refined"
+    , metadata := .record []
+    , fields := [("limit", .nat 20)] }
+  let comp : Composition := ⟨refinedLayer, [baseLayer], []⟩
+  let o : ClaimObj :=
+    { comp := comp
+    , layer := 0
+    , claim := .lam (.lam (.lam (.binary .equal (.get (.bound 2) "limit") (.nat 20))))
+    , arity := 1 }
+  let steps : List RStep := [.lateBinding "limit" "Refined"]
+  exact ⟨10, o, steps, by decide, by decide, by decide +kernel, by decide +kernel⟩
+
 end Obend.Logic
 end

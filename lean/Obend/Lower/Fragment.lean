@@ -899,6 +899,16 @@ theorem lower_sound {e v : LExpr} (run : SSteps e v) (canonical : Canonical v) :
     · obtain ⟨w', ev, a⟩ := evaluates_behind ah ⟨steps, value⟩
       exact ⟨w', ⟨steps_trans (positive_steps pos) ev.1, ev.2⟩, chain.snoc a⟩
 
+private theorem canonical_and_lower_sound_inhabited :
+    ∃ (fs : List (String × LExpr)) (e : LExpr),
+      0 < fs.length ∧ SSteps e (.record fs) ∧ Canonical (.record fs) := by
+  let fs : List (String × LExpr) := [("a", .lit 7), ("b", .lit 11)]
+  let v : LExpr := .record fs
+  let e : LExpr := .const "outer" (.const "inner" v)
+  exact ⟨fs, e, by decide,
+    .next (.delta "outer" (.const "inner" v)) (.next (.delta "inner" v) (.refl v)),
+    .record fs⟩
+
 /-- **`lower_sound` at `Nat`**: `Evaluates (lowerT e) (lowerT (lit n))`. -/
 theorem lower_sound_nat {e : LExpr} {n : Nat} (run : SSteps e (.lit n)) :
     Evaluates (lowerT e) (lowerT (.lit n)) := by

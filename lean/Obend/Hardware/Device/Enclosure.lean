@@ -219,6 +219,11 @@ theorem within_sound {x : CanonicalRat} {I : Interval} {tol : CanonicalRat}
   simp only [Interval.within, Bool.and_eq_true, decide_eq_true_eq] at h
   exact ⟨Rat.le_trans h.1 hx.1, Rat.le_trans hx.2 h.2⟩
 
+private theorem within_inhabited :
+    ∃ (x : CanonicalRat) (I : Interval) (tol : CanonicalRat),
+      0 < tol ∧ x ∈ I ∧ I.within tol = true :=
+  ⟨1, ⟨-2, 3⟩, 4, by decide, by rw [Interval.mem_iff]; decide, by decide⟩
+
 /-- Scale an interval by a rational. -/
 @[expose] def scale (c : CanonicalRat) (I : Interval) : Interval :=
   Interval.mul (Interval.ofPoint c) I
