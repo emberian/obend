@@ -3,9 +3,9 @@
 
   * Z3 QF_BV safety barrier property sheets (`apps/foc-hil/verilator/foc_drive_props.smt2`,
     `apps/sdr-ft8/verilator/sdr_ft8_props.smt2`) prove `unsat`.
-  * Yosys + Z3 logic equivalence (`hardware/lec/lec.sh`) across the 5 compiler-emitted SystemVerilog
-    modules in `hardware/sim/` (`cleanroom_tcad_stack`, `cnc_5axis_userspace_mill`,
-    `lc_drives_userspace_stator`, `obend_retimed_mac2`, `obend_width_probe`) when `yosys` and
+  * Yosys + Z3 logic equivalence (`hardware/lec/lec.sh`) across the 6 compiler-emitted SystemVerilog
+    modules in `hardware/sim/` (`obend_pipelined_risc64`, `obend_goldilocks_bfly4`,
+    `obend_gf2_64_karatsuba`, `obend_ospc_tile0`, `obend_retimed_mac2`, `obend_width_probe`) when `yosys` and
     `obend-emit-sv` are present.
   * Verilator `-Wall` lint + cycle-accurate simulation (`Verilated::randReset(2)`, VCD trace) of
     `hardware/sim/tb_top.sv` + `sim_main.cpp` and standalone multi-clock `obend_width_probe.sv`.
@@ -126,18 +126,21 @@ with tempfile.TemporaryDirectory(prefix="obend_run_hw_") as work_dir:
     if r_build_tb.returncode == 0:
         r_sim = subprocess.run([os.path.join(obj_dir, "Vtb_top")], cwd=work_dir, capture_output=True, text=True)
         out = r_sim.stdout + r_sim.stderr
-        check("verilator sim: cleanroom_tcad_stack, lc_drives_userspace_stator, cnc_5axis_userspace_mill & obend_retimed_mac2 exact",
+        check("verilator sim: obend_pipelined_risc64, obend_goldilocks_bfly4, obend_gf2_64_karatsuba, obend_ospc_tile0 & obend_retimed_mac2 exact",
               r_sim.returncode == 0 and "VERILATE_PASS module=tb_top mismatches=0" in out, out)
 
     # 4. Yosys + Z3 LEC on hardware/sim Modules (when obend-emit-sv and yosys are available)
     EMIT_SV_BIN = os.environ.get("OBEND_EMIT_SV") or os.path.join(LEAN, ".lake", "build", "bin", "obend-emit-sv")
     if os.path.exists(EMIT_SV_BIN) and os.path.exists(YOSYS):
+        eqy_bin = os.environ.get("EQY_BIN") or shutil.which("eqy") or os.path.expanduser("~/tools/oss-cad-suite/bin/eqy")
+        eqy_default = ["--eqy"] if os.path.exists(eqy_bin) else ["--no-eqy", "eqy binary not installed on host"]
         for target, stem, extra in [
-            ("tcad", "cleanroom_tcad_stack", []),
-            ("mill", "cnc_5axis_userspace_mill", []),
-            ("stator", "lc_drives_userspace_stator", []),
+            ("risc64", "obend_pipelined_risc64", eqy_default),
+            ("goldilocks-bfly4", "obend_goldilocks_bfly4", ["--no-eqy", "four 32x32->64 multipliers in Stage 1"]),
+            ("gf2-64-karatsuba", "obend_gf2_64_karatsuba", eqy_default),
+            ("ospc-tile0", "obend_ospc_tile0", eqy_default),
             ("mac2", "obend_retimed_mac2", ["--no-eqy", "64x64 variable multiply"]),
-            ("width-probe", "obend_width_probe", []),
+            ("width-probe", "obend_width_probe", eqy_default),
         ]:
             lec_env = {**os.environ, "OBEND_EMIT_SV": EMIT_SV_BIN}
             r_lec = subprocess.run(
@@ -294,121 +297,21 @@ with tempfile.TemporaryDirectory(prefix="obend_run_hw_") as work_dir:
                   r_ob_chk.returncode == 0 and r_ob_run.returncode == 0 and expected_val in r_ob_run.stdout,
                   r_ob_chk.stdout + r_ob_chk.stderr + r_ob_run.stdout + r_ob_run.stderr)
 
-        # 8. Live Compiler-Emitted SystemVerilog (emit-sv) + Verilator (-Wall) C++ Co-Simulation
-        stator_sv = os.path.join(work_dir, "lc_drives_userspace_stator.sv")
-        mill_sv = os.path.join(work_dir, "cnc_5axis_userspace_mill.sv")
-        r_emit_stator = subprocess.run(
-            [OBEND_BIN, "hardware", "emit-sv", "--module", "lc_drives_stator", "--out", stator_sv],
+        # 8. Live Compiler-Emitted SystemVerilog (emit-sv) on Built-In RtlModule Targets
+        mac2_sv = os.path.join(work_dir, "obend_retimed_mac2.sv")
+        wp_sv = os.path.join(work_dir, "obend_width_probe.sv")
+        r_emit_mac2 = subprocess.run(
+            [OBEND_BIN, "hardware", "emit-sv", "--top", "obend_retimed_mac2", "--out", mac2_sv],
             capture_output=True, text=True,
         )
-        r_emit_mill = subprocess.run(
-            [OBEND_BIN, "hardware", "emit-sv", "--module", "cnc_5axis_mill", "--out", mill_sv],
+        r_emit_wp = subprocess.run(
+            [OBEND_BIN, "hardware", "emit-sv", "--top", "obend_width_probe", "--out", wp_sv],
             capture_output=True, text=True,
         )
-        check("obend hardware emit-sv: synthesized SystemVerilog-2012 emitted for lc_drives_stator & cnc_5axis_mill",
-              r_emit_stator.returncode == 0 and r_emit_mill.returncode == 0
-              and os.path.exists(stator_sv) and os.path.exists(mill_sv),
-              r_emit_stator.stdout + r_emit_stator.stderr + r_emit_mill.stdout + r_emit_mill.stderr)
-
-        if os.path.exists(VERILATOR):
-            up_tb_sv = os.path.join(work_dir, "userspace_phys_tb.sv")
-            with open(up_tb_sv, "w") as f:
-                f.write("""/* verilator lint_off UNUSED */
-/* verilator lint_off DECLFILENAME */
-module userspace_phys_tb (
-  input  logic        clk,
-  input  logic        rst,
-  input  logic [63:0] stator_arg,
-  input  logic [63:0] mill_arg,
-  output logic [63:0] out_massKg,
-  output logic [63:0] out_camSurfaceErrorUm,
-  output logic [63:0] out_thermalResistance,
-  output logic [63:0] out_sdfMargin,
-  output logic [63:0] out_peakWindingTemp,
-  output logic [63:0] out_servoLagUm,
-  output logic [63:0] out_endMillDeflectionUm,
-  output logic [63:0] out_abbeAngularDriftUm,
-  output logic [63:0] out_commandedAxisAt10mmUm,
-  output logic [63:0] out_totalVolumetricErrorUm
-);
-  lc_drives_userspace_stator u_stator (
-    .clk(clk),
-    .rst(rst),
-    .arg(stator_arg),
-    .out_massKg(out_massKg),
-    .out_camSurfaceErrorUm(out_camSurfaceErrorUm),
-    .out_thermalResistance(out_thermalResistance),
-    .out_sdfMargin(out_sdfMargin),
-    .out_peakWindingTemp(out_peakWindingTemp)
-  );
-  cnc_5axis_userspace_mill u_mill (
-    .clk(clk),
-    .rst(rst),
-    .arg(mill_arg),
-    .out_servoLagUm(out_servoLagUm),
-    .out_endMillDeflectionUm(out_endMillDeflectionUm),
-    .out_abbeAngularDriftUm(out_abbeAngularDriftUm),
-    .out_commandedAxisAt10mmUm(out_commandedAxisAt10mmUm),
-    .out_totalVolumetricErrorUm(out_totalVolumetricErrorUm)
-  );
-endmodule
-""")
-
-            up_main_cpp = os.path.join(work_dir, "userspace_phys_main.cpp")
-            with open(up_main_cpp, "w") as f:
-                f.write("""#include <cstdio>
-#include <cstdlib>
-#include "Vuserspace_phys_tb.h"
-#include "verilated.h"
-
-int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);
-    Vuserspace_phys_tb top;
-    top.clk = 0;
-    top.rst = 0;
-    top.stator_arg = 8ULL;
-    top.mill_arg = 6ULL;
-    top.eval();
-    top.clk = 1;
-    top.eval();
-    std::printf(
-        "userspace_phys_sv: massKg=%llu camErr=%llu rTh=%llu sdfMargin=%llu peakWindingTemp=%llu | cmdAxis=%llu totalVolErr=%llu\\n",
-        static_cast<unsigned long long>(top.out_massKg),
-        static_cast<unsigned long long>(top.out_camSurfaceErrorUm),
-        static_cast<unsigned long long>(top.out_thermalResistance),
-        static_cast<unsigned long long>(top.out_sdfMargin),
-        static_cast<unsigned long long>(top.out_peakWindingTemp),
-        static_cast<unsigned long long>(top.out_commandedAxisAt10mmUm),
-        static_cast<unsigned long long>(top.out_totalVolumetricErrorUm)
-    );
-    if (top.out_peakWindingTemp != 122ULL || top.out_sdfMargin != 24ULL ||
-        top.out_commandedAxisAt10mmUm != 10024ULL || top.out_totalVolumetricErrorUm != 26ULL) {
-        return 1;
-    }
-    return 0;
-}
-""")
-
-            up_obj_dir = os.path.join(work_dir, "obj_userspace_phys")
-            r_up_ver = subprocess.run([
-                VERILATOR, "--cc", "--exe", "--build", "-j", "0",
-                "-CFLAGS", "-std=c++20 -Wno-unused-variable",
-                "--top-module", "userspace_phys_tb",
-                "-sv", "-Wall",
-                f"-I{work_dir}",
-                stator_sv, mill_sv, up_tb_sv, up_main_cpp,
-                "--Mdir", up_obj_dir, "-o", "sim_userspace_phys",
-            ], capture_output=True, text=True)
-            check("verilator (-Wall): compiler-emitted lc_drives_userspace_stator.sv & cnc_5axis_userspace_mill.sv build",
-                  r_up_ver.returncode == 0, r_up_ver.stdout + r_up_ver.stderr)
-
-            if r_up_ver.returncode == 0:
-                r_up_sim = subprocess.run([os.path.join(up_obj_dir, "sim_userspace_phys")], capture_output=True, text=True)
-                check("verilator co-sim: compiler-emitted SV matches Lean kernel (peakWindingTemp=122, sdfMargin=24, cmdAxis=10024, totalVolErr=26)",
-                      r_up_sim.returncode == 0
-                      and "peakWindingTemp=122" in r_up_sim.stdout and "sdfMargin=24" in r_up_sim.stdout
-                      and "cmdAxis=10024" in r_up_sim.stdout and "totalVolErr=26" in r_up_sim.stdout,
-                      r_up_sim.stdout + r_up_sim.stderr)
+        check("obend hardware emit-sv: synthesized SystemVerilog-2012 emitted for obend_retimed_mac2 & obend_width_probe",
+              r_emit_mac2.returncode == 0 and r_emit_wp.returncode == 0
+              and os.path.exists(mac2_sv) and os.path.exists(wp_sv),
+              r_emit_mac2.stdout + r_emit_mac2.stderr + r_emit_wp.stdout + r_emit_wp.stderr)
 
 print(f"\nrun-hardware: {count - len(failures)}/{count} passed")
 sys.exit(1 if failures else 0)
