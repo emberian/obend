@@ -862,8 +862,10 @@ theorem verifyScheduledSumcheck_point_len {R : Type} [CommRingOps R] [DecidableE
 theorem verifyScheduledRound_sound {R : Type} [LawfulCommRing R] [DecidableEq R] [TranscriptChallenge R] {phase : TranscriptPhase} [CanSqueezeTranscript phase]
     {maxDeg : Nat} {claimedSum trueSum : R} {p pStar : RoundPoly R} {tr : Transcript phase} {r nextClaim : R} {tr' : Transcript phase}
     (hAcc : stepScheduledRound maxDeg claimedSum p tr = some (r, nextClaim, tr'))
-    (hPStarSum : CommRingOps.add (evalPoly pStar CommRingOps.zero) (evalPoly pStar CommRingOps.one) = trueSum) (hFalse : claimedSum ≠ trueSum) :
-    p.coeffs.length ≤ maxDeg + 1 ∧ (r, tr') = absorbAndSqueezeRound p tr ∧ (nextClaim ≠ evalPoly pStar r ∨ PolyDiscrepancyRootHit p pStar r) := by
+    (hPStarSum : CommRingOps.add (evalPoly pStar CommRingOps.zero) (evalPoly pStar CommRingOps.one) = trueSum) :
+    claimedSum ≠ trueSum →
+    p.coeffs.length ≤ maxDeg + 1 ∧ ((r : R), (tr' : Transcript phase)) = absorbAndSqueezeRound p tr ∧ (nextClaim ≠ evalPoly pStar r ∨ PolyDiscrepancyRootHit p pStar r) := by
+  intro hFalse
   unfold stepScheduledRound at hAcc; split at hAcc
   · rename_i hCond; simp only [Bool.and_eq_true, List.isEmpty_iff, List.drop_eq_nil_iff, degLePoly, decide_eq_true_eq] at hCond
     simp only [Option.some.injEq, Prod.mk.injEq] at hAcc; rcases hAcc with ⟨hr, hNext, hTr⟩; subst hr hNext hTr; refine ⟨hCond.1.1, rfl, ?_⟩
@@ -1410,7 +1412,7 @@ theorem verifyMxfp4Sumcheck_sound {phase : TranscriptPhase} [CanSqueezeTranscrip
       let qTbl := qInts.map intToGoldilocks; let sTbl := sShifts.map shiftToGoldilocks
       fv = CommRingOps.mul (eqPolyVec rJ rJp) (CommRingOps.mul (mleEval xTbl (rI ++ rB ++ rK)) (CommRingOps.mul (mleEval qTbl (rB ++ rK ++ rJp)) (mleEval sTbl (rK ++ rJp)))))
     (hSumFalse : dClaim ≠ mleEval (mxfp4ContractTable logI logJ logK logB xTbl qInts sShifts) (rI ++ rJ)) :
-    Mxfp4SumcheckRootHit logJ logK logB xTbl (qInts.map intToGoldilocks) (sShifts.map shiftToGoldilocks) rI rJ (allChals.take logB) ((allChals.drop logB).take logK) ps tr₀ := by
+    Mxfp4SumcheckRootHit logJ logK logB xTbl (qInts.map intToGoldilocks) (sShifts.map shiftToGoldilocks) rI rJ (allChals.take logB) ((allChals.drop logB).take logK) ps (tr₀ : Transcript phase) := by
   obtain ⟨hAllLen, _⟩ := verifyScheduledSumcheck_point_len _ _ _ _ _ _ _ hVer; rw [(mxfp4DegSchedule_never_deg_four _ _ _).1] at hAllLen
   rw [mxfp4_phase1_eq_mle logI logJ logK logB xTbl qInts sShifts rI rJ hRI hRJ hX hQ hS] at hSumFalse; unfold mxfp4DegSchedule at hVer; rw [List.append_assoc] at hVer
   obtain ⟨s₁, tr₁, hVerB, hVerKJ⟩ := scheduledSumcheck_split (List.replicate logB 2) (List.replicate logK 3 ++ List.replicate logJ 3) _ _ _ _ _ _ hVer

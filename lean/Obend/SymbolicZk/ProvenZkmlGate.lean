@@ -810,7 +810,8 @@ theorem verifyMxfp4ChunkIop_sound {suite : ZkmlSuiteProfile} {M : Mxfp4ModelMani
   verifyMxfp4ChunkIop_sound_of_unpack (verifyMxfp4ChunkIop_unpack hAcc) hMatch
 theorem verifyMxfp4ChunkIop_registered_sound {suite : ZkmlSuiteProfile} {M : Mxfp4ModelManifest} {powBits : Nat} {w : Mxfp4ChunkWitness} {c : ZkmlChunkReceipt}
     (hAcc : verifyMxfp4ChunkIop suite M powBits c = true) (hMatch : WitnessMatchesMxfp4Chunk w c) (hRegQ : ∀ q ∈ w.qInts, isValidE2m1Mantissa q = true)
-    (hRegS : ∀ sh ∈ w.sShifts, isValidMxfp4Shift sh = true) : ∃ (rI rJ rB rK rJp : List Goldilocks) (finalVal : Goldilocks) (trPostFold : Transcript .instanceBound),
+    (hRegS : ∀ sh ∈ w.sShifts, isValidMxfp4Shift sh = true) : ChunkMeetsPow suite powBits c ∧
+    ∃ (rI rJ rB rK rJp : List Goldilocks) (finalVal : Goldilocks) (trPostFold : Transcript .instanceBound),
       runMxfp4SumcheckPhase suite c = some (rI, rJ, rB, rK, rJp, finalVal, trPostFold) ∧
       (let setup := mxfp4SetupRaw suite c.iopProof.logI c.iopProof.logJ c.iopProof.logK c.iopProof.logB c.modelWeightsRoot c.policyFloorDigest c.suiteDigest
          c.chunkIdx c.layerIdx c.stateInCommit c.stateOutCommit c.qMerkleRoot c.sMerkleRoot c.iopProof.dClaim
@@ -818,7 +819,7 @@ theorem verifyMxfp4ChunkIop_registered_sound {suite : ZkmlSuiteProfile} {M : Mxf
        (M = w.model ∧ w.dTbl = mxfp4ContractTable w.logI w.logJ w.logK w.logB w.xTbl w.qInts w.sShifts) ∨ OuterMleRootHit w rI rJ ∨
        Mxfp4SumcheckRootHit w.logJ w.logK w.logB w.xTbl (w.qInts.map intToGoldilocks) (w.sShifts.map shiftToGoldilocks) rI rJ rB rK c.iopProof.sumcheckRounds setup.2.2 ∨
        AuthenticatedFoldWalkDeviation w c rI rJ rB rK rJp rawQs ∨ ZkmlCshakeCollision M w c) := by
-  obtain ⟨_, rI, rJ, rB, rK, rJp, fv, trPF, hPh, hDisj⟩ := verifyMxfp4ChunkIop_sound hAcc hMatch; refine ⟨rI, rJ, rB, rK, rJp, fv, trPF, hPh, ?_⟩
+  obtain ⟨hPow, rI, rJ, rB, rK, rJp, fv, trPF, hPh, hDisj⟩ := verifyMxfp4ChunkIop_sound hAcc hMatch; refine ⟨hPow, rI, rJ, rB, rK, rJp, fv, trPF, hPh, ?_⟩
   rcases hDisj with ⟨hM, _, _, hD⟩ | hO | hS | hF | ⟨hBad, _⟩ | hC
   · exact .inl ⟨hM, hD⟩
   · exact .inr (.inl hO)
