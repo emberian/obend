@@ -674,6 +674,8 @@ private def sc7Compact : Program :=
   #[some sc7_i0, some sc7_i1, some sc7_i2, none, some sc7_i4, some sc7_i5, some sc7_i6, some sc7_i7, none, some sc7_i9, some sc7_i10]
 
 private theorem storeConst7Prog_strip : storeConst7Prog.map (Option.map stripInst) = sc7Compact := by
+  apply Array.ext'
+  simp only [Array.toList_map]
   decide +kernel
 
 private theorem list_mapM_eq_some {α β : Type} (f : α → Option β) (g : α → β) (xs : List α)
