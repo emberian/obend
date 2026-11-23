@@ -1,4 +1,7 @@
-module
+import Obend.Hardware.PipelinedRisc
+import Obend.Tactic.Tooth
+import Obend.AssertAxioms
+
 /-
 # PipelinedRiscBurchDillTest — End-to-End Hazard Corner Cases, RTL Co-Simulation & `#tooth` Kills
 
@@ -18,19 +21,7 @@ Verifies `Obend.Hardware.PipelinedRisc`:
    bypass guard, breaking `regNonZero`, disabling `detectLoadUseStall`, disabling `branchTakenFlush`,
    corrupting `exAluResult`, and dropping `applyWb`).
 -/
-public import Obend.Hardware.PipelinedRisc
-public import Obend.Tactic.Tooth
-public import Obend.AssertAxioms
-import all Obend.Hardware.HDL
-import all Obend.Hardware.PipelinedRiscCore
-import all Obend.Hardware.PipelinedRisc
-meta import all Obend.Hardware.HDL
-meta import all Obend.Hardware.PipelinedRiscCore
-meta import all Obend.Hardware.PipelinedRisc
-import all Obend.Tactic.Tooth
-import all Obend.AssertAxioms
 
-public section
 namespace Obend.Tests.SiliconElab.PipelinedRiscBurchDill
 
 open Obend.Hardware.HDL
@@ -45,7 +36,8 @@ set_option autoImplicit false
 /-! ## 1. Universal Sanity Bundle Across ISA, Burch–Dill Commutator, Liveness & `RtlModule` -/
 
 theorem pipelinedRisc_master_verification_bundle
-    (imem : InstrMem) (p : PipeState) (hWf : PipeWf p) (n : Nat) :
+    (imem : InstrMem) (p : PipeState) (hWf : PipeWf p) (n : Nat)
+    (Y : Obend.Hardware.YosysLec.LecAssign) :
     (∃ k, (k = 0 ∨ k = 1) ∧
       flushPipeline (stepPipeline imem p) = stepIsaN imem k (flushPipeline p)) ∧
     (∃ k, k ≤ n ∧ PipeWf (stepPipelineN imem n p) ∧
@@ -54,13 +46,18 @@ theorem pipelinedRisc_master_verification_bundle
       (stepPipelineN imem 3 (stepPipelineN imem 2 p)).retiredCount) ∧
     (1 ≤ burchDillStepsN imem 4 p) ∧
     (checkRtlModule pipelinedRiscCoreRtlModule = true ∧
-     checkRtlModuleW pipelinedRiscCoreRtlModule = true) := by
+     checkRtlModuleW pipelinedRiscCoreRtlModule = true ∧
+     Obend.Hardware.YosysLec.moduleFaithful pipelinedRiscCoreRtlModule = true ∧
+     ((Obend.Hardware.YosysLec.lecScript pipelinedRiscCoreRtlModule).env Y).wire =
+       evalWireTable ((Obend.Hardware.YosysLec.lecScript pipelinedRiscCoreRtlModule).inpVal Y)
+         ((Obend.Hardware.YosysLec.lecScript pipelinedRiscCoreRtlModule).regVal Y)
+         pipelinedRiscCoreRtlModule.wires) := by
   exact ⟨burchDill_step_commutes imem p hWf,
    pipelinedRisc_multiCycle_refines_isa imem n p hWf,
    pipelinedRisc_retires_every_3_cycles imem p,
    (burchDill_no_starvation_progress imem p hWf).2,
    ⟨(pipelinedRiscCoreRtlModule_faithful (fun _ => 0#64) (fun _ => 0#64)).1,
-    (pipelinedRiscCoreRtlModule_faithful (fun _ => 0#64) (fun _ => 0#64)).2.1⟩⟩
+    pipelinedRiscCoreRtl_faithful Y⟩⟩
 
 /-! ## 2. Concrete `#guard` Hazard Corner-Case Programs Matching `stepIsaN` Bit-for-Bit -/
 
@@ -342,4 +339,3 @@ def applyWbDropped (regs : RegFile) (_ : MemWbLatch) : RegFile := regs
   by mutation Obend.Hardware.PipelinedRisc.applyWb := applyWbDropped
 
 end Obend.Tests.SiliconElab.PipelinedRiscBurchDill
-end

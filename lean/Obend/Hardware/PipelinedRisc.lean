@@ -11,8 +11,10 @@ register-transfer refinement (`pipelinedRiscRtl_outputs_refine`, `pipelinedRiscR
 -/
 public import Obend.Hardware.HDL
 public import Obend.Hardware.PipelinedRiscCore
+public import Obend.Hardware.YosysLec
 import all Obend.Hardware.HDL
 import all Obend.Hardware.PipelinedRiscCore
+import all Obend.Hardware.YosysLec
 
 public section
 namespace Obend.Hardware.PipelinedRisc
@@ -140,6 +142,22 @@ theorem pipelinedRiscCoreRtlModule_faithful (inputs regs : Nat → BitVec 64) :
       evalModuleOutputs pipelinedRiscCoreRtlModule inputs regs := by
   exact ⟨by decide +kernel, by decide +kernel,
    evalModuleOutputsW_eq_of_all64 pipelinedRiscCoreRtlModule inputs regs (by decide +kernel)⟩
+
+/-- Emission & Yosys `QF_BV` LEC faithfulness gate (`pipelinedRiscCoreRtl_faithful`):
+`pipelinedRiscCoreRtlModule` passes `checkRtlModuleW`, `YosysLec.moduleFaithful`, and exact
+SMT-LIB2 wire-table evaluation agreement for every solver assignment `Y`. -/
+theorem pipelinedRiscCoreRtl_faithful (Y : Obend.Hardware.YosysLec.LecAssign) :
+    checkRtlModuleW pipelinedRiscCoreRtlModule = true ∧
+    Obend.Hardware.YosysLec.moduleFaithful pipelinedRiscCoreRtlModule = true ∧
+    ((Obend.Hardware.YosysLec.lecScript pipelinedRiscCoreRtlModule).env Y).wire =
+      evalWireTable ((Obend.Hardware.YosysLec.lecScript pipelinedRiscCoreRtlModule).inpVal Y)
+        ((Obend.Hardware.YosysLec.lecScript pipelinedRiscCoreRtlModule).regVal Y)
+        pipelinedRiscCoreRtlModule.wires := by
+  have hw : checkWidths pipelinedRiscCoreRtlModule = true := by decide +kernel
+  have hf := Obend.Hardware.YosysLec.moduleFaithful_of_checkWidths pipelinedRiscCoreRtlModule hw
+  refine ⟨by decide +kernel, hf, ?_⟩
+  simp only [Obend.Hardware.YosysLec.moduleFaithful, Bool.and_eq_true] at hf
+  exact Obend.Hardware.YosysLec.wireFold_sound _ _ _ _ _ hf.1.1
 
 /-! ## 2. Pipeline-to-RTL State Projection & Combinational / Sequential Refinement Proofs -/
 
