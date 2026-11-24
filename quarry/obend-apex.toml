@@ -2297,6 +2297,41 @@ module = "Obend.Lower.Pancake.BeltLatch"
 theorem = "pancakeBeltLatch_correct"
 description = "Serialized Pancake custody belt-latch kernel (`pancakeBeltLatch_correct`, `pancakeBeltLatch_frame`, `accepted_parent_consumed`) proving exact memory/return refinement and fork refusal across arbitrarily many intervening transitions."
 
+[[apex]]
+id = "vault-semidirect-gsp-escrow-and-mixt-grading"
+subsystem = "Vault"
+module = "Obend.Vault.SemidirectGsp"
+theorem = "apex_semidirect_gsp_multi_turn_sound"
+description = "Causal-ancestry semidirect product (`semidirectMerge_comm`, `causally_prior_write_survives_revocation`), CISE/Mandate bounded offline escrow slices (`multi_locus_escrow_nonneg_and_conserved`), MixT 4-level IFC (`ifc_unendorsed_strong_noninterference`), GSP prefix rebase, and per-cone non-aborting settlement (`jstitchByCone_is_commit`)."
+
+[[apex]]
+id = "polis-zkcapfold-epoch-decoupled-disjointness"
+subsystem = "Polis"
+module = "Obend.Polis.ZkCapFold"
+theorem = "zkCapFold_epoch_decoupled_iff_foldChain_at_presentation"
+description = "Epoch-decoupled PQ capability chain folding (`OfflineCapBundle`, fixed-arity `2 * kMax + 2` salted Dual-Spine nullifier vector commitments) paired with live-epoch sorted-gap `RevokedGapRoot256` non-membership (`unrelated_revocations_preserve_folded_bundle`, `retroactive_ancestor_revocation_kills_pre_folded_cone`) and choice-free `PSum` collision extraction."
+
+[[apex]]
+id = "vault-certified-partial-view-and-homomorphic-peval"
+subsystem = "Vault"
+module = "Obend.Vault.CertifiedPartialView"
+theorem = "peval_sound_and_confidential"
+description = "Dynamic 256-bit sparse authenticated partial-view tree with range non-omission proofs (`rangeScanPartial_sound_or_collision`), multi-turn `CertifiedPeval` membrane soundness (`peval_sound_and_confidential`), and Goldilocks Module-SIS Ajtai homomorphic linear opening for `Form.NExpr` (`certifiedMoves_pairsOf_and_balanced`)."
+
+[[apex]]
+id = "core-heap-image-roundtrip-and-resume"
+subsystem = "Core"
+module = "Obend.Core.HeapImage"
+theorem = "rehydrate_resume_steps_eq"
+description = "Canonical ByteArray Core4 heap-image persistence round-tripping every Term, RuntimeValue, Cell, Frame, Control, and State bit-identically with 256-bit cSHAKE256 CID binding and preserving multi-yield perform continuation execution across checkpoints."
+
+[[apex]]
+id = "repair-upgrade-envelope-lazy-relink-and-lift"
+subsystem = "Repair"
+module = "Obend.Repair.UpgradeEnvelope"
+theorem = "relinkLogAcrossEpochs_sound"
+description = "Hofmann-Pierce-Wagner symmetric complemented edit lenses, Thor M1 lazy per-bucket upgrades (`lazyUpgrade_obs_eq_eagerUpgrade`), Genealogy-gated epoch log relinking with LobCost accounting, and lifted yielded Core4 continuations (`liftYieldedContinuation_commutes`)."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

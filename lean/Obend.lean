@@ -373,3 +373,6 @@ public import Obend.SymbolicZk.SkolemChaseCore
 public import Obend.SymbolicZk.StencilRolloutStark
 public import Obend.Trailblaze.CathedralApex
 public import Obend.Trailblaze.StageBInstances
+public import Obend.Vault.CertifiedPartialView
+public import Obend.Core.HeapImage
+public import Obend.Repair.UpgradeEnvelope
