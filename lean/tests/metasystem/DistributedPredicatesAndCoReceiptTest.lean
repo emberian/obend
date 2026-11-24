@@ -58,6 +58,7 @@ import all Obend.Slot.World
 import all Obend.Tactic.Cases
 import all Obend.Tactic.Tooth
 import all Obend.Vault.Mandate
+import all Obend.Core.SortedArray
 
 /-!
 # `tests/metasystem/DistributedPredicatesAndCoReceiptTest.lean`

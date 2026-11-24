@@ -12,6 +12,7 @@ import Obend.Hardware.HDL
 import Obend.Hardware.YosysLec
 import Obend.Receipt.Merkle
 import Obend.Core.Digest
+import Obend.Codec.Hex
 
 /-!
 # `obend pde`: the nonlinear conservation-law solver, checker and emitter
@@ -707,13 +708,9 @@ theorem pdeTrajectoryDigest_binding (H : Hash) (s₁ s₂ : PdeTrajectoryStateme
   if hb : pdeTrajectoryBytes s₁ = pdeTrajectoryBytes s₂ then .inl (pdeTrajectoryBytes_injective hb)
   else .inr ⟨_, _, .inl rfl, .inr rfl, hb, congrArg ofBE h⟩
 
-def hexBytes (bs : List UInt8) : String :=
-  String.ofList (bs.flatMap fun b =>
-    ["0123456789abcdef".toList[b.toNat / 16]!, "0123456789abcdef".toList[b.toNat % 16]!])
-
 /-- The receipt: the deployed 256-bit digest of the statement, as 64 hex digits. -/
 def pdeReceiptHex (s : PdeTrajectoryStatement) : String :=
-  hexBytes (pdeTrajectoryDigest Obend.Core.Digest.deployed s)
+  Obend.Codec.Hex.bytesToHex (pdeTrajectoryDigest Obend.Core.Digest.deployed s)
 
 /-! ## 6. The Q32.32 backend -/
 

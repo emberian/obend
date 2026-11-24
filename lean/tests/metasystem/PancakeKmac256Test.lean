@@ -1,6 +1,8 @@
 module
 import Obend.Lower.Pancake.PancakeKmac256
 import Obend.Tactic.Tooth
+import Obend.Codec.Hex
+meta import Obend.Codec.Hex
 import all Obend.Lower.Pancake.PancakeKmac256
 import all Obend.Lower.Pancake.PancakeCshake256
 import all Obend.Lower.Pancake.EmitPnk
@@ -14,6 +16,7 @@ import all Obend.Lower.Pancake.WordBuffer
 
 public section
 open Obend.Lower.Pancake Obend.Digest Obend.Digest.Kmac256
+open Obend.Codec.Hex (bytesToHex)
 namespace PancakeKmacTest
 
 -- A wrong `right_encode(256)` byte.
@@ -216,16 +219,13 @@ private def golden : List String := [
   "a99de128ff00bea9a8ca8dd1d51003c29a514a0d534ebc9f37ad8c7bcd003e53",
   "b557ec7607c18d826f7e08cb61065d6149abf54d6fb8160a736823fc0b905451"]
 
-private def hexDigit (n : Nat) : Char := "0123456789abcdef".toList.getD n '0'
 
-private def hex (bs : List UInt8) : String :=
-  bs.foldl (fun acc b => (acc.push (hexDigit (b.toNat / 16))).push (hexDigit (b.toNat % 16))) ""
 
 -- Check the known answers in the ordinary Lean test build as well as in the native differential.
 #guard golden.length == 95 && vectors.length == golden.length
 #guard (vectors.zip golden).all fun ((key, custom, msg), tag) =>
-  hex (kmac256Bytes key custom msg) == tag
-#guard hex (kmac256Bytes (vectorKey.map (· + 1)) "My Tagged Application".toUTF8.toList
+  bytesToHex (kmac256Bytes key custom msg) == tag
+#guard bytesToHex (kmac256Bytes (vectorKey.map (· + 1)) "My Tagged Application".toUTF8.toList
     [0, 1, 2, 3]) != "f2d95c33c9a201eb10c524b9084b4bacae0092f869122df7d7870b92c842e05b"
 #guard functionName == "KMAC".toUTF8.toList
 
@@ -258,7 +258,7 @@ def verifyNative (exe dir : System.FilePath) : IO Unit := do
   for ((key, custom, msg), tag) in vectors.zip golden do
     let label := s!"|K|={key.length}, |S|={custom.length}, |X|={msg.length}"
     let spec := kmac256Bytes key custom msg
-    unless hex spec == tag do throw (IO.userError s!"specification differs from golden: {label}")
+    unless bytesToHex spec == tag do throw (IO.userError s!"specification differs from golden: {label}")
     IO.FS.writeBinFile (dir / "key") ⟨key.toArray⟩
     IO.FS.writeBinFile (dir / "custom") ⟨custom.toArray⟩
     IO.FS.writeBinFile (dir / "message") ⟨msg.toArray⟩

@@ -175,6 +175,8 @@ import all Obend.Lower.Proofs.Book
 import all Obend.Slot.Core4
 import all Obend.Slot.Selection
 import all Obend.Tactic.MonadicReduction
+import all Obend.Codec.Hex
+import all Obend.Core.SortedArray
 
 /-!
 # Grain powerbox, caretaker membranes, blame and restart, end to end

@@ -19,6 +19,7 @@ public import Obend.Hardware.Codec
 import all Obend.Hardware.PinoutEquiv
 import all Obend.Hardware.Codec
 import Obend.Tactic.Tooth
+import Obend.Codec.Hex
 public section
 namespace Obend.Hardware.Judge
 open Lean (Json toJson)
@@ -1174,23 +1175,6 @@ def badBinaryPnrCert : BinaryHwCert := { adder2nsPnrCert with p5 := 100 }
 theorem badBinaryCborCert_refused :
     checkBinaryCborJudge 0 .pnr badBinaryPnrCert =
       .refused (.binaryCborCertViolation 1) [] := by decide +kernel
-def hexCharVal (c : Char) : Option Nat :=
-  if '0' ≤ c && c ≤ '9' then some (c.toNat - '0'.toNat)
-  else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 'a'.toNat + 10)
-  else if 'A' ≤ c && c ≤ 'F' then some (c.toNat - 'A'.toNat + 10)
-  else none
-def decodeHexChars : List Char → Option (List UInt8)
-  | [] => some []
-  | hi :: lo :: rest =>
-    match hexCharVal hi, hexCharVal lo, decodeHexChars rest with
-    | some h, some l, some tail => some (UInt8.ofNat (h * 16 + l) :: tail)
-    | _, _, _ => none
-  | [_] => none
-def encodeHexBytes (bytes : List UInt8) : String :=
-  let hexDigits : Array Char := #['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f']
-  String.ofList (bytes.flatMap fun b =>
-    let n := b.toNat
-    [hexDigits.getD (n / 16) '0', hexDigits.getD (n % 16) '0'])
 def decodeBinaryCborDomainCode (s : String) : Except String Nat :=
   match s.trimAscii.toString.toNat? <|> extractNatField s "domainId" with
   | some n => .ok n
@@ -1211,7 +1195,7 @@ def decodeBinaryCborObj (s : String) : Except String HwCertDomain :=
     | none => .error s!"missing required binary CBOR domain id in '{s}'"
 def decodeBinaryCborCert (s : String) : Except String BinaryHwCert := do
   let trimmed := s.trimAscii.toString
-  match decodeHexChars trimmed.toList with
+  match Obend.Codec.Hex.hexCharsToBytesAnyCase? trimmed.toList with
   | some rawBytes =>
     match decodeBinaryHwCert rawBytes with
     | some cert => .ok cert
@@ -1293,7 +1277,7 @@ theorem badBinaryTapeCert_refused :
       .refused (.binaryCborCertViolation 10) [] := by decide +kernel
 def decodeBinaryTapeCertHex (s : String) : Except String BinaryTapeCert := do
   let trimmed := s.trimAscii.toString
-  match decodeHexChars trimmed.toList with
+  match Obend.Codec.Hex.hexCharsToBytesAnyCase? trimmed.toList with
   | some rawBytes =>
     match decodeBinaryTapeCert rawBytes with
     | some cert => .ok cert

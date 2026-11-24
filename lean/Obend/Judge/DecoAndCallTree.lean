@@ -52,13 +52,15 @@ import all Obend.Judge.SymbolicRegexBisim
 import all Obend.Judge.VpaComplementAndJson
 import all Obend.Judge.TranscriptPolicy
 import all Obend.Vault.Lsafe
+import Obend.Codec.Hex
 public section
 namespace Obend.Judge.DecoAndCallTree
 open Obend.Crypto Obend.Crypto.BinaryTower256
 open Obend.Digest.Cshake256
 open Obend.Judge.VpaJson (JState JMode StrSub stepJson specRunJson specRunJson_append jsonAccepting
   SpanRoot spanMerkleRoot spanTag verifySpanMerkleInclusion)
-open Obend.Judge.Commit (cshakeHasher HashCollision hexOf unhex)
+open Obend.Judge.Commit (cshakeHasher HashCollision unhex)
+open Obend.Codec.Hex (byteArrayToHex bytesToHexAscii bytesToHexAscii_length)
 open Obend.Judge (spanConfined spanConfined_run)
 set_option autoImplicit false
 instance byteArrayLawfulBEq : LawfulBEq ByteArray where
@@ -394,23 +396,11 @@ def topLevelMembers (body : List SpanSlot) : List (ByteArray × ByteArray) :=
   let scan := scanSlots Scan.init body
   if jsonAccepting scan.st then scan.found else []
 
-/-- Lowercase hex encoding of every digest byte, including leading zeros. -/
-def hexDigit (n : Nat) : UInt8 := UInt8.ofNat (if n < 10 then 48 + n else 87 + n)
-def hex64 (h : Hash256) : List UInt8 :=
-  h.val.data.toList.flatMap fun b => [hexDigit (b.toNat / 16), hexDigit (b.toNat % 16)]
+/-- Lowercase hex of every digest byte, including leading zeros, as ASCII bytes. -/
+def hex64 (h : Hash256) : List UInt8 := bytesToHexAscii h.val.data.toList
 
 theorem hex64_length (h : Hash256) : (hex64 h).length = 64 := by
-  have aux (xs : List UInt8) :
-      (xs.flatMap fun b => [hexDigit (b.toNat / 16), hexDigit (b.toNat % 16)]).length = 2 * xs.length := by
-    induction xs with
-    | nil => rfl
-    | cons b bs ih => simp [List.flatMap_cons, ih, Nat.mul_add, Nat.add_comm]; omega
-  rw [hex64, aux]
-  have hs : h.val.data.toList.length = 32 := by
-    change h.val.data.toList.length = 32
-    rw [Array.length_toList, ByteArray.size_data]
-    exact h.property
-  rw [hs]
+  rw [hex64, bytesToHexAscii_length, Array.length_toList, ByteArray.size_data, h.property]
 
 def subtreeKey : ByteArray := "subtree_root".toByteArray
 
@@ -1284,7 +1274,7 @@ def decEdge (bs : List UInt8) : Option DataflowEdge :=
   | _ => none
 
 def encodeCallTreeClaim (q : CallTreeClaim) : String :=
-  hexOf ⟨(encList [encPolicy q.policy, encTree q.tree, q.expectedRoot.val.data.toList,
+  byteArrayToHex ⟨(encList [encPolicy q.policy, encTree q.tree, q.expectedRoot.val.data.toList,
     encList (q.requiredEdges.map encEdge)]).toArray⟩
 
 def decodeCallTreeClaim (s : String) : Except String CallTreeClaim :=
@@ -1299,7 +1289,7 @@ def decodeCallTreeClaim (s : String) : Except String CallTreeClaim :=
     | _ => .error "deco-calltree@1: a claim is four framed fields"
 
 def encodeCallTreeWitness (w : CallTreeWitness) : String :=
-  hexOf ⟨(encList (w.map fun o => encList [encBytesList o.request, encBytesList o.response])).toArray⟩
+  byteArrayToHex ⟨(encList (w.map fun o => encList [encBytesList o.request, encBytesList o.response])).toArray⟩
 
 def decOpening (bs : List UInt8) : Option HopOpening :=
   match decList bs with

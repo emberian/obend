@@ -153,6 +153,9 @@ import all Obend.Consensus.SimplexProtocol
 import all Obend.Logic.SeparationFrame
 import all Obend.Polis.CapTP
 import all Obend.Vault.Mandate
+import all Obend.Codec.Hex
+import all Obend.Core.SortedArray
+import all Obend.Crypto.FastRing
 
 public section
 namespace Obend.Tests.BinaryTowerDecoCallTree

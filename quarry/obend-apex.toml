@@ -108,6 +108,13 @@ module = "Obend.Core.RangeSafe"
 theorem = "rangeSafe_pipeline_inhabited"
 description = "Interval/range-safe modular-to-integer arithmetic bridge discharging overflow/wrap preconditions across hardware and field pipelines."
 
+[[apex]]
+id = "core-sorted-array-search-spec"
+subsystem = "Core"
+module = "Obend.Core.SortedArray"
+theorem = "search_eq_spec"
+description = "Half-open binary search over a strictly sorted array equals the linear list lookup; the tree's one sorted `UInt64` set (`SortedU64Set`, shared by CapTP, EnvHarness and HermesEnv) rests on it."
+
 # ==============================================================================
 # 2. `Leaf` — Book Emission, Specialization, Static Folding & Served Pin Linking
 # ==============================================================================
@@ -788,6 +795,13 @@ subsystem = "Codec"
 module = "Obend.Codec.DetCbor"
 theorem = "encodeDetCbor_injective"
 description = "RFC 8949 Deterministic CBOR `ByteArray` encoder/decoder refines formal grammar, rejects non-canonical encodings, and proves injectivity."
+
+[[apex]]
+id = "codec-hex-canonical-spelling"
+subsystem = "Codec"
+module = "Obend.Codec.Hex"
+theorem = "bytesToHexChars_of_hexCharsToBytes?"
+description = "The tree's one hex codec: the strict lowercase decoder accepts exactly the encoder's spelling (one spelling per byte string), beside the case-insensitive and ASCII-byte roundtrips and the fixed-width number spelling (`hexCharsToNat?_natToHexChars`)."
 
 [[apex]]
 id = "logic-guarded-lob-fixpoint"

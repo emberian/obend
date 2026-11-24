@@ -20,6 +20,8 @@ public import metasystem.VerifiableCredentialsAndTraceTest
 import all metasystem.VerifiableCredentialsAndTraceTest
 import all Obend.Polis.VerifiableCredentials
 import Obend.Tactic.Tooth
+import Obend.Codec.Hex
+meta import Obend.Codec.Hex
 public section
 namespace Obend.Tests.LawSymbolicZkDualPcsSeam
 open Obend.Crypto Obend.SymbolicZk.CompileToPiop
@@ -72,10 +74,6 @@ example : SymbolicSemanticsValid (lowerChaseAtoms [atom 0, atom 1] [atom 0, atom
 #tooth lowerChaseRuleInstance_sound by mutation lowerChaseAtoms := fun _ _ =>
   ⟨#[], #[], #[], #[], #[], #[], #[], 1⟩
 
-def hex (b : ByteArray) : String :=
-  String.ofList (b.data.toList.flatMap fun v =>
-    [Char.ofNat (if v.toNat / 16 < 10 then 48 + v.toNat / 16 else 87 + v.toNat / 16),
-     Char.ofNat (if v.toNat % 16 < 10 then 48 + v.toNat % 16 else 87 + v.toNat % 16)])
 def old : SpecTheory 16 := [⟨"fee", 3, 0xaaaa⟩]
 def turn : AmendmentTurn 16 := ⟨2, [⟨"recover", 1, 0x00c0⟩]⟩
 def floor : Bedrock 16 := ⟨fun v => (0x00c0 : BitVec 16).getLsbD v.val, 6, by decide⟩
@@ -87,11 +85,11 @@ def root : Obend.Polis.Block :=
     Native.bytesOfList (be 8 101)⟩
 
 -- Exact strings are also asserted by Rust amend_cli::test_law_biscuit_golden_vectors.
-#guard hex turn.digest == "2431ea726b7b7030421d7278cbbf3570767930d00f0a439804c825148edb6b35"
-#guard hex floor.digest == "0d9cb8d846f06d8780ea40f054faef443159568f0587ef09f4c2776a6fae0f83"
-#guard hex receipt.digest == "cf5a6308c19e9183faedadac9ddf72533272750ab3b64f616e421d93061d25f6"
-#guard hex (rootLineage root) == "e7d43dfb65f7d2f70ed08dbf68492e1fde0bd24251a456ed4f33b25dc9e4f251"
-#guard hex (Native.bytesOfList (be 32 (credNul (rootLineage root)))) ==
+#guard Obend.Codec.Hex.byteArrayToHex turn.digest == "2431ea726b7b7030421d7278cbbf3570767930d00f0a439804c825148edb6b35"
+#guard Obend.Codec.Hex.byteArrayToHex floor.digest == "0d9cb8d846f06d8780ea40f054faef443159568f0587ef09f4c2776a6fae0f83"
+#guard Obend.Codec.Hex.byteArrayToHex receipt.digest == "cf5a6308c19e9183faedadac9ddf72533272750ab3b64f616e421d93061d25f6"
+#guard Obend.Codec.Hex.byteArrayToHex (rootLineage root) == "e7d43dfb65f7d2f70ed08dbf68492e1fde0bd24251a456ed4f33b25dc9e4f251"
+#guard Obend.Codec.Hex.byteArrayToHex (Native.bytesOfList (be 32 (credNul (rootLineage root)))) ==
   "aa15ffe15196a3cce9df102d6897fa10e2d441a1a5c393d1e035b0562152c027"
 
 open Obend.Polis.VerifiableCredentials Obend.Polis.HouyhnhnmTurn

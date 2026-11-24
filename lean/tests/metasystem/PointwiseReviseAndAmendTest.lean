@@ -160,6 +160,8 @@ import all Obend.Spec.Proofs.C4
 import all Obend.Tactic.Cases
 import all Obend.Tactic.MonadicReduction
 import all Obend.Tactic.Tooth
+import all Obend.Codec.Hex
+import all Obend.Core.SortedArray
 
 meta import all Obend.Law.AmendCli
 

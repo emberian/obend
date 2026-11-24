@@ -5,6 +5,7 @@ Keeps `Lean.Json` strictly private (`LAW-M2`: `0` `public import Lean`) while pr
 fail-closed UTF-8 JSON request/response marshaling for `Obend.FFI.Bridge`.
 -/
 import Lean
+import Obend.Codec.Hex
 public import Obend.Doc.WorkbookEngine
 public import Obend.Spec.Parse
 
@@ -24,19 +25,9 @@ set_option autoImplicit false
 @[expose] def defaultSessionWorkbook : Workbook :=
   { title := "SessionWorkbook", sections := [], cells := [] }
 
-private def hexDigitChar (n : Nat) : Char :=
-  if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
-
-private def byteArrayToHex (bs : ByteArray) : String :=
-  String.ofList <| bs.data.toList.flatMap fun b =>
-    let v := b.toNat
-    [hexDigitChar (v / 16), hexDigitChar (v % 16)]
-
+/-- A 256-bit value as 64 lowercase hex digits, most significant first. -/
 private def bitVec256ToHex (bv : BitVec 256) : String :=
-  let bytes : List UInt8 := (List.range 32).map fun i =>
-    let shift := (31 - i) * 8
-    ((bv >>> shift).toNat % 256).toUInt8
-  byteArrayToHex (ByteArray.mk bytes.toArray)
+  String.ofList (Obend.Codec.Hex.natToHexChars 64 bv.toNat)
 
 private def nat256ToHex (n : Nat) : String :=
   bitVec256ToHex (BitVec.ofNat 256 n)

@@ -20,9 +20,11 @@ Every recursion is fuel-bounded with fuel proportional to the input; running out
 -/
 public import Lean
 public import Obend.Spec.Law
+import Obend.Codec.Hex
 public section
 namespace Obend.Spec.Parse
 open Lean
+open Obend.Codec.Hex (decodeHexNibbleAnyCase? isHexChar isLowerHexChar hexCharsToNat?)
 set_option autoImplicit false
 
 /-! ## ECMAScript character classes -/
@@ -184,15 +186,10 @@ def Diagnostic.json (d : Diagnostic) : Json :=
 
 /-! ## JSON string literals (`JSON.parse` of a quoted token) -/
 
-def hexValue (c : Char) : Option Nat :=
-  if '0' ≤ c && c ≤ '9' then some (c.toNat - '0'.toNat)
-  else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 'a'.toNat + 10)
-  else if 'A' ≤ c && c ≤ 'F' then some (c.toNat - 'A'.toNat + 10)
-  else none
-
 def hex4 : List Char → Option (Nat × List Char)
   | a :: b :: c :: d :: rest => do
-    pure ((((← hexValue a) * 16 + (← hexValue b)) * 16 + (← hexValue c)) * 16 + (← hexValue d), rest)
+    pure ((((← decodeHexNibbleAnyCase? a) * 16 + (← decodeHexNibbleAnyCase? b)) * 16 +
+      (← decodeHexNibbleAnyCase? c)) * 16 + (← decodeHexNibbleAnyCase? d), rest)
   | _ => none
 
 /-- The body of a quoted token (between the quotes). A lone UTF-16 surrogate escape has no
@@ -296,11 +293,9 @@ structure Token where
   stop : Nat
   deriving Inhabited
 
-def asciiHexDigit (c : Char) : Bool := (hexValue c).isSome
-
 /-- `^(?:[A-Za-z_]\w*|0[xX][0-9a-fA-F]+n?|[0-9]+n?|"(?:[^"\\]|\\.)*"|->|>>>|<<|>>|<=s|<s|==|!=|<=|>=|&&|\|\||[{}:=().,+*/%<>-&|^~])` -/
 def tokenRe : Re := alts [ident,
-  seqs [chr '0', .char (fun c => c == 'x' || c == 'X'), many1 (.char asciiHexDigit), opt (chr 'n')],
+  seqs [chr '0', .char (fun c => c == 'x' || c == 'X'), many1 (.char isHexChar), opt (chr 'n')],
   seqs [many1 (.char asciiDigit), opt (chr 'n')], quoted,
   str "->", str ">>>", str "<<", str ">>", str "<=s", str "<s",
   str "==", str "!=", str "<=", str ">=", str "&&", str "||",
@@ -363,7 +358,7 @@ def node (kind : String) (fields : List (String × Json)) (span : Span) : Json :
 def isNumberToken (t : List Char) : Bool :=
   match t with
   | '0' :: ('x' :: rest) | '0' :: ('X' :: rest) =>
-    let digits := rest.takeWhile asciiHexDigit
+    let digits := rest.takeWhile isHexChar
     !digits.isEmpty && (rest.drop digits.length == [] || rest.drop digits.length == ['n'])
   | _ =>
     let digits := t.takeWhile asciiDigit
@@ -373,8 +368,8 @@ def isNumberToken (t : List Char) : Bool :=
 def natValue (t : List Char) : String :=
   match t with
   | '0' :: ('x' :: rest) | '0' :: ('X' :: rest) =>
-    let digits := rest.takeWhile asciiHexDigit
-    let val := digits.foldl (fun acc c => acc * 16 + (hexValue c).getD 0) 0
+    let digits := rest.takeWhile isHexChar
+    let val := (hexCharsToNat? digits).getD 0
     toString val
   | _ =>
     let digits := t.takeWhile asciiDigit
@@ -719,11 +714,10 @@ def packageNameRe : Re := seqs [ident, many (.seq (chr '/') ident)]
 extends (DESIGN §4). -/
 def packageRe : Re := seqs [str "package", many1 space, group 1 packageNameRe,
   opt (seqs [many1 space, str "extends", many1 space, group 2 (many1 dot)]), many space, .done]
-def hexDigit (c : Char) : Bool := asciiDigit c || ('a' ≤ c && c ≤ 'f')
 /-- A parent root: `NAME@^MAJOR` (an intention: the versions of MAJOR its owner's record names) or
 `NAME@0xHASH` (an extension: the package whose content hash is HASH, 64 lowercase hex digits). -/
 def packageRefRe : Re := seqs [group 1 packageNameRe, chr '@',
-  alts [.seq (chr '^') (group 2 (many1 (.char asciiDigit))), .seq (str "0x") (group 3 (many1 (.char hexDigit)))], .done]
+  alts [.seq (chr '^') (group 2 (many1 (.char asciiDigit))), .seq (str "0x") (group 3 (many1 (.char isLowerHexChar)))], .done]
 /-- `protocol GENERIC for KIND:` with indented `def` methods: an implementation of a generic (a
 new one when GENERIC is a bare name, an imported one when `Alias.Name`) for a kind it need not
 be an ancestor of (LTUO §9.2.9). -/

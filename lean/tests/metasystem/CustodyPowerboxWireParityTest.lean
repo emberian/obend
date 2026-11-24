@@ -5,6 +5,9 @@ import all Obend.Vault.Replay
 import all Obend.Vault.WorldTree
 import all Obend.Polis.GrainCustodyHost
 import Obend.Tactic.Tooth
+import Obend.Codec.Hex
+meta import Obend.Codec.Hex
+meta import Obend.Core.SortedArray
 import all Obend.Polis.GrainPowerbox
 import all Obend.Apps.ZkNtt.Goldilocks
 import all Obend.AssertAxioms
@@ -100,10 +103,6 @@ open Obend.Crypto
 set_option autoImplicit false
 
 def bytes (n : UInt8) : ByteArray := ⟨(List.replicate 32 n).toArray⟩
-def hex (b : ByteArray) : String :=
-  String.ofList (b.data.toList.flatMap fun x =>
-    let digits := "0123456789abcdef".toList.toArray
-    [digits[x.toNat / 16]!, digits[x.toNat % 16]!])
 
 def lease : PrepaidLease := openLease 257 128 10 100
 def pkg : SignedGrainPackage := ⟨bytes 7, ⟨#[0,255,128]⟩, ByteArray.empty, bytes 9⟩
@@ -122,15 +121,15 @@ def archive : GrainArchive :=
     ledger.lease, ledger, ingress, [(0,bytes 1,bytes 5)], ByteArray.empty⟩
 
 -- Identical fixture fields and hex strings in cloud_custody::tests::custody_wire_vectors.
-#guard hex (authorityRoot ["z", "api:443"] [128,1] [129,2,2] [8,3] true) ==
+#guard Obend.Codec.Hex.byteArrayToHex (authorityRoot ["z", "api:443"] [128,1] [129,2,2] [8,3] true) ==
   "073cd30c52c70354069f7752ce084f869bab1a22418b931297fdce2f726d0ed9"
-#guard hex (packageDigest pkg) ==
+#guard Obend.Codec.Hex.byteArrayToHex (packageDigest pkg) ==
   "cb7bfdba43c79d62764d185088fe2340325237b8fc86626c04694e3b75170bd7"
-#guard hex (sessionCheckpoint session) ==
+#guard Obend.Codec.Hex.byteArrayToHex (sessionCheckpoint session) ==
   "68e2cbe03a4dfe7e41fed63a8de29df8edb6905b2ed9398e8c3b354608978a56"
-#guard hex (transitionHead archive) ==
+#guard Obend.Codec.Hex.byteArrayToHex (transitionHead archive) ==
   "2304c16c0e41ca4b4a7c4e33fb3f31759efd64c0cab5851785645e4918290a62"
-#guard hex ingress.root ==
+#guard Obend.Codec.Hex.byteArrayToHex ingress.root ==
   "1825228bfbbed2ea44769b36f726113a6a7c9f4a9cfea136f5cf7746726aec75"
 #guard authorityRoot ["z","api:443","z"] [1,128,1] [2,129] [3,8,3] true ==
   authorityRoot ["api:443","z"] [128,1] [129,2,2] [8,3] true

@@ -308,6 +308,9 @@ import all Obend.Tactic.Tooth
 import all Obend.Vault.Law
 import all Obend.Vault.Mandate
 import all Obend.Vault.Page
+import all Obend.Codec.Hex
+import all Obend.Core.SortedArray
+import all Obend.Hardware.Fabulous.TileEval
 public import Obend.Hardware.MultiDStencilCorrect
 public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms

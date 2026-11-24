@@ -45,6 +45,7 @@ import all Obend.Judge.SymbolicRegexBisim
 import all Obend.Judge.VpaComplementAndJson
 import all Obend.AssertAxioms
 import all Obend.Tactic.Tooth
+import all Obend.Codec.Hex
 meta import Obend.Digest.Cshake256
 meta import Obend.Vault.Lsafe
 meta import Obend.Judge.SymbolicRegexBisim
@@ -528,7 +529,7 @@ theorem json_utf8_and_eof_refused :
     match s with
     | .normal => if b == 0x22 then .close else if b == 0x5c then .cont .esc else .cont .normal
     | .esc => if isEscapeByte b then .cont .normal else if b == 0x75 then .cont (.hex 3) else .bad
-    | .hex n => if isHexDigit b then (match n with | 0 => .cont .normal | k + 1 => .cont (.hex k)) else .bad
+    | .hex n => if Obend.Codec.Hex.isHexByte b then (match n with | 0 => .cont .normal | k + 1 => .cont (.hex k)) else .bad
     | _ => .bad
 #tooth json_utf8_and_escape_positive by mutation stepStr := fun _ _ => .bad
 

@@ -143,6 +143,8 @@ import all Obend.Category.Refines
 import all Obend.Crypto.GameSoundness
 import all Obend.Judge.SymbolicRegexBisim
 import all Obend.Judge.VpaComplementAndJson
+import all Obend.Codec.Hex
+import all Obend.Core.SortedArray
 meta import Obend.Polis.VerifiableCredentials
 meta import Obend.Polis.HouyhnhnmTurn
 meta import Obend.Polis.HouyhnhnmMonitor
@@ -184,6 +186,7 @@ namespace Obend.Tests.VerifiableCredentialsAndTrace
 
 open Obend.Polis Obend.Polis.VerifiableCredentials Obend.Polis.HouyhnhnmTurn
 open Obend.Polis.HouyhnhnmMonitor Obend.Polis.CapTP
+open Obend.Core.SortedArray (SortedU64Set)
 open Obend.Crypto Obend.Codec.DetCbor Obend.Vault.Lsafe
 open Obend.SymbolicZk Obend.SymbolicZk.Ranked
 

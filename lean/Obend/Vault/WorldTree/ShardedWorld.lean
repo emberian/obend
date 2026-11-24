@@ -14,6 +14,7 @@ public import Obend.Vault.DecodeCache
 public import Obend.Vault.Cost
 public import Obend.Digest.Cshake256.Fast
 public import Obend.Reasons
+public import Obend.Codec.Hex
 
 public section
 
@@ -52,6 +53,9 @@ open Obend.Vault.Rehydration (WitnessReceipt)
 open Obend.Vault.Transport (Issue Grants Standing Landing Obligation Contract)
 open Obend.Digest.Cshake256 (customizationPrefix)
 open Obend.Digest.Cshake256.Fast (pushList push_data pushList_data empty_data spongeBytes sponge_fast_eq)
+open Obend.Codec.Hex (hexNibbleByte decodeHexNibbleByte? bytesToHex bytesToHexChars bytesToHexAscii
+  hexAsciiToBytes? hexCharsToBytes? hexCharsToBytes?_bytesToHex hexAsciiToBytes?_bytesToHexAscii
+  hexAsciiToBytes?_of_odd)
 
 /-! ## 1. The World State & Fast ByteArray cSHAKE256 -/
 
@@ -1759,84 +1763,10 @@ theorem reassembleFromArray_eq (total : Nat) (arr : Array (List (Nat × Page)))
 
 /-! ## 5. Hex & RFC-8259 JSON Framing for Shards and Root Manifest -/
 
-theorem unhexDigit_hexDigit (n : Nat) (h : n < 16) : Json.unhexDigit (Json.hexDigit n) = some n := by
-  have hc : n = 0 ∨ n = 1 ∨ n = 2 ∨ n = 3 ∨ n = 4 ∨ n = 5 ∨ n = 6 ∨ n = 7 ∨
-      n = 8 ∨ n = 9 ∨ n = 10 ∨ n = 11 ∨ n = 12 ∨ n = 13 ∨ n = 14 ∨ n = 15 := by omega
-  rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> rfl
-
-theorem unhex_hex : ∀ (bs : Bytes), Json.unhex (Json.hex bs).toList = some bs
-  | [] => rfl
-  | b :: bs => by
-    have hdiv : b.toNat / 16 < 16 := by have := b.toNat_lt; omega
-    have hmod : b.toNat % 16 < 16 := Nat.mod_lt _ (by decide)
-    have hhex : (Json.hex (b :: bs)).toList =
-        Json.hexDigit (b.toNat / 16) :: Json.hexDigit (b.toNat % 16) :: (Json.hex bs).toList := by
-      simp [Json.hex, String.toList_ofList]
-    rw [hhex, Json.unhex]
-    dsimp only [bind, Option.bind, pure]
-    rw [unhexDigit_hexDigit _ hdiv, unhexDigit_hexDigit _ hmod, unhex_hex bs]
-    dsimp only
-    congr 1; congr 1
-    have hb : (b.toNat / 16 * 16 + b.toNat % 16) = b.toNat := by omega
-    rw [hb]
-    exact UInt8.ofNat_toNat
-
-def hexNibble (n : Nat) : UInt8 :=
-  if n < 10 then (48 + n).toUInt8 else (87 + n).toUInt8
-
-def hexByteHi (b : UInt8) : UInt8 := hexNibble (b.toNat / 16)
-def hexByteLo (b : UInt8) : UInt8 := hexNibble (b.toNat % 16)
-
-def unhexNibble (b : UInt8) : Option Nat :=
-  let n := b.toNat
-  if 48 ≤ n && n ≤ 57 then some (n - 48)
-  else if 97 ≤ n && n ≤ 102 then some (n - 87)
-  else none
-
-theorem unhexNibble_hexNibble (n : Nat) (h : n < 16) : unhexNibble (hexNibble n) = some n := by
-  have hc : n = 0 ∨ n = 1 ∨ n = 2 ∨ n = 3 ∨ n = 4 ∨ n = 5 ∨ n = 6 ∨ n = 7 ∨
-      n = 8 ∨ n = 9 ∨ n = 10 ∨ n = 11 ∨ n = 12 ∨ n = 13 ∨ n = 14 ∨ n = 15 := by omega
-  rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> rfl
-
-theorem hexNibble_ne_quote (n : Nat) (h : n < 16) : hexNibble n ≠ 34 := by
-  have hc : n = 0 ∨ n = 1 ∨ n = 2 ∨ n = 3 ∨ n = 4 ∨ n = 5 ∨ n = 6 ∨ n = 7 ∨
-      n = 8 ∨ n = 9 ∨ n = 10 ∨ n = 11 ∨ n = 12 ∨ n = 13 ∨ n = 14 ∨ n = 15 := by omega
-  rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide
-
-def hexAsciiBytes (bs : Bytes) : Bytes :=
-  bs.flatMap fun b => [hexByteHi b, hexByteLo b]
-
-def unhexAsciiBytes : Bytes → Option Bytes
-  | [] => some []
-  | a :: b :: rest => do
-    let hi ← unhexNibble a
-    let lo ← unhexNibble b
-    let tl ← unhexAsciiBytes rest
-    some ((hi * 16 + lo).toUInt8 :: tl)
-  | [_] => none
-
-theorem unhexNibble_hi (b : UInt8) : unhexNibble (hexByteHi b) = some (b.toNat / 16) :=
-  unhexNibble_hexNibble _ (by have := b.toNat_lt; omega)
-
-theorem unhexNibble_lo (b : UInt8) : unhexNibble (hexByteLo b) = some (b.toNat % 16) :=
-  unhexNibble_hexNibble _ (Nat.mod_lt _ (by decide))
-
-theorem unhexAscii_hexAscii : ∀ (bs : Bytes), unhexAsciiBytes (hexAsciiBytes bs) = some bs
-  | [] => rfl
-  | b :: bs => by
-    have ih := unhexAscii_hexAscii bs
-    simp only [hexAsciiBytes] at ih
-    simp only [hexAsciiBytes, List.flatMap_cons, List.cons_append, List.nil_append, unhexAsciiBytes]
-    rw [unhexNibble_hi b, unhexNibble_lo b, ih]
-    simp only [bind, Option.bind]
-    congr 1; congr 1
-    have hb : b.toNat / 16 * 16 + b.toNat % 16 = b.toNat := by omega
-    rw [hb]; exact UInt8.ofNat_toNat
-
 def pushHexArray.go (raw : ByteArray) (i : Nat) (out : ByteArray) : ByteArray :=
   if h : i < raw.size then
     let b := raw[i]'h
-    pushHexArray.go raw (i + 1) ((out.push (hexByteHi b)).push (hexByteLo b))
+    pushHexArray.go raw (i + 1) ((out.push (hexNibbleByte (b.toNat / 16))).push (hexNibbleByte (b.toNat % 16)))
   else out
 termination_by raw.size - i
 
@@ -1844,7 +1774,7 @@ def pushHexArray (acc : ByteArray) (raw : ByteArray) : ByteArray := pushHexArray
 
 theorem pushHexArray_go_eq (raw : ByteArray) (i : Nat) (out : ByteArray) :
     (pushHexArray.go raw i out).data.toList =
-      out.data.toList ++ hexAsciiBytes (raw.data.toList.drop i) := by
+      out.data.toList ++ bytesToHexAscii (raw.data.toList.drop i) := by
   have hs : raw.data.toList.length = raw.size := Array.length_toList
   rw [pushHexArray.go]
   by_cases h : i < raw.size
@@ -1852,13 +1782,13 @@ theorem pushHexArray_go_eq (raw : ByteArray) (i : Nat) (out : ByteArray) :
     rw [dite_eq_left_of_eq_true (eq_true h), pushHexArray_go_eq raw (i + 1), List.drop_eq_getElem_cons hl]
     have hg : raw.data.toList[i]'hl = raw[i]'h := rfl
     rw [hg, push_u8_data, push_u8_data]
-    simp [hexAsciiBytes, List.append_assoc]
+    simp [bytesToHexAscii, List.append_assoc]
   · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]
-    simp [hexAsciiBytes]
+    simp [bytesToHexAscii]
 termination_by raw.size - i
 
 theorem pushHexArray_eq (acc raw : ByteArray) :
-    (pushHexArray acc raw).data.toList = acc.data.toList ++ hexAsciiBytes raw.data.toList := by
+    (pushHexArray acc raw).data.toList = acc.data.toList ++ bytesToHexAscii raw.data.toList := by
   simpa [pushHexArray] using pushHexArray_go_eq raw 0 acc
 
 def unhexSliceGo (b : ByteArray) (stop : Nat) (hstop : stop ≤ b.size) (i : Nat) (out : ByteArray) :
@@ -1866,7 +1796,7 @@ def unhexSliceGo (b : ByteArray) (stop : Nat) (hstop : stop ≤ b.size) (i : Nat
   if h : i + 1 < stop then
     have h0 : i < b.size := by omega
     have h1 : i + 1 < b.size := by omega
-    match unhexNibble (b[i]'h0), unhexNibble (b[i + 1]'h1) with
+    match decodeHexNibbleByte? (b[i]'h0), decodeHexNibbleByte? (b[i + 1]'h1) with
     | some hi, some lo => unhexSliceGo b stop hstop (i + 2) (out.push (hi * 16 + lo).toUInt8)
     | _, _ => none
   else some out
@@ -1882,7 +1812,7 @@ def unhexSlice (b : ByteArray) (start stop : Nat) : Option ByteArray :=
 theorem unhexSliceGo_eq (b : ByteArray) (stop : Nat) (hstop : stop ≤ b.size)
     (i : Nat) (hle : i ≤ stop) (heven : (stop - i) % 2 = 0) (out : ByteArray) :
     (unhexSliceGo b stop hstop i out).map (fun a => a.data.toList) =
-      (unhexAsciiBytes ((b.data.toList.drop i).take (stop - i))).map (out.data.toList ++ ·) := by
+      (hexAsciiToBytes? ((b.data.toList.drop i).take (stop - i))).map (out.data.toList ++ ·) := by
   have hs : b.data.toList.length = b.size := Array.length_toList
   rw [unhexSliceGo]
   by_cases h : i + 1 < stop
@@ -1898,21 +1828,21 @@ theorem unhexSliceGo_eq (b : ByteArray) (stop : Nat) (hstop : stop ≤ b.size)
       rw [g0, g1, hk]
       rfl
     rw [hsub]
-    dsimp only [unhexAsciiBytes]
-    cases unhexNibble (b[i]'(by omega)) with
+    dsimp only [hexAsciiToBytes?]
+    cases decodeHexNibbleByte? (b[i]'(by omega)) with
     | none => rfl
     | some hi =>
-      cases unhexNibble (b[i + 1]'(by omega)) with
+      cases decodeHexNibbleByte? (b[i + 1]'(by omega)) with
       | none => rfl
       | some lo =>
         dsimp only [bind, Option.bind]
         rw [unhexSliceGo_eq b stop hstop (i + 2) (by omega) (by omega)]
         rw [push_u8_data]
-        cases unhexAsciiBytes ((b.data.toList.drop (i + 2)).take (stop - (i + 2))) <;>
+        cases hexAsciiToBytes? ((b.data.toList.drop (i + 2)).take (stop - (i + 2))) <;>
           simp [List.append_assoc]
   · rw [dite_eq_right_of_eq_false (eq_false h)]
     have h0 : stop - i = 0 := by omega
-    simp [h0, unhexAsciiBytes]
+    simp [h0, hexAsciiToBytes?]
 termination_by stop - i
 
 /-! ### Shard JSON Framing: `{"format":"obend-shard-1","hex":"..."}\n` -/
@@ -1924,14 +1854,14 @@ def shardPrefixBytes : Bytes := shardPrefixArray.data.toList
 def shardSuffixBytes : Bytes := shardSuffixArray.data.toList
 
 def frameShardBytes (raw : Bytes) : Bytes :=
-  shardPrefixBytes ++ hexAsciiBytes raw ++ shardSuffixBytes
+  shardPrefixBytes ++ bytesToHexAscii raw ++ shardSuffixBytes
 
 def unframeShardBytes (bs : Bytes) : Option Bytes :=
   let plen := shardPrefixBytes.length
   let slen := shardSuffixBytes.length
   if plen + slen ≤ bs.length && bs.take plen == shardPrefixBytes &&
       bs.drop (bs.length - slen) == shardSuffixBytes then
-    unhexAsciiBytes ((bs.drop plen).take (bs.length - plen - slen))
+    hexAsciiToBytes? ((bs.drop plen).take (bs.length - plen - slen))
   else none
 
 theorem take_append_exact {α : Type} : ∀ (xs ys : List α), (xs ++ ys).take xs.length = xs
@@ -1946,7 +1876,7 @@ theorem unframeShardBytes_frameShardBytes (raw : Bytes) :
     unframeShardBytes (frameShardBytes raw) = some raw := by
   unfold unframeShardBytes frameShardBytes
   let p := shardPrefixBytes
-  let m := hexAsciiBytes raw
+  let m := bytesToHexAscii raw
   let s := shardSuffixBytes
   have hlen : (p ++ m ++ s).length = p.length + m.length + s.length := by
     simp [List.length_append, Nat.add_assoc]
@@ -1972,7 +1902,7 @@ theorem unframeShardBytes_frameShardBytes (raw : Bytes) :
       ((p ++ m ++ s).drop ((p ++ m ++ s).length - s.length) == s)) = true then _ else _) = _
   dsimp only [p, m, s] at hmid
   simp only [hcond, ↓reduceIte, hmid]
-  exact unhexAscii_hexAscii raw
+  exact hexAsciiToBytes?_bytesToHexAscii raw
 
 def frameShardArray (raw : ByteArray) : ByteArray :=
   appendByteArray (pushHexArray shardPrefixArray raw) shardSuffixArray
@@ -2106,13 +2036,13 @@ theorem decodeShardPayloadArray_eq (b : ByteArray) :
             (ByteArray.emptyWithCapacity ((b.size - shardSuffixArray.size - shardPrefixArray.size) / 2)) with
         | none =>
           rw [hu, hemp, hspan, hps] at hgo
-          cases hu2 : unhexAsciiBytes ((b.data.toList.drop shardPrefixBytes.length).take
+          cases hu2 : hexAsciiToBytes? ((b.data.toList.drop shardPrefixBytes.length).take
               (b.data.toList.length - shardPrefixBytes.length - shardSuffixBytes.length)) with
           | none => rfl
           | some _ => rw [hu2] at hgo; simp at hgo
         | some arr =>
           rw [hu, hemp, hspan, hps] at hgo
-          cases hu2 : unhexAsciiBytes ((b.data.toList.drop shardPrefixBytes.length).take
+          cases hu2 : hexAsciiToBytes? ((b.data.toList.drop shardPrefixBytes.length).take
               (b.data.toList.length - shardPrefixBytes.length - shardSuffixBytes.length)) with
           | none => rw [hu2] at hgo; simp at hgo
           | some raw =>
@@ -2131,17 +2061,7 @@ theorem decodeShardPayloadArray_eq (b : ByteArray) :
           have : ((b.size - shardSuffixArray.size - shardPrefixArray.size) % 2 == 0) = true := by
             rw [beq_iff_eq]; omega
           exact absurd this (by simpa using hev)
-        have hnone : ∀ (xs : Bytes), xs.length % 2 ≠ 0 → unhexAsciiBytes xs = none := by
-          intro xs
-          induction xs using unhexAsciiBytes.induct with
-          | case1 => intro h; simp at h
-          | case2 a1 a2 rest ih =>
-            intro h
-            have hr : rest.length % 2 ≠ 0 := by simp at h; omega
-            simp [unhexAsciiBytes, ih hr, bind, Option.bind]
-            cases unhexNibble a1 <;> cases unhexNibble a2 <;> rfl
-          | case3 _ => intro _; rfl
-        rw [hnone _ hodd]
+        rw [hexAsciiToBytes?_of_odd _ hodd]
         rfl
     · simp only [hc, Bool.false_eq_true, ↓reduceIte]; rfl
   · have hbndS : ¬ (shardPrefixBytes.length + shardSuffixBytes.length ≤ b.size) := by omega
@@ -2215,16 +2135,16 @@ theorem unframeManifest_frameManifest (core : ManifestCore) :
 Prefixing the bucket byte makes shard keys provably distinct across buckets without assuming
 cryptographic collision-freedom, while remaining 100% content-addressed within each bucket. -/
 def shardKey (b : Nat) (digest : String) : String :=
-  hex [b.toUInt8] ++ "-" ++ digest
+  bytesToHex [b.toUInt8] ++ "-" ++ digest
 
-theorem hex_single_len (x : UInt8) : (hex [x]).toList.length = 2 := by
-  simp [hex]
+theorem hex_single_len (x : UInt8) : (bytesToHex [x]).toList.length = 2 := by
+  simp [bytesToHexChars]
 
 theorem shardKey_take2 (b : Nat) (d : String) :
-    (shardKey b d).toList.take 2 = (hex [b.toUInt8]).toList := by
+    (shardKey b d).toList.take 2 = (bytesToHex [b.toUInt8]).toList := by
   unfold shardKey
-  have happ : (hex [b.toUInt8] ++ "-" ++ d).toList =
-      (hex [b.toUInt8]).toList ++ ("-" ++ d).toList := by
+  have happ : (bytesToHex [b.toUInt8] ++ "-" ++ d).toList =
+      (bytesToHex [b.toUInt8]).toList ++ ("-" ++ d).toList := by
     rw [String.append_assoc, String.toList_append]
   rw [happ, ← hex_single_len b.toUInt8]
   exact take_append_exact _ _
@@ -2234,8 +2154,8 @@ theorem shardKey_bucket_inj {b1 b2 : Nat} {d1 d2 : String}
     (heq : shardKey b1 d1 = shardKey b2 d2) : b1 = b2 := by
   have ht : (shardKey b1 d1).toList.take 2 = (shardKey b2 d2).toList.take 2 := by rw [heq]
   rw [shardKey_take2, shardKey_take2] at ht
-  have hu := congrArg unhex ht
-  rw [unhex_hex, unhex_hex] at hu
+  have hu := congrArg hexCharsToBytes? ht
+  rw [hexCharsToBytes?_bytesToHex, hexCharsToBytes?_bytesToHex] at hu
   injection hu with hlist
   injection hlist with hb
   have hnat := congrArg UInt8.toNat hb
@@ -2264,7 +2184,7 @@ def shardSpecOf (p : ShardPayload) : Option (String × Bytes) :=
   if isEmptyShard p then none
   else
     let sb := encodeShardPayload p
-    some (hex (logHash sb), sb)
+    some (bytesToHex (logHash sb), sb)
 
 def shardForBucket (w : World) (b : Nat) : Option (String × Bytes) :=
   shardSpecOf (bucketItems b (enumList w.store.pages), bucketItems b (enumList w.store.tombs))
@@ -2306,7 +2226,7 @@ def decodeAllBuckets (store : String → Option Bytes) :
     match store k with
     | none => .error ("missing world shard " ++ k)
     | some sb =>
-      if hex (logHash sb) != d then
+      if bytesToHex (logHash sb) != d then
         .error ("corrupt world shard " ++ k ++ ": digest mismatch")
       else match decodeShardPayload sb with
         | none => .error ("malformed world shard " ++ k)
@@ -2361,7 +2281,7 @@ theorem decodeAllBuckets_shards_ok (w : World) (store : String → Option Bytes)
         change Except.ok (([], []) :: _) = Except.ok (pay :: _)
         rw [hp0]
       · have hsf : shardForBucket w b =
-            some (hex (logHash (encodeShardPayload pay)), encodeShardPayload pay) := by
+            some (bytesToHex (logHash (encodeShardPayload pay)), encodeShardPayload pay) := by
           simp [shardForBucket, shardSpecOf, pay, he]
         have hst := hstore b _ _ hb hsf
         simp only [List.map_cons, hsf, Option.map_some, decodeAllBuckets, hst, bne_self_eq_false,
@@ -2526,14 +2446,14 @@ def buildCachedBucket (p : ShardPayload) (prev? : Option CachedBucket) : CachedB
       ⟨p, none, by simp [shardSpecOf, he]⟩
     else
       let bs := encodeShardPayloadArray p
-      ⟨p, some (hex (logHashArray bs), bs), by
+      ⟨p, some (bytesToHex (logHashArray bs), bs), by
         simp [bs, shardSpecOf, he, encodeShardPayloadArray_eq, logHashArray_eq]⟩
   | none =>
     if he : isEmptyShard p = true then
       ⟨p, none, by simp [shardSpecOf, he]⟩
     else
       let bs := encodeShardPayloadArray p
-      ⟨p, some (hex (logHashArray bs), bs), by
+      ⟨p, some (bytesToHex (logHashArray bs), bs), by
         simp [bs, shardSpecOf, he, encodeShardPayloadArray_eq, logHashArray_eq]⟩
 
 theorem buildCachedBucket_payload (p : ShardPayload) (prev? : Option CachedBucket) :
@@ -2652,7 +2572,7 @@ def shardPath (dir : System.FilePath) (key : String) : System.FilePath := shards
 (`cSHAKE256` of `manifest`), `nonStoreMetaJson`, and `bucketDigests` (`""` for empty buckets). -/
 def frameRootJson (anchor : Nat) (manifest : ByteArray) (m : NonStoreMeta)
     (digests : List (Option String)) : ByteArray :=
-  let rootDigest := hex (logHashArray manifest)
+  let rootDigest := bytesToHex (logHashArray manifest)
   let dStr := ",".intercalate (digests.map fun d? => "\"" ++ d?.getD "" ++ "\"")
   ("{\"format\":\"obend-world-root-1\",\"logAnchor\":\"" ++ toString anchor ++
     "\",\"rootDigest\":\"" ++ rootDigest ++
@@ -2765,7 +2685,7 @@ def pruneObsoleteShards (dir : System.FilePath) (active : List String) : IO Unit
       try IO.FS.removeFile e.path catch _ => pure ()
 
 def mkCanonicalCachedBucket (payload : ShardPayload) (d : String) (sb : ByteArray)
-    (hd : hex (logHashArray sb) = d) : CachedBucket :=
+    (hd : bytesToHex (logHashArray sb) = d) : CachedBucket :=
   if he : isEmptyShard payload = true then
     ⟨payload, none, by simp [shardSpecOf, he]⟩
   else
@@ -2775,7 +2695,7 @@ def mkCanonicalCachedBucket (payload : ShardPayload) (d : String) (sb : ByteArra
       ⟨payload, some (d, sb), by
         simp [cbs, shardSpecOf, he, ← hd, ← h, encodeShardPayloadArray_eq, logHashArray_eq]⟩
     else
-      ⟨payload, some (hex (logHashArray cbs), cbs), by
+      ⟨payload, some (bytesToHex (logHashArray cbs), cbs), by
         simp [cbs, shardSpecOf, he, encodeShardPayloadArray_eq, logHashArray_eq]⟩
 
 /-- `O(N)` single-pass array reassembler for `loadShardedWorld`. -/
@@ -2833,7 +2753,7 @@ def loadShardedWorld (dir : System.FilePath) (manifest : ByteArray) : IO (Option
         tArr := tArr.push []
         builtBuckets := builtBuckets.push emptyBucket
       | some (d, sb) =>
-        if hd : hex (logHashArray sb) = d then
+        if hd : bytesToHex (logHashArray sb) = d then
           let ent := readBucketCached (decCache[b]?.join) sb
           nextDec := nextDec.setIfInBounds b (some ent)
           match ent.result with
@@ -2875,7 +2795,7 @@ def loadManifestSingleBucket (dir : System.FilePath) (manifest : ByteArray) (pag
     if !(← sf.pathExists) then return none
     let sb ← Obend.Vault.Cost.readBinFile sf
     Obend.Vault.Cost.addCheckpoint sb.size
-    if hex (logHashArray sb) != d then return none
+    if bytesToHex (logHashArray sb) != d then return none
     let decCache ← getDecodeBuckets dir
     let ent ← Obend.Vault.Cost.compute fun _ => readBucketCached (decCache[b]?.join) sb
     setDecodeBuckets dir (decCache.setIfInBounds b (some ent))

@@ -333,6 +333,9 @@ import all Obend.Reasons
 import all Obend.Run.HyperLaw
 import all Obend.Trailblaze.CathedralApex
 import all Obend.Vault.Lsafe
+import all Obend.Core.SortedArray
+import all Obend.Crypto.FastRing
+import all Obend.Hardware.Process
 
 /-!
 # The seL4 / Microkit capability kernel, end to end

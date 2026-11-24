@@ -13,6 +13,7 @@ import Obend.Hardware.PlaneSweepDrcLvs
 import all Obend.Vault.Json
 meta import Obend.Vault.Json
 meta import Obend.Doc.Structured
+meta import Obend.Codec.Hex
 meta import Obend.Doc.Graph
 meta import Obend.Doc.Patch
 meta import Obend.Core.Data
@@ -24,6 +25,7 @@ meta import Obend.Hardware.PlaneSweepDrcLvs
 import Lean.Data.Json
 
 open Obend.Doc
+open Obend.Codec.Hex (byteArrayToHex)
 open Obend.Core.Data
 open Obend.Vault.HardwareProjection
 open Obend.Hardware.HDL

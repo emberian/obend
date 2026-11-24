@@ -252,6 +252,8 @@ import all Obend.Polis.GrainPowerbox
 import all Obend.Polis.ZkBiscuit
 import all Obend.Run.Durable
 import all Obend.Run.Proofs.Durable
+import all Obend.Codec.Hex
+import all Obend.Core.SortedArray
 meta import all Obend.Vault.WorldTree
 meta import all Obend.Vault.Escrow
 meta import all Obend.Vault.SurviveFirePor

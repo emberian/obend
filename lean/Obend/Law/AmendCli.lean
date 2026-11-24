@@ -8,6 +8,7 @@ import all Obend.Hardware.DprStutter
 import all Obend.Judge.SvenvsCorrigibility
 import all Obend.Judge.CertifierRatchet
 import all Obend.Logic.SeparationFrame
+import Obend.Codec.Hex
 
 public section
 namespace Obend.Law.PointwiseRevise
@@ -47,6 +48,7 @@ open PointwiseRevise Lean
 open Obend.Hardware.DprStutter Obend.Hardware.SiliconOuroboros
 open Obend.Judge.SvenvsCorrigibility Obend.Judge.CertifierRatchet
 open Obend.Logic
+open Obend.Codec.Hex (decodeHexNibbleAnyCase?)
 set_option autoImplicit false
 
 /-! Workflow engine, callable without changing the executable's command dispatcher.
@@ -163,21 +165,15 @@ inductive BundleValue where
 def jsonSpace (c : Char) : Bool := c == ' ' || c == '\n' || c == '\r' || c == '\t'
 def skipSpace (xs : List Char) : List Char := xs.dropWhile jsonSpace
 
-def hexDigit (c : Char) : Option Nat :=
-  if '0' ≤ c ∧ c ≤ '9' then some (c.toNat - '0'.toNat)
-  else if 'a' ≤ c ∧ c ≤ 'f' then some (c.toNat - 'a'.toNat + 10)
-  else if 'A' ≤ c ∧ c ≤ 'F' then some (c.toNat - 'A'.toNat + 10)
-  else none
-
 def requireSome {α : Type} (x : Option α) (err : String) : Except String α :=
   match x with | some a => .ok a | none => .error err
 
 def hexQuad : List Char → Except String (Nat × List Char)
   | a :: b :: c :: d :: rest => do
-    let a ← requireSome (hexDigit a) "bad unicode escape"
-    let b ← requireSome (hexDigit b) "bad unicode escape"
-    let c ← requireSome (hexDigit c) "bad unicode escape"
-    let d ← requireSome (hexDigit d) "bad unicode escape"
+    let a ← requireSome (decodeHexNibbleAnyCase? a) "bad unicode escape"
+    let b ← requireSome (decodeHexNibbleAnyCase? b) "bad unicode escape"
+    let c ← requireSome (decodeHexNibbleAnyCase? c) "bad unicode escape"
+    let d ← requireSome (decodeHexNibbleAnyCase? d) "bad unicode escape"
     return (4096*a + 256*b + 16*c + d, rest)
   | _ => .error "short unicode escape"
 

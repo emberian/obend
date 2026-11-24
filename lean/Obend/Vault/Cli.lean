@@ -133,12 +133,14 @@ public import Obend.Vault.FormCheck
 public import Obend.Vault.Cost
 public import Obend.Vault.Log
 public import Obend.Vault.DecodeCache
+import Obend.Codec.Hex
 public import Obend.Vault.Log
 public section
 
 namespace Obend.Vault.Cli
 
 open Obend.Doc Obend.Vault Obend.Vault.Json Obend.Vault.Log Obend.Vault.Replay
+open Obend.Codec.Hex (bytesToHexChars)
 
 /-- The deployed byte hash (cSHAKE256, as `lean/tests/doc/RoundTrip.lean`); the log replays with it. -/
 def H : Obend.Digest.HashBytes.Hash := Obend.Vault.Replay.H
@@ -335,7 +337,7 @@ structure Head where
 /-- The digest of a world, as `obend log` says it: the first 16 hex digits of its commitment. -/
 def worldDigest (w : Replay.World) : String :=
   let (_, c, _) := ChunkedWorld.manifestAndCommit w none
-  String.ofList ((hex (be 32 c)).toList.take 16)
+  String.ofList ((bytesToHexChars (be 32 c)).take 16)
 
 /-- The world's bytes as a record committed to them (`c`): in the sharded manifest encoding, in the
 monolithic growth-history JSON encoding, or in the full-history JSON encoding; none when none match. -/
@@ -1103,8 +1105,8 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := withVaultL
     (match qs.head? with
       | some r => match decodeTurn r.payload with
         | .ok (.compacted n d a _) => " through a checkpoint record: " ++ toString n ++
-            " forgotten records (prefix digest " ++ String.ofList ((hex (be 32 d)).toList.take 16) ++
-            "), ending at receipt " ++ String.ofList ((hex (be 32 a)).toList.take 16)
+            " forgotten records (prefix digest " ++ String.ofList ((bytesToHexChars (be 32 d)).take 16) ++
+            "), ending at receipt " ++ String.ofList ((bytesToHexChars (be 32 a)).take 16)
         | _ => ""
       | none => ""))
   IO.println ("logical log: " ++ toString bs.size ++ " bytes; checkpoint: " ++
@@ -1136,7 +1138,7 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := withVaultL
   let r ← recoverLog dir
   IO.println ("checkpoint: " ++ r.checkpoint)
   let committed := match qs.getLast? with
-    | some last => String.ofList ((hex (be 32 last.receipt.newCommit)).toList.take 16)
+    | some last => String.ofList ((bytesToHexChars (be 32 last.receipt.newCommit)).take 16)
     | none => worldDigest genesis
   IO.println ("world " ++ worldDigest fromGenesis ++ ": replayed from genesis")
   IO.println ("world " ++ worldDigest r.head.world ++ ": the checkpoint and the records after it")

@@ -29,6 +29,7 @@ import all Obend.Hardware.Gpu.ArraySchedule
 import all Obend.Hardware.Gpu.Rdna2.Encodings
 import all Obend.Hardware.Gpu.Rdna2.Decode
 import all Obend.Hardware.Gpu.Rdna2.Check
+import all Obend.Codec.Hex
 import all Obend.Hardware.Gpu.Rdna2.Waitcnt
 import all Obend.Hardware.Gpu.Rdna2.Block
 import all Obend.Hardware.Gpu.Rdna2.Cert

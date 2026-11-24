@@ -179,6 +179,7 @@ import all Obend.Consensus.Simplex
 import all Obend.Consensus.SimplexProtocol
 import all Obend.Polis.CapTP
 import all Obend.Vault.Mandate
+import all Obend.Core.SortedArray
 
 public section
 

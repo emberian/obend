@@ -50,6 +50,7 @@ pair table is a list scanned linearly, not a hashed table.
 public import Obend.Judge.Class
 public import Obend.Codec.DetCbor
 public import Obend.Digest.Cshake256
+public import Obend.Codec.Hex
 import all Obend.Codec.DetCbor
 
 public section
@@ -220,29 +221,17 @@ theorem countSpan_injective {a b : Nat} (h : countSpan a = countSpan b) : a = b 
     _ = ofDigits (countDigits b b) := by rw [hl]
     _ = b := ofDigits_countDigits b b (Nat.le_refl _)
 
-/-- Lowercase hex of a byte string: the wire form of the byte formats. -/
-def hexOf (b : ByteArray) : String :=
-  b.data.toList.foldl (fun s x =>
-    (s.push (Char.ofNat (if x.toNat / 16 < 10 then 48 + x.toNat / 16 else 87 + x.toNat / 16))).push
-      (Char.ofNat (if x.toNat % 16 < 10 then 48 + x.toNat % 16 else 87 + x.toNat % 16))) ""
+open Obend.Codec.Hex (byteArrayToHex hexCharsToBytes? hexCharsToBytes?_byteArrayToHex)
 
-def hexVal (c : Char) : Option Nat :=
-  if 48 ≤ c.toNat ∧ c.toNat ≤ 57 then some (c.toNat - 48)
-  else if 97 ≤ c.toNat ∧ c.toNat ≤ 102 then some (c.toNat - 87) else none
-
-def unhexChars : List Char → Option (List UInt8)
-  | [] => some []
-  | [_] => none
-  | a :: b :: rest =>
-    match hexVal a, hexVal b, unhexChars rest with
-    | some x, some y, some r => some (UInt8.ofNat (16 * x + y) :: r)
-    | _, _, _ => none
-
-/-- The byte string a lowercase hex string spells; odd lengths and other characters are refused. -/
+/-- The byte string a lowercase hex string spells: the wire form of the byte formats, written by
+`Obend.Codec.Hex.byteArrayToHex`. Odd lengths and other characters are refused. -/
 def unhex (s : String) : Except String ByteArray :=
-  match unhexChars s.toList with
+  match hexCharsToBytes? s.toList with
   | some l => .ok ⟨l.toArray⟩
   | none => .error "not lowercase hex"
+
+theorem unhex_byteArrayToHex (b : ByteArray) : unhex (byteArrayToHex b) = .ok b := by
+  simp only [unhex, hexCharsToBytes?_byteArrayToHex, Array.toArray_toList]
 
 /-- A decimal field. -/
 def natField (s : String) : Except String Nat :=
@@ -254,7 +243,8 @@ end Obend.Judge.Commit
 
 namespace Obend.Judge.SymbolicRegex
 
-open Obend.Judge.Commit (Hasher cshakeHasher HashCollision hexOf unhex)
+open Obend.Judge.Commit (Hasher cshakeHasher HashCollision unhex)
+open Obend.Codec.Hex (byteArrayToHex)
 
 set_option autoImplicit false
 
@@ -1338,7 +1328,7 @@ An object is the two expressions' prefix codes in hex, joined by `:`; a certific
 codes, flat, joined by `:` (empty for no pairs). -/
 
 def encodeInclusionQuery (q : InclusionQuery) : String :=
-  hexOf (encRE q.lhs) ++ ":" ++ hexOf (encRE q.rhs)
+  byteArrayToHex (encRE q.lhs) ++ ":" ++ byteArrayToHex (encRE q.rhs)
 
 def decodeREHex (s : String) : Except String PredRE :=
   match unhex s with
@@ -1358,7 +1348,7 @@ def decodeInclusionQuery (s : String) : Except String InclusionQuery :=
   | _ => .error "an inclusion query is two fields"
 
 def encodePairs (ps : Pairs) : String :=
-  ":".intercalate (ps.flatMap fun pq => [hexOf (encRE pq.1), hexOf (encRE pq.2)])
+  ":".intercalate (ps.flatMap fun pq => [byteArrayToHex (encRE pq.1), byteArrayToHex (encRE pq.2)])
 
 def pairOff : List PredRE → Option Pairs
   | [] => some []

@@ -143,6 +143,8 @@ public import Obend.Vault.FrustumMembrane
 public import Obend.Vault.TransclusionAndMirror
 public import Obend.Vault.SurviveFirePor
 public import Obend.Codec.DetCbor
+public import Obend.Codec.Hex
+public import Obend.Core.SortedArray
 public import Obend.Consensus.Simplex
 public import Obend.Consensus.SimplexProtocol
 public import Obend.Consensus.SimplexTrace

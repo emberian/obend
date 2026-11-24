@@ -12,6 +12,7 @@ The logic-equivalence check of the emitted `.sv` is `hardware/lec/lec.sh` with `
 -/
 public import Lean.Data.Json
 import Lean
+import Obend.Codec.Hex
 public import Std.Tactic.BVDecide
 import Std.Tactic.BVDecide.Reflect
 public import Obend.Core.Term
@@ -486,12 +487,7 @@ def emitVerilatorHarnessCpp
 
 /-- Format a 64-bit `BitVec 64` constant as a 16-digit SMT-LIB2 hex literal `#x0123456789abcdef`. -/
 def bitVec64ToSmtHex (v : BitVec 64) : String :=
-  let hexDigits : Array Char := #['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f']
-  let chars := (List.range 16).map fun i =>
-    let shift := (15 - i) * 4
-    let nib := (v.toNat >>> shift) &&& 0xF
-    hexDigits.getD nib '0'
-  "#x" ++ String.ofList chars
+  "#x" ++ String.ofList (Obend.Codec.Hex.natToHexChars 16 v.toNat)
 
 /-- Render a word-level `RtlAluOp` application in SMT-LIB2 `QF_BV`. -/
 def emitAluOpSmt2 (op : RtlAluOp) (lhs rhs : String) : String :=

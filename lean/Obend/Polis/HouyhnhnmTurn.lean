@@ -7,6 +7,7 @@ import all Obend.Crypto.Sumcheck
 public section
 namespace Obend.Polis.HouyhnhnmTurn
 open Obend.Crypto Obend.Vault.Mandate Obend.Polis.CapTP
+open Obend.Core.SortedArray (SortedU64Set)
 open Obend.Polis.VerifiableCredentials
 open Obend.Digest.Cshake256 Obend.Digest.HashBytes
 

@@ -13,12 +13,15 @@ public import Obend.Doc.Patch
 public import Obend.Core.Data
 public import Obend.Run.Core4
 public import Obend.Spec.DataWire
+public import Obend.Codec.Hex
 
 public section
 
 namespace Obend.Doc
 
 open Obend.Core.Data (Data)
+open Obend.Codec.Hex (hexNibbleChar bytesToHexChars byteArrayToHex hexCharsToBytesAnyCase?
+  decodeHexNibbleAnyCase?_hexNibbleChar hexCharsToBytesAnyCase?_bytesToHexChars)
 
 set_option autoImplicit false
 
@@ -145,70 +148,17 @@ theorem ProjectionKind.contractual_count :
 
 /-! ## 2. Feature 35: StructuredCell & Content.cell Carrier -/
 
-/-- Hex encoding helper for byte arrays. -/
-def hexDigit (n : Nat) : Char :=
-  if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
-
-def byteToHex (b : UInt8) : String :=
-  let hi := b.toNat / 16
-  let lo := b.toNat % 16
-  String.ofList [hexDigit hi, hexDigit lo]
-
-def byteArrayToHex (b : ByteArray) : String :=
-  (b.data.toList.map byteToHex).foldl (· ++ ·) ""
-
-def unhexDigit (c : Char) : Option Nat :=
-  if '0' ≤ c && c ≤ '9' then some (c.toNat - 48)
-  else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 87)
-  else if 'A' ≤ c && c ≤ 'F' then some (c.toNat - 55)
-  else none
-
-def hexToBytes : List Char → Option (List UInt8)
-  | [] => some []
-  | a :: b :: rest => do
-    let x ← unhexDigit a
-    let y ← unhexDigit b
-    let r ← hexToBytes rest
-    return (x * 16 + y).toUInt8 :: r
-  | [_] => none
-
+/-- Drops a leading `0x` or `0X`. -/
 def stripHexPrefix : List Char → List Char
   | '0' :: 'x' :: rest => rest
   | '0' :: 'X' :: rest => rest
   | cs => cs
 
+/-- A pin hash in hex, read in either case, with or without a `0x` prefix; it is written by
+`Obend.Codec.Hex.byteArrayToHex`. -/
 def hexToByteArray (s : String) : Option ByteArray := do
-  let bytes ← hexToBytes (stripHexPrefix s.toList)
+  let bytes ← hexCharsToBytesAnyCase? (stripHexPrefix s.toList)
   return ByteArray.mk bytes.toArray
-
-private theorem unhexDigit_hexDigit_fin : ∀ n : Fin 16, unhexDigit (hexDigit n.val) = some n.val := by
-  decide
-
-private theorem hexDigit_ne_x_fin : ∀ n : Fin 16, hexDigit n.val ≠ 'x' ∧ hexDigit n.val ≠ 'X' := by
-  decide
-
-theorem unhexDigit_hexDigit {n : Nat} (hn : n < 16) : unhexDigit (hexDigit n) = some n :=
-  unhexDigit_hexDigit_fin ⟨n, hn⟩
-
-theorem hexDigit_ne_x {n : Nat} (hn : n < 16) : hexDigit n ≠ 'x' ∧ hexDigit n ≠ 'X' :=
-  hexDigit_ne_x_fin ⟨n, hn⟩
-
-def bytesToHexChars : List UInt8 → List Char
-  | [] => []
-  | b :: bs => hexDigit (b.toNat / 16) :: hexDigit (b.toNat % 16) :: bytesToHexChars bs
-
-private theorem byteToHex_toList (b : UInt8) :
-    (byteToHex b).toList = [hexDigit (b.toNat / 16), hexDigit (b.toNat % 16)] := by
-  simp [byteToHex]
-
-private theorem foldl_byteToHex_toList :
-    ∀ (bs : List UInt8) (acc : String),
-      ((bs.map byteToHex).foldl (· ++ ·) acc).toList = acc.toList ++ bytesToHexChars bs
-  | [], acc => by simp [bytesToHexChars]
-  | b :: bs, acc => by
-    simp only [List.map_cons, List.foldl_cons, bytesToHexChars]
-    rw [foldl_byteToHex_toList bs (acc ++ byteToHex b), String.toList_append, byteToHex_toList]
-    simp [List.append_assoc]
 
 private theorem stripHexPrefix_cons2 (c1 c2 : Char) (rest : List Char)
     (hx : c2 ≠ 'x') (hX : c2 ≠ 'X') :
@@ -237,50 +187,28 @@ private theorem stripHexPrefix_cons2 (c1 c2 : Char) (rest : List Char)
       exact absurd hc2 hX
     · rfl
 
+/-- A hex digit is not the `x` of a `0x` prefix. -/
+private theorem hexNibbleChar_ne_x (n : Nat) : hexNibbleChar n ≠ 'x' ∧ hexNibbleChar n ≠ 'X' := by
+  have h := decodeHexNibbleAnyCase?_hexNibbleChar n
+  constructor
+  · intro hx; rw [hx] at h; cases h
+  · intro hX; rw [hX] at h; cases h
+
 private theorem stripHexPrefix_bytesToHexChars :
     ∀ bs : List UInt8, stripHexPrefix (bytesToHexChars bs) = bytesToHexChars bs
   | [] => rfl
   | b :: bs => by
-    have hlo : b.toNat % 16 < 16 := Nat.mod_lt _ (by decide)
-    obtain ⟨hnx, hnX⟩ := hexDigit_ne_x hlo
+    obtain ⟨hnx, hnX⟩ := hexNibbleChar_ne_x (b.toNat % 16)
     exact stripHexPrefix_cons2 _ _ _ hnx hnX
-
-private theorem uint8_div_mod_reconstruct (b : UInt8) :
-    ((b.toNat / 16) * 16 + b.toNat % 16).toUInt8 = b := by
-  have hsum : (b.toNat / 16) * 16 + b.toNat % 16 = b.toNat := by omega
-  rw [hsum]
-  cases b with
-  | ofBitVec v =>
-    cases v with
-    | ofFin f =>
-      cases f with
-      | mk n hn =>
-        simp [UInt8.toNat, Nat.toUInt8, UInt8.ofNat, BitVec.ofNat, Fin.ofNat, Nat.mod_eq_of_lt hn]
-
-private theorem hexToBytes_bytesToHexChars :
-    ∀ bs : List UInt8, hexToBytes (bytesToHexChars bs) = some bs
-  | [] => rfl
-  | b :: bs => by
-    have hb : b.toNat < 256 := b.toNat_lt
-    have hhi : b.toNat / 16 < 16 := by omega
-    have hlo : b.toNat % 16 < 16 := by omega
-    simp only [bytesToHexChars, hexToBytes, bind, Option.bind]
-    rw [unhexDigit_hexDigit hhi, unhexDigit_hexDigit hlo, hexToBytes_bytesToHexChars bs]
-    dsimp only [pure]
-    rw [uint8_div_mod_reconstruct b]
 
 /-- Round-trip soundness of `byteArrayToHex` and `hexToByteArray`. -/
 @[simp] theorem hexToByteArray_byteArrayToHex (b : ByteArray) :
     hexToByteArray (byteArrayToHex b) = some b := by
   cases b with
   | mk arr =>
-    cases arr with
-    | mk bs =>
-      unfold hexToByteArray byteArrayToHex
-      simp only [bind, Option.bind, pure]
-      rw [foldl_byteToHex_toList bs ""]
-      simp only [String.toList_empty, List.nil_append]
-      rw [stripHexPrefix_bytesToHexChars bs, hexToBytes_bytesToHexChars bs]
+    unfold hexToByteArray
+    rw [String.toList_ofList, stripHexPrefix_bytesToHexChars, hexCharsToBytesAnyCase?_bytesToHexChars]
+    simp only [bind, Option.bind, pure, Array.toArray_toList]
 
 /-- Structured non-markdown cell record inside a notebook. -/
 structure StructuredCell where

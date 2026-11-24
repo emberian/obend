@@ -3,6 +3,8 @@ public import Obend.Polis.CapTP
 public import Obend.Polis.HouyhnhnmTurn
 public import Obend.Polis.HouyhnhnmMonitor
 import all Obend.Polis.CapTP
+import all Obend.Vault.Mandate
+import all Obend.Core.SortedArray
 import all Obend.Polis.HouyhnhnmTurn
 import all Obend.Polis.HouyhnhnmMonitor
 import Obend.Tactic.Tooth
@@ -10,6 +12,7 @@ import Obend.Tactic.Tooth
 public section
 namespace Obend.Tests.HouyhnhnmCapTpMonitor
 open Obend.Polis.CapTP Obend.Polis.HouyhnhnmTurn Obend.Polis.HouyhnhnmMonitor
+open Obend.Core.SortedArray (SortedU64Set)
 open Obend.Vault.Mandate Obend.Crypto
 
 @[expose] def alice : Principal := ⟨"Alice", 1⟩
@@ -151,7 +154,7 @@ example : (encodePublicInputs framingVector).data =
     #[32] ++ Array.replicate 32 5 ++ #[32] ++ Array.replicate 32 6 ++
     #[37,2,172,2,32] ++ Array.replicate 32 8 ++ #[0] := by decide
 
-#tooth lookupSwissExec_eq_spec by mutation search := fun _ _ _ _ _ _ => none
+#tooth lookupSwissExec_eq_spec by mutation Obend.Core.SortedArray.search := fun _ _ _ _ _ _ => none
 #tooth pushout_refuses_replay by mutation SortedDigestSet.merge := fun a _ => a
 #tooth verifyHybridHandoff_sound by mutation verifyHybridHandoff :=
   fun v held heldCommitment introducerDigest recipientDigest seen c =>

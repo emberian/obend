@@ -7,6 +7,7 @@ public import Obend.Digest.Cshake256
 public import Obend.Digest.HashBytes
 public import Obend.Equiv.Reduction
 public import Lean.Data.Json
+import Obend.Codec.Hex
 public section
 namespace Obend.Vault.Form
 set_option autoImplicit false
@@ -1021,9 +1022,8 @@ def assignmentOf (j : Json) : Except String Assignment := do
     | .error _ => pure []
   return ⟨nats, pages, labels⟩
 def digestNat (H : Obend.Digest.HashBytes.Hash) (s : String) : Nat := ((H s.toUTF8.toList).take 8).foldl (fun acc b => acc * 256 + b.toNat) 0
-def hex16 (n : Nat) : String :=
-  let ds := (List.range 16).reverse.map fun i => (n / 16 ^ i) % 16
-  String.ofList (ds.map fun d => if d < 10 then Char.ofNat (48 + d) else Char.ofNat (87 + d))
+/-- `n % 16 ^ 16` in sixteen lowercase hex digits. -/
+def hex16 (n : Nat) : String := String.ofList (Obend.Codec.Hex.natToHexChars 16 n)
 def formDigest (H : Obend.Digest.HashBytes.Hash) (f : Form) : String := hex16 (digestNat H (formJson f).compress)
 def receiptJson (r : WitnessReceipt) : Json := Json.mkObj [("prev", toJson r.prevHash), ("old", toJson r.oldCommit), ("new", toJson r.newCommit), ("effects", toJson r.effectsHash)]
 def receiptOf (j : Json) : Except String WitnessReceipt := do

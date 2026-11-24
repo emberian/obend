@@ -142,7 +142,7 @@ theorem strictKeys_pairwise {α : Type} (key : α → Nat) :
     · exact Nat.lt_trans h.1 (ih.1 x hx)
 
 theorem strictKeys_sorted {α : Type} (key : α → Nat) (xs : List α)
-    (h : strictKeys key xs = true) : Obend.Polis.CapTP.SortedBy key xs.toArray := by
+    (h : strictKeys key xs = true) : Obend.Core.SortedArray.SortedBy key xs.toArray := by
   intro i j hi hj hij
   simpa using (List.pairwise_iff_getElem.mp (strictKeys_pairwise key xs h)
     i j (by simpa using hi) (by simpa using hj) hij)
@@ -150,7 +150,7 @@ theorem strictKeys_sorted {α : Type} (key : α → Nat) (xs : List α)
 /-- Invitations use the same verified binary-search implementation. -/
 structure InvitationTableExec where
   entries : Array (Nat × Invitation)
-  sorted : Obend.Polis.CapTP.SortedBy Prod.fst entries
+  sorted : Obend.Core.SortedArray.SortedBy Prod.fst entries
 
 def InvitationTableExec.ofInvitations (invitations : List (Nat × Invitation)) :
     Option InvitationTableExec :=
@@ -159,14 +159,14 @@ def InvitationTableExec.ofInvitations (invitations : List (Nat × Invitation)) :
   else none
 
 def lookupInvitationExec (table : InvitationTableExec) (id : Nat) : Option Invitation :=
-  (Obend.Polis.CapTP.search Prod.fst table.entries id
+  (Obend.Core.SortedArray.search Prod.fst table.entries id
     (table.entries.size + 1) 0 table.entries.size).map Prod.snd
 
 theorem lookupInvitationExec_eq_spec (table : InvitationTableExec) (id : Nat) :
     lookupInvitationExec table id =
       (table.entries.toList.find? (fun p => p.1 == id)).map Prod.snd := by
   unfold lookupInvitationExec
-  rw [Obend.Polis.CapTP.search_eq_spec _ _ table.sorted]
+  rw [Obend.Core.SortedArray.search_eq_spec _ _ table.sorted]
   rfl
 
 def lookupInvitationsExec (invitations : List (Nat × Invitation)) (id : Nat) : Option Invitation :=
@@ -483,7 +483,7 @@ theorem admitOffer_unsafe_refused {reg reg' : InvitationRegistry} {b b' : Book}
 /-- Immutable sorted seat index; construction checks ordering once, lookup is binary search. -/
 structure SeatTableExec where
   entries : Array Seat
-  sorted : Obend.Polis.CapTP.SortedBy Seat.account entries
+  sorted : Obend.Core.SortedArray.SortedBy Seat.account entries
 
 def SeatTableExec.ofSeats (seats : List Seat) : Option SeatTableExec :=
   if h : strictKeys Seat.account seats = true then
@@ -494,12 +494,12 @@ def lookupSeatSpec (seats : List Seat) (account : AccountId) : Option Seat :=
   seats.find? (fun s => s.account == account)
 
 def lookupSeatExec (table : SeatTableExec) (account : AccountId) : Option Seat :=
-  Obend.Polis.CapTP.search Seat.account table.entries account
+  Obend.Core.SortedArray.search Seat.account table.entries account
     (table.entries.size + 1) 0 table.entries.size
 
 theorem lookupSeatExec_eq_lookupSpec (table : SeatTableExec) (account : AccountId) :
     lookupSeatExec table account = lookupSeatSpec table.entries.toList account :=
-  Obend.Polis.CapTP.search_eq_spec _ _ table.sorted account
+  Obend.Core.SortedArray.search_eq_spec _ _ table.sorted account
 
 /-- Checked list entry point: sorted inputs use the index; other inputs keep the first match.
 Callers making repeated queries can retain the table returned by `ofSeats`. -/
@@ -1014,15 +1014,15 @@ theorem amountList_lookup {xs : List Entry} (hs : xs.Pairwise (fun a b => a.1 < 
       simp [amountList, hb, hz]
     · simp [amountList, hb, ih ht]
 def AssetBundle.amountOf (a : AssetBundle) (b : AssetBrand) : Nat :=
-  ((CapTP.search Prod.fst a.entries b (a.entries.size + 1) 0 a.entries.size).map
+  ((Obend.Core.SortedArray.search Prod.fst a.entries b (a.entries.size + 1) 0 a.entries.size).map
     (fun p => p.2.toNat)).getD 0
 theorem AssetBundle.amountOf_eq_spec (a : AssetBundle) (b : AssetBrand) :
     a.amountOf b = a.amountSpec b := by
-  have hs : CapTP.SortedBy Prod.fst a.entries := by
+  have hs : Obend.Core.SortedArray.SortedBy Prod.fst a.entries := by
     intro i j hi hj hij
     exact (List.pairwise_iff_getElem.mp a.canonical.1) i j (by simpa using hi)
       (by simpa using hj) hij
-  rw [amountOf, CapTP.search_eq_spec _ _ hs, amountSpec, amountList_lookup a.canonical.1]
+  rw [amountOf, Obend.Core.SortedArray.search_eq_spec _ _ hs, amountSpec, amountList_lookup a.canonical.1]
   rfl
 def AssetBundle.bundleLeq (a b : AssetBundle) : Bool :=
   a.entries.all (fun p => decide (p.2.toNat ≤ b.amountOf p.1))

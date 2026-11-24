@@ -34,6 +34,7 @@ import all Obend.Run.Control
 import all Obend.Run.Fold
 import all Obend.Run.Negotiation
 import all Obend.Slot.Protocol
+import Obend.Codec.Hex
 
 public section
 namespace Obend.Receipt.Negotiation
@@ -59,16 +60,12 @@ def log : List NRow := final.cfg.log
 
 /-! ## Digests -/
 
-def hexDigit (n : Nat) : Char := "0123456789abcdef".toList[n % 16]!
-
-def hex (bytes : List UInt8) : String :=
-  String.mk (bytes.flatMap fun b => [hexDigit (b.toNat / 16), hexDigit (b.toNat % 16)])
-
 /-- `OBEND.RECEIPT/v1` -/
 def customization : List UInt8 := "OBEND.RECEIPT/v1".toUTF8.toList
 
 /-- The digest of a canonical text. -/
-def digest (s : String) : Digest := hex (Obend.Digest.Cshake256.cshake256Bytes customization s.toUTF8.toList)
+def digest (s : String) : Digest :=
+  Obend.Codec.Hex.bytesToHex (Obend.Digest.Cshake256.cshake256Bytes customization s.toUTF8.toList)
 
 /-- The digest of a JSON value's canonical form (object keys sorted, no whitespace). -/
 def digestJson (j : Json) : Digest := digest j.compress

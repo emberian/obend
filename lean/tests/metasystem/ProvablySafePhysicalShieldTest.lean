@@ -190,6 +190,7 @@ import all Obend.Judge.Computational
 import all Obend.Logic.SeparationFrame
 import all Obend.Polis.CapTP
 import all Obend.Vault.Mandate
+import all Obend.Core.SortedArray
 
 /-!
 # The sampled hardware gatekeeper and the quasi-Fermi device certificate, exercised

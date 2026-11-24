@@ -28,6 +28,7 @@ public import Obend.Hardware.Gpu.Rdna2.Host
 public import Lean.Data.Json
 import all Obend.Hardware.Gpu.Rdna2.Semantics
 import all Obend.Hardware.Gpu.Rdna2.Host
+import Obend.Codec.Hex
 public section
 
 namespace Obend.Hardware.Gpu.Rdna2
@@ -81,8 +82,8 @@ def parseExpected (s : String) : Except String (Array Vector) :=
       | none => throw s!"expected.tsv: bad index {i}"
     | _ => throw s!"expected.tsv: bad line {ln}"
 
-def hexToNat (h : String) : Nat :=
-  h.foldl (fun acc c => acc * 16 + (if c.isDigit then c.toNat - '0'.toNat else c.toLower.toNat - 'a'.toNat + 10)) 0
+/-- A hex word of a dump, either case (`0` for anything else). -/
+def hexToNat (h : String) : Nat := (Obend.Codec.Hex.hexCharsToNat? h.toList).getD 0
 
 /-- Each stage's LDS allocation in bytes, from the resource line RADV prints (`LDS: N`). -/
 def parseDumpLds (s : String) : Array Nat := Id.run do
@@ -131,10 +132,10 @@ def parseDumpData (s : String) : Except String (Array StageData) := do
         let some addr := off.toNat? | throw s!"bad constant-data offset: {off}"
         if addr % 4 != 0 || addr < lastEnd then throw "unaligned or overlapping constant data"
         if hexes.isEmpty then throw "empty constant-data record"
-        let ws ← hexes.toArray.mapM fun h => do
-          if h.length != 8 || !h.toList.all (fun c => c.isDigit || ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F')) then
-            throw s!"bad constant-data dword: {h}"
-          pure (UInt32.ofNat (hexToNat h))
+        let ws ← hexes.toArray.mapM fun h =>
+          match h.length == 8, Obend.Codec.Hex.hexCharsToNat? h.toList with
+          | true, some w => pure (UInt32.ofNat w)
+          | _, _ => throw s!"bad constant-data dword: {h}"
         cur := cur.push (addr, ws)
         lastEnd := addr + 4 * ws.size
       | _ => throw s!"bad constant-data record: {ln}"

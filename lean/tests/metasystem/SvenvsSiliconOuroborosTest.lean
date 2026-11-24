@@ -165,6 +165,7 @@ import all Obend.Judge.Computational
 import all Obend.Logic.SeparationFrame
 import all Obend.Polis.CapTP
 import all Obend.Vault.Mandate
+import all Obend.Core.SortedArray
 
 public section
 namespace Obend.Tests.SvenvsSiliconOuroboros

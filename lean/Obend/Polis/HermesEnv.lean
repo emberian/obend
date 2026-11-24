@@ -9,9 +9,10 @@ Formalizes the Polisware / Hermes communication & room-governance policy substra
 4. Multi-turn Hermes room attenuation, `SortedU64Set` revocation, and `hermesRoom_multi_turn_attenuation_sound`.
 -/
 public import Obend.Logic.EnvHarness
+public import Obend.Core.SortedArray
 public section
 namespace Obend.Polis.HermesEnv
-open Obend.Logic.EnvHarness (SortedU64Set SimulatesSet insertSortedSpec)
+open Obend.Core.SortedArray (SortedU64Set SimulatesSet insertKey)
 set_option autoImplicit false
 /-! ## 1. Boolean-Closed + `k`-of-`n` Threshold Policy Syntax & Evaluation -/
 mutual
@@ -704,7 +705,7 @@ theorem findRoomCap_mem {Atom : Type} {cid : UInt64} {c : HermesRoomCap Atom} :
   | .revokeSubRoom targetId =>
     ({ st with
         revoked := st.revoked.insert targetId
-        revokedSpec := insertSortedSpec targetId st.revokedSpec }, none)
+        revokedSpec := insertKey targetId st.revokedSpec }, none)
   | .postMessage cid msgDigest256 env =>
     if st.revoked.contains cid then
       (st, some (.refusedRevokedOrMissing cid))

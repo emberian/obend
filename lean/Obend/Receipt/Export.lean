@@ -31,6 +31,7 @@ public import Obend.Receipt.Negotiation
 public import Obend.Judge.Identity
 public import Obend.Reasons.DialecticalBlame
 import all Obend.Slot.Protocol
+import Obend.Codec.Hex
 
 public section
 namespace Obend.Receipt.Export
@@ -354,7 +355,7 @@ def verifyWorld (j : Json) (root : Option Nat) : Except String String := do
   unless R.verdict.isOk do
     throw "verdict: world-transition receipt records a refusal, not an admitted transition"
   let overall ← trustLine worldSupports j
-  return s!"world-transition ({dial}): {repr R.verdict.isOk} at the expected view {(hex (Obend.Digest.Cshake256.natBytesBE R.dated)).take 16}…; trust {overall}"
+  return s!"world-transition ({dial}): {repr R.verdict.isOk} at the expected view {(Obend.Codec.Hex.bytesToHex (Obend.Digest.Cshake256.natBytesBE R.dated)).take 16}…; trust {overall}"
 
 /-! ## The consumer -/
 

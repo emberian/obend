@@ -2406,7 +2406,7 @@ def snapshotWireTag : String := "exp-verkle-openhash@2"
 /-- Replace the prior typed snapshot record; preserve unrelated transport records and world data. -/
 def exportToChunkedWorld (w : ChunkedWorld.World) (t : ElasticOpenTable)
     (f : ExpVerkleForestExec) : ChunkedWorld.World :=
-  { w with received := (snapshotWireTag, Json.hex (snapshotPayloadCodec.enc (t, f))) :: w.received.filter (fun r => r.1 != snapshotWireTag) }
+  { w with received := (snapshotWireTag, Obend.Codec.Hex.bytesToHex (snapshotPayloadCodec.enc (t, f))) :: w.received.filter (fun r => r.1 != snapshotWireTag) }
 
 theorem exportToChunkedWorld_idempotent (w : ChunkedWorld.World) (t : ElasticOpenTable)
     (f : ExpVerkleForestExec) :
@@ -2416,12 +2416,12 @@ theorem exportToChunkedWorld_idempotent (w : ChunkedWorld.World) (t : ElasticOpe
 def importFromChunkedWorld (w : ChunkedWorld.World) : Option (ElasticOpenTable × ExpVerkleForestExec) := do
   let (tag, text) ← w.received.head?
   if tag ≠ snapshotWireTag then none else
-    let bs ← Json.unhex text.toList
+    let bs ← Obend.Codec.Hex.hexCharsToBytes? text.toList
     snapshotPayloadCodec.decodeExact bs
 
 theorem exportToChunkedWorld_roundtrip (w : ChunkedWorld.World) (t : ElasticOpenTable)
     (f : ExpVerkleForestExec) : importFromChunkedWorld (exportToChunkedWorld w t f) = some (t, f) := by
-  simp [importFromChunkedWorld, exportToChunkedWorld, ChunkedWorld.unhex_hex,
+  simp [importFromChunkedWorld, exportToChunkedWorld, Obend.Codec.Hex.hexCharsToBytes?_bytesToHex,
     ChunkedWorld.FastCodec.decodeExact_enc]
 
 theorem exported_checkpoint_roundtrip (w : ChunkedWorld.World) (t : ElasticOpenTable)

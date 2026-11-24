@@ -39,6 +39,7 @@ public import Obend.Vault.Rehydration
 
 public section
 namespace Obend.Polis.GrainPowerbox
+open Obend.Core.SortedArray (SortedU64Set)
 
 open Obend.Polis
 open Obend.Crypto
@@ -197,7 +198,7 @@ structure PowerboxHost where
 
 /-- No grains, nothing revoked, an empty graph. -/
 def genesis (users : List Nat) (facts : Nat → KleenePred3) : PowerboxHost :=
-  ⟨users, facts, #[], .empty, .empty, [], CapTP.SortedU64Set.empty, [], [], []⟩
+  ⟨users, facts, #[], .empty, .empty, [], SortedU64Set.empty, [], [], []⟩
 
 /-- Grain `g` holds `x` in slot `slot`. -/
 def HoldsAt (h : PowerboxHost) (g : GrainId) (slot : Nat) (x : HeldCap) : Prop :=
@@ -651,7 +652,7 @@ theorem step_ext (hs : stepPowerboxHost h t = some h') : HostExt h h' := by
   | delegate src slot dst pet hop wrap gift =>
     obtain ⟨x, owners, -, -, -, -, -, rfl⟩ := step_delegate hs
     exact ⟨rfl, fun _ he => List.mem_cons_of_mem _ he, fun _ hm => hm, fun _ hr => hr,
-      fun k hk => (CapTP.SortedU64Set.spec_insert _ _ _).mpr (.inr hk), fun _ he => he⟩
+      fun k hk => (SortedU64Set.spec_insert _ _ _).mpr (.inr hk), fun _ he => he⟩
   | invoke g slot need action =>
     obtain ⟨x, -, -, rfl⟩ := step_invoke hs
     exact ⟨rfl, fun _ he => he, fun _ hm => hm, fun _ hr => hr, fun _ hk => hk,
@@ -897,7 +898,7 @@ theorem step_accountable (ha : Accountable h) (hs : stepPowerboxHost h t = some 
                  giftsSpent := h.giftsSpent.insert gift,
                  edges := delegationEdge src dst x.cap (x.cap.extend hop wrap) :: h.edges } :=
       ⟨rfl, fun _ he => List.mem_cons_of_mem _ he, fun _ hm => hm, fun _ hr => hr,
-        fun k hk => (CapTP.SortedU64Set.spec_insert _ _ _).mpr (.inr hk), fun _ he => he⟩
+        fun k hk => (SortedU64Set.spec_insert _ _ _).mpr (.inr hk), fun _ he => he⟩
     obtain ⟨p, hp⟩ := ha.grounded src slot x hheld
     exact (ha.rebase hx₁ ha.grounded (fun e he => .inl he) ha.petnames ha.frozen).addCap
       (x := delegatedEntry src (x.cap.extend hop wrap) pet) hfresh
@@ -1134,7 +1135,7 @@ theorem gift_never_redeemed_twice
   have hspent : h₂.giftsSpent.contains gift = true := by
     obtain ⟨x, owners, -, -, -, -, -, rfl⟩ := step_delegate hs
     exact (h₂.giftsSpent.contains_eq_spec gift).mpr
-      ((trace_ext ht).gifts gift ((CapTP.SortedU64Set.spec_insert _ _ _).mpr (.inl rfl)))
+      ((trace_ext ht).gifts gift ((SortedU64Set.spec_insert _ _ _).mpr (.inl rfl)))
   cases hn : stepPowerboxHost h₂ (.delegate src' slot' dst' pet' hop' wrap' gift) with
   | none => rfl
   | some h₃ =>
@@ -1393,7 +1394,7 @@ theorem powerboxStep_skip_implies_violation (h : PowerboxHost) (t : PowerboxTurn
         simp_all
   | delegate src slot dst pet hop wrap gift =>
     simp only [stepPowerboxHost, PowerboxViolation, ← claimMembrane_eq_none,
-      ← petnameFresh_eq_false, ← capAdmissible_eq_false, ← CapTP.SortedU64Set.contains_eq_spec]
+      ← petnameFresh_eq_false, ← capAdmissible_eq_false, ← SortedU64Set.contains_eq_spec]
     cases hh : heldAt h src slot with
     | none =>
       have hno : ∀ x, ¬HoldsAt h src slot x := fun x hx => by

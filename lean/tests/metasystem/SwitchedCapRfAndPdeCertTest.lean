@@ -239,6 +239,8 @@ import all Obend.Judge.Computational
 import all Obend.Logic.SeparationFrame
 import all Obend.Polis.CapTP
 import all Obend.Vault.Mandate
+import all Obend.Codec.Hex
+import all Obend.Core.SortedArray
 
 /-!
 # The switched-capacitor front end, the CORDIC weld and the hyperbolic judge, exercised

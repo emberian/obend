@@ -240,6 +240,8 @@ import all Obend.Polis.CapTP
 import all Obend.Run.Durable
 import all Obend.Run.Proofs.Durable
 import all Obend.Vault.Mandate
+import all Obend.Codec.Hex
+import all Obend.Core.SortedArray
 
 public section
 namespace Obend.Tests.Metasystem.ExpVerkleAndOpenHashTest

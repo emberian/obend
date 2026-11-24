@@ -3,7 +3,7 @@ module
 # PoliswareAndEnvHarnessTest — Open-World `EnvHarness`, `HermesEnv` `WhyTrue`/`WhyFalse`, `DecentralizedRulesMesh` & P1 Hardening Suite
 
 Compile-time `#guard`, `#tooth` mutation-killing, and `#print axioms` verification suite covering:
-1. `Obend.Logic.EnvHarness`: `SortedU64Set` binary search, `skip_implies_contract_violation`,
+1. `Obend.Logic.EnvHarness`: the `SortedU64Set` revocation set, `skip_implies_contract_violation`,
    `most_general_client_multi_turn_safe`, and `multi_handle_reachability_inhabited`.
 2. `Obend.Polis.HermesEnv`: constructive `evalWhy_sound_and_complete` (`WhyTrue` / `WhyFalse` over
    boolean + `threshold k ps` policies) and `hermesRoom_multi_turn_attenuation_sound`.
@@ -21,11 +21,13 @@ public import Obend.Polis.PrivatePredicate
 public import Obend.Judge.DecoAndCallTree
 public import Obend.Hardware.Judge
 import all Obend.Logic.EnvHarness
+import all Obend.Core.SortedArray
 import all Obend.Polis.HermesEnv
 import all Obend.Polis.DecentralizedRulesMesh
 import all Obend.Polis.PrivatePredicate
 import all Obend.Judge.DecoAndCallTree
 meta import Obend.Logic.EnvHarness
+meta import Obend.Core.SortedArray
 meta import Obend.Polis.HermesEnv
 meta import Obend.Polis.DecentralizedRulesMesh
 meta import Obend.Polis.PrivatePredicate
@@ -36,6 +38,7 @@ public section
 namespace Obend.Tests.Metasystem.PoliswareAndEnvHarnessTest
 
 open Obend.Logic.EnvHarness
+open Obend.Core.SortedArray (SortedU64Set insertKey)
 open Obend.Polis.HermesEnv
 open Obend.Polis.DecentralizedRulesMesh
 open Obend.Polis.EpistemicVouchMarket (CapEdge TrustNode)
@@ -47,7 +50,7 @@ set_option autoImplicit false
 def demoRevokedSet : SortedU64Set :=
   (((SortedU64Set.empty.insert 42).insert 7).insert 19).insert 7
 
-#guard demoRevokedSet.items == #[7, 19, 42]
+#guard demoRevokedSet.data == #[7, 19, 42]
 #guard demoRevokedSet.contains 19 == true
 #guard demoRevokedSet.contains 42 == true
 #guard demoRevokedSet.contains 18 == false
@@ -188,7 +191,7 @@ end P1Regressions
   Obend.Logic.EnvHarness.stepMultiHandle := fun w t =>
     match t with
     | .invoke handle _ _ => .inl (w, handle)
-    | .revoke handle => .inl ({ w with revoked := w.revoked.insert handle, revokedSpec := insertSortedSpec handle w.revokedSpec }, handle)
+    | .revoke handle => .inl ({ w with revoked := w.revoked.insert handle, revokedSpec := insertKey handle w.revokedSpec }, handle)
     | .mint _ _ _ => .inr .handleSpaceExhausted
     | .attenuate _ _ _ => .inr .handleSpaceExhausted
 
@@ -227,7 +230,7 @@ end P1Regressions
 
 /-! ## 6. Kernel Axiom Verification (`0 sorryAx`, `0` custom axioms) -/
 
-#print axioms Obend.Logic.EnvHarness.bsearchU64_eq_containsSpec
+#print axioms Obend.Core.SortedArray.search_eq_spec
 #print axioms Obend.Logic.EnvHarness.skip_implies_contract_violation
 #print axioms Obend.Logic.EnvHarness.most_general_client_multi_turn_safe
 #print axioms Obend.Logic.EnvHarness.multi_handle_reachability_inhabited

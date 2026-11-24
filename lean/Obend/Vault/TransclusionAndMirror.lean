@@ -10,6 +10,7 @@ public import Obend.Vault.FrustumMembrane
 public import Obend.Doc.ReactiveNotebook
 import all Obend.Doc.ReactiveNotebook
 import all Obend.Vault.FrustumMembrane
+import Obend.Codec.Hex
 
 public section
 
@@ -1269,12 +1270,9 @@ structure ObendUri where
   address : ByteArray
 deriving DecidableEq
 
-def hexDigit (n : Nat) : Char := "0123456789abcdef".toList.getD n '0'
-
 /-- `obend://<kind>/<hex address>`. -/
 def ObendUri.render (u : ObendUri) : String :=
-  "obend://" ++ u.kind ++ "/" ++
-    String.ofList (u.address.data.toList.flatMap fun b => [hexDigit (b.toNat / 16), hexDigit (b.toNat % 16)])
+  "obend://" ++ u.kind ++ "/" ++ Obend.Codec.Hex.byteArrayToHex u.address
 
 /-- The badge a render bears: its tier, the gates that did not run, and where to check instead. -/
 structure MirrorRender where

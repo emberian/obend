@@ -320,6 +320,9 @@ import all Obend.Spec.Types
 import all Obend.Vault.Law
 import all Obend.Vault.Mandate
 import all Obend.Vault.Page
+import all Obend.Codec.Hex
+import all Obend.Core.SortedArray
+import all Obend.Hardware.Fabulous.TileEval
 
 /-!
 # Metaprogrammed Multi-Dimensional Nonlinear PDE Solver & Accelerator Test Suite

@@ -80,7 +80,7 @@ def sortByKey (l : List α) : Array α :=
 /-- The table's keys strictly ascend: no key occurs twice. One pass. -/
 def tableOk (A : Array α) : Bool := ascending (A.toList.map key)
 /-- Find the entry with key `k` by CapTP's binary search. -/
-def lookup (A : Array α) (k : Nat) : Option α := CapTP.search key A k (A.size + 1) 0 A.size
+def lookup (A : Array α) (k : Nat) : Option α := Obend.Core.SortedArray.search key A k (A.size + 1) 0 A.size
 theorem sortByKey_perm (l : List α) : (sortByKey key l).toList.Perm l := by
   simpa only [sortByKey, List.toList_toArray] using
     List.mergeSort_perm l (fun a b => decide (key a ≤ key b))
@@ -104,12 +104,12 @@ theorem pairwise_key_unique : ∀ {l : List α}, l.Pairwise (fun a b => key a < 
 /-- On a table that passed `tableOk`, the binary search is the list search. -/
 theorem lookup_eq_find {A : Array α} (h : tableOk key A = true) (k : Nat) :
     lookup key A k = A.toList.find? (fun x => key x == k) := by
-  have hs : CapTP.SortedBy key A := by
+  have hs : Obend.Core.SortedArray.SortedBy key A := by
     intro i j hi hj hij
     have := List.pairwise_iff_getElem.1 (tableOk_pairwise key h) i j (by simpa using hi)
       (by simpa using hj) hij
     simpa using this
-  rw [lookup, CapTP.search_eq_spec key A hs k, CapTP.findSpec]
+  rw [lookup, Obend.Core.SortedArray.search_eq_spec key A hs k, Obend.Core.SortedArray.findSpec]
 theorem lookup_some {A : Array α} (h : tableOk key A = true) {k : Nat} {x : α}
     (hx : lookup key A k = some x) : x ∈ A.toList ∧ key x = k := by
   rw [lookup_eq_find key h] at hx

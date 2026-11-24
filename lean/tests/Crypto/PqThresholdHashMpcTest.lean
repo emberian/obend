@@ -18,6 +18,7 @@ import all Obend.Crypto.ThresholdHashMpc
 meta import Obend.Crypto.ThresholdMpcUcGames
 meta import Obend.Crypto.PqHashSignatures
 meta import Obend.Polis.PqThresholdCustody
+meta import Obend.Codec.Hex
 import all Init.Data.String.Defs
 import all Init.Data.ByteArray.Basic
 import all Init.Data.Array.Basic
@@ -66,15 +67,10 @@ open Obend.Digest.HashBytes
 open Obend.Judge.Computational
 open Obend.Polis
 open Obend.Polis.GrainPowerbox
+open Obend.Codec.Hex (bytesToHex)
 
 set_option autoImplicit false
 set_option Elab.async false
-
-/-- Hex encoder for byte-exact cross-language wire vector parity with `crates/obend-pq-mpc`. -/
-def hexBytes (bs : List UInt8) : String :=
-  String.ofList (bs.flatMap fun x =>
-    let digits := "0123456789abcdef".toList.toArray
-    [digits[x.toNat / 16]!, digits[x.toNat % 16]!])
 
 /-! ## 1. `ThresholdMpcUcGames` Inhabitedness & Non-Vacuity Witnesses -/
 
@@ -136,10 +132,10 @@ def goldenAdrsSample : HashAdrs where
   hashStep := 2
 
 #guard (encodeAdrs goldenAdrsSample).length == 32
-#guard hexBytes (encodeAdrs goldenAdrsSample) ==
+#guard bytesToHex (encodeAdrs goldenAdrsSample) ==
   "0000000300000000010203040506070800000000000000070000000b00000002"
 
-#guard hexBytes (encodeMultiFrame [[1, 2], [3, 4, 5]]) == "0202010203030405"
+#guard bytesToHex (encodeMultiFrame [[1, 2], [3, 4, 5]]) == "0202010203030405"
 
 -- Verify concrete `cshake256Suite` stateless `leanSPHINCS` (`compactGoldenParams`) sign + verify + cut-batch:
 def goldenPkCshake : PqPublicKey := derivePublicKey cshake256Suite compactGoldenParams goldenSk
@@ -420,16 +416,16 @@ def goldenHybridIdCommitVec : List UInt8 :=
 def goldenDkgCommitVec : List UInt8 :=
   dkgCommitShare 1 2 (List.replicate 32 (0x77 : UInt8)) (List.replicate 16 (0x88 : UInt8))
 
-#guard hexBytes (encodeAdrs goldenAdrsSample) == "0000000300000000010203040506070800000000000000070000000b00000002"
-#guard hexBytes (encodeMultiFrame [[1, 2], [3, 4, 5]]) == "0202010203030405"
-#guard hexBytes goldenCshakePrfVec == "c461f210265b042ab4a95566bee3f8f012369b504f0d613db3fe5950abb95e3f"
-#guard hexBytes goldenPoseidonPrfVec == "9d8e13308f4896065e011eaad3a88fb2661f882b73b1d63b7530cfb6277d9c77"
-#guard hexBytes goldenPkCshake.pkRoot == "060cabbcc13f5548d6d75596ce5eecba3ebaf1f07b117ebcf7e2a74fae387e4c"
-#guard hexBytes goldenPkPoseidon.pkRoot == "58a15dec578680f6cfdb75d30c08ab18107b00e18763e3ae957446ef22b90d43"
-#guard hexBytes goldenHybridIdCommitVec == "66094e4608c0f029966c719bfe27a34d07ee4b4d936da1a440aa7ae03afdb349"
-#guard hexBytes goldenDkgCommitVec == "3db80075c4e7c88b9e218161e7b98ecc51f6af1b808c82a4d63b0f0dbb07b62d"
+#guard bytesToHex (encodeAdrs goldenAdrsSample) == "0000000300000000010203040506070800000000000000070000000b00000002"
+#guard bytesToHex (encodeMultiFrame [[1, 2], [3, 4, 5]]) == "0202010203030405"
+#guard bytesToHex goldenCshakePrfVec == "c461f210265b042ab4a95566bee3f8f012369b504f0d613db3fe5950abb95e3f"
+#guard bytesToHex goldenPoseidonPrfVec == "9d8e13308f4896065e011eaad3a88fb2661f882b73b1d63b7530cfb6277d9c77"
+#guard bytesToHex goldenPkCshake.pkRoot == "060cabbcc13f5548d6d75596ce5eecba3ebaf1f07b117ebcf7e2a74fae387e4c"
+#guard bytesToHex goldenPkPoseidon.pkRoot == "58a15dec578680f6cfdb75d30c08ab18107b00e18763e3ae957446ef22b90d43"
+#guard bytesToHex goldenHybridIdCommitVec == "66094e4608c0f029966c719bfe27a34d07ee4b4d936da1a440aa7ae03afdb349"
+#guard bytesToHex goldenDkgCommitVec == "3db80075c4e7c88b9e218161e7b98ecc51f6af1b808c82a4d63b0f0dbb07b62d"
 #guard match goldenSigCshakeOpt with
-  | some s => s.msgTswCtr == 1 && hexBytes s.rRand == "aac835eedf6da763c8db059bfb5d2f25a9a52f55eccd2a5c5698da3a2f7d193f"
+  | some s => s.msgTswCtr == 1 && bytesToHex s.rRand == "aac835eedf6da763c8db059bfb5d2f25a9a52f55eccd2a5c5698da3a2f7d193f"
   | none => false
 
 /-! ## 5. All 5 Mandatory `#tooth` Mutation-Sensitivity Witnesses (+ Structural Teeth) -/

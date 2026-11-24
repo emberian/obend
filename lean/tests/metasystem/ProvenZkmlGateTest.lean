@@ -30,6 +30,7 @@ meta import all Obend.Digest.Cshake256.Fast
 meta import all Obend.Digest.Cshake256.Seam
 meta import all Obend.Digest.Cshake256.Spec
 meta import all Obend.Digest.HashBytes
+meta import all Obend.Codec.Hex
 import all Obend.SymbolicZk.EinSumcheckMxfp4
 import all Obend.SymbolicZk.ProvenZkmlGate
 import all Obend.Judge.Class
@@ -43,6 +44,7 @@ import all Obend.Digest.Cshake256.Fast
 import all Obend.Digest.Cshake256.Seam
 import all Obend.Digest.Cshake256.Spec
 import all Obend.Digest.HashBytes
+import all Obend.Codec.Hex
 import all Obend.Tactic.Tooth
 import all Obend.AssertAxioms
 
@@ -55,10 +57,6 @@ set_option autoImplicit false
 
 def bytes32 (b : UInt8) : ByteArray := ⟨(List.replicate 32 b).toArray⟩
 
-def hexOf (b : ByteArray) : String :=
-  String.ofList (b.data.toList.flatMap fun x =>
-    let digits := "0123456789abcdef".toList.toArray
-    [digits[x.toNat / 16]!, digits[x.toNat % 16]!])
 
 /-! ## 1. Cross-Language Golden `MXFP4` `EinSumcheck` Vectors (`zkml_she_gate_test.rs` Parity) -/
 
@@ -101,22 +99,22 @@ def assertKat (label : String) (ok : Bool) : IO Unit := do
     ((goldenChunk1.iopProof.sumcheckRounds.map fun r => r.coeffs.length) == [3, 4, 4])
   assertKat "golden carry" (goldenChunk0.stateOutCommit == goldenChunk1.stateInCommit)
   assertKat "goldenIopSuite.digest"
-    (hexOf goldenIopSuite.digest == "34a5a0f8a1b87b1c386f07b60e44574cf021693c388890d404565d56a3144499")
+    (Obend.Codec.Hex.byteArrayToHex goldenIopSuite.digest == "34a5a0f8a1b87b1c386f07b60e44574cf021693c388890d404565d56a3144499")
   assertKat "sampleChainModel.root"
-    (hexOf sampleChainModel.root == "762f45dde0a05eed9cd34395e82a02a6a62308ffe0bdd625485225e0b373eae5")
+    (Obend.Codec.Hex.byteArrayToHex sampleChainModel.root == "762f45dde0a05eed9cd34395e82a02a6a62308ffe0bdd625485225e0b373eae5")
   assertKat "goldenChunk0.stateInCommit"
-    (hexOf goldenChunk0.stateInCommit == "ba697cdee5e9c34eba685d0bed9067e6326a4da6b2d586e645328a42cef8ef1e")
+    (Obend.Codec.Hex.byteArrayToHex goldenChunk0.stateInCommit == "ba697cdee5e9c34eba685d0bed9067e6326a4da6b2d586e645328a42cef8ef1e")
   assertKat "goldenChunk0.stateOutCommit"
-    (hexOf goldenChunk0.stateOutCommit == "9ad1dbd66b7c9169ddc14ceb281d8b754a33345506add4b9533eaf1fcacee467")
+    (Obend.Codec.Hex.byteArrayToHex goldenChunk0.stateOutCommit == "9ad1dbd66b7c9169ddc14ceb281d8b754a33345506add4b9533eaf1fcacee467")
   assertKat "goldenChunk1.stateOutCommit"
-    (hexOf goldenChunk1.stateOutCommit == "384c2c6b9d228ec4a7823b3619867d96f22a51cfbbbbbd1851e9b7e35f2d0c3b")
+    (Obend.Codec.Hex.byteArrayToHex goldenChunk1.stateOutCommit == "384c2c6b9d228ec4a7823b3619867d96f22a51cfbbbbbd1851e9b7e35f2d0c3b")
   assertKat "goldenChunk0 iopProof bytes"
     ((encodeSuccinctMxfp4IopProof goldenChunk0.iopProof).length == 3063)
   assertKat "goldenChunk0 preimage bytes" (goldenChunk0.preimage.length == 3314)
   assertKat "goldenChunk0 digest"
-    (hexOf (zkmlChunkDigest goldenChunk0) == "46f7fb825d329096db84770071f1cadad8900ab87b89476c42a40e310ea5cd58")
+    (Obend.Codec.Hex.byteArrayToHex (zkmlChunkDigest goldenChunk0) == "46f7fb825d329096db84770071f1cadad8900ab87b89476c42a40e310ea5cd58")
   assertKat "goldenChunk1 digest"
-    (hexOf (zkmlChunkDigest goldenChunk1) == "514ba9e346519b4f80831bdf63171581100e5c55963c9ef190232627429fecd7")
+    (Obend.Codec.Hex.byteArrayToHex (zkmlChunkDigest goldenChunk1) == "514ba9e346519b4f80831bdf63171581100e5c55963c9ef190232627429fecd7")
   assertKat "verify goldenChunk0" (verifyMxfp4ChunkIop goldenIopSuite sampleChainModel 0 goldenChunk0)
   assertKat "verify goldenChunk1" (verifyMxfp4ChunkIop goldenIopSuite sampleChainModel 0 goldenChunk1)
   assertKat "zero-pow nonzero nonce refused"
@@ -126,7 +124,7 @@ def assertKat (label : String) (ok : Bool) : IO Unit := do
   -- 2. 8-bit post-commit PoW grinding (`[145, 289]`), zero-span `none`, and `w - 1` (`144`, `288`) invalid:
   let pow8Suite : ZkmlSuiteProfile := ⟨64, 2, 6, 95, 8, 20, 256, 1⟩
   assertKat "pow8Suite.digest"
-    (hexOf pow8Suite.digest == "0143dab34e24656cc84341a732c5300bf03943afa6b33248b6d2bfc78e7033b1")
+    (Obend.Codec.Hex.byteArrayToHex pow8Suite.digest == "0143dab34e24656cc84341a732c5300bf03943afa6b33248b6d2bfc78e7033b1")
   let pow8Chunk0 := proveMxfp4ChunkIop pow8Suite (bytes32 0x22) pow8Suite.digest 0 sampleChainWitness0 145
   let pow8Chunk1 := proveMxfp4ChunkIop pow8Suite (bytes32 0x22) pow8Suite.digest 1 sampleChainWitness1 289
   assertKat "grindChunkPowWindowed chunk0 = 145 & span=0 none"
@@ -145,9 +143,9 @@ def assertKat (label : String) (ok : Bool) : IO Unit := do
   assertKat "pow8Chunk1 w-1=288 invalid"
     (!checkMxfp4ChunkPow pow8Suite 8 { pow8Chunk1 with iopProof := { pow8Chunk1.iopProof with powNonce := 288 } })
   assertKat "pow8Chunk0 digest"
-    (hexOf (zkmlChunkDigest pow8Chunk0) == "f237251918da6520f706e72c8748e5cad6c4c3e3213994984ff81eca78ba0e3e")
+    (Obend.Codec.Hex.byteArrayToHex (zkmlChunkDigest pow8Chunk0) == "f237251918da6520f706e72c8748e5cad6c4c3e3213994984ff81eca78ba0e3e")
   assertKat "pow8Chunk1 digest"
-    (hexOf (zkmlChunkDigest pow8Chunk1) == "73b5c347c45dc42989521240f69c4bfc5f99544aa7b78835d9a89cd92150f774")
+    (Obend.Codec.Hex.byteArrayToHex (zkmlChunkDigest pow8Chunk1) == "73b5c347c45dc42989521240f69c4bfc5f99544aa7b78835d9a89cd92150f774")
 
   -- 3. `checkZkmlTurn` acceptance & full 7-clause refusal matrix:
   let pow8Stmt : ZkmlStreamStatement :=

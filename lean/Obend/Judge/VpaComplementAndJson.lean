@@ -33,11 +33,13 @@ the definition; its rejections are exercised by vectors); a parser from bytes to
 -/
 public import Obend.Judge.Class
 public import Obend.Judge.SymbolicRegexBisim
+import Obend.Codec.Hex
 public section
 namespace Obend.Judge.VpaJson
 open Obend.Codec.DetCbor
 open Obend.Judge.Commit (Hasher cshakeHasher HashCollision keysDistinctB keysDistinctB_sound
-  spliceByteArray spliceByteArray_toList hexOf unhex natField countSpan countSpan_injective)
+  spliceByteArray spliceByteArray_toList unhex natField countSpan countSpan_injective)
+open Obend.Codec.Hex (byteArrayToHex isHexByte)
 set_option autoImplicit false
 /-! ## 1. Determinized visibly pushdown automata -/
 /-- A type with a list of all its elements. -/
@@ -574,9 +576,6 @@ structure JState where
 def JState.init : JState := ⟨.value false, [], ByteArray.empty, [], true⟩
 def isWs (b : UInt8) : Bool := b == 0x20 || b == 0x09 || b == 0x0a || b == 0x0d
 def isDigit (b : UInt8) : Bool := decide (0x30 ≤ b.toNat) && decide (b.toNat ≤ 0x39)
-def isHexDigit (b : UInt8) : Bool :=
-  isDigit b || (decide (0x41 ≤ b.toNat) && decide (b.toNat ≤ 0x46)) ||
-    (decide (0x61 ≤ b.toNat) && decide (b.toNat ≤ 0x66))
 /-- The byte after a backslash in a short escape: `"` `\` `/` `b` `f` `n` `r` `t`. -/
 def isEscapeByte (b : UInt8) : Bool :=
   b == 0x22 || b == 0x5c || b == 0x2f || b == 0x62 || b == 0x66 || b == 0x6e || b == 0x72 || b == 0x74
@@ -598,13 +597,13 @@ def stepStr : StrSub → UInt8 → StrOut
     else if 0xf1 ≤ b.toNat ∧ b.toNat ≤ 0xf3 then .cont (.utf8 2 0x80 0xbf) else .bad
   | .esc, b => if isEscapeByte b then .cont .normal else if b == 0x75 then .cont .u0 else .bad
   | .u0, b => if b == 0x44 || b == 0x64 then .cont .hexD
-      else if isHexDigit b then .cont (.hex 2) else .bad
+      else if isHexByte b then .cont (.hex 2) else .bad
   | .hexD, b => if 0x30 ≤ b.toNat ∧ b.toNat ≤ 0x37 then .cont (.hex 1)
       else if b == 0x38 || b == 0x39 || b == 0x41 || b == 0x42 || b == 0x61 || b == 0x62 then
         .cont (.hiSurr 1)
       else .bad
   | .hiSurr n, b =>
-    if isHexDigit b then (match n with | 0 => .cont .afterHi | k + 1 => .cont (.hiSurr k)) else .bad
+    if isHexByte b then (match n with | 0 => .cont .afterHi | k + 1 => .cont (.hiSurr k)) else .bad
   | .afterHi, b => if b == 0x5c then .cont .loEsc else .bad
   | .loEsc, b => if b == 0x75 then .cont .loU else .bad
   | .loU, b => if b == 0x44 || b == 0x64 then .cont .loD else .bad
@@ -612,7 +611,7 @@ def stepStr : StrSub → UInt8 → StrOut
     if (0x43 ≤ b.toNat ∧ b.toNat ≤ 0x46) ∨ (0x63 ≤ b.toNat ∧ b.toNat ≤ 0x66) then .cont (.hex 1)
     else .bad
   | .hex n, b =>
-    if isHexDigit b then (match n with | 0 => .cont .normal | k + 1 => .cont (.hex k)) else .bad
+    if isHexByte b then (match n with | 0 => .cont .normal | k + 1 => .cont (.hex k)) else .bad
   | .utf8 n lo hi, b =>
     if lo ≤ b.toNat ∧ b.toNat ≤ hi then
       match n with | 0 => .cont .normal | k + 1 => .cont (.utf8 k 0x80 0xbf)
@@ -1308,7 +1307,8 @@ instance jsonSpanJudge : Judge JsonSpanClaim JsonSpanCert where
     simp [jsonSpanCheck, hm.1, hr, hi]
   mono := by intro _ _ _ _ _ _; rfl
 def encodeJsonSpanClaim (o : JsonSpanClaim) : String :=
-  ":".intercalate [hexOf o.doc, toString o.l, toString o.r, hexOf o.mask, hexOf o.redacted]
+  ":".intercalate [byteArrayToHex o.doc, toString o.l, toString o.r, byteArrayToHex o.mask,
+    byteArrayToHex o.redacted]
 def decodeJsonSpanClaim (s : String) : Except String JsonSpanClaim :=
   match s.splitOn ":" with
   | [d, l, r, m, x] =>
@@ -1317,8 +1317,8 @@ def decodeJsonSpanClaim (s : String) : Except String JsonSpanClaim :=
     | _, _, _, _, _ => .error "a span claim is hex:dec:dec:hex:hex"
   | _ => .error "a span claim is five fields"
 def encodeJsonSpanCert (c : JsonSpanCert) : String :=
-  ":".intercalate (toString c.root.count :: hexOf c.root.top :: toString c.proof.index ::
-    c.proof.siblings.map hexOf)
+  ":".intercalate (toString c.root.count :: byteArrayToHex c.root.top :: toString c.proof.index ::
+    c.proof.siblings.map byteArrayToHex)
 def decodeJsonSpanCert (s : String) : Except String JsonSpanCert :=
   match s.splitOn ":" with
   | n :: t :: i :: sibs =>

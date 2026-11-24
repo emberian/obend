@@ -8,6 +8,7 @@ The captured source fingerprints of the front end and the front-end identity
 vectors (FIPS 180-4 / NIST CAVP, `Compiler/Sha256Vectors.lean`) are not ported here.
 -/
 public import Lean
+import Obend.Codec.Hex
 public section
 namespace Obend.Spec.Sha256
 set_option autoImplicit false
@@ -69,12 +70,9 @@ def digest (message : ByteArray) : Array UInt32 := Id.run do
   for block in [0:padded.size / 64] do state := compress state padded (64 * block)
   return state
 
-def hexDigit (n : Nat) : Char := "0123456789abcdef".toList[n % 16]!
-
-/-- Lowercase hexadecimal, 64 characters. -/
+/-- Lowercase hexadecimal, 64 characters: each word in eight digits, most significant first. -/
 def hex (message : ByteArray) : String :=
-  String.ofList ((digest message).toList.flatMap fun w =>
-    (List.range 8).map fun i => hexDigit ((w.toNat >>> (4 * (7 - i))) % 16))
+  String.ofList ((digest message).toList.flatMap fun w => Obend.Codec.Hex.natToHexChars 8 w.toNat)
 
 def hexString (text : String) : String := hex text.toUTF8
 

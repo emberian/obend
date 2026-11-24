@@ -10,6 +10,7 @@ checkable against the version it names.
 public import Obend.Vault.Store
 public import Obend.Doc.Structured
 public import Obend.Spec.DataWire
+import Obend.Codec.Hex
 public import Lean.Data.Json
 public section
 
@@ -19,25 +20,7 @@ set_option autoImplicit false
 
 open Lean (Json ToJson FromJson toJson fromJson?)
 open Obend.Doc Obend.Vault
-
-@[expose] def hexDigit (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
-
-@[expose] def hex (b : List UInt8) : String :=
-  String.ofList (b.flatMap fun x => [hexDigit (x.toNat / 16), hexDigit (x.toNat % 16)])
-
-@[expose] def unhexDigit (c : Char) : Option Nat :=
-  if '0' ≤ c && c ≤ '9' then some (c.toNat - 48)
-  else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 87)
-  else none
-
-@[expose] def unhex : List Char → Option (List UInt8)
-  | [] => some []
-  | a :: b :: rest => do
-    let x ← unhexDigit a
-    let y ← unhexDigit b
-    let r ← unhex rest
-    return (x * 16 + y).toUInt8 :: r
-  | [_] => none
+open Obend.Codec.Hex (bytesToHex byteArrayToHex hexCharsToBytes?)
 
 def spanJson : Span → Json
   | .identity => "identity"
@@ -60,7 +43,7 @@ def spanOf (j : Json) : Except String Span :=
 def contentJson : Content → Json
   | .text s => Json.mkObj [("t", s)]
   | .cite n c => Json.mkObj [("c", n), ("page", toJson c.page), ("span", spanJson c.span),
-      ("v", toJson c.version), ("h", hex c.commitment),
+      ("v", toJson c.version), ("h", bytesToHex c.commitment),
       ("mode", if c.mode == .pinned then "pinned" else "following")]
   | .field n v => Json.mkObj [("f", n), ("value", v)]
   | .cell id k ast pins receipt => Json.mkObj [
@@ -99,7 +82,7 @@ def contentOf (j : Json) : Except String Content :=
         let span ← spanOf (← j.getObjVal? "span")
         let v ← j.getObjValAs? Nat "v"
         let h ← j.getObjValAs? String "h"
-        let some bytes := unhex h.toList | .error "bad commitment"
+        let some bytes := hexCharsToBytes? h.toList | .error "bad commitment"
         let mode ← j.getObjValAs? String "mode"
         .ok (.cite n ⟨page, span, v, bytes, if mode == "pinned" then .pinned else .following⟩)
       | .error _ => do

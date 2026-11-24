@@ -137,6 +137,7 @@ import Obend.Category.OpenSystem
 import Obend.Category.Refines
 import Obend.ClusterGov.PhysicalEnvelope
 import Obend.Codec.DetCbor
+import Obend.Codec.Hex
 import Obend.Consensus.Epistemic
 import Obend.Consensus.Finality
 import Obend.Consensus.Simplex
@@ -260,6 +261,7 @@ import Obend.Core.RowCongruence
 import Obend.Core.RowExposureInvariance
 import Obend.Core.RowHit
 import Obend.Core.RuntimeOrigins
+import Obend.Core.SortedArray
 import Obend.Core.Term
 import Obend.Core.TermTraverse
 import Obend.Core.Traverse

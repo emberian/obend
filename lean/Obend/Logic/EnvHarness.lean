@@ -4,10 +4,9 @@ module
 
 Formalizes open-world multi-turn protocol verification with anti-narrowing environment completeness:
 
-1. **WHNF-Transparent Sorted Unboxed `UInt64` Set (`SortedU64Set`, `bsearchU64_eq_containsSpec`)**:
-   - Pairs an inductive `List UInt64` specification (`containsSpec`, `insertSortedSpec`,
-     `List.Pairwise (· < ·)`) with an unboxed sorted `Array UInt64` carrier and `O(log N)` binary
-     search `bsearchU64`, connected by `bsearchU64_eq_containsSpec` and `SimulatesSet`.
+1. **Revocation set**: the tree's sorted `UInt64` set `Obend.Core.SortedArray.SortedU64Set`
+   (logarithmic `contains`, deduplicating `insert`), related to the machine's `List UInt64` ghost
+   by `SimulatesSet`.
 2. **Open-World `UniversalEnvHarness` & Anti-Narrowing Completeness (`skip_implies_contract_violation`)**:
    - Bans silent syntactic pre-filtering of adversary inputs: every turn `t : Turn` reaches `step`,
      which either executes a contract-satisfying transition (`step_complete_on_contract`) or returns
@@ -20,222 +19,13 @@ Formalizes open-world multi-turn protocol verification with anti-narrowing envir
    - Constructive 5-turn trace minting `h₀ ≠ h₁`, revoking `h₀`, refusing `h₀`, and succeeding on `h₁`.
 -/
 public import Obend.Logic.MultiTurnHoare
+public import Obend.Core.SortedArray
 public section
 namespace Obend.Logic.EnvHarness
 open Obend.Core.Term (Term)
 open Obend.Logic (ProtocolSpec ExpectedPlan SafeWP)
+open Obend.Core.SortedArray (SortedU64Set SimulatesSet insertKey)
 set_option autoImplicit false
-/-! ## 1. WHNF-Transparent `SortedU64Set` (`Spec ↔ Exec` Binary Search over `Array UInt64`) -/
-/-- Specification membership over a `List UInt64`. -/
-def containsSpec (k : UInt64) : List UInt64 → Bool
-  | [] => false
-  | x :: xs => (x == k) || containsSpec k xs
-theorem containsSpec_iff (k : UInt64) : ∀ (xs : List UInt64), containsSpec k xs = true ↔ k ∈ xs
-  | [] => by simp [containsSpec]
-  | x :: xs => by
-    simp only [containsSpec, Bool.or_eq_true, beq_iff_eq, containsSpec_iff k xs, List.mem_cons]
-    exact ⟨fun h => h.imp Eq.symm id, fun h => h.imp Eq.symm id⟩
-/-- Strictly sorted `UInt64` list specification (`List.Pairwise (· < ·)`). -/
-def StrictlySortedU64 (xs : List UInt64) : Prop :=
-  List.Pairwise (fun a b : UInt64 => a.toNat < b.toNat) xs
-/-- Structural sorted insertion into a `List UInt64` without duplicates. -/
-def insertSortedSpec (k : UInt64) : List UInt64 → List UInt64
-  | [] => [k]
-  | x :: xs =>
-    if k == x then x :: xs
-    else if decide (k.toNat < x.toNat) then k :: x :: xs
-    else x :: insertSortedSpec k xs
-theorem u64_eq_of_toNat_eq {a b : UInt64} (h : a.toNat = b.toNat) : a = b := by
-  have h1 := congrArg UInt64.ofNat h
-  simpa using h1
-theorem insertSortedSpec_mem (k y : UInt64) :
-    ∀ (xs : List UInt64), y ∈ insertSortedSpec k xs ↔ y = k ∨ y ∈ xs
-  | [] => by simp [insertSortedSpec]
-  | x :: xs => by
-    unfold insertSortedSpec
-    by_cases hkx : k = x
-    · subst hkx; simp
-    · have hBeq : (k == x) = false := beq_eq_false_iff_ne.mpr hkx
-      simp only [hBeq, Bool.false_eq_true, ↓reduceIte]
-      split
-      · simp
-      · simp [insertSortedSpec_mem k y xs, or_left_comm]
-theorem insertSortedSpec_sorted (k : UInt64) :
-    ∀ {xs : List UInt64}, StrictlySortedU64 xs → StrictlySortedU64 (insertSortedSpec k xs)
-  | [], _ => List.Pairwise.cons (fun _ hm => by cases hm) List.Pairwise.nil
-  | x :: xs, hp => by
-    rcases List.pairwise_cons.mp hp with ⟨hhead, htail⟩
-    unfold insertSortedSpec
-    by_cases hkx : k = x
-    · subst hkx; simpa [StrictlySortedU64] using hp
-    · have hBeq : (k == x) = false := beq_eq_false_iff_ne.mpr hkx
-      simp only [hBeq, Bool.false_eq_true, ↓reduceIte]
-      split
-      · rename_i hlt
-        have hkxLt : k.toNat < x.toNat := of_decide_eq_true hlt
-        refine List.pairwise_cons.mpr ⟨?_, hp⟩
-        intro z hz
-        rcases List.mem_cons.mp hz with rfl | hzr
-        · exact hkxLt
-        · exact Nat.lt_trans hkxLt (hhead z hzr)
-      · rename_i hge
-        have hxkLt : x.toNat < k.toNat := by
-          have hneNat : k.toNat ≠ x.toNat := fun h => hkx (u64_eq_of_toNat_eq h)
-          have hnotLt : ¬ k.toNat < x.toNat := fun h => hge (decide_eq_true h)
-          omega
-        refine List.pairwise_cons.mpr ⟨?_, insertSortedSpec_sorted k htail⟩
-        intro z hz
-        rcases (insertSortedSpec_mem k z xs).mp hz with rfl | hzr
-        · exact hxkLt
-        · exact hhead z hzr
-theorem pairwise_lt_get :
-    ∀ {xs : List UInt64}, StrictlySortedU64 xs →
-      ∀ {i j : Nat} (hi : i < xs.length) (hj : j < xs.length),
-        i < j → xs[i].toNat < xs[j].toNat
-  | [], _, _, _, hi, _, _ => by cases hi
-  | x :: xs, hp, i, j, hi, hj, hij => by
-    rcases List.pairwise_cons.mp hp with ⟨hhead, htail⟩
-    cases i with
-    | zero =>
-      cases j with
-      | zero => omega
-      | succ j' =>
-        have hj' : j' < xs.length := by simpa using hj
-        exact hhead xs[j'] (List.getElem_mem hj')
-    | succ i' =>
-      cases j with
-      | zero => omega
-      | succ j' => exact pairwise_lt_get htail (by simpa using hi) (by simpa using hj) (by omega)
-/-- Structural-fuel binary search on unboxed `Array UInt64` (`0` `WellFounded.fix` WHNF bloat). -/
-def bsearchAux : Nat → Array UInt64 → Nat → Nat → UInt64 → Bool
-  | 0, _, _, _, _ => false
-  | fuel + 1, arr, lo, hi, k =>
-    if hRange : lo < hi ∧ hi ≤ arr.size then
-      let mid := (lo + hi) / 2
-      have hMidLt : mid < arr.size := by omega
-      let v := arr[mid]
-      if v == k then true
-      else if decide (v.toNat < k.toNat) then bsearchAux fuel arr (mid + 1) hi k
-      else bsearchAux fuel arr lo mid k
-    else false
-/-- `O(log N)` binary search membership check over an unboxed `Array UInt64`. -/
-@[expose] def bsearchU64 (arr : Array UInt64) (k : UInt64) : Bool :=
-  bsearchAux arr.size arr 0 arr.size k
-private theorem bsearchAux_iff (arr : Array UInt64) (hSort : StrictlySortedU64 arr.toList) (k : UInt64) :
-    ∀ (fuel lo hi : Nat), hi - lo ≤ fuel → hi ≤ arr.size →
-      (bsearchAux fuel arr lo hi k = true ↔
-        ∃ (idx : Nat) (hIdx : idx < arr.size), lo ≤ idx ∧ idx < hi ∧ arr[idx] = k)
-  | 0, lo, hi, hFuel, _ => by
-    simp only [bsearchAux, Bool.false_eq_true, false_iff]
-    rintro ⟨idx, _, hlo, hhi, _⟩; omega
-  | fuel + 1, lo, hi, hFuel, hHi => by
-    by_cases hLt : lo < hi
-    · let mid := (lo + hi) / 2
-      have hLoMid : lo ≤ mid := by omega
-      have hMidHi : mid < hi := by omega
-      have hMidSz : mid < arr.size := by omega
-      simp only [bsearchAux, hLt, hHi, and_self, ↓reduceDIte]
-      change (if arr[mid] == k then true
-        else if decide (arr[mid].toNat < k.toNat) then bsearchAux fuel arr (mid + 1) hi k
-        else bsearchAux fuel arr lo mid k) = true ↔ _
-      by_cases hEq : arr[mid] = k
-      · have hBeqT : (arr[mid] == k) = true := beq_iff_eq.mpr hEq
-        simp only [hBeqT, ↓reduceIte, true_iff]
-        exact ⟨mid, hMidSz, hLoMid, hMidHi, hEq⟩
-      · have hNeB : (arr[mid] == k) = false := beq_eq_false_iff_ne.mpr hEq
-        by_cases hVK : arr[mid].toNat < k.toNat
-        · have hDecVK : decide (arr[mid].toNat < k.toNat) = true := decide_eq_true hVK
-          simp only [hNeB, hDecVK, Bool.false_eq_true, ↓reduceIte]
-          rw [bsearchAux_iff arr hSort k fuel (mid + 1) hi (by omega) hHi]
-          constructor
-          · rintro ⟨idx, hIdx, h1, h2, h3⟩
-            exact ⟨idx, hIdx, by omega, h2, h3⟩
-          · rintro ⟨idx, hIdx, h1, h2, h3⟩
-            refine ⟨idx, hIdx, ?_, h2, h3⟩
-            if hGe : mid + 1 ≤ idx then exact hGe
-            else
-              have hLeMid : idx ≤ mid := by omega
-              rcases Nat.eq_or_lt_of_le hLeMid with rfl | hIdxLtMid
-              · exact False.elim (hEq h3)
-              · have hMono := pairwise_lt_get hSort
-                  (by simpa [Array.length_toList] using hIdx)
-                  (by simpa [Array.length_toList] using hMidSz) hIdxLtMid
-                have hCmp : arr[idx].toNat < arr[mid].toNat := hMono
-                rw [h3] at hCmp; omega
-        · have hDecVK : decide (arr[mid].toNat < k.toNat) = false := decide_eq_false hVK
-          simp only [hNeB, hDecVK, Bool.false_eq_true, ↓reduceIte]
-          have hKV : k.toNat < arr[mid].toNat := by
-            have hNeNat : arr[mid].toNat ≠ k.toNat := fun h => hEq (u64_eq_of_toNat_eq h)
-            omega
-          rw [bsearchAux_iff arr hSort k fuel lo mid (by omega) (by omega)]
-          constructor
-          · rintro ⟨idx, hIdx, h1, h2, h3⟩
-            exact ⟨idx, hIdx, h1, by omega, h3⟩
-          · rintro ⟨idx, hIdx, h1, h2, h3⟩
-            refine ⟨idx, hIdx, h1, ?_, h3⟩
-            if hLtM : idx < mid then exact hLtM
-            else
-              have hMidLe : mid ≤ idx := by omega
-              rcases Nat.eq_or_lt_of_le hMidLe with hEqIdx | hMidLtIdx
-              · subst hEqIdx; exact False.elim (hEq h3)
-              · have hMono := pairwise_lt_get hSort
-                  (by simpa [Array.length_toList] using hMidSz)
-                  (by simpa [Array.length_toList] using hIdx) hMidLtIdx
-                have hCmp : arr[mid].toNat < arr[idx].toNat := hMono
-                rw [h3] at hCmp; omega
-    · have hNotRange : ¬ (lo < hi ∧ hi ≤ arr.size) := fun h => hLt h.1
-      simp only [bsearchAux, hNotRange, ↓reduceDIte, Bool.false_eq_true, false_iff]
-      rintro ⟨idx, _, h1, h2, _⟩; omega
-/-- **Verified `Spec ↔ Exec` Equivalence (`bsearchU64_eq_containsSpec`)**: `O(log N)` binary search
-on a strictly sorted `Array UInt64` computes the exact specification `containsSpec k arr.toList`. -/
-theorem bsearchU64_eq_containsSpec (arr : Array UInt64) (hSort : StrictlySortedU64 arr.toList)
-    (k : UInt64) :
-    bsearchU64 arr k = containsSpec k arr.toList := by
-  apply Bool.eq_iff_iff.mpr
-  rw [bsearchU64, bsearchAux_iff arr hSort k arr.size 0 arr.size (Nat.le_refl _) (Nat.le_refl _),
-      containsSpec_iff]
-  constructor
-  · rintro ⟨idx, hIdx, _, _, rfl⟩
-    exact Array.getElem_mem_toList hIdx
-  · intro hMem
-    obtain ⟨idx, hIdx, hEq⟩ := List.mem_iff_getElem.mp hMem
-    have hIdxArr : idx < arr.size := by simpa [Array.length_toList] using hIdx
-    exact ⟨idx, hIdxArr, Nat.zero_le _, hIdxArr, hEq⟩
-/-- WHNF-clean unboxed sorted `UInt64` set for irrevocable handle revocation tracking. -/
-structure SortedU64Set where
-  items : Array UInt64
-  deriving DecidableEq, Repr
-/-- Refinement relation pairing `SortedU64Set` with its strictly sorted `List UInt64` specification. -/
-def SimulatesSet (spec : List UInt64) (exec : SortedU64Set) : Prop :=
-  exec.items.toList = spec ∧ StrictlySortedU64 spec
-@[expose] def SortedU64Set.empty : SortedU64Set := ⟨#[]⟩
-@[expose] def SortedU64Set.contains (s : SortedU64Set) (k : UInt64) : Bool :=
-  bsearchU64 s.items k
-@[expose] def SortedU64Set.insert (s : SortedU64Set) (k : UInt64) : SortedU64Set :=
-  ⟨(insertSortedSpec k s.items.toList).toArray⟩
-theorem SortedU64Set.simulates_empty : SimulatesSet [] SortedU64Set.empty :=
-  ⟨rfl, List.Pairwise.nil⟩
-theorem SortedU64Set.simulates_insert {spec : List UInt64} {s : SortedU64Set}
-    (hSim : SimulatesSet spec s) (k : UInt64) :
-    SimulatesSet (insertSortedSpec k spec) (s.insert k) := by
-  rcases hSim with ⟨hEq, hSort⟩
-  exact ⟨by simp [SortedU64Set.insert, hEq], insertSortedSpec_sorted k hSort⟩
-theorem SortedU64Set.contains_iff_mem {spec : List UInt64} {s : SortedU64Set}
-    (hSim : SimulatesSet spec s) (k : UInt64) :
-    s.contains k = true ↔ k ∈ spec := by
-  rcases hSim with ⟨hEq, hSort⟩
-  have hSortArr : StrictlySortedU64 s.items.toList := by rwa [hEq]
-  rw [SortedU64Set.contains, bsearchU64_eq_containsSpec s.items hSortArr k, hEq, containsSpec_iff]
-theorem SortedU64Set.mem_mono_insert {spec : List UInt64} {s : SortedU64Set}
-    (hSim : SimulatesSet spec s) (k x : UInt64)
-    (hx : s.contains x = true) : (s.insert k).contains x = true := by
-  have hxMem : x ∈ spec := (s.contains_iff_mem hSim x).mp hx
-  have hSim' := s.simulates_insert hSim k
-  exact ((s.insert k).contains_iff_mem hSim' x).mpr ((insertSortedSpec_mem k x spec).mpr (.inr hxMem))
-theorem SortedU64Set.contains_self_insert {spec : List UInt64} {s : SortedU64Set}
-    (hSim : SimulatesSet spec s) (k : UInt64) : (s.insert k).contains k = true := by
-  have hSim' := s.simulates_insert hSim k
-  exact ((s.insert k).contains_iff_mem hSim' k).mpr ((insertSortedSpec_mem k k spec).mpr (.inl rfl))
 /-! ## 2. Universal Open-World `EnvHarness` & `skip_implies_contract_violation` -/
 /-- Polymorphic open-world environment harness: forbids silent input narrowing by requiring `step`
 to accept every syntactic `Turn` and either advance preserving `worldInv` or return a structured
@@ -471,7 +261,7 @@ def EnvRefusalSound (w : MultiHandleWorld) (t : OpenEnvTurn) : EnvRefusal → Pr
   | .revoke handle =>
     .inl ({ w with
       revoked := w.revoked.insert handle
-      revokedSpec := insertSortedSpec handle w.revokedSpec }, handle)
+      revokedSpec := insertKey handle w.revokedSpec }, handle)
 private theorem nextH_toNat_eq (h : UInt64) (hLt : h.toNat + 1 < UInt64.size) :
     (UInt64.ofNat (h.toNat + 1)).toNat = h.toNat + 1 := by
   rw [UInt64.toNat_ofNat', Nat.mod_eq_of_lt hLt]
@@ -783,7 +573,7 @@ theorem stepMultiHandle_revoked_mono {w w' : MultiHandleWorld} {t : OpenEnvTurn}
   | revoke handle =>
     simp only [stepMultiHandle, Sum.inl.injEq, Prod.mk.injEq] at hStep
     rcases hStep with ⟨rfl, rfl⟩
-    exact ⟨fun x hx => w.revoked.mem_mono_insert hInv.revoked_sim handle x hx, Nat.le_refl _, rfl⟩
+    exact ⟨fun x hx => w.revoked.contains_insert_of_contains handle x hx, Nat.le_refl _, rfl⟩
 
 /-- **Most-General Demonic Client Multi-Turn Safety (`most_general_client_multi_turn_safe`)**:
 For ANY state type `ClientState`, ANY adaptive `client : DemonicClient ClientState`, ANY horizon `n`,

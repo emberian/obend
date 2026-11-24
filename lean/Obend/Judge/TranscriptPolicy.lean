@@ -36,13 +36,15 @@ public import Obend.Core.Data
 import all Obend.Codec.DetCbor
 import all Obend.Judge.SymbolicRegexBisim
 import all Obend.Judge.VpaComplementAndJson
+import Obend.Codec.Hex
 
 public section
 
 namespace Obend.Judge
 
 open Lean (Json toJson)
-open Obend.Judge.Commit (cshakeHasher hexOf unhex)
+open Obend.Judge.Commit (cshakeHasher unhex)
+open Obend.Codec.Hex (byteArrayToHex)
 
 set_option autoImplicit false
 
@@ -402,7 +404,7 @@ def redactedSpanToJson (sp : RedactedSpan) : Json :=
   Json.mkObj
     [ ("offset", toJson sp.offset)
     , ("length", toJson sp.length)
-    , ("commitment", Json.str (hexOf sp.commitment))
+    , ("commitment", Json.str (byteArrayToHex sp.commitment))
     , ("byteClassMask", toJson sp.byteClassMask) ]
 
 def redactedSpanOfJson (j : Json) : Except String RedactedSpan := do
@@ -429,7 +431,7 @@ def encodeTlsnCert (c : TlsnTranscriptCert) : String :=
   Json.compress <| Json.mkObj
     [ ("slotCount", toJson c.slotCount)
     , ("spanCount", toJson c.spanRoot.count)
-    , ("spanTop", Json.str (hexOf c.spanRoot.top)) ]
+    , ("spanTop", Json.str (byteArrayToHex c.spanRoot.top)) ]
 
 def decodeTlsnCert (s : String) : Except String TlsnTranscriptCert := do
   let j ← Json.parse s

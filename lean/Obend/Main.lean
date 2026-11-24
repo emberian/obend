@@ -27,6 +27,7 @@ import Obend.Analysis.NonlinearPdeCli
 import Obend.FFI.Bridge
 import Obend.FFI.BridgeTypes
 import Obend.Doc.WorkbookEngine
+import Obend.Codec.Hex
 import Obend.Leaf.BytecodeRegisterJit
 import Lean.Data.Json
 
@@ -857,6 +858,7 @@ def proveArgs (spec name : String) : List String → Option (IO UInt32)
 /-! JSON adapters keep decoding failures separate from semantic refusals. -/
 namespace LiveCli
 open Lean
+open Obend.Codec.Hex (bytesToHex byteArrayToHex hexCharsToNat?)
 def field (j : Json) (k : String) : Except String Json := j.getObjVal? k
 def nat (j : Json) (k : String) : Except String Nat := j.getObjValAs? Nat k
 def text (j : Json) (k : String) : Except String String := j.getObjValAs? String k
@@ -874,13 +876,12 @@ def finish (args : List String) (ok : Bool) (j : Json) : IO UInt32 := do
   output args j
   if !ok then IO.eprintln "refused: verification failed"
   return if ok then 0 else 3
-def hex (bs : ByteArray) : String := String.ofList (bs.data.toList.flatMap fun b =>
-  ["0123456789abcdef".toList[b.toNat / 16]!, "0123456789abcdef".toList[b.toNat % 16]!])
-def hex256 (n : Nat) : String := hex ⟨(Obend.Digest.HashBytes.be 32 n).toArray⟩
+def hex256 (n : Nat) : String := bytesToHex (Obend.Digest.HashBytes.be 32 n)
+/-- 64 hex digits of either case. -/
 def unhex256 (s : String) : Except String Nat :=
-  if s.length != 64 then throw "expected 64 hex digits" else s.toList.foldlM (fun n c =>
-    match "0123456789abcdef".toList.idxOf? c.toLower with
-    | some digit => pure (16 * n + digit) | none => throw "expected 64 hex digits") 0
+  match s.length == 64, hexCharsToNat? s.toList with
+  | true, some n => pure n
+  | _, _ => throw "expected 64 hex digits"
 /-- `flag VALUE` taken out of an argument list, wherever it stands. -/
 def takeOpt (flag : String) : List String → Option String × List String
   | f :: rest => match f == flag, rest with
@@ -919,14 +920,14 @@ open Obend.Law.AmendCli Obend.Law.PointwiseRevise in
       | .error _ => pure none
       | .ok v => pure (some (← decodeIO v.getStr?))
     if expected.isSome && expected != some prior then ok := false
-    let digest := hex r.digest
+    let digest := byteArrayToHex r.digest
     let row ← decodeIO (Json.parse (renderAmendReceiptJson r))
     let accepted := match r.revision with | .accepted _ _ => true | _ => false
     ok := ok && accepted
     rows := rows.push ((row.setObjVal! "receiptHex" (toJson digest)).setObjVal! "previousReceiptHex" (toJson prior)
-      |>.setObjVal! "turnDigestHex" (toJson (hex r.turnDigest))
-      |>.setObjVal! "bedrockDigestHex" (toJson (hex r.bedrockDigest))
-      |>.setObjVal! "supportDigestHex" (toJson (hex r.supportDigest)))
+      |>.setObjVal! "turnDigestHex" (toJson (byteArrayToHex r.turnDigest))
+      |>.setObjVal! "bedrockDigestHex" (toJson (byteArrayToHex r.bedrockDigest))
+      |>.setObjVal! "supportDigestHex" (toJson (byteArrayToHex r.supportDigest)))
     prior := digest
   let summary := (verdict ok (if ok then "law admitted" else "law or receipt chain refused"))
     |>.setObjVal! "receipts" (.arr rows) |>.setObjVal! "generations" (toJson st.generations)
@@ -1107,7 +1108,7 @@ def custody (cmd dirName : String) (args : List String) : IO UInt32 := do
     s := custodyEvent auth verify s event
   | _ => throw (IO.userError "custody commands: init | prepare | reopen | event")
   custodySave dir s
-  finish [] true ((verdict true (reprStr status)).setObjVal! "varDataRootHex" (toJson (hex liveRoot)))
+  finish [] true ((verdict true (reprStr status)).setObjVal! "varDataRootHex" (toJson (byteArrayToHex liveRoot)))
 open Obend.Crypto Obend.Judge Obend.Ledger
 instance : FromJson Rat := ⟨rat⟩
 instance : FromJson Side := ⟨fun j => do
@@ -1189,7 +1190,7 @@ def bazaar (path : String) (args : List String) : IO UInt32 := do
     IO.FS.rename (historyPath ++ ".pending") historyPath
     let digest := deriveOrderBatchNullifier256 b.openingQuery.market b.openingQuery.committedOrders b.encryptedOrders
     finish args true (Json.mkObj ([("status", toJson "accepted"), ("epoch", toJson next.base.epoch),
-      ("nullifierHex", toJson (hex ⟨(Obend.Digest.HashBytes.be 32 digest.toNat).toArray⟩)),
+      ("nullifierHex", toJson (bytesToHex (Obend.Digest.HashBytes.be 32 digest.toNat))),
       ("decryptedBook", toJson out.decryptedBook.coeffs), ("currency", toJson out.currencySettlement.entries),
       ("goods", toJson out.goodsSettlement.entries)] ++ attested))
 section
