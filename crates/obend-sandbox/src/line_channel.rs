@@ -54,10 +54,7 @@ impl Proposal {
         }
     }
 
-    pub fn op(
-        tool: impl Into<String>,
-        args: impl IntoIterator<Item = (String, String)>,
-    ) -> Self {
+    pub fn op(tool: impl Into<String>, args: impl IntoIterator<Item = (String, String)>) -> Self {
         Self {
             tool: tool.into(),
             args: Some(args.into_iter().collect()),
@@ -402,7 +399,11 @@ impl<C: BodyChannel> ConfinedBrain<C> {
                     Ok(action) => return Some(action),
                     Err(reason) => {
                         self.unmapped_refusals += 1;
-                        if self.body.send(&Verdict::refuse(reason.to_string())).is_err() {
+                        if self
+                            .body
+                            .send(&Verdict::refuse(reason.to_string()))
+                            .is_err()
+                        {
                             self.done = true;
                             return None;
                         }
@@ -441,13 +442,14 @@ mod tests {
     #[test]
     fn oversized_frame_refused_and_channel_permanently_poisoned() {
         // Attempt 1: 512 bytes without newline + valid JSON on second half -> must fail AND stay poisoned!
-        let second_half = serde_json::to_string(&BodyMsg::Propose(Proposal::invoke("smuggled"))).unwrap();
+        let second_half =
+            serde_json::to_string(&BodyMsg::Propose(Proposal::invoke("smuggled"))).unwrap();
         let mut stream = "x".repeat(300);
         stream.push_str(&second_half);
         stream.push('\n');
 
-        let mut ch = LineChannel::new(Cursor::new(stream.into_bytes()), Vec::new())
-            .with_max_line_bytes(128);
+        let mut ch =
+            LineChannel::new(Cursor::new(stream.into_bytes()), Vec::new()).with_max_line_bytes(128);
         assert!(ch.recv().is_err(), "oversized frame must fail closed");
         assert!(ch.is_poisoned());
         assert!(

@@ -1,6 +1,8 @@
 //! End-to-end Rust FFI tests for the Lean `simplex-trace@1` certificate judge
 //! (`Obend.Consensus.SimplexTrace.simplexTraceFormat`) through `ObendSession::weave_cert`
-//! and `ObendSession::commit_turn`.
+//! and `ObendSession::commit_turn`. These need the linked kernel, so the stub build omits them.
+
+#![cfg(not(feature = "stub"))]
 
 use obend_ffi::session::{encode_receipt, ObendSession};
 use serde_json::{json, Value};
@@ -69,7 +71,6 @@ fn honest_two_view_trace() -> Vec<Value> {
     ]
 }
 
-#[cfg(not(feature = "stub"))]
 #[test]
 fn honest_four_validator_multi_view_trace_weaves_commits_and_opens_receipt() {
     let mut session = ObendSession::new().expect("session");
@@ -87,14 +88,15 @@ fn honest_four_validator_multi_view_trace_weaves_commits_and_opens_receipt() {
         "proposal alone must not verify before commit"
     );
 
-    session.commit_turn(&tid).expect("commit woven Simplex turn");
+    session
+        .commit_turn(&tid)
+        .expect("commit woven Simplex turn");
     assert!(
         session.verify_receipt(&receipt).unwrap(),
         "committed Simplex trace witness opens against session root"
     );
 }
 
-#[cfg(not(feature = "stub"))]
 #[test]
 fn equivocating_second_vote_is_slashed_when_undeclared_and_accepted_when_declared_faulty() {
     let mut session = ObendSession::new().expect("session");
@@ -117,10 +119,11 @@ fn equivocating_second_vote_is_slashed_when_undeclared_and_accepted_when_declare
     let tid = session
         .weave_cert(&declared)
         .expect("same trace is reachable when node 3 is in the declared faulty set");
-    session.commit_turn(&tid).expect("commit declared-faulty trace");
+    session
+        .commit_turn(&tid)
+        .expect("commit declared-faulty trace");
 }
 
-#[cfg(not(feature = "stub"))]
 #[test]
 fn unknown_sender_and_non_leader_proposals_fail_closed() {
     let mut session = ObendSession::new().expect("session");
@@ -138,7 +141,8 @@ fn unknown_sender_and_non_leader_proposals_fail_closed() {
 
     // Node 2 is not leader of view 1 (leader is 0).
     let c1 = vec![block_entry(1, 999)];
-    let non_leader = wrap_simplex_witness(&[0, 1, 2, 3], 1, &[], &[msg_block(2, 1, "propose", &c1)]);
+    let non_leader =
+        wrap_simplex_witness(&[0, 1, 2, 3], 1, &[], &[msg_block(2, 1, "propose", &c1)]);
     let err_leader = session
         .weave_cert(&non_leader)
         .expect_err("non-leader proposal must be refused")

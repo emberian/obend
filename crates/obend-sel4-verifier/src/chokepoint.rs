@@ -165,7 +165,9 @@ impl CapRights {
     };
 
     pub const fn subset_of(self, parent: Self) -> bool {
-        (!self.read || parent.read) && (!self.write || parent.write) && (!self.grant || parent.grant)
+        (!self.read || parent.read)
+            && (!self.write || parent.write)
+            && (!self.grant || parent.grant)
     }
 }
 
@@ -181,12 +183,27 @@ pub enum SharedRegionId {
 /// Typed kernel objects held in per-PD disjoint CSpace slots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KernelObject {
-    Notification { ntfn_id: u32 },
-    PpcEndpoint { ep_id: u32 },
-    SharedRegion { region: SharedRegionId, byte_len: usize },
-    PrivateFrame { pfn: u64 },
-    Mmio { kind: ApertureKind, base_paddr: u64, byte_size: u64 },
-    HwTrng { trng_id: u32 },
+    Notification {
+        ntfn_id: u32,
+    },
+    PpcEndpoint {
+        ep_id: u32,
+    },
+    SharedRegion {
+        region: SharedRegionId,
+        byte_len: usize,
+    },
+    PrivateFrame {
+        pfn: u64,
+    },
+    Mmio {
+        kind: ApertureKind,
+        base_paddr: u64,
+        byte_size: u64,
+    },
+    HwTrng {
+        trng_id: u32,
+    },
 }
 
 /// Local capability handle presented by a PD (`epoch == 0` is unconditionally invalid).
@@ -286,7 +303,11 @@ impl<const SLOTS: usize> PdCspaceTable<SLOTS> {
         badge: u64,
     ) -> Result<CapHandle, CapFault> {
         let parent = *self.resolve(parent_handle)?;
-        if dst_slot >= SLOTS || dst_slot <= parent_handle.slot || self.slots[dst_slot].live || global_cap_id == 0 {
+        if dst_slot >= SLOTS
+            || dst_slot <= parent_handle.slot
+            || self.slots[dst_slot].live
+            || global_cap_id == 0
+        {
             return Err(CapFault::TableFull);
         }
         if !rights.subset_of(parent.rights)
@@ -358,9 +379,9 @@ impl<const SLOTS: usize> PdCspaceTable<SLOTS> {
     }
 
     pub fn has_live_hw_trng(&self) -> bool {
-        self.slots.iter().any(|s| {
-            s.live && s.rights.read && matches!(s.obj, KernelObject::HwTrng { .. })
-        })
+        self.slots
+            .iter()
+            .any(|s| s.live && s.rights.read && matches!(s.obj, KernelObject::HwTrng { .. }))
     }
 
     pub fn slots(&self) -> &[CapSlotEntry; SLOTS] {
@@ -392,10 +413,18 @@ pub enum CapRequest {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapReply {
-    Signalled { delivered_badge: u64 },
+    Signalled {
+        delivered_badge: u64,
+    },
     Badge(u64),
-    MappedRegion { region: SharedRegionId, byte_len: usize, writable: bool },
-    PpcAuthorized { ep_id: u32 },
+    MappedRegion {
+        region: SharedRegionId,
+        byte_len: usize,
+        writable: bool,
+    },
+    PpcAuthorized {
+        ep_id: u32,
+    },
 }
 
 /// Four-PD disjoint CSpace container & notification badge state (`CAP-03` replacement).
@@ -426,7 +455,11 @@ impl<const SLOTS: usize> FourPdCspace<SLOTS> {
     }
 
     /// Dispatch a capability operation strictly against `caller_pd`'s isolated CSpace table.
-    pub fn dispatch(&mut self, caller_pd: ChokepointRole, req: CapRequest) -> Result<CapReply, CapFault> {
+    pub fn dispatch(
+        &mut self,
+        caller_pd: ChokepointRole,
+        req: CapRequest,
+    ) -> Result<CapReply, CapFault> {
         let table = &self.tables[caller_pd.index()];
         match req {
             CapRequest::Signal {
@@ -534,23 +567,63 @@ impl<const SLOTS: usize> FourPdCspace<SLOTS> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChokepointViolation {
     InvalidRootServerSpan,
-    RootServerSpanBudgetExceeded { span_bytes: u64, limit_bytes: u64 },
-    LoaderCollision { phys_end: u64, loader_base: u64 },
-    DomainFootprintExceedsSpan { sum_bytes: u64, span_bytes: u64 },
-    RoleMismatch { slot: usize, expected: ChokepointRole, got: ChokepointRole },
-    CanonicalNameMismatch { role: ChokepointRole },
-    DuplicatePdId { pd_id: u32 },
-    SharedWritableMmio { pd_a: ChokepointRole, pd_b: ChokepointRole },
-    ForbiddenApertureOwner { role: ChokepointRole, kind: ApertureKind },
-    MissingRequiredAperture { role: ChokepointRole, kind: ApertureKind },
+    RootServerSpanBudgetExceeded {
+        span_bytes: u64,
+        limit_bytes: u64,
+    },
+    LoaderCollision {
+        phys_end: u64,
+        loader_base: u64,
+    },
+    DomainFootprintExceedsSpan {
+        sum_bytes: u64,
+        span_bytes: u64,
+    },
+    RoleMismatch {
+        slot: usize,
+        expected: ChokepointRole,
+        got: ChokepointRole,
+    },
+    CanonicalNameMismatch {
+        role: ChokepointRole,
+    },
+    DuplicatePdId {
+        pd_id: u32,
+    },
+    SharedWritableMmio {
+        pd_a: ChokepointRole,
+        pd_b: ChokepointRole,
+    },
+    ForbiddenApertureOwner {
+        role: ChokepointRole,
+        kind: ApertureKind,
+    },
+    MissingRequiredAperture {
+        role: ChokepointRole,
+        kind: ApertureKind,
+    },
     DirectIngressToEgressBypass,
-    ForbiddenChannelTopology { src: ChokepointRole, dst: ChokepointRole },
-    InvalidChannelBounds { channel_id: u32 },
-    CalleeConsumesCallerIrq { channel_id: u32 },
-    InvalidPpcPriority { commit_prio: u8, persist_prio: u8 },
+    ForbiddenChannelTopology {
+        src: ChokepointRole,
+        dst: ChokepointRole,
+    },
+    InvalidChannelBounds {
+        channel_id: u32,
+    },
+    CalleeConsumesCallerIrq {
+        channel_id: u32,
+    },
+    InvalidPpcPriority {
+        commit_prio: u8,
+        persist_prio: u8,
+    },
     MissingPipelineStageEdge,
-    DuplicateGlobalCapId { global_cap_id: u64 },
-    CspacePrivilegeViolation { role: ChokepointRole },
+    DuplicateGlobalCapId {
+        global_cap_id: u64,
+    },
+    CspacePrivilegeViolation {
+        role: ChokepointRole,
+    },
 }
 
 /// Validate the four-PD Microkit chokepoint system descriptor AND per-PD CSpace least-privilege partition:
@@ -718,7 +791,11 @@ pub fn verify_chokepoint_system<const SLOTS: usize>(
             (ChokepointRole::Ingress, ChokepointRole::TxEgress, _) => {
                 return Err(ChokepointViolation::DirectIngressToEgressBypass);
             }
-            (ChokepointRole::Ingress, ChokepointRole::Commit, ChokepointChannelKind::OneWaySpsc) => {
+            (
+                ChokepointRole::Ingress,
+                ChokepointRole::Commit,
+                ChokepointChannelKind::OneWaySpsc,
+            ) => {
                 saw_ingress_to_commit = true;
             }
             (
@@ -728,7 +805,11 @@ pub fn verify_chokepoint_system<const SLOTS: usize>(
             ) => {
                 saw_commit_to_persist = true;
             }
-            (ChokepointRole::Commit, ChokepointRole::TxEgress, ChokepointChannelKind::OneWaySpsc) => {
+            (
+                ChokepointRole::Commit,
+                ChokepointRole::TxEgress,
+                ChokepointChannelKind::OneWaySpsc,
+            ) => {
                 saw_commit_to_egress = true;
             }
             _ => {
@@ -774,23 +855,45 @@ pub fn verify_chokepoint_system<const SLOTS: usize>(
                 }
             }
             let permitted = match (role, entry.obj) {
-                (ChokepointRole::Ingress, KernelObject::SharedRegion { region: SharedRegionId::IngressRing, byte_len }) => {
-                    byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.write
-                }
+                (
+                    ChokepointRole::Ingress,
+                    KernelObject::SharedRegion {
+                        region: SharedRegionId::IngressRing,
+                        byte_len,
+                    },
+                ) => byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.write,
                 (ChokepointRole::Ingress, KernelObject::Notification { .. }) => {
                     entry.rights.write && !entry.rights.read && entry.bound_badge != 0
                 }
-                (ChokepointRole::Ingress, KernelObject::Mmio { kind: ApertureKind::RxNicMmio, .. }) => true,
+                (
+                    ChokepointRole::Ingress,
+                    KernelObject::Mmio {
+                        kind: ApertureKind::RxNicMmio,
+                        ..
+                    },
+                ) => true,
 
-                (ChokepointRole::Commit, KernelObject::SharedRegion { region: SharedRegionId::IngressRing, byte_len }) => {
-                    byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.read && !entry.rights.write
-                }
-                (ChokepointRole::Commit, KernelObject::SharedRegion { region: SharedRegionId::CommitLeafBuf, byte_len }) => {
-                    byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.read && entry.rights.write
-                }
-                (ChokepointRole::Commit, KernelObject::SharedRegion { region: SharedRegionId::EgressReleaseRing, byte_len }) => {
-                    byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.write
-                }
+                (
+                    ChokepointRole::Commit,
+                    KernelObject::SharedRegion {
+                        region: SharedRegionId::IngressRing,
+                        byte_len,
+                    },
+                ) => byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.read && !entry.rights.write,
+                (
+                    ChokepointRole::Commit,
+                    KernelObject::SharedRegion {
+                        region: SharedRegionId::CommitLeafBuf,
+                        byte_len,
+                    },
+                ) => byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.read && entry.rights.write,
+                (
+                    ChokepointRole::Commit,
+                    KernelObject::SharedRegion {
+                        region: SharedRegionId::EgressReleaseRing,
+                        byte_len,
+                    },
+                ) => byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.write,
                 (ChokepointRole::Commit, KernelObject::PrivateFrame { pfn }) => {
                     if pfn == 0 || !entry.rights.read || !entry.rights.write {
                         false
@@ -809,28 +912,48 @@ pub fn verify_chokepoint_system<const SLOTS: usize>(
                     entry.rights.read && !entry.rights.write
                 }
 
-                (ChokepointRole::Persist, KernelObject::SharedRegion { region: SharedRegionId::CommitLeafBuf, byte_len }) => {
-                    byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.read && !entry.rights.write
-                }
-                (ChokepointRole::Persist, KernelObject::SharedRegion { region: SharedRegionId::PersistDurableLog, .. }) => {
-                    entry.rights.read && entry.rights.write
-                }
+                (
+                    ChokepointRole::Persist,
+                    KernelObject::SharedRegion {
+                        region: SharedRegionId::CommitLeafBuf,
+                        byte_len,
+                    },
+                ) => byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.read && !entry.rights.write,
+                (
+                    ChokepointRole::Persist,
+                    KernelObject::SharedRegion {
+                        region: SharedRegionId::PersistDurableLog,
+                        ..
+                    },
+                ) => entry.rights.read && entry.rights.write,
                 (ChokepointRole::Persist, KernelObject::PpcEndpoint { .. }) => {
                     entry.rights.read && !entry.rights.write
                 }
-                (ChokepointRole::Persist, KernelObject::Mmio { kind: ApertureKind::DurableLogStorage, .. }) => {
-                    entry.rights.read && entry.rights.write
-                }
+                (
+                    ChokepointRole::Persist,
+                    KernelObject::Mmio {
+                        kind: ApertureKind::DurableLogStorage,
+                        ..
+                    },
+                ) => entry.rights.read && entry.rights.write,
 
-                (ChokepointRole::TxEgress, KernelObject::SharedRegion { region: SharedRegionId::EgressReleaseRing, byte_len }) => {
-                    byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.read && !entry.rights.write
-                }
+                (
+                    ChokepointRole::TxEgress,
+                    KernelObject::SharedRegion {
+                        region: SharedRegionId::EgressReleaseRing,
+                        byte_len,
+                    },
+                ) => byte_len <= MAX_IPC_FRAME_BYTES && entry.rights.read && !entry.rights.write,
                 (ChokepointRole::TxEgress, KernelObject::Notification { .. }) => {
                     entry.rights.read && !entry.rights.write
                 }
-                (ChokepointRole::TxEgress, KernelObject::Mmio { kind: ApertureKind::TxNicMmio, .. }) => {
-                    entry.rights.write
-                }
+                (
+                    ChokepointRole::TxEgress,
+                    KernelObject::Mmio {
+                        kind: ApertureKind::TxNicMmio,
+                        ..
+                    },
+                ) => entry.rights.write,
 
                 _ => false,
             };
@@ -845,9 +968,14 @@ pub fn verify_chokepoint_system<const SLOTS: usize>(
         });
     }
     if let Some(priv_pfn) = commit_private_pfn {
-        for role in [ChokepointRole::Ingress, ChokepointRole::Persist, ChokepointRole::TxEgress] {
+        for role in [
+            ChokepointRole::Ingress,
+            ChokepointRole::Persist,
+            ChokepointRole::TxEgress,
+        ] {
             for s in cspaces.pd_table(role).slots() {
-                if s.live && matches!(s.obj, KernelObject::PrivateFrame { pfn } if pfn == priv_pfn) {
+                if s.live && matches!(s.obj, KernelObject::PrivateFrame { pfn } if pfn == priv_pfn)
+                {
                     return Err(ChokepointViolation::CspacePrivilegeViolation { role });
                 }
             }
@@ -961,7 +1089,9 @@ impl PdSyscallGate {
                 Self::handle_read_fd(fd_arg, buf)
             }
             linux_aarch64_nr::FSTAT => -ERRNO_EBADF,
-            linux_aarch64_nr::CLOSE | linux_aarch64_nr::FUTEX | linux_aarch64_nr::CLOCK_GETTIME => 0,
+            linux_aarch64_nr::CLOSE | linux_aarch64_nr::FUTEX | linux_aarch64_nr::CLOCK_GETTIME => {
+                0
+            }
             _ => -ERRNO_ENOSYS,
         }
     }
@@ -974,11 +1104,11 @@ pub const PERSIST_WAL_CHAIN_DOMAIN: &[u8] = b"OBEND-PERSIST-WAL-CHAIN-V1";
 pub fn compute_persist_leaf_digest(alg: OutboxHashAlg, log_seq: u64, leaf_bytes: &[u8]) -> Digest {
     match alg {
         OutboxHashAlg::Cshake256 => {
-            let mut s = customized(PERSIST_LEAF_ACK_DOMAIN);
+            let mut s = Cshake256::customized(PERSIST_LEAF_ACK_DOMAIN);
             s.absorb(&log_seq.to_be_bytes());
             s.absorb(&(leaf_bytes.len() as u64).to_be_bytes());
             s.absorb(leaf_bytes);
-            s.digest()
+            s.finalize_32()
         }
         OutboxHashAlg::Sha256 => {
             let mut h = Sha256::new();
@@ -1000,11 +1130,11 @@ pub fn advance_persist_wal_root(
 ) -> Digest {
     match alg {
         OutboxHashAlg::Cshake256 => {
-            let mut s = customized(PERSIST_WAL_CHAIN_DOMAIN);
+            let mut s = Cshake256::customized(PERSIST_WAL_CHAIN_DOMAIN);
             s.absorb(prev_wal_root);
             s.absorb(&log_seq.to_be_bytes());
             s.absorb(leaf_digest);
-            s.digest()
+            s.finalize_32()
         }
         OutboxHashAlg::Sha256 => {
             let mut h = Sha256::new();
@@ -1068,7 +1198,8 @@ impl<const LOG_CAP: usize> PersistPdState<LOG_CAP> {
         let Some(hdr) = leaf_buf_ro.get(..8) else {
             return refuse;
         };
-        let staged_len = usize::try_from(u64::from_le_bytes(hdr.try_into().unwrap())).unwrap_or(usize::MAX);
+        let staged_len =
+            usize::try_from(u64::from_le_bytes(hdr.try_into().unwrap())).unwrap_or(usize::MAX);
         if mr0_len == 0
             || mr0_len != staged_len
             || mr0_len > MAX_IPC_FRAME_BYTES - 8
@@ -1094,7 +1225,8 @@ impl<const LOG_CAP: usize> PersistPdState<LOG_CAP> {
         self.used = next_used;
         self.entries = next_seq;
         let leaf_digest = compute_persist_leaf_digest(self.hash_alg, next_seq, leaf_slice);
-        self.wal_root = advance_persist_wal_root(self.hash_alg, &self.wal_root, next_seq, &leaf_digest);
+        self.wal_root =
+            advance_persist_wal_root(self.hash_alg, &self.wal_root, next_seq, &leaf_digest);
         PersistDigestAck {
             status_ok: true,
             fsynced: true,
@@ -1400,7 +1532,10 @@ impl<const MAX_N: usize, const MAX_VIEWS: usize> CommitPdMonitor<MAX_N, MAX_VIEW
             return self.halt(HaltReason::CapacityExhausted);
         };
         if private_copy.public_inputs.height != next_height
-            || !ct_eq_digest(&private_copy.public_inputs.pre_state_root, &self.committed_state_root)
+            || !ct_eq_digest(
+                &private_copy.public_inputs.pre_state_root,
+                &self.committed_state_root,
+            )
             || private_copy.public_inputs.revoked_root == [0u8; 32]
             || !private_copy.last_row_gate_ok
             || !ct_eq_digest(
@@ -1572,7 +1707,9 @@ mod tests {
         persist_log_rw: CapHandle,
     }
 
-    fn canonical_cspaces_and_handles(include_commit_trng: bool) -> (FourPdCspace<8>, CanonicalHandles) {
+    fn canonical_cspaces_and_handles(
+        include_commit_trng: bool,
+    ) -> (FourPdCspace<8>, CanonicalHandles) {
         let mut cs = FourPdCspace::<8>::new();
         // Ingress PD (disjoint global_cap_id 100..109)
         let _ = cs
@@ -1629,7 +1766,13 @@ mod tests {
             .unwrap();
         let _ = cs
             .pd_table_mut(ChokepointRole::Commit)
-            .install_root(1, 201, KernelObject::PrivateFrame { pfn: 40 }, CapRights::RW, 0)
+            .install_root(
+                1,
+                201,
+                KernelObject::PrivateFrame { pfn: 40 },
+                CapRights::RW,
+                0,
+            )
             .unwrap();
         let commit_leaf_rw = cs
             .pd_table_mut(ChokepointRole::Commit)
@@ -1646,7 +1789,13 @@ mod tests {
             .unwrap();
         let commit_ppc = cs
             .pd_table_mut(ChokepointRole::Commit)
-            .install_root(3, 203, KernelObject::PpcEndpoint { ep_id: 1 }, CapRights::WO, 0)
+            .install_root(
+                3,
+                203,
+                KernelObject::PpcEndpoint { ep_id: 1 },
+                CapRights::WO,
+                0,
+            )
             .unwrap();
         let commit_egress_rw = cs
             .pd_table_mut(ChokepointRole::Commit)
@@ -1674,7 +1823,13 @@ mod tests {
         if include_commit_trng {
             let _ = cs
                 .pd_table_mut(ChokepointRole::Commit)
-                .install_root(6, 206, KernelObject::HwTrng { trng_id: 0 }, CapRights::RO, 0)
+                .install_root(
+                    6,
+                    206,
+                    KernelObject::HwTrng { trng_id: 0 },
+                    CapRights::RO,
+                    0,
+                )
                 .unwrap();
         }
 
@@ -1707,7 +1862,13 @@ mod tests {
             .unwrap();
         let _ = cs
             .pd_table_mut(ChokepointRole::Persist)
-            .install_root(2, 302, KernelObject::PpcEndpoint { ep_id: 1 }, CapRights::RO, 0)
+            .install_root(
+                2,
+                302,
+                KernelObject::PpcEndpoint { ep_id: 1 },
+                CapRights::RO,
+                0,
+            )
             .unwrap();
         let _ = cs
             .pd_table_mut(ChokepointRole::Persist)
@@ -2445,7 +2606,10 @@ mod tests {
         );
         assert!(!ok2);
         assert!(commit.is_halted());
-        assert_eq!(commit.halt_reason(), Some(HaltReason::PersistDigestMismatch));
+        assert_eq!(
+            commit.halt_reason(),
+            Some(HaltReason::PersistDigestMismatch)
+        );
         assert_eq!(egress.tx_packets_emitted(), 1);
         assert_eq!(commit.forwarded(), 1);
 

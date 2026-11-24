@@ -170,9 +170,11 @@ fn physical_hazard_reticle_visibility_floor_exhaustive_adversarial_backgrounds()
             .step_by(85)
             .flat_map(|r| {
                 (0u8..=255).step_by(85).flat_map(move |g| {
-                    (0u8..=255)
-                        .step_by(85)
-                        .flat_map(move |b| [0u8, 128, 255].into_iter().map(move |a| Rgba::new(r, g, b, a)))
+                    (0u8..=255).step_by(85).flat_map(move |b| {
+                        [0u8, 128, 255]
+                            .into_iter()
+                            .map(move |a| Rgba::new(r, g, b, a))
+                    })
                 })
             })
             .collect();
@@ -927,14 +929,8 @@ fn software_scanline_stream_sealer_zero_leakage_completeness_and_u64_max_guard()
 
     // 1. u64::MAX wraparound guard: first-frame MAX and (MAX-1 -> MAX) strictly refused.
     let mut sealer = SensorFrameSealer::new();
-    let max_frame = RawSensorFrame::from_full_frame(
-        7,
-        u64::MAX,
-        2,
-        1,
-        vec![Rgba::BLACK, Rgba::WHITE],
-        vec![],
-    );
+    let max_frame =
+        RawSensorFrame::from_full_frame(7, u64::MAX, 2, 1, vec![Rgba::BLACK, Rgba::WHITE], vec![]);
     assert_eq!(
         sealer.seal_frame(&max_frame),
         Err(EpiphanyRefusal::SensorSeqOverflow {
@@ -979,7 +975,10 @@ fn software_scanline_stream_sealer_zero_leakage_completeness_and_u64_max_guard()
     };
     let mut stream_max = ScanlineStreamSealer::new();
     assert!(matches!(
-        stream_max.begin_frame(ScanlineStreamConfig { mono_seq: u64::MAX, ..cfg.clone() }),
+        stream_max.begin_frame(ScanlineStreamConfig {
+            mono_seq: u64::MAX,
+            ..cfg.clone()
+        }),
         Err(EpiphanyRefusal::SensorSeqOverflow { .. })
     ));
 
@@ -1038,7 +1037,10 @@ fn software_scanline_stream_sealer_zero_leakage_completeness_and_u64_max_guard()
         Err(EpiphanyRefusal::ScanlineStreamViolation { .. })
     ));
     assert!(matches!(
-        s_a.begin_frame(ScanlineStreamConfig { redact_boxes: vec![], ..cfg.clone() }),
+        s_a.begin_frame(ScanlineStreamConfig {
+            redact_boxes: vec![],
+            ..cfg.clone()
+        }),
         Err(EpiphanyRefusal::SensorSeqRollback { .. })
     ));
 
@@ -1055,7 +1057,9 @@ fn software_scanline_stream_sealer_zero_leakage_completeness_and_u64_max_guard()
 
     let mut stripped_sealer = SensorFrameSealer::new();
     let stripped_raw = RawSensorFrame::from_full_frame(7, 42, 4, 2, vec![Rgba::WHITE; 8], vec![]);
-    let stripped_sealed = stripped_sealer.seal_frame(&stripped_raw).expect("seal stripped");
+    let stripped_sealed = stripped_sealer
+        .seal_frame(&stripped_raw)
+        .expect("seal stripped");
     assert!(matches!(
         verify_sealed_frame_against_policy(&stripped_sealed, &cfg.redact_boxes, Some(41)),
         Err(EpiphanyRefusal::InvalidGeometry { .. })
@@ -1066,8 +1070,11 @@ fn software_scanline_stream_sealer_zero_leakage_completeness_and_u64_max_guard()
         s_a.begin_frame(cfg.clone()),
         Err(EpiphanyRefusal::SensorSeqRollback { .. })
     ));
-    s_a.begin_frame(ScanlineStreamConfig { mono_seq: 43, ..cfg.clone() })
-        .expect("begin seq 43");
+    s_a.begin_frame(ScanlineStreamConfig {
+        mono_seq: 43,
+        ..cfg.clone()
+    })
+    .expect("begin seq 43");
     for p in &stream_a {
         s_a.step_scanline(p).expect("next frame step");
     }

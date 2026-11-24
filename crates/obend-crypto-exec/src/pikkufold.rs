@@ -23,9 +23,11 @@ use crate::canopy::{
 use crate::goldilocks::{
     CanonicalLift, CanonicalLiftError, Goldilocks, GoldilocksExt2, mle_eval_base_at_ext2,
 };
+use obend_keccak::Cshake256;
+
 use crate::transcript::{
-    Cshake256Xof, DUAL_TRACK1_LABEL, DUAL_TRACK2_LABEL, FenziTranscript, InstanceBound,
-    RelationBound, Unbound, cshake256_32, leb128,
+    DUAL_TRACK1_LABEL, DUAL_TRACK2_LABEL, FenziTranscript, InstanceBound, RelationBound, Unbound,
+    cshake256_32, leb128,
 };
 
 /// Cyclotomic power-of-two ring degree $d = 64$ for $R_{q_{\text{lat}}} = \mathbb{Z}_{q_{\text{lat}}}[X]/(X^{64} + 1)$.
@@ -749,7 +751,7 @@ impl LatticeParams {
         let mut matrix = Vec::with_capacity(rows * cols);
         for r in 0..rows {
             for c in 0..cols {
-                let mut xof = Cshake256Xof::new(PIKKUFOLD_CRS_CUSTOMIZATION);
+                let mut xof = Cshake256::customized(PIKKUFOLD_CRS_CUSTOMIZATION);
                 xof.absorb(&crs_seed);
                 xof.absorb(&(r as u64).to_be_bytes());
                 xof.absorb(&(c as u64).to_be_bytes());
@@ -798,7 +800,7 @@ impl LatticeParams {
     /// Domain-separated 256-bit `cSHAKE256` commitment over `rows`, `cols`, `crs_seed`, and every
     /// ring entry of `self.matrix` (so both seeded and explicit matrices are injectively bound!).
     pub fn transcript_digest(&self) -> [u8; 32] {
-        let mut xof = Cshake256Xof::new(AKITA_PARAMS_DIGEST_CUSTOMIZATION);
+        let mut xof = Cshake256::customized(AKITA_PARAMS_DIGEST_CUSTOMIZATION);
         xof.absorb(&(self.rows as u64).to_be_bytes());
         xof.absorb(&(self.cols as u64).to_be_bytes());
         xof.absorb(&self.crs_seed);
@@ -1134,7 +1136,7 @@ fn absorb_akita_round(tr: &mut FenziTranscript<InstanceBound>, rnd: &AkitaFoldRo
 /// invertible in $R_{Q_{\text{LAT}}}$, giving single-round quadratic soundness $\le 4 / 2^{147.5} < 2^{-145} \ll 2^{-128}$!
 pub fn squeeze_invertible_ring_challenge(tr: &mut FenziTranscript<InstanceBound>) -> RingElem {
     let seed = tr.squeeze_challenge_256();
-    let mut xof = Cshake256Xof::new(AKITA_CHALLENGE_XOF_CUSTOMIZATION);
+    let mut xof = Cshake256::customized(AKITA_CHALLENGE_XOF_CUSTOMIZATION);
     xof.absorb(&seed);
 
     let mut byte = [0u8; 1];
@@ -1594,7 +1596,7 @@ pub struct OrderSalt {
 impl OrderSalt {
     /// Deterministically derive a fresh `OrderSalt` from 32 bytes of OS/caller entropy.
     pub fn from_entropy(entropy: [u8; 32]) -> Self {
-        let mut xof = Cshake256Xof::new(b"OBEND.DARKBAZAAR.ORDERSALT/v1");
+        let mut xof = Cshake256::customized(b"OBEND.DARKBAZAAR.ORDERSALT/v1");
         xof.absorb(&entropy);
         let mut canopy_salt_seed = [0u8; 32];
         xof.squeeze(&mut canopy_salt_seed);
@@ -1673,7 +1675,7 @@ fn derive_canopy_bind_limbs(
     tot_val: u64,
     canopy_salt_seed: &[u8; 32],
 ) -> [Goldilocks; 2] {
-    let mut xof = Cshake256Xof::new(BAZAAR_CANOPY_BIND_CUSTOMIZATION);
+    let mut xof = Cshake256::customized(BAZAAR_CANOPY_BIND_CUSTOMIZATION);
     xof.absorb(&account_id.to_be_bytes());
     xof.absorb(&[side.tag_u64() as u8]);
     xof.absorb(&max_bits.to_be_bytes());
@@ -1767,7 +1769,7 @@ fn build_order_ring_witness_and_canopy_table(
     ];
     let mut ring_witness = pack_goldilocks_to_ring_witness(&secret_msg, lattice_cols)?;
     if lattice_cols > 2 {
-        let mut ext_xof = Cshake256Xof::new(BAZAAR_LAT_BLIND_EXT_CUSTOMIZATION);
+        let mut ext_xof = Cshake256::customized(BAZAAR_LAT_BLIND_EXT_CUSTOMIZATION);
         ext_xof.absorb(&witness.salt.canopy_salt_seed);
         ext_xof.absorb(&witness.salt.lattice_blinding.to_be_bytes());
         let mut b2 = [0u8; 2];
@@ -2032,7 +2034,7 @@ fn combine_commitments(
 }
 
 #[inline]
-fn sample_uniform_sym(xof: &mut Cshake256Xof, half_width: i64) -> i64 {
+fn sample_uniform_sym(xof: &mut Cshake256, half_width: i64) -> i64 {
     debug_assert!(half_width > 0);
     let span = (half_width as u64) * 2 + 1;
     let threshold = u64::MAX - (u64::MAX % span);
@@ -2142,7 +2144,7 @@ fn populate_order_r1cs_witness(
     price: u64,
     fill: u64,
     slack: u64,
-    blinding_xof: &mut Cshake256Xof,
+    blinding_xof: &mut Cshake256,
 ) -> Result<(Vec<RingElem>, u128), LatticeError> {
     let qty = wit.qty()?;
     let total = wit.total()?;
@@ -2330,7 +2332,7 @@ fn populate_order_r1cs_witness(
 fn populate_batch_carry_witness(
     d_vals: &[u128],
     primal_sum: u128,
-    blinding_xof: &mut Cshake256Xof,
+    blinding_xof: &mut Cshake256,
 ) -> Vec<RingElem> {
     let mut rings = vec![RingElem::zero(); BAZAAR_R1CS_COLS];
     let pi_limbs = u128_to_limbs8(primal_sum);
@@ -2357,7 +2359,7 @@ fn populate_batch_carry_witness(
 }
 
 #[inline]
-fn next_lambda_triple(xof: &mut Cshake256Xof) -> [i64; BAZAAR_LAMBDA_STREAMS] {
+fn next_lambda_triple(xof: &mut Cshake256) -> [i64; BAZAAR_LAMBDA_STREAMS] {
     let mut out = [0i64; BAZAAR_LAMBDA_STREAMS];
     let mut buf = [0u8; 8];
     for slot in &mut out {
@@ -2371,7 +2373,7 @@ fn next_lambda_triple(xof: &mut Cshake256Xof) -> [i64; BAZAAR_LAMBDA_STREAMS] {
 #[inline]
 fn accum_quad_gate(
     acc: &mut [i128; BAZAAR_LAMBDA_STREAMS],
-    xof: &mut Cshake256Xof,
+    xof: &mut Cshake256,
     a_val: i64,
     b_val: i64,
     c_val: i64,
@@ -2393,7 +2395,7 @@ fn accum_quad_gate(
 #[inline]
 fn accum_bool_range(
     acc: &mut [i128; BAZAAR_LAMBDA_STREAMS],
-    xof: &mut Cshake256Xof,
+    xof: &mut Cshake256,
     rings: &[RingElem],
     base_slot: usize,
     count: usize,
@@ -2412,7 +2414,7 @@ fn eval_batch_quad_residual(
     z_batch: &[RingElem],
     chal_e: i64,
 ) -> [i64; BAZAAR_LAMBDA_STREAMS] {
-    let mut xof = Cshake256Xof::new(BAZAAR_GATE_LAMBDA_CUSTOMIZATION);
+    let mut xof = Cshake256::customized(BAZAAR_GATE_LAMBDA_CUSTOMIZATION);
     xof.absorb(lambda_seed);
     let mut acc = [0i128; BAZAAR_LAMBDA_STREAMS];
 
@@ -2906,7 +2908,7 @@ fn prove_dark_bazaar_zk_unchecked(
         flow_dual_mu,
     );
 
-    let mut mask_xof = Cshake256Xof::new(BAZAAR_PROVER_MASK_CUSTOMIZATION);
+    let mut mask_xof = Cshake256::customized(BAZAAR_PROVER_MASK_CUSTOMIZATION);
     mask_xof.absorb(tr.state());
     for wit in witnesses {
         mask_xof.absorb(&wit.qty()?.to_be_bytes());
@@ -3781,8 +3783,12 @@ mod tests {
         // Independent cSHAKE256 vector. Both unmasked LE64 words have bit 63 set.
         let salt = core::array::from_fn(|i| i as u8);
         let limbs = derive_canopy_bind_limbs(
-            0x0102_0304_0506_0708, OrderSide::Ask, 57, 0x1122_3344_5566,
-            0x0010_2030_4050_6071, &salt,
+            0x0102_0304_0506_0708,
+            OrderSide::Ask,
+            57,
+            0x1122_3344_5566,
+            0x0010_2030_4050_6071,
+            &salt,
         );
         assert_eq!(
             limbs.map(Goldilocks::to_canonical_u64),
@@ -4342,7 +4348,7 @@ mod tests {
         let r1cs_params = derive_bazaar_r1cs_params(&lp).unwrap();
         let bdlop_params = derive_bazaar_bdlop_params(&lp).unwrap();
         let (m_ord_half, z_ord_max) = ord_mask_bounds(lp.cols).unwrap();
-        let mut adv_xof = Cshake256Xof::new(b"ADV.SPLICE.MASK");
+        let mut adv_xof = Cshake256::customized(b"ADV.SPLICE.MASK");
         let (r1cs_w0, d0) =
             populate_order_r1cs_witness(&spliced_orders[0], &witnesses[0], 48, 12, 1, &mut adv_xof)
                 .unwrap();

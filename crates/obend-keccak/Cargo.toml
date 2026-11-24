@@ -1,0 +1,8 @@
+[package]
+name = "obend-keccak"
+version = "0.1.0"
+edition = "2021"
+description = "Allocation-free no_std Keccak-f[1600], FIPS 202 SHA-3 and SHAKE, and NIST SP 800-185 cSHAKE256 and KMAC256"
+license = "Apache-2.0"
+
+[dependencies]

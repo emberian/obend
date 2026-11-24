@@ -21,7 +21,11 @@ impl ObendSession {
         ensure_lean_thread_initialized();
         let handle = unsafe {
             sys::obend_session_init(
-                if config.is_empty() { ptr::null() } else { config.as_ptr() },
+                if config.is_empty() {
+                    ptr::null()
+                } else {
+                    config.as_ptr()
+                },
                 config.len(),
             )
         };
@@ -39,7 +43,11 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_eval_cell(
                 self.handle,
-                if cell_bytes.is_empty() { ptr::null() } else { cell_bytes.as_ptr() },
+                if cell_bytes.is_empty() {
+                    ptr::null()
+                } else {
+                    cell_bytes.as_ptr()
+                },
                 cell_bytes.len(),
                 &mut out_ptr,
                 &mut out_len,
@@ -64,7 +72,11 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_turn_propose(
                 self.handle,
-                if turn_bytes.is_empty() { ptr::null() } else { turn_bytes.as_ptr() },
+                if turn_bytes.is_empty() {
+                    ptr::null()
+                } else {
+                    turn_bytes.as_ptr()
+                },
                 turn_bytes.len(),
                 &mut out_ptr,
                 &mut out_len,
@@ -87,7 +99,11 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_turn_commit(
                 self.handle,
-                if turn_id.is_empty() { ptr::null() } else { turn_id.as_ptr() },
+                if turn_id.is_empty() {
+                    ptr::null()
+                } else {
+                    turn_id.as_ptr()
+                },
                 turn_id.len(),
             )
         };
@@ -105,7 +121,11 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_project_hardware(
                 self.handle,
-                if hw_bytes.is_empty() { ptr::null() } else { hw_bytes.as_ptr() },
+                if hw_bytes.is_empty() {
+                    ptr::null()
+                } else {
+                    hw_bytes.as_ptr()
+                },
                 hw_bytes.len(),
                 &mut out_ptr,
                 &mut out_len,
@@ -128,7 +148,11 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_verify_receipt(
                 self.handle,
-                if receipt_bytes.is_empty() { ptr::null() } else { receipt_bytes.as_ptr() },
+                if receipt_bytes.is_empty() {
+                    ptr::null()
+                } else {
+                    receipt_bytes.as_ptr()
+                },
                 receipt_bytes.len(),
             )
         };
@@ -152,9 +176,7 @@ impl ObendSession {
     pub fn get_last_error(&self) -> String {
         let mut out_ptr = ptr::null_mut();
         let mut out_len = 0usize;
-        let rc = unsafe {
-            sys::obend_get_last_error(self.handle, &mut out_ptr, &mut out_len)
-        };
+        let rc = unsafe { sys::obend_get_last_error(self.handle, &mut out_ptr, &mut out_len) };
         if rc == 0 && !out_ptr.is_null() && out_len > 0 {
             let slice = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
             String::from_utf8_lossy(slice).into_owned()
@@ -170,7 +192,11 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_view_affordances(
                 self.handle,
-                if query_bytes.is_empty() { ptr::null() } else { query_bytes.as_ptr() },
+                if query_bytes.is_empty() {
+                    ptr::null()
+                } else {
+                    query_bytes.as_ptr()
+                },
                 query_bytes.len(),
                 &mut out_ptr,
                 &mut out_len,
@@ -195,7 +221,11 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_cell_weave_cert(
                 self.handle,
-                if cert_bytes.is_empty() { ptr::null() } else { cert_bytes.as_ptr() },
+                if cert_bytes.is_empty() {
+                    ptr::null()
+                } else {
+                    cert_bytes.as_ptr()
+                },
                 cert_bytes.len(),
                 &mut out_ptr,
                 &mut out_len,
@@ -256,7 +286,13 @@ impl Drop for ObendSession {
 /// `root(32) || size(8) || index(8) || pathLen(8) || path(pathLen x 32) || payload`,
 /// integers big-endian. `verify_receipt` recomputes the payload's digest and climbs the path
 /// (`Obend.Receipt.Merkle.opens`); the root must be one the session committed.
-pub fn encode_receipt(root: &[u8], size: u64, index: u64, path: &[[u8; 32]], payload: &[u8]) -> Vec<u8> {
+pub fn encode_receipt(
+    root: &[u8],
+    size: u64,
+    index: u64,
+    path: &[[u8; 32]],
+    payload: &[u8],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(56 + 32 * path.len() + payload.len());
     out.extend_from_slice(root);
     out.extend_from_slice(&size.to_be_bytes());

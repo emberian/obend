@@ -104,176 +104,11 @@ const UDR_QUERY_MILLI_BITS_TABLE: [u64; 12] =
     [0, 415, 678, 830, 912, 955, 977, 988, 994, 997, 998, 999];
 
 // ---------------------------------------------------------------------------
-// Pure-Std NIST FIPS 202 / SP 800-185 cSHAKE256 + Canonical LEB128 Framing
+// cSHAKE256 + Canonical LEB128 Framing
 // ---------------------------------------------------------------------------
 
-const KECCAK_RATE_BYTES: usize = 136;
-
-const KECCAK_RC: [u64; 24] = [
-    0x0000_0000_0000_0001,
-    0x0000_0000_0000_8082,
-    0x8000_0000_0000_808a,
-    0x8000_0000_8000_8000,
-    0x0000_0000_0000_808b,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8009,
-    0x0000_0000_0000_008a,
-    0x0000_0000_0000_0088,
-    0x0000_0000_8000_8009,
-    0x0000_0000_8000_000a,
-    0x0000_0000_8000_808b,
-    0x8000_0000_0000_008b,
-    0x8000_0000_0000_8089,
-    0x8000_0000_0000_8003,
-    0x8000_0000_0000_8002,
-    0x8000_0000_0000_0080,
-    0x0000_0000_0000_800a,
-    0x8000_0000_8000_000a,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8080,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8008,
-];
-
-const KECCAK_ROT: [u32; 25] = [
-    0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
-];
-
-fn keccak_f1600(state: &mut [u64; 25]) {
-    for &rc in &KECCAK_RC {
-        let mut c = [0u64; 5];
-        for x in 0..5 {
-            c[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-        }
-        for x in 0..5 {
-            let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
-            for y in 0..5 {
-                state[x + 5 * y] ^= d;
-            }
-        }
-        let mut b = [0u64; 25];
-        for y in 0..5 {
-            for x in 0..5 {
-                let idx = x + 5 * y;
-                b[y + 5 * ((2 * x + 3 * y) % 5)] = state[idx].rotate_left(KECCAK_ROT[idx]);
-            }
-        }
-        for y in 0..5 {
-            for x in 0..5 {
-                state[x + 5 * y] =
-                    b[x + 5 * y] ^ ((!b[(x + 1) % 5 + 5 * y]) & b[(x + 2) % 5 + 5 * y]);
-            }
-        }
-        state[0] ^= rc;
-    }
-}
-
-fn left_encode(value: u64, out: &mut [u8; 9]) -> usize {
-    let n = ((64 - value.leading_zeros()).max(1) as usize).div_ceil(8);
-    out[0] = n as u8;
-    for i in 0..n {
-        out[i + 1] = (value >> (8 * (n - i - 1))) as u8;
-    }
-    n + 1
-}
-
-#[derive(Clone)]
-struct CshakeSponge {
-    lanes: [u64; 25],
-    pos: usize,
-    suffix: u8,
-}
-
-impl CshakeSponge {
-    fn new(customization: &[u8]) -> Self {
-        let mut s = Self {
-            lanes: [0u64; 25],
-            pos: 0,
-            suffix: if customization.is_empty() { 0x1f } else { 0x04 },
-        };
-        if !customization.is_empty() {
-            s.absorb_left_encode(KECCAK_RATE_BYTES as u64);
-            s.absorb_encode_string(&[]);
-            s.absorb_encode_string(customization);
-            while s.pos != 0 {
-                s.absorb(&[0]);
-            }
-        }
-        s
-    }
-
-    /// Absorbs up to a lane boundary bytewise, then whole little-endian lanes, then the tail.
-    fn absorb(&mut self, bytes: &[u8]) {
-        let mut rest = bytes;
-        while !self.pos.is_multiple_of(8) {
-            let Some((&b, tail)) = rest.split_first() else {
-                return;
-            };
-            self.absorb_byte(b);
-            rest = tail;
-        }
-        let (lanes, tail) = rest.as_chunks::<8>();
-        for lane in lanes {
-            self.lanes[self.pos / 8] ^= u64::from_le_bytes(*lane);
-            self.advance(8);
-        }
-        for &b in tail {
-            self.absorb_byte(b);
-        }
-    }
-
-    fn absorb_byte(&mut self, b: u8) {
-        self.lanes[self.pos / 8] ^= (b as u64) << (8 * (self.pos % 8));
-        self.advance(1);
-    }
-
-    fn advance(&mut self, n: usize) {
-        self.pos += n;
-        if self.pos == KECCAK_RATE_BYTES {
-            keccak_f1600(&mut self.lanes);
-            self.pos = 0;
-        }
-    }
-
-    fn absorb_left_encode(&mut self, value: u64) {
-        let mut buf = [0u8; 9];
-        let len = left_encode(value, &mut buf);
-        self.absorb(&buf[..len]);
-    }
-
-    fn absorb_encode_string(&mut self, bytes: &[u8]) {
-        let bit_len = u64::try_from(bytes.len())
-            .expect("slice length fits u64")
-            .checked_mul(8)
-            .expect("bit length fits u64");
-        self.absorb_left_encode(bit_len);
-        self.absorb(bytes);
-    }
-
-    /// Xors the domain suffix at the current position and the final bit of the rate.
-    fn pad(&mut self) {
-        self.lanes[self.pos / 8] ^= (self.suffix as u64) << (8 * (self.pos % 8));
-        self.lanes[(KECCAK_RATE_BYTES - 1) / 8] ^= 0x80u64 << (8 * ((KECCAK_RATE_BYTES - 1) % 8));
-    }
-
-    fn finalize_32(mut self) -> [u8; 32] {
-        self.pad();
-        keccak_f1600(&mut self.lanes);
-        let mut out = [0u8; 32];
-        for (i, byte) in out.iter_mut().enumerate() {
-            *byte = (self.lanes[i / 8] >> (8 * (i % 8))) as u8;
-        }
-        out
-    }
-}
-
-/// Computes SP 800-185 `cSHAKE256` (`N = ""`, customization `S`, 32-byte output).
-pub fn cshake256_32(customization: &[u8], input: &[u8]) -> [u8; 32] {
-    let mut sponge = CshakeSponge::new(customization);
-    sponge.absorb(input);
-    sponge.finalize_32()
-}
+pub use obend_keccak::cshake256_32;
+use obend_keccak::{keccak_f1600, Cshake256, SHAKE256_RATE_BYTES};
 
 /// Encodes a u64 in at most ten canonical unsigned LEB128 bytes.
 fn leb128_bytes(mut value: u64, buf: &mut [u8; 10]) -> &[u8] {
@@ -2369,7 +2204,7 @@ impl<'a> NonceAbsorber<'a> {
         let third_len = step.len() + 8;
         // A fitting label is shorter than 128, so all three field lengths take one byte.
         let fixed_len = 3 + state.len() + third_len;
-        if label.len() >= KECCAK_RATE_BYTES - fixed_len {
+        if label.len() >= SHAKE256_RATE_BYTES - fixed_len {
             return Self::General {
                 transcript: FsTranscript {
                     state: *state,
@@ -2378,18 +2213,17 @@ impl<'a> NonceAbsorber<'a> {
                 label,
             };
         }
-        let mut sponge = CshakeSponge::new(FS_ABSORB_TAG);
+        let mut sponge = Cshake256::customized(FS_ABSORB_TAG);
         sponge.absorb(&[state.len() as u8]);
         sponge.absorb(state);
         sponge.absorb(&[label.len() as u8]);
         sponge.absorb(label);
         sponge.absorb(&[third_len as u8]);
         sponge.absorb(step);
-        let nonce_at = sponge.pos;
+        let nonce_at = sponge.position();
         sponge.absorb(&[0; 8]);
-        sponge.pad();
         Self::OneBlock {
-            seeded: sponge.lanes,
+            seeded: sponge.padded_lanes(),
             lane: nonce_at / 8,
             shift: 8 * (nonce_at % 8) as u32,
         }
@@ -3992,12 +3826,11 @@ mod nonce_absorber_tests {
 
     #[test]
     fn grind_padding_combines_domain_and_final_bit_in_last_byte() {
-        let mut sponge = CshakeSponge::new(FS_ABSORB_TAG);
-        sponge.absorb(&[0xa5; KECCAK_RATE_BYTES - 1]);
-        let mut expected = sponge.lanes;
+        let mut sponge = Cshake256::customized(FS_ABSORB_TAG);
+        sponge.absorb(&[0xa5; SHAKE256_RATE_BYTES - 1]);
+        let mut expected = *sponge.lanes();
         expected[16] ^= 0x84 << 56;
-        sponge.pad();
-        assert_eq!(sponge.lanes, expected);
+        assert_eq!(sponge.padded_lanes(), expected);
     }
 
     #[test]
@@ -4006,11 +3839,11 @@ mod nonce_absorber_tests {
         for _ in 0..2_000 {
             let len = (rng.next() % 500) as usize;
             let msg: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
-            let mut bytewise = CshakeSponge::new(FS_ABSORB_TAG);
+            let mut bytewise = Cshake256::customized(FS_ABSORB_TAG);
             for &b in &msg {
-                bytewise.absorb_byte(b);
+                bytewise.absorb(&[b]);
             }
-            let mut split = CshakeSponge::new(FS_ABSORB_TAG);
+            let mut split = Cshake256::customized(FS_ABSORB_TAG);
             let mut rest = msg.as_slice();
             while !rest.is_empty() {
                 let take = 1 + (rng.next() as usize) % rest.len().min(150);

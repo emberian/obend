@@ -1234,10 +1234,9 @@ pub fn apply_patch(v: &ViewNode, patch: &ViewPatch) -> Result<ViewNode, PatchErr
             _ => Err(PatchError::HostShapeMismatch),
         },
         ViewPatch::PatchAdept(inner_patch) => match v {
-            ViewNode::Adept(inner) => Ok(ViewNode::Adept(Box::new(apply_patch(
-                inner,
-                inner_patch,
-            )?))),
+            ViewNode::Adept(inner) => {
+                Ok(ViewNode::Adept(Box::new(apply_patch(inner, inner_patch)?)))
+            }
             _ => Err(PatchError::AdeptShapeMismatch),
         },
     }
@@ -1251,9 +1250,15 @@ pub fn apply_patch(v: &ViewNode, patch: &ViewPatch) -> Result<ViewNode, PatchErr
 /// (`obend/lean/Obend/Vault/FrustumMembrane.lean:661`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Disposition {
-    Sever { snapshot_digest: u64 },
-    Attenuate { allowed_slots: BTreeSet<(String, usize)> },
-    Interpose { label: String },
+    Sever {
+        snapshot_digest: u64,
+    },
+    Attenuate {
+        allowed_slots: BTreeSet<(String, usize)>,
+    },
+    Interpose {
+        label: String,
+    },
     Tether,
 }
 
@@ -1298,11 +1303,19 @@ impl WorldState {
     }
 
     pub fn get(&self, cell: &str, slot: usize) -> u64 {
-        self.slots.get(&(cell.to_owned(), slot)).copied().unwrap_or(0)
+        self.slots
+            .get(&(cell.to_owned(), slot))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
-fn read_visible_slot(frustum: &Frustum, state: &WorldState, cell: &str, slot: usize) -> Option<u64> {
+fn read_visible_slot(
+    frustum: &Frustum,
+    state: &WorldState,
+    cell: &str,
+    slot: usize,
+) -> Option<u64> {
     if frustum.visible_slots.contains(&(cell.to_owned(), slot)) {
         Some(state.get(cell, slot))
     } else {

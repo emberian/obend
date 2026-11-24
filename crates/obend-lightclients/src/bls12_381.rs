@@ -19,7 +19,9 @@
 //! `fixture_*` signing helpers are deterministic test fixtures, NOT constant time, and must never
 //! be used with real secret keys.
 
-use crate::bigint::{limbs_add, limbs_bit, limbs_bits, limbs_from_hex, limbs_ge, limbs_is_zero, Limbs, Mont};
+use crate::bigint::{
+    limbs_add, limbs_bit, limbs_bits, limbs_from_hex, limbs_ge, limbs_is_zero, Limbs, Mont,
+};
 use std::sync::OnceLock;
 
 /// Ethereum consensus proof-of-possession ciphersuite DST.
@@ -239,7 +241,10 @@ impl Fp {
     }
     fn from_hex(h: &str) -> Self {
         let l = limbs_from_hex::<6>(h);
-        assert!(!limbs_ge(&l, ctx().fp.modulus()), "Fp::from_hex: constant >= p");
+        assert!(
+            !limbs_ge(&l, ctx().fp.modulus()),
+            "Fp::from_hex: constant >= p"
+        );
         Fp(ctx().fp.to_mont(&l))
     }
     fn canon(&self) -> Limbs<6> {
@@ -251,7 +256,7 @@ impl Fp {
     fn from_be_reduce(b: &[u8]) -> Self {
         Fp(ctx().fp.from_be_reduce(b))
     }
-    fn to_be48(&self) -> [u8; 48] {
+    fn to_be48(self) -> [u8; 48] {
         let v = ctx().fp.to_be(&self.0, 48);
         let mut o = [0u8; 48];
         o.copy_from_slice(&v);
@@ -382,16 +387,32 @@ struct Fp6 {
 
 impl Field for Fp6 {
     fn zero() -> Self {
-        Fp6 { c0: Fp2::zero(), c1: Fp2::zero(), c2: Fp2::zero() }
+        Fp6 {
+            c0: Fp2::zero(),
+            c1: Fp2::zero(),
+            c2: Fp2::zero(),
+        }
     }
     fn one() -> Self {
-        Fp6 { c0: Fp2::one(), c1: Fp2::zero(), c2: Fp2::zero() }
+        Fp6 {
+            c0: Fp2::one(),
+            c1: Fp2::zero(),
+            c2: Fp2::zero(),
+        }
     }
     fn add(&self, o: &Self) -> Self {
-        Fp6 { c0: self.c0.add(&o.c0), c1: self.c1.add(&o.c1), c2: self.c2.add(&o.c2) }
+        Fp6 {
+            c0: self.c0.add(&o.c0),
+            c1: self.c1.add(&o.c1),
+            c2: self.c2.add(&o.c2),
+        }
     }
     fn sub(&self, o: &Self) -> Self {
-        Fp6 { c0: self.c0.sub(&o.c0), c1: self.c1.sub(&o.c1), c2: self.c2.sub(&o.c2) }
+        Fp6 {
+            c0: self.c0.sub(&o.c0),
+            c1: self.c1.sub(&o.c1),
+            c2: self.c2.sub(&o.c2),
+        }
     }
     fn mul(&self, o: &Self) -> Self {
         let (a0, a1, a2) = (&self.c0, &self.c1, &self.c2);
@@ -399,21 +420,43 @@ impl Field for Fp6 {
         let t0 = a0.mul(b0);
         let t1 = a1.mul(b1);
         let t2 = a2.mul(b2);
-        let c0 = a1.add(a2).mul(&b1.add(b2)).sub(&t1).sub(&t2).mul_xi().add(&t0);
-        let c1 = a0.add(a1).mul(&b0.add(b1)).sub(&t0).sub(&t1).add(&t2.mul_xi());
+        let c0 = a1
+            .add(a2)
+            .mul(&b1.add(b2))
+            .sub(&t1)
+            .sub(&t2)
+            .mul_xi()
+            .add(&t0);
+        let c1 = a0
+            .add(a1)
+            .mul(&b0.add(b1))
+            .sub(&t0)
+            .sub(&t1)
+            .add(&t2.mul_xi());
         let c2 = a0.add(a2).mul(&b0.add(b2)).sub(&t0).sub(&t2).add(&t1);
         Fp6 { c0, c1, c2 }
     }
     fn neg(&self) -> Self {
-        Fp6 { c0: self.c0.neg(), c1: self.c1.neg(), c2: self.c2.neg() }
+        Fp6 {
+            c0: self.c0.neg(),
+            c1: self.c1.neg(),
+            c2: self.c2.neg(),
+        }
     }
     fn inv(&self) -> Self {
         let (c0, c1, c2) = (&self.c0, &self.c1, &self.c2);
         let t0 = c0.sqr().sub(&c1.mul(c2).mul_xi());
         let t1 = c2.sqr().mul_xi().sub(&c0.mul(c1));
         let t2 = c1.sqr().sub(&c0.mul(c2));
-        let d = c0.mul(&t0).add(&c2.mul(&t1).add(&c1.mul(&t2)).mul_xi()).inv();
-        Fp6 { c0: t0.mul(&d), c1: t1.mul(&d), c2: t2.mul(&d) }
+        let d = c0
+            .mul(&t0)
+            .add(&c2.mul(&t1).add(&c1.mul(&t2)).mul_xi())
+            .inv();
+        Fp6 {
+            c0: t0.mul(&d),
+            c1: t1.mul(&d),
+            c2: t2.mul(&d),
+        }
     }
     fn is_zero(&self) -> bool {
         self.c0.is_zero() && self.c1.is_zero() && self.c2.is_zero()
@@ -423,7 +466,11 @@ impl Field for Fp6 {
 impl Fp6 {
     /// Multiply by `v` (`v^3 = xi`).
     fn mul_by_v(&self) -> Self {
-        Fp6 { c0: self.c2.mul_xi(), c1: self.c0, c2: self.c1 }
+        Fp6 {
+            c0: self.c2.mul_xi(),
+            c1: self.c0,
+            c2: self.c1,
+        }
     }
 }
 
@@ -435,29 +482,55 @@ struct Fp12 {
 
 impl Field for Fp12 {
     fn zero() -> Self {
-        Fp12 { c0: Fp6::zero(), c1: Fp6::zero() }
+        Fp12 {
+            c0: Fp6::zero(),
+            c1: Fp6::zero(),
+        }
     }
     fn one() -> Self {
-        Fp12 { c0: Fp6::one(), c1: Fp6::zero() }
+        Fp12 {
+            c0: Fp6::one(),
+            c1: Fp6::zero(),
+        }
     }
     fn add(&self, o: &Self) -> Self {
-        Fp12 { c0: self.c0.add(&o.c0), c1: self.c1.add(&o.c1) }
+        Fp12 {
+            c0: self.c0.add(&o.c0),
+            c1: self.c1.add(&o.c1),
+        }
     }
     fn sub(&self, o: &Self) -> Self {
-        Fp12 { c0: self.c0.sub(&o.c0), c1: self.c1.sub(&o.c1) }
+        Fp12 {
+            c0: self.c0.sub(&o.c0),
+            c1: self.c1.sub(&o.c1),
+        }
     }
     fn mul(&self, o: &Self) -> Self {
         let t0 = self.c0.mul(&o.c0);
         let t1 = self.c1.mul(&o.c1);
-        let c1 = self.c0.add(&self.c1).mul(&o.c0.add(&o.c1)).sub(&t0).sub(&t1);
-        Fp12 { c0: t0.add(&t1.mul_by_v()), c1 }
+        let c1 = self
+            .c0
+            .add(&self.c1)
+            .mul(&o.c0.add(&o.c1))
+            .sub(&t0)
+            .sub(&t1);
+        Fp12 {
+            c0: t0.add(&t1.mul_by_v()),
+            c1,
+        }
     }
     fn neg(&self) -> Self {
-        Fp12 { c0: self.c0.neg(), c1: self.c1.neg() }
+        Fp12 {
+            c0: self.c0.neg(),
+            c1: self.c1.neg(),
+        }
     }
     fn inv(&self) -> Self {
         let d = self.c0.sqr().sub(&self.c1.sqr().mul_by_v()).inv();
-        Fp12 { c0: self.c0.mul(&d), c1: self.c1.mul(&d).neg() }
+        Fp12 {
+            c0: self.c0.mul(&d),
+            c1: self.c1.mul(&d).neg(),
+        }
     }
     fn is_zero(&self) -> bool {
         self.c0.is_zero() && self.c1.is_zero()
@@ -467,7 +540,10 @@ impl Field for Fp12 {
 impl Fp12 {
     /// `f^(p^6)`: `w -> -w`.
     fn conj(&self) -> Self {
-        Fp12 { c0: self.c0, c1: self.c1.neg() }
+        Fp12 {
+            c0: self.c0,
+            c1: self.c1.neg(),
+        }
     }
 }
 
@@ -500,7 +576,11 @@ struct Aff<F> {
 
 impl<F: CurveField> Aff<F> {
     fn identity() -> Self {
-        Aff { x: F::zero(), y: F::zero(), inf: true }
+        Aff {
+            x: F::zero(),
+            y: F::zero(),
+            inf: true,
+        }
     }
     #[cfg(test)]
     fn on_curve(&self) -> bool {
@@ -510,14 +590,22 @@ impl<F: CurveField> Aff<F> {
         if self.inf {
             *self
         } else {
-            Aff { x: self.x, y: self.y.neg(), inf: false }
+            Aff {
+                x: self.x,
+                y: self.y.neg(),
+                inf: false,
+            }
         }
     }
-    fn to_jac(&self) -> Jac<F> {
+    fn to_jac(self) -> Jac<F> {
         if self.inf {
             Jac::identity()
         } else {
-            Jac { x: self.x, y: self.y, z: F::one() }
+            Jac {
+                x: self.x,
+                y: self.y,
+                z: F::one(),
+            }
         }
     }
 }
@@ -532,18 +620,26 @@ struct Jac<F> {
 
 impl<F: CurveField> Jac<F> {
     fn identity() -> Self {
-        Jac { x: F::one(), y: F::one(), z: F::zero() }
+        Jac {
+            x: F::one(),
+            y: F::one(),
+            z: F::zero(),
+        }
     }
     fn is_identity(&self) -> bool {
         self.z.is_zero()
     }
-    fn to_affine(&self) -> Aff<F> {
+    fn to_affine(self) -> Aff<F> {
         if self.is_identity() {
             return Aff::identity();
         }
         let zi = self.z.inv();
         let zi2 = zi.sqr();
-        Aff { x: self.x.mul(&zi2), y: self.y.mul(&zi2.mul(&zi)), inf: false }
+        Aff {
+            x: self.x.mul(&zi2),
+            y: self.y.mul(&zi2.mul(&zi)),
+            inf: false,
+        }
     }
     /// `dbl-2009-l` (a = 0).
     fn double(&self) -> Self {
@@ -559,7 +655,11 @@ impl<F: CurveField> Jac<F> {
         let x3 = f.sub(&d.dbl());
         let y3 = e.mul(&d.sub(&x3)).sub(&c.dbl().dbl().dbl());
         let z3 = self.y.mul(&self.z).dbl();
-        Jac { x: x3, y: y3, z: z3 }
+        Jac {
+            x: x3,
+            y: y3,
+            z: z3,
+        }
     }
     /// `add-2007-bl` with the doubling / inverse cases handled.
     fn add(&self, o: &Self) -> Self {
@@ -576,7 +676,11 @@ impl<F: CurveField> Jac<F> {
         let s1 = self.y.mul(&o.z).mul(&z2z2);
         let s2 = o.y.mul(&self.z).mul(&z1z1);
         if u1 == u2 {
-            return if s1 == s2 { self.double() } else { Jac::identity() };
+            return if s1 == s2 {
+                self.double()
+            } else {
+                Jac::identity()
+            };
         }
         let h = u2.sub(&u1);
         let i = h.dbl().sqr();
@@ -586,7 +690,11 @@ impl<F: CurveField> Jac<F> {
         let x3 = rr.sqr().sub(&j).sub(&v.dbl());
         let y3 = rr.mul(&v.sub(&x3)).sub(&s1.mul(&j).dbl());
         let z3 = self.z.add(&o.z).sqr().sub(&z1z1).sub(&z2z2).mul(&h);
-        Jac { x: x3, y: y3, z: z3 }
+        Jac {
+            x: x3,
+            y: y3,
+            z: z3,
+        }
     }
     fn mul_limbs<const M: usize>(&self, k: &Limbs<M>) -> Self {
         let mut acc = Jac::identity();
@@ -675,7 +783,11 @@ fn split_flags(b0: u8) -> Result<(bool, bool), BlsError> {
 }
 
 fn g1_generator_aff() -> Aff<Fp> {
-    Aff { x: Fp::from_hex(G1_X_HEX), y: Fp::from_hex(G1_Y_HEX), inf: false }
+    Aff {
+        x: Fp::from_hex(G1_X_HEX),
+        y: Fp::from_hex(G1_Y_HEX),
+        inf: false,
+    }
 }
 
 fn g2_generator_aff() -> Aff<Fp2> {
@@ -751,7 +863,12 @@ fn decode_g1_unchecked(b: &[u8; 48]) -> Result<Aff<Fp>, BlsError> {
         return Ok(Aff::identity());
     }
     let x = Fp::from_be_strict(&xb).ok_or(BlsError::NonCanonicalField)?;
-    let mut y = x.sqr().mul(&x).add(&Fp::curve_b()).sqrt().ok_or(BlsError::NotOnCurve)?;
+    let mut y = x
+        .sqr()
+        .mul(&x)
+        .add(&Fp::curve_b())
+        .sqrt()
+        .ok_or(BlsError::NotOnCurve)?;
     if y.lex_largest() != sign {
         y = y.neg();
     }
@@ -771,7 +888,12 @@ fn decode_g2_unchecked(b: &[u8; 96]) -> Result<Aff<Fp2>, BlsError> {
     let c1 = Fp::from_be_strict(&xb[..48]).ok_or(BlsError::NonCanonicalField)?;
     let c0 = Fp::from_be_strict(&xb[48..]).ok_or(BlsError::NonCanonicalField)?;
     let x = Fp2::new(c0, c1);
-    let mut y = x.sqr().mul(&x).add(&Fp2::curve_b()).sqrt().ok_or(BlsError::NotOnCurve)?;
+    let mut y = x
+        .sqr()
+        .mul(&x)
+        .add(&Fp2::curve_b())
+        .sqrt()
+        .ok_or(BlsError::NotOnCurve)?;
     if y.lex_largest() != sign {
         y = y.neg();
     }
@@ -781,7 +903,9 @@ fn decode_g2_unchecked(b: &[u8; 96]) -> Result<Aff<Fp2>, BlsError> {
 /// Cheap curve-decode + sum of compressed G1 keys WITHOUT running 255-bit `[r]P` subgroup scalar
 /// multiplications — used ONLY to verify a candidate committee's SSZ commitment against a trusted
 /// `SyncCommittee` root BEFORE paying for full [`key_validate`] subgroup checks (anti-DoS).
-pub(crate) fn aggregate_g1_compressed_unchecked(pubkeys: &[[u8; 48]]) -> Result<[u8; 48], BlsError> {
+pub(crate) fn aggregate_g1_compressed_unchecked(
+    pubkeys: &[[u8; 48]],
+) -> Result<[u8; 48], BlsError> {
     if pubkeys.is_empty() {
         return Err(BlsError::IdentityPublicKey);
     }
@@ -832,7 +956,10 @@ fn expand_message_xmd(msg: &[u8], dst: &[u8], len: usize) -> Vec<u8> {
         dst
     };
     let ell = len.div_ceil(32);
-    assert!(ell <= 255 && len <= 65535, "expand_message_xmd: output too long");
+    assert!(
+        ell <= 255 && len <= 65535,
+        "expand_message_xmd: output too long"
+    );
     let mut dst_prime = dst.to_vec();
     dst_prime.push(dst.len() as u8);
     let mut m = vec![0u8; 64];
@@ -876,7 +1003,12 @@ fn sswu_e2(u: &Fp2) -> Aff<Fp2> {
         Some(y) => (x1, y),
         None => {
             let x2 = zu2.mul(&x1);
-            (x2, g(&x2).sqrt().expect("SSWU: g(x2) is square when g(x1) is not"))
+            (
+                x2,
+                g(&x2)
+                    .sqrt()
+                    .expect("SSWU: g(x2) is square when g(x1) is not"),
+            )
         }
     };
     if u.sgn0() != y.sgn0() {
@@ -905,14 +1037,29 @@ fn iso3_map(p: &Aff<Fp2>) -> Aff<Fp2> {
     let x = p.x;
     let x2 = x.sqr();
     let x3 = x2.mul(&x);
-    let x_num = k[1][3].mul(&x3).add(&k[1][2].mul(&x2)).add(&k[1][1].mul(&x)).add(&k[1][0]);
+    let x_num = k[1][3]
+        .mul(&x3)
+        .add(&k[1][2].mul(&x2))
+        .add(&k[1][1].mul(&x))
+        .add(&k[1][0]);
     let x_den = x2.add(&k[2][1].mul(&x)).add(&k[2][0]);
-    let y_num = k[3][3].mul(&x3).add(&k[3][2].mul(&x2)).add(&k[3][1].mul(&x)).add(&k[3][0]);
-    let y_den = x3.add(&k[4][2].mul(&x2)).add(&k[4][1].mul(&x)).add(&k[4][0]);
+    let y_num = k[3][3]
+        .mul(&x3)
+        .add(&k[3][2].mul(&x2))
+        .add(&k[3][1].mul(&x))
+        .add(&k[3][0]);
+    let y_den = x3
+        .add(&k[4][2].mul(&x2))
+        .add(&k[4][1].mul(&x))
+        .add(&k[4][0]);
     if x_den.is_zero() || y_den.is_zero() {
         return Aff::identity();
     }
-    Aff { x: x_num.mul(&x_den.inv()), y: p.y.mul(&y_num).mul(&y_den.inv()), inf: false }
+    Aff {
+        x: x_num.mul(&x_den.inv()),
+        y: p.y.mul(&y_num).mul(&y_den.inv()),
+        inf: false,
+    }
 }
 
 fn map_to_curve_g2(u: &Fp2) -> Aff<Fp2> {
@@ -922,7 +1069,9 @@ fn map_to_curve_g2(u: &Fp2) -> Aff<Fp2> {
 /// RFC 9380 `BLS12381G2_XMD:SHA-256_SSWU_RO_` with the given DST.
 pub fn hash_to_g2(msg: &[u8], dst: &[u8]) -> G2Affine {
     let [u0, u1] = hash_to_field_fp2(msg, dst);
-    let r = map_to_curve_g2(&u0).to_jac().add(&map_to_curve_g2(&u1).to_jac());
+    let r = map_to_curve_g2(&u0)
+        .to_jac()
+        .add(&map_to_curve_g2(&u1).to_jac());
     G2Affine(r.mul_limbs(&ctx().h_eff).to_affine())
 }
 
@@ -935,8 +1084,16 @@ pub fn hash_to_g2(msg: &[u8], dst: &[u8]) -> G2Affine {
 /// `l * w^3 = (lam * x_T - y_T) - lam * x_P * v + y_P * v * w`.
 fn line_eval(lam: &Fp2, t: &Aff<Fp2>, p: &Aff<Fp>) -> Fp12 {
     Fp12 {
-        c0: Fp6 { c0: lam.mul(&t.x).sub(&t.y), c1: lam.mul_fp(&p.x).neg(), c2: Fp2::zero() },
-        c1: Fp6 { c0: Fp2::zero(), c1: Fp2::new(p.y, Fp::zero()), c2: Fp2::zero() },
+        c0: Fp6 {
+            c0: lam.mul(&t.x).sub(&t.y),
+            c1: lam.mul_fp(&p.x).neg(),
+            c2: Fp2::zero(),
+        },
+        c1: Fp6 {
+            c0: Fp2::zero(),
+            c1: Fp2::new(p.y, Fp::zero()),
+            c2: Fp2::zero(),
+        },
     }
 }
 
@@ -953,7 +1110,11 @@ fn miller_loop(pairs: &[(Aff<Fp>, Aff<Fp2>)]) -> Fp12 {
             f = f.mul(&line_eval(&lam, t, p));
             let x3 = lam.sqr().sub(&t.x.dbl());
             let y3 = lam.mul(&t.x.sub(&x3)).sub(&t.y);
-            *t = Aff { x: x3, y: y3, inf: false };
+            *t = Aff {
+                x: x3,
+                y: y3,
+                inf: false,
+            };
         }
         if (X_ABS >> i) & 1 == 1 {
             for (t, (p, q)) in ts.iter_mut().zip(pairs.iter()) {
@@ -961,7 +1122,11 @@ fn miller_loop(pairs: &[(Aff<Fp>, Aff<Fp2>)]) -> Fp12 {
                 f = f.mul(&line_eval(&lam, t, p));
                 let x3 = lam.sqr().sub(&t.x).sub(&q.x);
                 let y3 = lam.mul(&t.x.sub(&x3)).sub(&t.y);
-                *t = Aff { x: x3, y: y3, inf: false };
+                *t = Aff {
+                    x: x3,
+                    y: y3,
+                    inf: false,
+                };
             }
         }
     }
@@ -977,7 +1142,11 @@ fn final_exponentiation(f: &Fp12) -> Fp12 {
 }
 
 fn pairing_product(pairs: &[(Aff<Fp>, Aff<Fp2>)]) -> Fp12 {
-    let v: Vec<(Aff<Fp>, Aff<Fp2>)> = pairs.iter().filter(|(p, q)| !p.inf && !q.inf).copied().collect();
+    let v: Vec<(Aff<Fp>, Aff<Fp2>)> = pairs
+        .iter()
+        .filter(|(p, q)| !p.inf && !q.inf)
+        .copied()
+        .collect();
     if v.is_empty() {
         return Fp12::one();
     }
@@ -996,7 +1165,9 @@ pub fn pairing_product_is_one(pairs: &[(G1Affine, G2Affine)]) -> bool {
 
 /// Sum of G1 points (identity for the empty slice).
 pub fn aggregate_g1(points: &[G1Affine]) -> G1Affine {
-    let s = points.iter().fold(Jac::<Fp>::identity(), |acc, p| acc.add(&p.0.to_jac()));
+    let s = points
+        .iter()
+        .fold(Jac::<Fp>::identity(), |acc, p| acc.add(&p.0.to_jac()));
     G1Affine(s.to_affine())
 }
 
@@ -1067,7 +1238,12 @@ fn fixture_scalar(sk: &[u8; 32]) -> Limbs<4> {
 
 /// TEST FIXTURE (NOT constant time): `[sk mod r] G1`, compressed. Panics if `sk = 0 mod r`.
 pub fn fixture_sk_to_pk(sk: &[u8; 32]) -> [u8; 48] {
-    encode_g1(&g1_generator_aff().to_jac().mul_limbs(&fixture_scalar(sk)).to_affine())
+    encode_g1(
+        &g1_generator_aff()
+            .to_jac()
+            .mul_limbs(&fixture_scalar(sk))
+            .to_affine(),
+    )
 }
 
 /// TEST FIXTURE (NOT constant time): `[sk mod r] H(msg)` under [`DST_POP`], compressed.

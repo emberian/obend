@@ -32,8 +32,12 @@ pub mod goldilocks;
 pub mod pikkufold;
 pub mod transcript;
 
-use canopy::{CanopyError, CanopyHashCollision, CanopyOpenedColumn, extract_canopy_hash_collision_with};
-use pikkufold::{LatticeError, LatticeParams, RingElem, SisCollisionWitness, extract_sis_collision};
+use canopy::{
+    CanopyError, CanopyHashCollision, CanopyOpenedColumn, extract_canopy_hash_collision_with,
+};
+use pikkufold::{
+    LatticeError, LatticeParams, RingElem, SisCollisionWitness, extract_sis_collision,
+};
 
 /// Product witness returned constructively by `extract_dual_forgery` (`HashBreak × SisBreak`,
 /// closing `F2` without `Classical` or pigeonhole `Prop` erasure!).
@@ -218,7 +222,10 @@ mod redteam_and_bench_tests {
         .expect("must extract concrete HashBreak x SisBreak");
 
         // Verify extracted HashBreak is genuine concrete collision data
-        assert_ne!(dual_break.hash_break.preimage_a, dual_break.hash_break.preimage_b);
+        assert_ne!(
+            dual_break.hash_break.preimage_a,
+            dual_break.hash_break.preimage_b
+        );
         assert_eq!(
             toy_hash(&dual_break.hash_break.preimage_a),
             dual_break.hash_break.shared_digest
@@ -278,7 +285,8 @@ mod redteam_and_bench_tests {
         let mut forged_b = honest_receipt.clone();
         let const_table = vec![Goldilocks::from_u64_reduced(7); 16];
         let const_canopy = canopy_commit(&canopy_params, num_vars, &const_table, None).unwrap();
-        let const_ring = pack_goldilocks_to_ring_witness(&const_table, lattice_params.cols).unwrap();
+        let const_ring =
+            pack_goldilocks_to_ring_witness(&const_table, lattice_params.cols).unwrap();
         let const_lat = commit_ring_witness(&lattice_params, &const_ring).unwrap();
         forged_b.canopy_commitment = const_canopy.commitment;
         forged_b.lattice_commitment = const_lat;
@@ -333,13 +341,15 @@ mod redteam_and_bench_tests {
     #[test]
     fn test_f5_forgery_omitted_eval_point_and_binary_non_udr_proximity_rejected() {
         // Binary additive outside UDR is rejected (`2026/2424`)
-        assert!(CanopyParams::new(
-            DomainKind::BinaryAdditive,
-            ProximityRegime::JohnsonBound,
-            4,
-            32
-        )
-        .is_err());
+        assert!(
+            CanopyParams::new(
+                DomainKind::BinaryAdditive,
+                ProximityRegime::JohnsonBound,
+                4,
+                32
+            )
+            .is_err()
+        );
 
         // Mutating evaluation point after opening is deterministically rejected by `canopy_verify`
         let params = CanopyParams::default_128bit();
@@ -365,7 +375,15 @@ mod redteam_and_bench_tests {
             .bind_relation("CANOPY.F5", &[0x55u8; 32], b"v=8")
             .bind_instance(&st.commitment.to_transcript_bytes(), wrong_val, &wrong_pt);
         assert!(
-            canopy_verify(&params, &st.commitment, &wrong_pt, wrong_val, &prf, &mut v_tr).is_err(),
+            canopy_verify(
+                &params,
+                &st.commitment,
+                &wrong_pt,
+                wrong_val,
+                &prf,
+                &mut v_tr
+            )
+            .is_err(),
             "proof bound to `pt` cannot verify at `wrong_pt`"
         );
     }
@@ -458,16 +476,18 @@ mod redteam_and_bench_tests {
         bad_salt_prf.order_openings[0].canopy_bind_limbs[0] = Goldilocks::from_u64_reduced(
             bad_salt_prf.order_openings[0].canopy_bind_limbs[0].to_canonical_u64() ^ 1,
         );
-        assert!(verify_dark_bazaar_same_opening(
-            &vk,
-            &cp,
-            &lp,
-            &market,
-            &smudge,
-            &committed_orders,
-            &bad_salt_prf
-        )
-        .is_err());
+        assert!(
+            verify_dark_bazaar_same_opening(
+                &vk,
+                &cp,
+                &lp,
+                &market,
+                &smudge,
+                &committed_orders,
+                &bad_salt_prf
+            )
+            .is_err()
+        );
 
         // Tamper 2: non-zero primal-dual KKT gap (`fills = [5, 5]` or `[0, 0]`) -> rejected!
         assert!(matches!(
@@ -487,16 +507,18 @@ mod redteam_and_bench_tests {
         ));
         let mut subopt_prf = bazaar_prf;
         subopt_prf.order_fills = vec![5, 5];
-        assert!(verify_dark_bazaar_same_opening(
-            &vk,
-            &cp,
-            &lp,
-            &market,
-            &smudge,
-            &committed_orders,
-            &subopt_prf
-        )
-        .is_err());
+        assert!(
+            verify_dark_bazaar_same_opening(
+                &vk,
+                &cp,
+                &lp,
+                &market,
+                &smudge,
+                &committed_orders,
+                &subopt_prf
+            )
+            .is_err()
+        );
     }
 
     /// **Red-Team `F7`**: `Choe–Kang–Stehlé (2026/2546)` unsmudged decryption, `< 40`-bit drowning,
@@ -770,8 +792,7 @@ mod redteam_and_bench_tests {
             let verify_us = t_ver.elapsed().as_micros();
 
             let mut ip_tr = base_tr.clone();
-            let iprf =
-                prove_independent_merkle_baseline(&c_params, &st, &pt, &mut ip_tr).unwrap();
+            let iprf = prove_independent_merkle_baseline(&c_params, &st, &pt, &mut ip_tr).unwrap();
             let mut iv_tr = base_tr;
             let ind_stats = verify_independent_merkle_baseline(
                 &c_params,
@@ -870,9 +891,7 @@ mod redteam_and_bench_tests {
         println!(
             "[METRICS][Sumcheck Ext2 v={v_sc} (N=16384)] prove={sc_prove_us}us verify={sc_verify_us}us"
         );
-        println!(
-            "[METRICS][PikkuFold 0-mul Kronecker Fold 256xRing64] {kron_us}us"
-        );
+        println!("[METRICS][PikkuFold 0-mul Kronecker Fold 256xRing64] {kron_us}us");
         println!(
             "[METRICS][DualPcsReceipt v={v_dual} (Canopy + Akita R_q64)] prove={dual_prove_ms:.2}ms verify={dual_ver_ms:.2}ms | DetCbor size={}B enc={cbor_enc_us}us dec={cbor_dec_us}us | canopy_hashes={}",
             cbor_bytes.len(),

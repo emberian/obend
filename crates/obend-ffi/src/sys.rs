@@ -130,8 +130,8 @@ const _: () = {
 #[cfg(not(feature = "stub"))]
 #[inline]
 unsafe fn lean_ctor_get(o: *const std::ffi::c_void, idx: usize) -> *mut std::ffi::c_void {
-    let fields =
-        (o as *const u8).add(std::mem::size_of::<LeanObjectHeader>()) as *const *mut std::ffi::c_void;
+    let fields = (o as *const u8).add(std::mem::size_of::<LeanObjectHeader>())
+        as *const *mut std::ffi::c_void;
     *fields.add(idx)
 }
 
@@ -237,7 +237,9 @@ mod tests {
 
     /// Cycles through all 256 byte values (131 is odd), from an offset that depends on `len`.
     fn pattern(len: usize) -> Vec<u8> {
-        (0..len).map(|i| (i.wrapping_mul(131).wrapping_add(len) % 256) as u8).collect()
+        (0..len)
+            .map(|i| (i.wrapping_mul(131).wrapping_add(len) % 256) as u8)
+            .collect()
     }
 
     /// The object is a fresh exclusive `ByteArray` of exactly `bytes`; then release it.
@@ -319,11 +321,21 @@ pub mod stub {
         rcpt
     }
 
+    /// # Safety
+    /// No requirements: the stub has no Lean runtime. `unsafe` matches the linked signature.
     pub unsafe fn lean_initialize_runtime_module() {}
+    /// # Safety
+    /// No requirements: the stub has no Lean runtime. `unsafe` matches the linked signature.
     pub unsafe fn lean_initialize_thread() {}
+    /// # Safety
+    /// No requirements: the stub has no Lean runtime. `unsafe` matches the linked signature.
     pub unsafe fn lean_finalize_thread() {}
+    /// # Safety
+    /// No requirements: the stub has no Lean runtime. `unsafe` matches the linked signature.
     pub unsafe fn obend_ensure_lean_thread() {}
 
+    /// # Safety
+    /// The configuration is not read. Release the returned session with [`obend_session_free`].
     pub unsafe fn obend_session_init(_config_ptr: *const u8, _config_len: usize) -> *mut Session {
         let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let stub = Box::new(StubSession {
@@ -336,12 +348,19 @@ pub mod stub {
         Box::into_raw(stub) as *mut Session
     }
 
+    /// # Safety
+    /// `session` must be null or a pointer from [`obend_session_init`] that has not been freed,
+    /// and it must not be used afterwards.
     pub unsafe fn obend_session_free(session: *mut Session) {
         if !session.is_null() {
             let _ = Box::from_raw(session as *mut StubSession);
         }
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`]. A non-null input pointer must be
+    /// readable for its length, and non-null output pointers must be writable. A buffer returned
+    /// through `out_ptr` belongs to the session and is valid until its next call.
     pub unsafe fn obend_eval_cell(
         session: *mut Session,
         cell_ptr: *const u8,
@@ -364,6 +383,10 @@ pub mod stub {
         -10
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`]. A non-null input pointer must be
+    /// readable for its length, and non-null output pointers must be writable. A buffer returned
+    /// through `out_ptr` belongs to the session and is valid until its next call.
     pub unsafe fn obend_turn_propose(
         session: *mut Session,
         turn_ptr: *const u8,
@@ -394,6 +417,9 @@ pub mod stub {
         0
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`]. A non-null input pointer must be
+    /// readable for its length.
     pub unsafe fn obend_turn_commit(
         session: *mut Session,
         turn_id_ptr: *const u8,
@@ -423,6 +449,10 @@ pub mod stub {
         }
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`]. A non-null input pointer must be
+    /// readable for its length, and non-null output pointers must be writable. A buffer returned
+    /// through `out_ptr` belongs to the session and is valid until its next call.
     pub unsafe fn obend_project_hardware(
         session: *mut Session,
         hw_ptr: *const u8,
@@ -445,6 +475,9 @@ pub mod stub {
         -10
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`]. A non-null input pointer must be
+    /// readable for its length.
     pub unsafe fn obend_verify_receipt(
         session: *mut Session,
         receipt_ptr: *const u8,
@@ -462,6 +495,9 @@ pub mod stub {
         -10
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`]. Non-null output pointers must be
+    /// writable. The returned buffer belongs to the session and is valid until its next call.
     pub unsafe fn obend_get_last_error(
         session: *mut Session,
         out_ptr: *mut *mut u8,
@@ -483,6 +519,10 @@ pub mod stub {
         0
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`]. A non-null input pointer must be
+    /// readable for its length, and non-null output pointers must be writable. A buffer returned
+    /// through `out_ptr` belongs to the session and is valid until its next call.
     pub unsafe fn obend_view_affordances(
         session: *mut Session,
         query_ptr: *const u8,
@@ -505,6 +545,10 @@ pub mod stub {
         -10
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`]. A non-null input pointer must be
+    /// readable for its length, and non-null output pointers must be writable. A buffer returned
+    /// through `out_ptr` belongs to the session and is valid until its next call.
     pub unsafe fn obend_cell_pop_lean(
         session: *mut Session,
         cell_ptr: *const u8,
@@ -527,6 +571,10 @@ pub mod stub {
         -10
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`]. A non-null input pointer must be
+    /// readable for its length, and non-null output pointers must be writable. A buffer returned
+    /// through `out_ptr` belongs to the session and is valid until its next call.
     pub unsafe fn obend_cell_weave_cert(
         session: *mut Session,
         cert_ptr: *const u8,
@@ -546,6 +594,8 @@ pub mod stub {
         -10
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`].
     pub unsafe fn call_workbook_step_json(
         session: *mut Session,
         req: &[u8],
@@ -564,6 +614,8 @@ pub mod stub {
         Err(-10)
     }
 
+    /// # Safety
+    /// `session` must be null or live from [`obend_session_init`].
     pub unsafe fn call_workbook_scrub_cell_json(
         session: *mut Session,
         req: &[u8],

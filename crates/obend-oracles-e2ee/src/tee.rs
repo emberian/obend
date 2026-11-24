@@ -20,7 +20,9 @@ use crate::curves::{
     der_encode, der_encode_uint, der_uint, verify_ecdsa_raw, verify_signature, FixtureSigner,
     HashAlg, SignatureAlgorithm, SubjectPublicKey,
 };
-use crate::sha256::{base64_decode_strict, ct_eq, hex_decode_strict, hex_encode_lower, sha256, Sha256};
+use crate::sha256::{
+    base64_decode_strict, ct_eq, hex_decode_strict, hex_encode_lower, sha256, Sha256,
+};
 use crate::sha512::sha384;
 
 // ---------------------------------------------------------------------------
@@ -142,8 +144,11 @@ impl KeyUsage {
     }
 }
 
-/// Parse one strict DER TLV returning `(tag, full_raw_tlv, value_slice, rest_slice)`.
-fn parse_der_tlv_raw(input: &[u8]) -> Option<(u8, &[u8], &[u8], &[u8])> {
+/// One DER TLV as `(tag, full_raw_tlv, value_slice, rest_slice)`.
+type DerTlvRaw<'a> = (u8, &'a [u8], &'a [u8], &'a [u8]);
+
+/// Parse one strict DER TLV.
+fn parse_der_tlv_raw(input: &[u8]) -> Option<DerTlvRaw<'_>> {
     let &tag = input.first()?;
     if tag & 0x1f == 0x1f {
         return None;
@@ -1047,15 +1052,31 @@ pub enum CertChainError {
     UnsupportedCriticalExtension,
     RootAnchorMismatch,
     RootNotSelfIssued,
-    IssuerSubjectMismatch { index: usize },
-    NotValidAtReferenceTime { index: usize },
-    BadChainSignature { index: usize },
+    IssuerSubjectMismatch {
+        index: usize,
+    },
+    NotValidAtReferenceTime {
+        index: usize,
+    },
+    BadChainSignature {
+        index: usize,
+    },
     MalformedBasicConstraintsDer,
     MalformedKeyUsageDer,
-    MissingCaBasicConstraints { index: usize },
-    NonCaIssuer { index: usize },
-    MissingKeyCertSign { index: usize },
-    PathLenConstraintExceeded { index: usize, max_allowed: u8, actual: usize },
+    MissingCaBasicConstraints {
+        index: usize,
+    },
+    NonCaIssuer {
+        index: usize,
+    },
+    MissingKeyCertSign {
+        index: usize,
+    },
+    PathLenConstraintExceeded {
+        index: usize,
+        max_allowed: u8,
+        actual: usize,
+    },
     LeafMustNotBeCa,
     LeafMissingDigitalSignature,
 }
@@ -1645,13 +1666,14 @@ fn cbor_decode_item(buf: &[u8], pos: &mut usize, depth: usize) -> Option<CborVal
         5 => {
             let maybe_len = cbor_read_arg(buf, pos, ai)?;
             let mut entries: Vec<(CborVal, CborVal)> = Vec::new();
-            let push_unique = |entries: &mut Vec<(CborVal, CborVal)>, k: CborVal, v: CborVal| -> Option<()> {
-                if entries.iter().any(|(ek, _)| ek == &k) {
-                    return None;
-                }
-                entries.push((k, v));
-                Some(())
-            };
+            let push_unique =
+                |entries: &mut Vec<(CborVal, CborVal)>, k: CborVal, v: CborVal| -> Option<()> {
+                    if entries.iter().any(|(ek, _)| ek == &k) {
+                        return None;
+                    }
+                    entries.push((k, v));
+                    Some(())
+                };
             match maybe_len {
                 Some(len) => {
                     let n = usize::try_from(len).ok()?;
@@ -2039,8 +2061,7 @@ impl AmdSnpCrl {
         if alg_tag != 0x30 {
             return Err(TeeError::SnpMalformedCrlDer);
         }
-        let (sig_tag, sig_val, rest) =
-            parse_der_tlv(rest).ok_or(TeeError::SnpMalformedCrlDer)?;
+        let (sig_tag, sig_val, rest) = parse_der_tlv(rest).ok_or(TeeError::SnpMalformedCrlDer)?;
         if sig_tag != 0x03 || !rest.is_empty() || sig_val.first() != Some(&0x00) {
             return Err(TeeError::SnpMalformedCrlDer);
         }
@@ -2073,8 +2094,7 @@ impl AmdSnpCrl {
         let issuer = parse_x509_name_der(iss_body).ok_or(TeeError::SnpMalformedCrlDer)?;
         cur = next;
 
-        let (last_update, next) =
-            parse_x509_time_tlv(cur).ok_or(TeeError::SnpMalformedCrlDer)?;
+        let (last_update, next) = parse_x509_time_tlv(cur).ok_or(TeeError::SnpMalformedCrlDer)?;
         let (next_update, mut cur) =
             parse_x509_time_tlv(next).ok_or(TeeError::SnpMalformedCrlDer)?;
 
@@ -2096,10 +2116,8 @@ impl AmdSnpCrl {
                 if stag != 0x02 {
                     return Err(TeeError::SnpMalformedCrlDer);
                 }
-                let ser =
-                    parse_x509_serial_bytes(sval).ok_or(TeeError::SnpMalformedCrlDer)?;
-                let (_, erest) =
-                    parse_x509_time_tlv(erest).ok_or(TeeError::SnpMalformedCrlDer)?;
+                let ser = parse_x509_serial_bytes(sval).ok_or(TeeError::SnpMalformedCrlDer)?;
+                let (_, erest) = parse_x509_time_tlv(erest).ok_or(TeeError::SnpMalformedCrlDer)?;
                 if !erest.is_empty() {
                     let (ext_tag, ext_seq, end_r) =
                         parse_der_tlv(erest).ok_or(TeeError::SnpMalformedCrlDer)?;
@@ -2566,7 +2584,12 @@ pub fn parse_intel_tdx_quote(quote: &[u8]) -> Result<ParsedIntelTdxQuote, TeeErr
             let body_type = u16::from_le_bytes([quote[48], quote[49]]);
             let body_size = le_u32(quote, 50) as usize;
             match (body_type, body_size) {
-                (2, TDX_TD10_BODY_LEN) => (&quote[54..54 + TDX_TD10_BODY_LEN], 54 + TDX_TD10_BODY_LEN, None, None),
+                (2, TDX_TD10_BODY_LEN) => (
+                    &quote[54..54 + TDX_TD10_BODY_LEN],
+                    54 + TDX_TD10_BODY_LEN,
+                    None,
+                    None,
+                ),
                 (3, TDX_TD15_BODY_LEN) => {
                     let end = 54 + TDX_TD15_BODY_LEN;
                     let b = quote.get(54..end).ok_or(TeeError::TdxMalformedQuote)?;
@@ -2643,7 +2666,8 @@ pub fn parse_intel_tdx_quote(quote: &[u8]) -> Result<ParsedIntelTdxQuote, TeeErr
     let mut qe_report_body = [0u8; SGX_QE_REPORT_BODY_LEN];
     qe_report_body.copy_from_slice(&qe_box[0..SGX_QE_REPORT_BODY_LEN]);
     let mut qe_report_signature = [0u8; 64];
-    qe_report_signature.copy_from_slice(&qe_box[SGX_QE_REPORT_BODY_LEN..SGX_QE_REPORT_BODY_LEN + 64]);
+    qe_report_signature
+        .copy_from_slice(&qe_box[SGX_QE_REPORT_BODY_LEN..SGX_QE_REPORT_BODY_LEN + 64]);
     let auth_sz_off = SGX_QE_REPORT_BODY_LEN + 64;
     let auth_sz = u16::from_le_bytes([qe_box[auth_sz_off], qe_box[auth_sz_off + 1]]) as usize;
     let auth_data_start = auth_sz_off + 2;
@@ -2659,7 +2683,8 @@ pub fn parse_intel_tdx_quote(quote: &[u8]) -> Result<ParsedIntelTdxQuote, TeeErr
         .get(auth_data_end..auth_data_end + 6)
         .ok_or(TeeError::TdxMalformedQuote)?;
     let inner_cert_type = u16::from_le_bytes([inner_hdr[0], inner_hdr[1]]);
-    let inner_cert_size = u32::from_le_bytes([inner_hdr[2], inner_hdr[3], inner_hdr[4], inner_hdr[5]]) as usize;
+    let inner_cert_size =
+        u32::from_le_bytes([inner_hdr[2], inner_hdr[3], inner_hdr[4], inner_hdr[5]]) as usize;
     let pem_start = auth_data_end + 6;
     if inner_cert_type != 5 || pem_start.checked_add(inner_cert_size) != Some(qe_box.len()) {
         return Err(TeeError::TdxMalformedQuote);
@@ -2678,7 +2703,9 @@ pub fn parse_intel_tdx_quote(quote: &[u8]) -> Result<ParsedIntelTdxQuote, TeeErr
     // DCAP quote cert_type=5 carries `[PCK Leaf, PCK CA, Intel SGX Root CA]`; normalize to root-first.
     if certs.len() >= 2
         && certs[0].subject_der() != certs[0].issuer_der()
-        && certs.last().is_some_and(|c| c.subject_der() == c.issuer_der())
+        && certs
+            .last()
+            .is_some_and(|c| c.subject_der() == c.issuer_der())
     {
         certs.reverse();
     }
@@ -2862,9 +2889,7 @@ enum OcspResponderId {
 /// Pure-Rust FIPS 180-4 SHA-1 used **solely** for RFC 6960 §4.2.1 `ResponderID.byKey` (`KeyHash`
 /// 20-byte public-key identifier matching; NEVER used for cryptographic signature verification).
 fn sha1_rfc6960_key_hash(data: &[u8]) -> [u8; 20] {
-    let mut h: [u32; 5] = [
-        0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0,
-    ];
+    let mut h: [u32; 5] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
     let bit_len = (data.len() as u64).wrapping_mul(8);
     let mut padded = Vec::with_capacity((data.len() + 9 + 63) & !63);
     padded.extend_from_slice(data);
@@ -2873,7 +2898,7 @@ fn sha1_rfc6960_key_hash(data: &[u8]) -> [u8; 20] {
         padded.push(0);
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 80];
         for i in 0..16 {
             w[i] = u32::from_be_bytes([
@@ -2948,8 +2973,7 @@ impl NvidiaOcspResponse {
         if otag != 0x30 || !oend.is_empty() {
             return Err(TeeError::GpuMalformedOcspDer);
         }
-        let (st_tag, st_val, rest) =
-            parse_der_tlv(obody).ok_or(TeeError::GpuMalformedOcspDer)?;
+        let (st_tag, st_val, rest) = parse_der_tlv(obody).ok_or(TeeError::GpuMalformedOcspDer)?;
         if st_tag != 0x0A || st_val != [0x00] {
             return Err(TeeError::GpuMalformedOcspDer);
         }
@@ -3269,7 +3293,11 @@ impl<'a> XmlParser<'a> {
         }
     }
     fn expect(&mut self, lit: &str) -> Option<()> {
-        if self.eat(lit) { Some(()) } else { None }
+        if self.eat(lit) {
+            Some(())
+        } else {
+            None
+        }
     }
     fn ws(&mut self) -> bool {
         let start = self.at;
@@ -3305,10 +3333,8 @@ impl<'a> XmlParser<'a> {
             _ => {
                 let code = if let Some(h) = body.strip_prefix("#x") {
                     u32::from_str_radix(h, 16).ok()?
-                } else if let Some(d) = body.strip_prefix('#') {
-                    d.parse::<u32>().ok()?
                 } else {
-                    return None;
+                    body.strip_prefix('#')?.parse::<u32>().ok()?
                 };
                 let c = char::from_u32(code)?;
                 if (c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r') {
@@ -3376,7 +3402,8 @@ impl<'a> XmlParser<'a> {
                 }
                 decls.push((String::new(), av));
             } else if let Some(p) = an.strip_prefix("xmlns:") {
-                if av.is_empty() || p == "xml" || p == "xmlns" || !seen_decls.insert(p.to_string()) {
+                if av.is_empty() || p == "xml" || p == "xmlns" || !seen_decls.insert(p.to_string())
+                {
                     return None;
                 }
                 decls.push((p.to_string(), av));
@@ -3384,7 +3411,10 @@ impl<'a> XmlParser<'a> {
                 if an.starts_with("xml:") || !seen_attrs.insert(an.clone()) {
                     return None;
                 }
-                attrs.push(XmlAttr { qname: an, value: av });
+                attrs.push(XmlAttr {
+                    qname: an,
+                    value: av,
+                });
             }
         }
         let mut kids = Vec::new();
@@ -3824,7 +3854,9 @@ pub fn verify_nvidia_rim_swid(
     }
     if certs.len() >= 2
         && certs[0].subject_der() != certs[0].issuer_der()
-        && certs.last().is_some_and(|c| c.subject_der() == c.issuer_der())
+        && certs
+            .last()
+            .is_some_and(|c| c.subject_der() == c.issuer_der())
     {
         certs.reverse();
     }
@@ -4005,9 +4037,7 @@ fn check_ocsp_chain_good(
                             || del.not_before() > now_secs
                             || del.not_after() < now_secs
                             || !del.has_ocsp_signing_eku()
-                            || !del
-                                .key_usage()
-                                .is_some_and(KeyUsage::digital_signature)
+                            || !del.key_usage().is_some_and(KeyUsage::digital_signature)
                             || del.basic_constraints().is_some_and(|bc| bc.is_ca)
                         {
                             return Err(TeeError::GpuOcspSignatureInvalid);
@@ -4109,7 +4139,12 @@ pub fn verify_nvidia_gpu(
         if !rim.colloquial_version.eq_ignore_ascii_case(expected_ver) {
             return Err(TeeError::GpuRimVersionMismatch);
         }
-        check_ocsp_chain_good(&rim.cert_chain_root_to_leaf, 1, &att.ocsp_responses, now_secs)?;
+        check_ocsp_chain_good(
+            &rim.cert_chain_root_to_leaf,
+            1,
+            &att.ocsp_responses,
+            now_secs,
+        )?;
     }
 
     let spdm_fwid = report.fwid().ok_or(TeeError::GpuMissingFwid)?;
@@ -4124,13 +4159,12 @@ pub fn verify_nvidia_gpu(
     if drv_rim.active_measurements.is_empty() && vbios_rim.active_measurements.is_empty() {
         return Err(TeeError::GpuMissingGoldenMeasurement(0));
     }
-    let mut covered_indices = BTreeSet::new();
-    for (&idx, _) in &drv_rim.active_measurements {
-        covered_indices.insert(idx);
-    }
-    for (&idx, _) in &vbios_rim.active_measurements {
-        covered_indices.insert(idx);
-    }
+    let covered_indices: BTreeSet<_> = drv_rim
+        .active_measurements
+        .keys()
+        .chain(vbios_rim.active_measurements.keys())
+        .copied()
+        .collect();
     for (&idx, measured) in &report.measurements {
         if covered_indices.contains(&idx) {
             if let Some(drv_vals) = drv_rim.active_measurements.get(&idx) {
@@ -4143,7 +4177,9 @@ pub fn verify_nvidia_gpu(
                     return Err(TeeError::GpuMeasurementMismatch(idx));
                 }
             }
-        } else if drv_rim.inactive_indices.contains(&idx) || vbios_rim.inactive_indices.contains(&idx) {
+        } else if drv_rim.inactive_indices.contains(&idx)
+            || vbios_rim.inactive_indices.contains(&idx)
+        {
             // Inactive RIM slots must report all-zero SHA-384 blocks (matching `tee-verify/src/nvidia_rim.rs:977`).
             if measured.len() != 48 || measured.iter().any(|&b| b != 0) {
                 return Err(TeeError::GpuMeasurementMismatch(idx));
@@ -4266,7 +4302,11 @@ pub fn fixture_issue_cert_der(
     }
     if let Some(fwid) = &spec.dice_fwid {
         let fwid_ext = der_encode(0x30, &der_encode(0x04, fwid));
-        exts.extend_from_slice(&encode_extension_der(OID_TCG_DICE_TCB_INFO, false, &fwid_ext));
+        exts.extend_from_slice(&encode_extension_der(
+            OID_TCG_DICE_TCB_INFO,
+            false,
+            &fwid_ext,
+        ));
     }
     if let Some((tcb, hw_id)) = &spec.amd_vcek_ext {
         exts.extend_from_slice(&encode_extension_der(
@@ -4365,7 +4405,10 @@ pub fn fixture_issue_ocsp_der(
     sha256_alg.extend_from_slice(&[0x05, 0x00]);
     let mut cert_id = der_encode(0x30, &sha256_alg);
     cert_id.extend_from_slice(&der_encode(0x04, &sha256(issuer_cert.subject_der())));
-    cert_id.extend_from_slice(&der_encode(0x04, &sha256(issuer_cert.spki_bitstring_bytes())));
+    cert_id.extend_from_slice(&der_encode(
+        0x04,
+        &sha256(issuer_cert.spki_bitstring_bytes()),
+    ));
     cert_id.extend_from_slice(&der_encode_uint(subject_cert.serial()));
 
     let mut single = der_encode(0x30, &cert_id);
@@ -4485,7 +4528,11 @@ pub fn fixture_build_amd_snp_report(
     vcek_signer: &FixtureSigner,
 ) -> Vec<u8> {
     let mut r = vec![0u8; SNP_REPORT_LEN];
-    let version: u32 = if product == AmdSnpProduct::Turin { 3 } else { 2 };
+    let version: u32 = if product == AmdSnpProduct::Turin {
+        3
+    } else {
+        2
+    };
     r[0x000..0x004].copy_from_slice(&version.to_le_bytes());
     r[0x004..0x008].copy_from_slice(&f.guest_svn.to_le_bytes());
     r[0x008..0x010].copy_from_slice(&f.guest_policy.to_le_bytes());
@@ -4546,7 +4593,14 @@ pub fn fixture_build_intel_tdx_quote(
     quote.extend_from_slice(&[0u8; 20]); // user_data
     assert_eq!(quote.len(), TDX_QUOTE_HEADER_LEN);
 
-    let mut body = vec![0u8; if f.mr_servicetd.is_some() { TDX_TD15_BODY_LEN } else { TDX_TD10_BODY_LEN }];
+    let mut body = vec![
+        0u8;
+        if f.mr_servicetd.is_some() {
+            TDX_TD15_BODY_LEN
+        } else {
+            TDX_TD10_BODY_LEN
+        }
+    ];
     body[120..128].copy_from_slice(&f.td_attributes.to_le_bytes());
     body[136..184].copy_from_slice(&f.mr_td);
     body[328..376].copy_from_slice(&f.rt_mr0);
@@ -4578,7 +4632,9 @@ pub fn fixture_build_intel_tdx_quote(
     }
     let pem_bytes = pem_chain.into_bytes();
 
-    let mut qe_cert_data = Vec::with_capacity(SGX_QE_REPORT_BODY_LEN + 64 + 8 + f.qe_auth_data.len() + pem_bytes.len());
+    let mut qe_cert_data = Vec::with_capacity(
+        SGX_QE_REPORT_BODY_LEN + 64 + 8 + f.qe_auth_data.len() + pem_bytes.len(),
+    );
     qe_cert_data.extend_from_slice(&qe_report);
     qe_cert_data.extend_from_slice(&qe_sig);
     qe_cert_data.extend_from_slice(&(f.qe_auth_data.len() as u16).to_le_bytes());
@@ -4626,7 +4682,11 @@ pub fn fixture_build_nvidia_rim_swid_xml(
         let rim_idx = spdm_idx - 1;
         let mut hash_attrs = String::new();
         for (k, v) in vals.iter().enumerate() {
-            assert_eq!(v.len(), 48, "SWID RIM golden measurement must be 48-byte SHA-384");
+            assert_eq!(
+                v.len(),
+                48,
+                "SWID RIM golden measurement must be 48-byte SHA-384"
+            );
             hash_attrs.push_str(&format!(" ns1:Hash{k}=\"{}\"", hex_encode_lower(v)));
         }
         payload_xml.push_str(&format!(

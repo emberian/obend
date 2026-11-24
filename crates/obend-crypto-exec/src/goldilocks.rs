@@ -48,9 +48,17 @@ pub enum GoldilocksExecError {
     LogLengthExceedsTwoAdicity(u32),
     ZeroBlowupFactor,
     ZeroCosetShift,
-    RoundCountMismatch { expected: usize, actual: usize },
-    DegreeBoundExceeded { max_deg: usize, actual_coeffs: usize },
-    RoundSumCheckFailed { round: usize },
+    RoundCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    DegreeBoundExceeded {
+        max_deg: usize,
+        actual_coeffs: usize,
+    },
+    RoundSumCheckFailed {
+        round: usize,
+    },
     FinalEqEvaluationMismatch,
     EmptyEvaluationTable,
 }
@@ -58,21 +66,40 @@ pub enum GoldilocksExecError {
 impl fmt::Display for GoldilocksExecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidPowerOfTwoLength(n) => write!(f, "length {n} is not a non-zero power of two"),
-            Self::LogLengthExceedsTwoAdicity(k) => write!(f, "log2(N)={k} exceeds Goldilocks 2-adicity 32"),
+            Self::InvalidPowerOfTwoLength(n) => {
+                write!(f, "length {n} is not a non-zero power of two")
+            }
+            Self::LogLengthExceedsTwoAdicity(k) => {
+                write!(f, "log2(N)={k} exceeds Goldilocks 2-adicity 32")
+            }
             Self::ZeroBlowupFactor => write!(f, "LDE blowup factor must be a power of two >= 1"),
             Self::ZeroCosetShift => write!(f, "coset LDE shift must be non-zero in F_p^*"),
             Self::RoundCountMismatch { expected, actual } => {
-                write!(f, "sumcheck round count mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "sumcheck round count mismatch: expected {expected}, got {actual}"
+                )
             }
-            Self::DegreeBoundExceeded { max_deg, actual_coeffs } => {
-                write!(f, "round polynomial has {actual_coeffs} coeffs, exceeding max_deg {max_deg}")
+            Self::DegreeBoundExceeded {
+                max_deg,
+                actual_coeffs,
+            } => {
+                write!(
+                    f,
+                    "round polynomial has {actual_coeffs} coeffs, exceeding max_deg {max_deg}"
+                )
             }
             Self::RoundSumCheckFailed { round } => {
-                write!(f, "sumcheck round {round} failed p(0) + p(1) == claimed_sum")
+                write!(
+                    f,
+                    "sumcheck round {round} failed p(0) + p(1) == claimed_sum"
+                )
             }
             Self::FinalEqEvaluationMismatch => {
-                write!(f, "weighted sumcheck final evaluation disagrees with eq_poly factor")
+                write!(
+                    f,
+                    "weighted sumcheck final evaluation disagrees with eq_poly factor"
+                )
             }
             Self::EmptyEvaluationTable => write!(f, "multilinear table must be non-empty"),
         }
@@ -345,14 +372,28 @@ pub struct GoldilocksExt2 {
 
 impl fmt::Debug for GoldilocksExt2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Ext2({} + {}·u)", self.c0.to_canonical_u64(), self.c1.to_canonical_u64())
+        write!(
+            f,
+            "Ext2({} + {}·u)",
+            self.c0.to_canonical_u64(),
+            self.c1.to_canonical_u64()
+        )
     }
 }
 
 impl GoldilocksExt2 {
-    pub const ZERO: Self = Self { c0: Goldilocks::ZERO, c1: Goldilocks::ZERO };
-    pub const ONE: Self = Self { c0: Goldilocks::ONE, c1: Goldilocks::ZERO };
-    pub const U_BASIS: Self = Self { c0: Goldilocks::ZERO, c1: Goldilocks::ONE };
+    pub const ZERO: Self = Self {
+        c0: Goldilocks::ZERO,
+        c1: Goldilocks::ZERO,
+    };
+    pub const ONE: Self = Self {
+        c0: Goldilocks::ONE,
+        c1: Goldilocks::ZERO,
+    };
+    pub const U_BASIS: Self = Self {
+        c0: Goldilocks::ZERO,
+        c1: Goldilocks::ONE,
+    };
 
     #[inline]
     pub const fn new(c0: Goldilocks, c1: Goldilocks) -> Self {
@@ -361,7 +402,10 @@ impl GoldilocksExt2 {
 
     #[inline]
     pub const fn from_base(c0: Goldilocks) -> Self {
-        Self { c0, c1: Goldilocks::ZERO }
+        Self {
+            c0,
+            c1: Goldilocks::ZERO,
+        }
     }
 
     #[inline]
@@ -383,16 +427,20 @@ impl GoldilocksExt2 {
         let b0 = self.c0.to_be_bytes();
         let b1 = self.c1.to_be_bytes();
         [
-            b0[0], b0[1], b0[2], b0[3], b0[4], b0[5], b0[6], b0[7],
-            b1[0], b1[1], b1[2], b1[3], b1[4], b1[5], b1[6], b1[7],
+            b0[0], b0[1], b0[2], b0[3], b0[4], b0[5], b0[6], b0[7], b1[0], b1[1], b1[2], b1[3],
+            b1[4], b1[5], b1[6], b1[7],
         ]
     }
 
     /// Decode 16 big-endian bytes with strict `CanonicalLift` validation on both coordinates.
     #[inline]
     pub const fn from_be_bytes_canonical(bytes: [u8; 16]) -> Result<Self, CanonicalLiftError> {
-        let b0 = [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
-        let b1 = [bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]];
+        let b0 = [
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ];
+        let b1 = [
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        ];
         let c0 = match Goldilocks::from_be_bytes_canonical(b0) {
             Ok(v) => v,
             Err(e) => return Err(e),
@@ -732,9 +780,11 @@ pub fn coset_lde(
     if c == 0 || !c.is_power_of_two() {
         return Err(GoldilocksExecError::InvalidPowerOfTwoLength(c));
     }
-    let extended_len = c
-        .checked_mul(blowup)
-        .ok_or(GoldilocksExecError::LogLengthExceedsTwoAdicity(GOLDILOCKS_TWO_ADICITY + 1))?;
+    let extended_len =
+        c.checked_mul(blowup)
+            .ok_or(GoldilocksExecError::LogLengthExceedsTwoAdicity(
+                GOLDILOCKS_TWO_ADICITY + 1,
+            ))?;
     let ext_log = extended_len.trailing_zeros();
     if ext_log > GOLDILOCKS_TWO_ADICITY {
         return Err(GoldilocksExecError::LogLengthExceedsTwoAdicity(ext_log));
@@ -782,7 +832,11 @@ pub fn coset_lde_ext2(
 /// Evaluate $\widetilde{\text{eq}}(\mathbf{z}, \mathbf{r}) = \prod_{i=0}^{v-1} ((1 - z_i)(1 - r_i) + z_i r_i)$
 /// at two points in $O(v)$ field operations.
 pub fn eq_poly_at<F: FieldElem>(z: &[F], r: &[F]) -> F {
-    assert_eq!(z.len(), r.len(), "eq_poly_at requires equal-dimension points");
+    assert_eq!(
+        z.len(),
+        r.len(),
+        "eq_poly_at requires equal-dimension points"
+    );
     let mut acc = F::ONE;
     for (&zi, &ri) in z.iter().zip(r.iter()) {
         // (1 - zi)(1 - ri) + zi*ri = 1 - zi - ri + 2*zi*ri
@@ -861,7 +915,11 @@ pub fn fold_first_var_in_place<F: FieldElem>(tbl: &mut Vec<F>, r0: F) {
     let half = tbl.len().div_ceil(2);
     for j in 0..half {
         let lo = tbl[2 * j];
-        let hi = if 2 * j + 1 < tbl.len() { tbl[2 * j + 1] } else { F::ZERO };
+        let hi = if 2 * j + 1 < tbl.len() {
+            tbl[2 * j + 1]
+        } else {
+            F::ZERO
+        };
         tbl[j] = lo + r0 * (hi - lo);
     }
     tbl.truncate(half);
@@ -1252,7 +1310,13 @@ pub fn bytes_to_limbs56(msg: &[u8]) -> Vec<Goldilocks> {
         .as_chunks::<7>()
         .0
         .iter()
-        .map(|chunk| Goldilocks(chunk.iter().fold(0u64, |acc, byte| (acc << 8) | *byte as u64)))
+        .map(|chunk| {
+            Goldilocks(
+                chunk
+                    .iter()
+                    .fold(0u64, |acc, byte| (acc << 8) | *byte as u64),
+            )
+        })
         .collect()
 }
 
@@ -1305,7 +1369,9 @@ mod tests {
     #[test]
     fn test_canonical_lift_rejects_entire_alias_band() {
         assert_eq!(
-            CanonicalLift::try_new(GOLDILOCKS_PRIME - 1).unwrap().value(),
+            CanonicalLift::try_new(GOLDILOCKS_PRIME - 1)
+                .unwrap()
+                .value(),
             GOLDILOCKS_PRIME - 1
         );
         assert!(CanonicalLift::try_new(GOLDILOCKS_PRIME).is_err());
@@ -1360,7 +1426,10 @@ mod tests {
 
         assert_eq!((x + y) * z, x * z + y * z);
         assert_eq!((x * y) * z, x * (y * z));
-        assert_eq!(GoldilocksExt2::U_BASIS.square(), GoldilocksExt2::from_base(Goldilocks::NON_RESIDUE));
+        assert_eq!(
+            GoldilocksExt2::U_BASIS.square(),
+            GoldilocksExt2::from_base(Goldilocks::NON_RESIDUE)
+        );
 
         let x_inv = x.inv().expect("non-zero Ext2 element is invertible");
         assert_eq!(x * x_inv, GoldilocksExt2::ONE);
@@ -1413,7 +1482,9 @@ mod tests {
             .map(|i| Goldilocks::from_u64_reduced((i as u64) * 13 + 5))
             .collect();
         let z: Vec<GoldilocksExt2> = (0..v)
-            .map(|i| GoldilocksExt2::from_canonical_u64_pair(100 + i as u64, 200 + 3 * i as u64).unwrap())
+            .map(|i| {
+                GoldilocksExt2::from_canonical_u64_pair(100 + i as u64, 200 + 3 * i as u64).unwrap()
+            })
             .collect();
 
         // Check hypercube sumcheck
@@ -1432,7 +1503,10 @@ mod tests {
         let (rounds, prover_claim) = prove_multilinear_sumcheck_ext2(&tbl, &mut prover_tr).unwrap();
         let ver_claim = verify_sumcheck_ext2(1, v, claimed_sum, &rounds, &mut verifier_tr).unwrap();
         assert_eq!(prover_claim, ver_claim);
-        assert_eq!(mle_eval_base_at_ext2(&tbl, &ver_claim.point).unwrap(), ver_claim.expected_val);
+        assert_eq!(
+            mle_eval_base_at_ext2(&tbl, &ver_claim.point).unwrap(),
+            ver_claim.expected_val
+        );
 
         // Check eq-weighted sumcheck reducing f(z) = y to f(r) = y_final
         let eval_z = mle_eval_base_at_ext2(&tbl, &z).unwrap();
@@ -1441,7 +1515,8 @@ mod tests {
             .bind_instance(b"mock-comm", eval_z, &z);
         let mut verifier_wtr = prover_wtr.clone();
 
-        let (w_rounds, w_claim) = prove_eq_weighted_sumcheck_ext2(&tbl, &z, &mut prover_wtr).unwrap();
+        let (w_rounds, w_claim) =
+            prove_eq_weighted_sumcheck_ext2(&tbl, &z, &mut prover_wtr).unwrap();
         let w_ver = verify_eq_weighted_sumcheck_ext2(
             &z,
             eval_z,
@@ -1451,7 +1526,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(w_claim, w_ver);
-        assert_eq!(mle_eval_base_at_ext2(&tbl, &w_ver.point).unwrap(), w_ver.expected_val);
+        assert_eq!(
+            mle_eval_base_at_ext2(&tbl, &w_ver.point).unwrap(),
+            w_ver.expected_val
+        );
     }
 
     #[test]
@@ -1482,9 +1560,18 @@ mod tests {
         let mut zero = [Goldilocks::ZERO; 12];
         poseidon2_perm12(&mut zero);
         let expected_zero: [u64; 12] = [
-            11097132300696900493, 4817033503716131495, 7555460377608229031, 224872347733495109,
-            12839575527406164415, 4503213659669793860, 3856907550950136457, 12429174811543629109,
-            2496023140331315972, 14004296959070018086, 17098536311382213852, 11122848566303444518,
+            11097132300696900493,
+            4817033503716131495,
+            7555460377608229031,
+            224872347733495109,
+            12839575527406164415,
+            4503213659669793860,
+            3856907550950136457,
+            12429174811543629109,
+            2496023140331315972,
+            14004296959070018086,
+            17098536311382213852,
+            11122848566303444518,
         ];
         assert_eq!(zero.map(Goldilocks::to_canonical_u64), expected_zero);
 
@@ -1494,11 +1581,23 @@ mod tests {
         }
         poseidon2_perm12(&mut counting);
         let expected_counting: [u64; 12] = [
-            15394614472075140167, 17426717166088917338, 6801718797131174547, 16472111479231588472,
-            17448160488936968945, 17334337553305053015, 8224495231203272238, 10470295389528806840,
-            2356879640365327750, 5001479999475202058, 16968076913882017596, 10007092176717462225,
+            15394614472075140167,
+            17426717166088917338,
+            6801718797131174547,
+            16472111479231588472,
+            17448160488936968945,
+            17334337553305053015,
+            8224495231203272238,
+            10470295389528806840,
+            2356879640365327750,
+            5001479999475202058,
+            16968076913882017596,
+            10007092176717462225,
         ];
-        assert_eq!(counting.map(Goldilocks::to_canonical_u64), expected_counting);
+        assert_eq!(
+            counting.map(Goldilocks::to_canonical_u64),
+            expected_counting
+        );
     }
 
     #[test]
@@ -1507,7 +1606,10 @@ mod tests {
         assert_eq!(limbs, vec![Goldilocks(283686901645312)]);
         poseidon2_pad(&mut limbs);
         let padded: Vec<u64> = limbs.iter().map(|x| x.to_canonical_u64()).collect();
-        assert_eq!(padded, vec![283686901645312, 1, 0, 0, 0, 0, 0, 72057594037927936]);
+        assert_eq!(
+            padded,
+            vec![283686901645312, 1, 0, 0, 0, 0, 0, 72057594037927936]
+        );
         // Seven limbs: start and end marker share the eighth lane.
         let mut seven = vec![Goldilocks::ZERO; 7];
         poseidon2_pad(&mut seven);
@@ -1524,22 +1626,22 @@ mod tests {
         assert_eq!(
             poseidon2_hash32(&[]),
             [
-                98, 50, 199, 227, 113, 250, 97, 21, 153, 172, 101, 152, 3, 218, 74, 102, 125, 82, 16,
-                81, 67, 240, 169, 3, 182, 44, 175, 103, 208, 108, 236, 182,
+                98, 50, 199, 227, 113, 250, 97, 21, 153, 172, 101, 152, 3, 218, 74, 102, 125, 82,
+                16, 81, 67, 240, 169, 3, 182, 44, 175, 103, 208, 108, 236, 182,
             ]
         );
         assert_eq!(
             poseidon2_hash32(&[0x00]),
             [
-                5, 212, 79, 90, 246, 154, 224, 32, 82, 183, 111, 43, 242, 36, 0, 62, 47, 3, 145, 143,
-                202, 209, 65, 236, 138, 142, 242, 94, 112, 126, 127, 119,
+                5, 212, 79, 90, 246, 154, 224, 32, 82, 183, 111, 43, 242, 36, 0, 62, 47, 3, 145,
+                143, 202, 209, 65, 236, 138, 142, 242, 94, 112, 126, 127, 119,
             ]
         );
         assert_eq!(
             poseidon2_hash32(&[0x01, 0x02, 0x03]),
             [
-                145, 131, 157, 142, 227, 174, 48, 41, 30, 211, 105, 211, 177, 29, 194, 184, 170, 56, 57,
-                241, 28, 165, 224, 218, 95, 234, 79, 237, 120, 163, 28, 86,
+                145, 131, 157, 142, 227, 174, 48, 41, 30, 211, 105, 211, 177, 29, 194, 184, 170,
+                56, 57, 241, 28, 165, 224, 218, 95, 234, 79, 237, 120, 163, 28, 86,
             ]
         );
         // 65 bytes: ten message limbs, two rate blocks.
@@ -1547,8 +1649,8 @@ mod tests {
         assert_eq!(
             poseidon2_hash32(&long),
             [
-                229, 231, 194, 177, 87, 165, 63, 177, 245, 133, 98, 146, 205, 194, 227, 85, 207, 215,
-                52, 194, 155, 126, 23, 97, 106, 82, 205, 115, 209, 0, 79, 199,
+                229, 231, 194, 177, 87, 165, 63, 177, 245, 133, 98, 146, 205, 194, 227, 85, 207,
+                215, 52, 194, 155, 126, 23, 97, 106, 82, 205, 115, 209, 0, 79, 199,
             ]
         );
     }

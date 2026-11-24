@@ -36,153 +36,10 @@ pub use deos::*;
 pub use iommu::*;
 pub use outbox::*;
 
+pub use obend_keccak::{cshake256, keccak_f1600, left_encode};
+use obend_keccak::{cshake256_32 as hash, Cshake256};
+
 pub type Digest = [u8; 32];
-const RATE: usize = 136;
-const RC: [u64; 24] = [
-    0x0000000000000001,
-    0x0000000000008082,
-    0x800000000000808a,
-    0x8000000080008000,
-    0x000000000000808b,
-    0x0000000080000001,
-    0x8000000080008081,
-    0x8000000000008009,
-    0x000000000000008a,
-    0x0000000000000088,
-    0x0000000080008009,
-    0x000000008000000a,
-    0x000000008000808b,
-    0x800000000000008b,
-    0x8000000000008089,
-    0x8000000000008003,
-    0x8000000000008002,
-    0x8000000000000080,
-    0x000000000000800a,
-    0x800000008000000a,
-    0x8000000080008081,
-    0x8000000000008080,
-    0x0000000080000001,
-    0x8000000080008008,
-];
-const ROT: [u32; 25] = [
-    0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
-];
-
-pub fn keccak_f1600(a: &mut [u64; 25]) {
-    for rc in RC {
-        let mut c = [0u64; 5];
-        for x in 0..5 {
-            c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
-        }
-        for x in 0..5 {
-            let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
-            for y in 0..5 {
-                a[x + 5 * y] ^= d;
-            }
-        }
-        let mut b = [0u64; 25];
-        for y in 0..5 {
-            for x in 0..5 {
-                b[y + 5 * ((2 * x + 3 * y) % 5)] = a[x + 5 * y].rotate_left(ROT[x + 5 * y]);
-            }
-        }
-        for y in 0..5 {
-            for x in 0..5 {
-                a[x + 5 * y] = b[x + 5 * y] ^ ((!b[(x + 1) % 5 + 5 * y]) & b[(x + 2) % 5 + 5 * y]);
-            }
-        }
-        a[0] ^= rc;
-    }
-}
-
-pub fn left_encode(value: u64, out: &mut [u8; 9]) -> usize {
-    let n = ((64 - value.leading_zeros()).max(1) as usize).div_ceil(8);
-    out[0] = n as u8;
-    for i in 0..n {
-        out[i + 1] = (value >> (8 * (n - i - 1))) as u8;
-    }
-    n + 1
-}
-
-struct Sponge {
-    lanes: [u64; 25],
-    pos: usize,
-}
-impl Sponge {
-    fn new() -> Self {
-        Self {
-            lanes: [0; 25],
-            pos: 0,
-        }
-    }
-    fn absorb(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.lanes[self.pos / 8] ^= (b as u64) << (8 * (self.pos % 8));
-            self.pos += 1;
-            if self.pos == RATE {
-                keccak_f1600(&mut self.lanes);
-                self.pos = 0;
-            }
-        }
-    }
-    fn left(&mut self, n: u64) {
-        let mut bytes = [0; 9];
-        let len = left_encode(n, &mut bytes);
-        self.absorb(&bytes[..len]);
-    }
-    fn encode_string(&mut self, s: &[u8]) {
-        // A Rust slice cannot have a length exceeding isize::MAX; guard the bit conversion.
-        self.left(
-            u64::try_from(s.len())
-                .expect("slice length")
-                .checked_mul(8)
-                .expect("bit length"),
-        );
-        self.absorb(s);
-    }
-    fn finish(mut self, suffix: u8, out: &mut [u8]) {
-        self.lanes[self.pos / 8] ^= (suffix as u64) << (8 * (self.pos % 8));
-        self.lanes[(RATE - 1) / 8] ^= 0x80u64 << (8 * ((RATE - 1) % 8));
-        keccak_f1600(&mut self.lanes);
-        self.pos = 0;
-        for b in out {
-            if self.pos == RATE {
-                keccak_f1600(&mut self.lanes);
-                self.pos = 0;
-            }
-            *b = (self.lanes[self.pos / 8] >> (8 * (self.pos % 8))) as u8;
-            self.pos += 1;
-        }
-    }
-    fn digest(self) -> Digest {
-        let mut out = [0; 32];
-        self.finish(4, &mut out);
-        out
-    }
-}
-fn customized(custom: &[u8]) -> Sponge {
-    let mut s = Sponge::new();
-    if !custom.is_empty() {
-        s.left(RATE as u64);
-        s.encode_string(&[]);
-        s.encode_string(custom);
-        while s.pos != 0 {
-            s.absorb(&[0]);
-        }
-    }
-    s
-}
-pub fn cshake256(custom: &[u8], input: &[u8], out: &mut [u8]) {
-    let mut s = customized(custom);
-    s.absorb(input);
-    s.finish(if custom.is_empty() { 0x1f } else { 0x04 }, out);
-}
-fn hash(custom: &[u8], input: &[u8]) -> Digest {
-    let mut out = [0; 32];
-    cshake256(custom, input, &mut out);
-    out
-}
-
 const K256: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -211,8 +68,8 @@ impl Sha256 {
     pub const fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             block: [0u8; 64],
             block_len: 0,
@@ -223,7 +80,8 @@ impl Sha256 {
         let mut w = [0u32; 64];
         for (i, slot) in w.iter_mut().enumerate().take(16) {
             let off = 4 * i;
-            *slot = u32::from_be_bytes([block[off], block[off + 1], block[off + 2], block[off + 3]]);
+            *slot =
+                u32::from_be_bytes([block[off], block[off + 1], block[off + 2], block[off + 3]]);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
@@ -327,7 +185,7 @@ fn leb(mut n: u64, out: &mut [u8; 10]) -> usize {
         }
     }
 }
-fn field(s: &mut Sponge, bytes: &[u8]) {
+fn field(s: &mut Cshake256, bytes: &[u8]) {
     let mut len = [0; 10];
     let n = leb(bytes.len() as u64, &mut len);
     s.absorb(&len[..n]);
@@ -360,13 +218,13 @@ impl Transcript<Unseeded> {
         if !protocol.is_ascii() {
             return None;
         }
-        let mut s = customized(b"OBEND.CRYPTO.FS.BIND/v1");
+        let mut s = Cshake256::customized(b"OBEND.CRYPTO.FS.BIND/v1");
         field(&mut s, &self.state);
         field(&mut s, protocol);
         field(&mut s, relation);
         field(&mut s, io);
         let mut state = [0; 32];
-        s.finish(4, &mut state);
+        s.squeeze(&mut state);
         Some(Transcript {
             state,
             step: 1,
@@ -376,7 +234,7 @@ impl Transcript<Unseeded> {
 }
 impl Transcript<RelationBound> {
     pub fn absorb(&mut self, label: &[u8], msg: &[u8]) {
-        let mut s = customized(b"OBEND.CRYPTO.FS.ABSORB/v1");
+        let mut s = Cshake256::customized(b"OBEND.CRYPTO.FS.ABSORB/v1");
         field(&mut s, &self.state);
         field(&mut s, label);
         let mut counter = [0; 10];
@@ -386,21 +244,21 @@ impl Transcript<RelationBound> {
         s.absorb(&len[..l]);
         s.absorb(&counter[..n]);
         s.absorb(msg);
-        s.finish(4, &mut self.state);
+        s.squeeze(&mut self.state);
         self.step = self.step.checked_add(1).expect("transcript exhausted");
     }
     pub fn squeeze(&mut self) -> Digest {
-        let mut s = customized(b"OBEND.CRYPTO.FS.SQUEEZE/v1");
+        let mut s = Cshake256::customized(b"OBEND.CRYPTO.FS.SQUEEZE/v1");
         field(&mut s, &self.state);
         let mut counter = [0; 10];
         let n = leb(self.step, &mut counter);
         s.absorb(&counter[..n]);
         let mut out = [0; 32];
-        s.finish(4, &mut out);
-        let mut s = customized(b"OBEND.CRYPTO.FS.RATCHET/v1");
+        s.squeeze(&mut out);
+        let mut s = Cshake256::customized(b"OBEND.CRYPTO.FS.RATCHET/v1");
         field(&mut s, &self.state);
         field(&mut s, &out);
-        s.finish(4, &mut self.state);
+        s.squeeze(&mut self.state);
         self.step = self.step.checked_add(1).expect("transcript exhausted");
         out
     }
@@ -550,28 +408,28 @@ pub struct CanopyBatchOpening<'a> {
     pub iacc: Goldilocks,
 }
 pub fn canopy_leaf(row: &[Goldilocks]) -> Digest {
-    let mut s = customized(b"obend.canopy.leaf.v1");
-    s.left(row.len() as u64);
+    let mut s = Cshake256::customized(b"obend.canopy.leaf.v1");
+    s.absorb_left_encode(row.len() as u64);
     for x in row {
         s.absorb(&x.0.to_be_bytes());
     }
-    s.digest()
+    s.finalize_32()
 }
 pub fn canopy_parent(left: &Digest, right: &Digest) -> Digest {
-    let mut s = customized(b"obend.canopy.node.v1");
+    let mut s = Cshake256::customized(b"obend.canopy.node.v1");
     s.absorb(left);
     s.absorb(right);
-    s.digest()
+    s.finalize_32()
 }
 pub fn canopy_root(depth: u32, cap_height: u32, cap: &[Digest]) -> Digest {
-    let mut s = customized(b"obend.canopy.cap.v1");
+    let mut s = Cshake256::customized(b"obend.canopy.cap.v1");
     s.absorb(&depth.to_be_bytes());
     s.absorb(&cap_height.to_be_bytes());
-    s.left(cap.len() as u64);
+    s.absorb_left_encode(cap.len() as u64);
     for d in cap {
         s.absorb(d);
     }
-    s.digest()
+    s.finalize_32()
 }
 /// Counts every invocation, including leaf hashing. Shared-cap root is one cSHAKE.
 /// Returns (shared-cap, naive), where naive authenticates each query to a binary root.

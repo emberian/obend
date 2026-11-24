@@ -394,13 +394,7 @@ impl<const N: usize> Curve<N> {
         self.fq.from_be_reduce(&digest[..take])
     }
 
-    fn verify(
-        &self,
-        q: &Jac<N>,
-        digest: &[u8],
-        r: &[u8],
-        s: &[u8],
-    ) -> Result<(), CryptoError> {
+    fn verify(&self, q: &Jac<N>, digest: &[u8], r: &[u8], s: &[u8]) -> Result<(), CryptoError> {
         if self.is_inf(q) {
             return Err(CryptoError::PointAtInfinity);
         }
@@ -413,7 +407,9 @@ impl<const N: usize> Curve<N> {
         let u1 = fq.from_mont(&fq.mul(&e, &w));
         let u2 = fq.from_mont(&fq.mul(&r_m, &w));
         let big_r = self.add(&self.mul(&self.g, &u1), &self.mul(q, &u2));
-        let (x, _) = self.to_affine(&big_r).ok_or(CryptoError::SignatureMismatch)?;
+        let (x, _) = self
+            .to_affine(&big_r)
+            .ok_or(CryptoError::SignatureMismatch)?;
         let v = fq.from_be_reduce(&self.fp.to_be(&x, self.len));
         if v == r_m {
             Ok(())
@@ -584,7 +580,10 @@ impl SubjectPublicKey {
             Self::Rsa { n, e } => {
                 let mut body = der_encode_uint(n);
                 body.extend_from_slice(&der_encode_uint(e));
-                ([OID_RSA_ENCRYPTION, DER_NULL].concat(), der_encode(0x30, &body))
+                (
+                    [OID_RSA_ENCRYPTION, DER_NULL].concat(),
+                    der_encode(0x30, &body),
+                )
             }
             Self::Ed25519(p) => (OID_ED25519.to_vec(), p.to_vec()),
         };
@@ -625,34 +624,34 @@ const ALGID_RSA_SHA384: &[u8] = &[
 /// RSASSA-PSS AlgorithmIdentifiers exactly as emitted by OpenSSL / pyca (hash & MGF1 AlgIds carry
 /// explicit NULL parameters; saltLength = hLen; trailerField omitted = 1).
 const ALGID_PSS_SHA256: &[u8] = &[
-    0x30, 0x41, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x34,
-    0xa0, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-    0x05, 0x00, 0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01,
-    0x01, 0x08, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-    0x05, 0x00, 0xa2, 0x03, 0x02, 0x01, 0x20,
+    0x30, 0x41, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x34, 0xa0,
+    0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,
+    0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0xa2, 0x03,
+    0x02, 0x01, 0x20,
 ];
 const ALGID_PSS_SHA384: &[u8] = &[
-    0x30, 0x41, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x34,
-    0xa0, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
-    0x05, 0x00, 0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01,
-    0x01, 0x08, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
-    0x05, 0x00, 0xa2, 0x03, 0x02, 0x01, 0x30,
+    0x30, 0x41, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x34, 0xa0,
+    0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00,
+    0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0xa2, 0x03,
+    0x02, 0x01, 0x30,
 ];
 /// RSASSA-PSS AlgorithmIdentifiers with explicit `[3] trailerField = 1` (`a3 03 02 01 01`), as
 /// emitted by real AMD KDS Genoa/Milan/Turin ARK & ASK RSA-4096 certificates.
 const ALGID_PSS_SHA256_TF1: &[u8] = &[
-    0x30, 0x46, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x39,
-    0xa0, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-    0x05, 0x00, 0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01,
-    0x01, 0x08, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-    0x05, 0x00, 0xa2, 0x03, 0x02, 0x01, 0x20, 0xa3, 0x03, 0x02, 0x01, 0x01,
+    0x30, 0x46, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x39, 0xa0,
+    0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,
+    0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0xa2, 0x03,
+    0x02, 0x01, 0x20, 0xa3, 0x03, 0x02, 0x01, 0x01,
 ];
 const ALGID_PSS_SHA384_TF1: &[u8] = &[
-    0x30, 0x46, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x39,
-    0xa0, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
-    0x05, 0x00, 0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01,
-    0x01, 0x08, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
-    0x05, 0x00, 0xa2, 0x03, 0x02, 0x01, 0x30, 0xa3, 0x03, 0x02, 0x01, 0x01,
+    0x30, 0x46, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x39, 0xa0,
+    0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00,
+    0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0xa2, 0x03,
+    0x02, 0x01, 0x30, 0xa3, 0x03, 0x02, 0x01, 0x01,
 ];
 const ALGID_ED25519: &[u8] = &[0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70];
 
@@ -686,10 +685,18 @@ impl SignatureAlgorithm {
         }
         // RFC 4055 §3.1 structural RSASSA-PSS AlgorithmIdentifier parser (accepting absent or NULL
         // parameters inside SHA-256/SHA-384 hashAlgorithm and mgf1 AlgorithmIdentifiers).
-        const OID_RSASSA_PSS: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a];
-        const OID_MGF1: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08];
-        const OID_SHA256_TLV: &[u8] = &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
-        const OID_SHA384_TLV: &[u8] = &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02];
+        const OID_RSASSA_PSS: &[u8] = &[
+            0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a,
+        ];
+        const OID_MGF1: &[u8] = &[
+            0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08,
+        ];
+        const OID_SHA256_TLV: &[u8] = &[
+            0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+        ];
+        const OID_SHA384_TLV: &[u8] = &[
+            0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
+        ];
         if let Some(params_tlv) = body.strip_prefix(OID_RSASSA_PSS) {
             let (pseq, end) = der_expect(params_tlv, 0x30)?;
             if !end.is_empty() {
@@ -718,7 +725,9 @@ impl SignatureAlgorithm {
             if !mend.is_empty() {
                 return Err(CryptoError::MalformedDer);
             }
-            let mgf_param = m_body.strip_prefix(OID_MGF1).ok_or(CryptoError::UnsupportedAlgorithm)?;
+            let mgf_param = m_body
+                .strip_prefix(OID_MGF1)
+                .ok_or(CryptoError::UnsupportedAlgorithm)?;
             if parse_sha2_alg(mgf_param)? != hash_alg {
                 return Err(CryptoError::UnsupportedAlgorithm);
             }
@@ -727,10 +736,8 @@ impl SignatureAlgorithm {
             if !send.is_empty() || der_uint(s_int)? != [hash_alg.output_len() as u8] {
                 return Err(CryptoError::UnsupportedAlgorithm);
             }
-            if !rem.is_empty() {
-                if rem != [0xa3, 0x03, 0x02, 0x01, 0x01] {
-                    return Err(CryptoError::UnsupportedAlgorithm);
-                }
+            if !rem.is_empty() && rem != [0xa3, 0x03, 0x02, 0x01, 0x01] {
+                return Err(CryptoError::UnsupportedAlgorithm);
             }
             return Ok(match hash_alg {
                 HashAlg::Sha256 => Self::RsaPssSha256,
@@ -804,7 +811,9 @@ pub fn verify_signature(
             rsa::verify_pss(n, e, alg.hash(), msg, sig, alg.hash().output_len())
         }
         (SubjectPublicKey::Ed25519(pk), A::Ed25519) => {
-            let sig: &[u8; 64] = sig.try_into().map_err(|_| CryptoError::BadSignatureLength)?;
+            let sig: &[u8; 64] = sig
+                .try_into()
+                .map_err(|_| CryptoError::BadSignatureLength)?;
             if ed25519::verify_strict(pk, msg, sig) {
                 Ok(())
             } else {
@@ -907,7 +916,9 @@ impl FixtureSigner {
                 out.copy_from_slice(&c.encode_sec1(&c.mul(&c.g, d)));
                 SubjectPublicKey::P384(out)
             }
-            FixtureKey::Ed25519(seed) => SubjectPublicKey::Ed25519(ed25519::fixture_public_key(seed)),
+            FixtureKey::Ed25519(seed) => {
+                SubjectPublicKey::Ed25519(ed25519::fixture_public_key(seed))
+            }
             FixtureKey::Rsa(k) => SubjectPublicKey::Rsa {
                 n: k.n(),
                 e: vec![0x01, 0x00, 0x01],
@@ -918,8 +929,12 @@ impl FixtureSigner {
     /// Fixed-width `r ‖ s` ECDSA signature. Panics if the key is not ECDSA for `alg`.
     pub fn sign_ecdsa_raw(&self, alg: SignatureAlgorithm, msg: &[u8]) -> Vec<u8> {
         let (r, s) = match (&self.key, alg) {
-            (FixtureKey::P256(d), SignatureAlgorithm::EcdsaP256Sha256) => p256().sign(d, &sha256(msg)),
-            (FixtureKey::P384(d), SignatureAlgorithm::EcdsaP384Sha384) => p384().sign(d, &sha384(msg)),
+            (FixtureKey::P256(d), SignatureAlgorithm::EcdsaP256Sha256) => {
+                p256().sign(d, &sha256(msg))
+            }
+            (FixtureKey::P384(d), SignatureAlgorithm::EcdsaP384Sha384) => {
+                p384().sign(d, &sha384(msg))
+            }
             _ => panic!("FixtureSigner::sign_ecdsa_raw: key/algorithm mismatch"),
         };
         [r, s].concat()
@@ -929,7 +944,8 @@ impl FixtureSigner {
     pub fn sign(&self, alg: SignatureAlgorithm, msg: &[u8]) -> Vec<u8> {
         use SignatureAlgorithm as A;
         match (&self.key, alg) {
-            (FixtureKey::P256(_), A::EcdsaP256Sha256) | (FixtureKey::P384(_), A::EcdsaP384Sha384) => {
+            (FixtureKey::P256(_), A::EcdsaP256Sha256)
+            | (FixtureKey::P384(_), A::EcdsaP384Sha384) => {
                 let raw = self.sign_ecdsa_raw(alg, msg);
                 let (r, s) = raw.split_at(raw.len() / 2);
                 encode_ecdsa_der(r, s)
@@ -975,14 +991,22 @@ mod tests {
             "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721",
         ))
         .unwrap();
-        let SubjectPublicKey::P256(pk) = s.public_key() else { panic!() };
+        let SubjectPublicKey::P256(pk) = s.public_key() else {
+            panic!()
+        };
         assert_eq!(
             pk.to_vec(),
             h("0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb67903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299")
         );
         let sig = s.sign_ecdsa_raw(SignatureAlgorithm::EcdsaP256Sha256, b"sample");
         assert_eq!(sig, h("efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8"));
-        assert!(verify_ecdsa_raw(&s.public_key(), SignatureAlgorithm::EcdsaP256Sha256, b"sample", &sig).is_ok());
+        assert!(verify_ecdsa_raw(
+            &s.public_key(),
+            SignatureAlgorithm::EcdsaP256Sha256,
+            b"sample",
+            &sig
+        )
+        .is_ok());
 
         let s = FixtureSigner::p384_from_scalar(&h(
             "6b9d3dad2e1b8c1c05b19875b6659f4de23c3b667bf297ba9aa47740787137d896d5724e4c70a825f872c9ea60d2edf5",
@@ -990,7 +1014,13 @@ mod tests {
         .unwrap();
         let sig = s.sign_ecdsa_raw(SignatureAlgorithm::EcdsaP384Sha384, b"sample");
         assert_eq!(sig, h("94edbb92a5ecb8aad4736e56c691916b3f88140666ce9fa73d64c4ea95ad133c81a648152e44acf96e36dd1e80fabe4699ef4aeb15f178cea1fe40db2603138f130e740a19624526203b6351d0a3a94fa329c145786e679e7b82c71a38628ac8"));
-        assert!(verify_ecdsa_raw(&s.public_key(), SignatureAlgorithm::EcdsaP384Sha384, b"sample", &sig).is_ok());
+        assert!(verify_ecdsa_raw(
+            &s.public_key(),
+            SignatureAlgorithm::EcdsaP384Sha384,
+            b"sample",
+            &sig
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1003,7 +1033,12 @@ mod tests {
         let n = h("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
         // r = 0, s = 0, s = n, r = n refused before any curve arithmetic.
         let zero = [0u8; 32];
-        for (r, s_) in [(&zero[..], &raw[32..]), (&raw[..32], &zero[..]), (&raw[..32], &n[..]), (&n[..], &raw[32..])] {
+        for (r, s_) in [
+            (&zero[..], &raw[32..]),
+            (&raw[..32], &zero[..]),
+            (&raw[..32], &n[..]),
+            (&n[..], &raw[32..]),
+        ] {
             let sig = [r, s_].concat();
             assert_eq!(
                 verify_ecdsa_raw(&pk, SignatureAlgorithm::EcdsaP256Sha256, msg, &sig),
@@ -1013,13 +1048,21 @@ mod tests {
         // Malleated s' = n - s is a valid ECDSA signature mathematically; we accept it (FIPS 186-5
         // has no low-s rule) but it must still verify only for the same message.
         // Off-curve point: flip one bit of Y.
-        let SubjectPublicKey::P256(mut bad) = pk.clone() else { panic!() };
+        let SubjectPublicKey::P256(mut bad) = pk.clone() else {
+            panic!()
+        };
         bad[64] ^= 1;
         assert_eq!(
             SubjectPublicKey::from_spki_der(&SubjectPublicKey::P256(bad).to_spki_der()),
             Err(CryptoError::PointNotOnCurve)
         );
-        assert!(verify_ecdsa_raw(&SubjectPublicKey::P256(bad), SignatureAlgorithm::EcdsaP256Sha256, msg, &raw).is_err());
+        assert!(verify_ecdsa_raw(
+            &SubjectPublicKey::P256(bad),
+            SignatureAlgorithm::EcdsaP256Sha256,
+            msg,
+            &raw
+        )
+        .is_err());
         // Key/algorithm confusion is refused.
         assert_eq!(
             verify_ecdsa_raw(&pk, SignatureAlgorithm::EcdsaP384Sha384, msg, &[0u8; 96]),
@@ -1032,26 +1075,56 @@ mod tests {
         let s = FixtureSigner::p384(b"der");
         let msg = b"der-check";
         let der = s.sign(SignatureAlgorithm::EcdsaP384Sha384, msg);
-        assert!(verify_signature(&s.public_key(), SignatureAlgorithm::EcdsaP384Sha384, msg, &der).is_ok());
+        assert!(verify_signature(
+            &s.public_key(),
+            SignatureAlgorithm::EcdsaP384Sha384,
+            msg,
+            &der
+        )
+        .is_ok());
         let mut trailing = der.clone();
         trailing.push(0);
-        assert!(verify_signature(&s.public_key(), SignatureAlgorithm::EcdsaP384Sha384, msg, &trailing).is_err());
+        assert!(verify_signature(
+            &s.public_key(),
+            SignatureAlgorithm::EcdsaP384Sha384,
+            msg,
+            &trailing
+        )
+        .is_err());
         // Non-minimal INTEGER (extra leading zero) is refused.
         let (r, sv) = parse_ecdsa_der(&der).unwrap();
         let mut body = der_encode(0x02, &[&[0u8, 0u8][..], &r].concat());
         body.extend_from_slice(&der_encode_uint(&sv));
         let bad = der_encode(0x30, &body);
-        assert!(verify_signature(&s.public_key(), SignatureAlgorithm::EcdsaP384Sha384, msg, &bad).is_err());
+        assert!(verify_signature(
+            &s.public_key(),
+            SignatureAlgorithm::EcdsaP384Sha384,
+            msg,
+            &bad
+        )
+        .is_err());
     }
 
     #[test]
     fn spki_and_algid_roundtrip() {
-        for s in [FixtureSigner::p256(b"a"), FixtureSigner::p384(b"b"), FixtureSigner::ed25519(b"c"), FixtureSigner::rsa(2048)] {
+        for s in [
+            FixtureSigner::p256(b"a"),
+            FixtureSigner::p384(b"b"),
+            FixtureSigner::ed25519(b"c"),
+            FixtureSigner::rsa(2048),
+        ] {
             let pk = s.public_key();
-            assert_eq!(SubjectPublicKey::from_spki_der(&pk.to_spki_der()).unwrap(), pk);
+            assert_eq!(
+                SubjectPublicKey::from_spki_der(&pk.to_spki_der()).unwrap(),
+                pk
+            );
         }
         for (a, _) in SignatureAlgorithm::ALL {
-            assert_eq!(SignatureAlgorithm::from_algorithm_identifier_der(&a.algorithm_identifier_der()).unwrap(), a);
+            assert_eq!(
+                SignatureAlgorithm::from_algorithm_identifier_der(&a.algorithm_identifier_der())
+                    .unwrap(),
+                a
+            );
         }
     }
 }

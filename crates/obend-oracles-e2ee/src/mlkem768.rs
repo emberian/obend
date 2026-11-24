@@ -3,7 +3,7 @@
 //! with `#![forbid(unsafe_code)]` and `0` external dependencies.
 //!
 //! Implements:
-//! - FIPS 202 Keccak-f[1600] sponge primitives (`SHA3-256`, `SHA3-512`, `SHAKE128`, `SHAKE256`),
+//! - FIPS 202 sponge primitives (`SHA3-256`, `SHA3-512`, `SHAKE128`, `SHAKE256`) from `obend-keccak`,
 //! - FIPS 203 §4.2–4.3 `ByteEncode_d` / `ByteDecode_d`, constant-time Barrett `Compress_d` /
 //!   `Decompress_d`, `SampleNTT`, `SamplePolyCBD_2`, and 128-point $\zeta = 17$ `NTT` / `NTT⁻¹` /
 //!   `MultiplyNTTs`,
@@ -53,202 +53,15 @@ pub enum MlKemError {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Pure-Rust FIPS 202 Keccak-f[1600] Sponge (SHA3-256, SHA3-512, SHAKE128, SHAKE256)
+// 1. FIPS 202 Sponges
 // ---------------------------------------------------------------------------
 
-const KECCAK_RC: [u64; 24] = [
-    0x0000_0000_0000_0001,
-    0x0000_0000_0000_8082,
-    0x8000_0000_0000_808a,
-    0x8000_0000_8000_8000,
-    0x0000_0000_0000_808b,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8009,
-    0x0000_0000_0000_008a,
-    0x0000_0000_0000_0088,
-    0x0000_0000_8000_8009,
-    0x0000_0000_8000_000a,
-    0x0000_0000_8000_808b,
-    0x8000_0000_0000_008b,
-    0x8000_0000_0000_8089,
-    0x8000_0000_0000_8003,
-    0x8000_0000_0000_8002,
-    0x8000_0000_0000_0080,
-    0x0000_0000_0000_800a,
-    0x8000_0000_8000_000a,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8080,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8008,
-];
+pub use obend_keccak::{keccak_f1600, sha3_256, sha3_512, shake256_into, KeccakSponge};
 
-const KECCAK_RHO: [u32; 25] = [
-    0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
-];
-
-/// Permute a 25-lane Keccak-f[1600] state in place (24 rounds).
-pub fn keccak_f1600(state: &mut [u64; 25]) {
-    for &rc in &KECCAK_RC {
-        let mut c = [0u64; 5];
-        for x in 0..5 {
-            c[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-        }
-        for x in 0..5 {
-            let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
-            for y in 0..5 {
-                state[x + 5 * y] ^= d;
-            }
-        }
-        let mut b = [0u64; 25];
-        for x in 0..5 {
-            for y in 0..5 {
-                b[y + 5 * ((2 * x + 3 * y) % 5)] =
-                    state[x + 5 * y].rotate_left(KECCAK_RHO[x + 5 * y]);
-            }
-        }
-        for x in 0..5 {
-            for y in 0..5 {
-                state[x + 5 * y] =
-                    b[x + 5 * y] ^ ((!b[((x + 1) % 5) + 5 * y]) & b[((x + 2) % 5) + 5 * y]);
-            }
-        }
-        state[0] ^= rc;
-    }
-}
-
-/// Reusable incremental FIPS 202 Keccak sponge parameterized by byte rate `R` and domain suffix.
-#[derive(Clone)]
-pub struct KeccakSponge<const RATE: usize> {
-    state: [u64; 25],
-    buf: [u8; RATE],
-    pos: usize,
-    squeezing: bool,
-    suffix: u8,
-}
-
-impl<const RATE: usize> KeccakSponge<RATE> {
-    pub const fn new(suffix: u8) -> Self {
-        Self {
-            state: [0u64; 25],
-            buf: [0u8; RATE],
-            pos: 0,
-            squeezing: false,
-            suffix,
-        }
-    }
-
-    fn xor_block(&mut self, block: &[u8; RATE]) {
-        let lanes = RATE / 8;
-        for (i, lane_ref) in self.state.iter_mut().enumerate().take(lanes) {
-            let off = 8 * i;
-            let word = u64::from_le_bytes([
-                block[off],
-                block[off + 1],
-                block[off + 2],
-                block[off + 3],
-                block[off + 4],
-                block[off + 5],
-                block[off + 6],
-                block[off + 7],
-            ]);
-            *lane_ref ^= word;
-        }
-        keccak_f1600(&mut self.state);
-    }
-
-    fn export_rate_bytes(&mut self) {
-        let lanes = RATE / 8;
-        for i in 0..lanes {
-            self.buf[8 * i..8 * i + 8].copy_from_slice(&self.state[i].to_le_bytes());
-        }
-    }
-
-    pub fn absorb(&mut self, mut data: &[u8]) {
-        debug_assert!(!self.squeezing);
-        if self.pos > 0 {
-            let take = (RATE - self.pos).min(data.len());
-            self.buf[self.pos..self.pos + take].copy_from_slice(&data[..take]);
-            self.pos += take;
-            data = &data[take..];
-            if self.pos == RATE {
-                let block = self.buf;
-                self.pos = 0;
-                self.xor_block(&block);
-            }
-        }
-        while data.len() >= RATE {
-            let mut block = [0u8; RATE];
-            block.copy_from_slice(&data[..RATE]);
-            self.xor_block(&block);
-            data = &data[RATE..];
-        }
-        if !data.is_empty() {
-            self.buf[..data.len()].copy_from_slice(data);
-            self.pos = data.len();
-        }
-    }
-
-    fn finalize_absorb(&mut self) {
-        if !self.squeezing {
-            for b in &mut self.buf[self.pos..RATE] {
-                *b = 0;
-            }
-            self.buf[self.pos] ^= self.suffix;
-            self.buf[RATE - 1] ^= 0x80;
-            let block = self.buf;
-            self.xor_block(&block);
-            self.export_rate_bytes();
-            self.pos = 0;
-            self.squeezing = true;
-        }
-    }
-
-    pub fn squeeze(&mut self, mut out: &mut [u8]) {
-        self.finalize_absorb();
-        while !out.is_empty() {
-            if self.pos == RATE {
-                keccak_f1600(&mut self.state);
-                self.export_rate_bytes();
-                self.pos = 0;
-            }
-            let avail = (RATE - self.pos).min(out.len());
-            out[..avail].copy_from_slice(&self.buf[self.pos..self.pos + avail]);
-            self.pos += avail;
-            out = &mut out[avail..];
-        }
-    }
-}
-
-/// Incremental FIPS 202 `SHAKE128` XOF (`rate = 168`, `suffix = 0x1f`).
-pub type Shake128 = KeccakSponge<168>;
-/// Incremental FIPS 202 `SHAKE256` XOF (`rate = 136`, `suffix = 0x1f`).
-pub type Shake256 = KeccakSponge<136>;
-
-/// FIPS 202 `SHA3-256` (`H(s)` in FIPS 203 §4.1).
-pub fn sha3_256(data: &[u8]) -> [u8; 32] {
-    let mut sp = KeccakSponge::<136>::new(0x06);
-    sp.absorb(data);
-    let mut out = [0u8; 32];
-    sp.squeeze(&mut out);
-    out
-}
-
-/// FIPS 202 `SHA3-512` (`G(c)` in FIPS 203 §4.1).
-pub fn sha3_512(data: &[u8]) -> [u8; 64] {
-    let mut sp = KeccakSponge::<72>::new(0x06);
-    sp.absorb(data);
-    let mut out = [0u8; 64];
-    sp.squeeze(&mut out);
-    out
-}
-
-/// One-shot FIPS 202 `SHAKE256` into `out`.
-pub fn shake256_into(data: &[u8], out: &mut [u8]) {
-    let mut sp = Shake256::new(0x1f);
-    sp.absorb(data);
-    sp.squeeze(out);
-}
+/// A 168-byte-rate sponge. Pass 0x1f to its constructor for SHAKE128.
+pub type Shake128 = KeccakSponge<{ obend_keccak::SHAKE128_RATE_BYTES }>;
+/// A 136-byte-rate sponge. Pass 0x1f to its constructor for SHAKE256.
+pub type Shake256 = KeccakSponge<{ obend_keccak::SHAKE256_RATE_BYTES }>;
 
 // ---------------------------------------------------------------------------
 // 2. Constant-Time Field Arithmetic mod q = 3329 & Precomputed Zeta Tables
@@ -488,7 +301,7 @@ pub fn byte_decode_12(bytes: &[u8; 384]) -> Poly {
 
 /// FIPS 203 Algorithm 7 `SampleNTT(XOF(ρ, b1, b2))` using incremental `SHAKE128` (`0` wasted blocks).
 pub fn sample_ntt(rho: &[u8; 32], b1: u8, b2: u8) -> Poly {
-    let mut xof = Shake128::new(0x1f);
+    let mut xof = obend_keccak::Shake128::new();
     xof.absorb(rho);
     xof.absorb(&[b1, b2]);
 
@@ -528,7 +341,7 @@ pub fn sample_poly_cbd2(bytes: &[u8; 128]) -> Poly {
 }
 
 fn prf_eta2(sigma: &[u8; 32], nonce: u8) -> [u8; 128] {
-    let mut sp = Shake256::new(0x1f);
+    let mut sp = obend_keccak::Shake256::new();
     sp.absorb(sigma);
     sp.absorb(&[nonce]);
     let mut out = [0u8; 128];
@@ -649,6 +462,11 @@ pub fn validate_decaps_key(dk: &[u8]) -> Result<&[u8; ML_KEM_768_DK_LEN], MlKemE
 // 6. K-PKE (Algorithms 13–15) & ML-KEM-768 Internal / Checked Entry Points (Algorithms 16–21)
 // ---------------------------------------------------------------------------
 
+/// The FIPS 203 matrix `Â`, whose entry `(i, j)` is `SampleNTT(ρ ‖ j ‖ i)`.
+fn sample_a_hat(rho: &[u8; 32]) -> [[Poly; ML_KEM_768_K]; ML_KEM_768_K] {
+    std::array::from_fn(|i| std::array::from_fn(|j| sample_ntt(rho, j as u8, i as u8)))
+}
+
 fn k_pke_keygen(d: &[u8; 32]) -> ([u8; ML_KEM_768_EK_LEN], [u8; 1152]) {
     let mut g_in = [0u8; 33];
     g_in[..32].copy_from_slice(d);
@@ -659,12 +477,7 @@ fn k_pke_keygen(d: &[u8; 32]) -> ([u8; ML_KEM_768_EK_LEN], [u8; 1152]) {
     rho.copy_from_slice(&g_out[0..32]);
     sigma.copy_from_slice(&g_out[32..64]);
 
-    let mut a_hat = [[[0u16; ML_KEM_N]; ML_KEM_768_K]; ML_KEM_768_K];
-    for i in 0..ML_KEM_768_K {
-        for j in 0..ML_KEM_768_K {
-            a_hat[i][j] = sample_ntt(&rho, j as u8, i as u8);
-        }
-    }
+    let a_hat = sample_a_hat(&rho);
 
     let mut s_hat = [[0u16; ML_KEM_N]; ML_KEM_768_K];
     let mut e_hat = [[0u16; ML_KEM_N]; ML_KEM_768_K];
@@ -711,12 +524,7 @@ fn k_pke_encrypt(
     let mut rho = [0u8; 32];
     rho.copy_from_slice(&ek[1152..1184]);
 
-    let mut a_hat = [[[0u16; ML_KEM_N]; ML_KEM_768_K]; ML_KEM_768_K];
-    for i in 0..ML_KEM_768_K {
-        for j in 0..ML_KEM_768_K {
-            a_hat[i][j] = sample_ntt(&rho, j as u8, i as u8);
-        }
-    }
+    let a_hat = sample_a_hat(&rho);
 
     let mut y_hat = [[0u16; ML_KEM_N]; ML_KEM_768_K];
     let mut e1 = [[0u16; ML_KEM_N]; ML_KEM_768_K];
@@ -865,7 +673,7 @@ pub fn ml_kem_768_decaps_internal(
     r_prime.copy_from_slice(&g_out[32..64]);
 
     // Implicit-rejection fallback K̄ = J(z || c) = SHAKE256(z || c, 32).
-    let mut j_sp = Shake256::new(0x1f);
+    let mut j_sp = obend_keccak::Shake256::new();
     j_sp.absorb(z);
     j_sp.absorb(ct);
     let mut k_bar = [0u8; 32];

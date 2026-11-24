@@ -23,159 +23,12 @@ use crate::tee::{TcbPosture, TeeVendor, VerifiedTeeEvidence};
 use crate::tlsn_e2ee::{VerifiedCallTree, VerifiedE2eeChannel, VerifiedHttpsTranscript};
 
 // ---------------------------------------------------------------------------
-// Pure-Rust Keccak-f[1600], NIST SP 800-185 `cSHAKE256`, & LEB128 Framing
+// `cSHAKE256` & LEB128 Framing
 // ---------------------------------------------------------------------------
 
-const SHAKE256_RATE_BYTES: usize = 136;
-const SHAKE256_RATE_LANES: usize = 17;
-
-const KECCAK_ROUND_CONSTANTS: [u64; 24] = [
-    0x0000_0000_0000_0001,
-    0x0000_0000_0000_8082,
-    0x8000_0000_0000_808a,
-    0x8000_0000_8000_8000,
-    0x0000_0000_0000_808b,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8009,
-    0x0000_0000_0000_008a,
-    0x0000_0000_0000_0088,
-    0x0000_0000_8000_8009,
-    0x0000_0000_8000_000a,
-    0x0000_0000_8000_808b,
-    0x8000_0000_0000_008b,
-    0x8000_0000_0000_8089,
-    0x8000_0000_0000_8003,
-    0x8000_0000_0000_8002,
-    0x8000_0000_0000_0080,
-    0x0000_0000_0000_800a,
-    0x8000_0000_8000_000a,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8080,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8008,
-];
-
-const KECCAK_ROTATION_OFFSETS: [u32; 25] = [
-    0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
-];
-
-fn keccak_f1600(state: &mut [u64; 25]) {
-    for &rc in &KECCAK_ROUND_CONSTANTS {
-        let mut c = [0u64; 5];
-        for x in 0..5 {
-            c[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-        }
-        for x in 0..5 {
-            let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
-            for y in 0..5 {
-                state[x + 5 * y] ^= d;
-            }
-        }
-        let mut b = [0u64; 25];
-        for x in 0..5 {
-            for y in 0..5 {
-                b[y + 5 * ((2 * x + 3 * y) % 5)] =
-                    state[x + 5 * y].rotate_left(KECCAK_ROTATION_OFFSETS[x + 5 * y]);
-            }
-        }
-        for x in 0..5 {
-            for y in 0..5 {
-                state[x + 5 * y] =
-                    b[x + 5 * y] ^ ((!b[((x + 1) % 5) + 5 * y]) & b[((x + 2) % 5) + 5 * y]);
-            }
-        }
-        state[0] ^= rc;
-    }
-}
-
-fn sp800_185_left_encode(mut value: usize) -> Vec<u8> {
-    if value == 0 {
-        return vec![1u8, 0u8];
-    }
-    let mut le = Vec::with_capacity(8);
-    while value > 0 {
-        le.push((value & 0xFF) as u8);
-        value >>= 8;
-    }
-    le.reverse();
-    let mut out = Vec::with_capacity(1 + le.len());
-    out.push(le.len() as u8);
-    out.extend_from_slice(&le);
-    out
-}
-
-fn sp800_185_encode_string(bytes: &[u8]) -> Vec<u8> {
-    let mut out = sp800_185_left_encode(bytes.len().saturating_mul(8));
-    out.extend_from_slice(bytes);
-    out
-}
-
-fn sp800_185_bytepad(bytes: &[u8], width: usize) -> Vec<u8> {
-    if width == 0 {
-        return Vec::new();
-    }
-    let mut out = sp800_185_left_encode(width);
-    out.extend_from_slice(bytes);
-    let rem = out.len() % width;
-    if rem != 0 {
-        out.resize(out.len() + (width - rem), 0u8);
-    }
-    out
-}
-
-fn xor_rate_block(state: &mut [u64; 25], block: &[u8]) {
-    for (lane_idx, st_lane) in state.iter_mut().enumerate().take(SHAKE256_RATE_LANES) {
-        let off = 8 * lane_idx;
-        let lane = u64::from_le_bytes([
-            block[off],
-            block[off + 1],
-            block[off + 2],
-            block[off + 3],
-            block[off + 4],
-            block[off + 5],
-            block[off + 6],
-            block[off + 7],
-        ]);
-        *st_lane ^= lane;
-    }
-}
-
-/// Evaluate 32-byte NIST SP 800-185 `cSHAKE256` (`N = ""`, `S = customization`), matching
+/// 32-byte NIST SP 800-185 `cSHAKE256` (`N = ""`, `S = customization`), matching
 /// `Obend.Digest.Cshake256.cshake256Bytes` and `Obend.Crypto.cshake32ByteArray` bit-for-bit.
-pub fn she_cshake256_32(customization: &[u8], input: &[u8]) -> [u8; 32] {
-    let suffix = if customization.is_empty() { 0x1f } else { 0x04 };
-    let mut framed = if customization.is_empty() {
-        input.to_vec()
-    } else {
-        let mut inner = sp800_185_encode_string(&[]);
-        inner.extend_from_slice(&sp800_185_encode_string(customization));
-        let mut pfx = sp800_185_bytepad(&inner, SHAKE256_RATE_BYTES);
-        pfx.extend_from_slice(input);
-        pfx
-    };
-
-    let count = SHAKE256_RATE_BYTES - (framed.len() % SHAKE256_RATE_BYTES);
-    if count == 1 {
-        framed.push(suffix ^ 0x80);
-    } else {
-        framed.push(suffix);
-        framed.resize(framed.len() + (count - 2), 0u8);
-        framed.push(0x80);
-    }
-
-    let mut state = [0u64; 25];
-    for chunk in framed.chunks_exact(SHAKE256_RATE_BYTES) {
-        xor_rate_block(&mut state, chunk);
-        keccak_f1600(&mut state);
-    }
-
-    let mut out = [0u8; 32];
-    for lane_idx in 0..4 {
-        out[8 * lane_idx..8 * lane_idx + 8].copy_from_slice(&state[lane_idx].to_le_bytes());
-    }
-    out
-}
+pub use obend_keccak::cshake256_32 as she_cshake256_32;
 
 /// Canonical unsigned LEB128 encoding matching `Obend.Crypto.Transcript.leb128`.
 pub fn she_leb128(mut n: u64) -> Vec<u8> {
@@ -337,7 +190,12 @@ fn pq_th_secret_prf(pk_seed: &[u8], sk_seed: &[u8], adrs: &HashAdrs) -> [u8; 32]
 }
 
 fn pq_th_prf_msg(sk_prf: &[u8], opt_rand: &[u8], mu: &[u8; 32]) -> [u8; 32] {
-    pq_th_call(PQ_TAG_PRF_MSG, &[], &HashAdrs::ZERO, &[sk_prf, opt_rand, mu])
+    pq_th_call(
+        PQ_TAG_PRF_MSG,
+        &[],
+        &HashAdrs::ZERO,
+        &[sk_prf, opt_rand, mu],
+    )
 }
 
 fn pq_th_pre_hash(pk_seed: &[u8], pk_root: &[u8], msg: &[u8]) -> [u8; 32] {
@@ -609,37 +467,35 @@ fn encode_indexed_pq_sig_list(sigs: &[(u64, PqHashSig)]) -> Vec<u8> {
     encode_she_fields(&mapped)
 }
 
-fn pq_wots_chain_steps(
-    pk_seed: &[u8; 32],
+/// The address of one WOTS+ hash chain.
+#[derive(Clone, Copy)]
+struct WotsChain<'a> {
+    pk_seed: &'a [u8; 32],
     layer: u32,
     tree: u64,
-    kp: u32,
+    key_pair: u32,
     chain: u32,
-    start_step: u32,
-    steps: usize,
-    mut cur: [u8; 32],
-) -> [u8; 32] {
-    for s in 0..steps {
-        let adrs = HashAdrs {
-            layer,
-            tree,
-            kind: AdrsKind::WotsHash,
-            key_pair: kp,
-            chain_idx: chain,
-            hash_step: start_step.wrapping_add(s as u32),
-        };
-        cur = pq_th_chain_f(pk_seed, &adrs, &cur);
-    }
-    cur
 }
 
-fn pq_wots_secret_base(
-    sk: &PqSecretKey,
-    layer: u32,
-    tree: u64,
-    kp: u32,
-    chain: u32,
-) -> [u8; 32] {
+impl WotsChain<'_> {
+    /// Applies `steps` chain hashes starting at position `start_step`.
+    fn advance(&self, start_step: u32, steps: usize, mut cur: [u8; 32]) -> [u8; 32] {
+        for s in 0..steps {
+            let adrs = HashAdrs {
+                layer: self.layer,
+                tree: self.tree,
+                kind: AdrsKind::WotsHash,
+                key_pair: self.key_pair,
+                chain_idx: self.chain,
+                hash_step: start_step.wrapping_add(s as u32),
+            };
+            cur = pq_th_chain_f(self.pk_seed, &adrs, &cur);
+        }
+        cur
+    }
+}
+
+fn pq_wots_secret_base(sk: &PqSecretKey, layer: u32, tree: u64, kp: u32, chain: u32) -> [u8; 32] {
     let adrs = HashAdrs {
         layer,
         tree,
@@ -661,16 +517,16 @@ fn pq_compute_wots_pk(
     let mut endpoints = Vec::with_capacity(params.ell1);
     for r in 0..params.ell1 {
         let base = pq_wots_secret_base(sk, layer, tree, kp, r as u32);
-        endpoints.push(pq_wots_chain_steps(
-            &sk.pk_seed,
-            layer,
-            tree,
-            kp,
-            r as u32,
-            0,
-            params.w - 1,
-            base,
-        ));
+        endpoints.push(
+            WotsChain {
+                pk_seed: &sk.pk_seed,
+                layer,
+                tree,
+                key_pair: kp,
+                chain: r as u32,
+            }
+            .advance(0, params.w - 1, base),
+        );
     }
     let adrs = HashAdrs {
         layer,
@@ -698,16 +554,16 @@ pub fn recover_wots_pk_from_sig(
         let dr = digits.get(r).copied().unwrap_or(0);
         let sig_val = sig_chains.get(r).copied().unwrap_or([0u8; 32]);
         let rem = (params.w - 1).saturating_sub(dr);
-        endpoints.push(pq_wots_chain_steps(
-            pk_seed,
-            layer,
-            tree,
-            kp,
-            r as u32,
-            dr as u32,
-            rem,
-            sig_val,
-        ));
+        endpoints.push(
+            WotsChain {
+                pk_seed,
+                layer,
+                tree,
+                key_pair: kp,
+                chain: r as u32,
+            }
+            .advance(dr as u32, rem, sig_val),
+        );
     }
     let adrs = HashAdrs {
         layer,
@@ -720,11 +576,30 @@ pub fn recover_wots_pk_from_sig(
     pq_th_tweak_tl(pk_seed, &adrs, &endpoints)
 }
 
-fn pq_compute_merkle_node<F: Fn(usize) -> [u8; 32]>(
-    pk_seed: &[u8; 32],
+/// The Merkle tree a node belongs to: public seed, hypertree layer, tree index, and node kind.
+#[derive(Clone, Copy, Debug)]
+struct MerkleTreeAddr<'a> {
+    pk_seed: &'a [u8; 32],
     layer: u32,
     tree: u64,
     node_kind: AdrsKind,
+}
+
+impl MerkleTreeAddr<'_> {
+    fn node_adrs(&self, height: usize, node_idx: usize) -> HashAdrs {
+        HashAdrs {
+            layer: self.layer,
+            tree: self.tree,
+            kind: self.node_kind,
+            key_pair: 0,
+            chain_idx: height as u32,
+            hash_step: node_idx as u32,
+        }
+    }
+}
+
+fn pq_compute_merkle_node<F: Fn(usize) -> [u8; 32]>(
+    addr: MerkleTreeAddr<'_>,
     leaf_fn: &F,
     height: usize,
     node_idx: usize,
@@ -732,99 +607,54 @@ fn pq_compute_merkle_node<F: Fn(usize) -> [u8; 32]>(
     if height == 0 {
         leaf_fn(node_idx)
     } else {
-        let left = pq_compute_merkle_node(
-            pk_seed,
-            layer,
-            tree,
-            node_kind,
-            leaf_fn,
-            height - 1,
-            2 * node_idx,
-        );
-        let right = pq_compute_merkle_node(
-            pk_seed,
-            layer,
-            tree,
-            node_kind,
-            leaf_fn,
-            height - 1,
-            2 * node_idx + 1,
-        );
-        let adrs = HashAdrs {
-            layer,
-            tree,
-            kind: node_kind,
-            key_pair: 0,
-            chain_idx: height as u32,
-            hash_step: node_idx as u32,
-        };
-        pq_th_node_h(pk_seed, &adrs, &left, &right)
+        let left = pq_compute_merkle_node(addr, leaf_fn, height - 1, 2 * node_idx);
+        let right = pq_compute_merkle_node(addr, leaf_fn, height - 1, 2 * node_idx + 1);
+        pq_th_node_h(
+            addr.pk_seed,
+            &addr.node_adrs(height, node_idx),
+            &left,
+            &right,
+        )
     }
 }
 
 fn pq_build_merkle_auth_path<F: Fn(usize) -> [u8; 32]>(
-    pk_seed: &[u8; 32],
-    layer: u32,
-    tree: u64,
-    node_kind: AdrsKind,
+    addr: MerkleTreeAddr<'_>,
     leaf_fn: &F,
     height: usize,
     node_idx: usize,
     local_idx: usize,
 ) -> Vec<[u8; 32]> {
     if height == 0 {
-        Vec::new()
-    } else {
-        let half = 1usize << (height - 1);
-        if local_idx < half {
-            let sib = pq_compute_merkle_node(
-                pk_seed,
-                layer,
-                tree,
-                node_kind,
-                leaf_fn,
-                height - 1,
-                2 * node_idx + 1,
-            );
-            let mut out = vec![sib];
-            out.extend(pq_build_merkle_auth_path(
-                pk_seed,
-                layer,
-                tree,
-                node_kind,
-                leaf_fn,
-                height - 1,
-                2 * node_idx,
-                local_idx,
-            ));
-            out
-        } else {
-            let sib = pq_compute_merkle_node(
-                pk_seed,
-                layer,
-                tree,
-                node_kind,
-                leaf_fn,
-                height - 1,
-                2 * node_idx,
-            );
-            let mut out = vec![sib];
-            out.extend(pq_build_merkle_auth_path(
-                pk_seed,
-                layer,
-                tree,
-                node_kind,
-                leaf_fn,
-                height - 1,
-                2 * node_idx + 1,
-                local_idx - half,
-            ));
-            out
-        }
+        return Vec::new();
     }
+    let half = 1usize << (height - 1);
+    let (sibling_idx, child_idx, child_local) = if local_idx < half {
+        (2 * node_idx + 1, 2 * node_idx, local_idx)
+    } else {
+        (2 * node_idx, 2 * node_idx + 1, local_idx - half)
+    };
+    let mut out = vec![pq_compute_merkle_node(
+        addr,
+        leaf_fn,
+        height - 1,
+        sibling_idx,
+    )];
+    out.extend(pq_build_merkle_auth_path(
+        addr,
+        leaf_fn,
+        height - 1,
+        child_idx,
+        child_local,
+    ));
+    out
 }
 
 /// Top-down Merkle authentication path walker matching `PqHashSignatures.walkMerkleAuthPath`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preserve the public positional API"
+)]
 pub fn walk_merkle_auth_path(
     pk_seed: &[u8; 32],
     layer: u32,
@@ -836,54 +666,48 @@ pub fn walk_merkle_auth_path(
     leaf_hash: [u8; 32],
     auth_path: &[[u8; 32]],
 ) -> Option<[u8; 32]> {
-    if height == 0 {
-        if auth_path.is_empty() {
-            Some(leaf_hash)
-        } else {
-            None
-        }
-    } else {
-        if auth_path.is_empty() {
-            return None;
-        }
-        let sib = auth_path[0];
-        let rest = &auth_path[1..];
-        let half = 1usize << (height - 1);
-        let adrs = HashAdrs {
+    walk_path(
+        MerkleTreeAddr {
+            pk_seed,
             layer,
             tree,
-            kind: node_kind,
-            key_pair: 0,
-            chain_idx: height as u32,
-            hash_step: node_idx as u32,
-        };
-        if local_idx < half {
-            let sub = walk_merkle_auth_path(
-                pk_seed,
-                layer,
-                tree,
-                node_kind,
-                height - 1,
-                2 * node_idx,
-                local_idx,
-                leaf_hash,
-                rest,
-            )?;
-            Some(pq_th_node_h(pk_seed, &adrs, &sub, &sib))
-        } else {
-            let sub = walk_merkle_auth_path(
-                pk_seed,
-                layer,
-                tree,
-                node_kind,
-                height - 1,
-                2 * node_idx + 1,
-                local_idx - half,
-                leaf_hash,
-                rest,
-            )?;
-            Some(pq_th_node_h(pk_seed, &adrs, &sib, &sub))
-        }
+            node_kind,
+        },
+        height,
+        node_idx,
+        local_idx,
+        leaf_hash,
+        auth_path,
+    )
+}
+
+fn walk_path(
+    addr: MerkleTreeAddr<'_>,
+    height: usize,
+    node_idx: usize,
+    local_idx: usize,
+    leaf_hash: [u8; 32],
+    auth_path: &[[u8; 32]],
+) -> Option<[u8; 32]> {
+    if height == 0 {
+        return auth_path.is_empty().then_some(leaf_hash);
+    }
+    let (&sib, rest) = auth_path.split_first()?;
+    let half = 1usize << (height - 1);
+    let adrs = addr.node_adrs(height, node_idx);
+    if local_idx < half {
+        let sub = walk_path(addr, height - 1, 2 * node_idx, local_idx, leaf_hash, rest)?;
+        Some(pq_th_node_h(addr.pk_seed, &adrs, &sub, &sib))
+    } else {
+        let sub = walk_path(
+            addr,
+            height - 1,
+            2 * node_idx + 1,
+            local_idx - half,
+            leaf_hash,
+            rest,
+        )?;
+        Some(pq_th_node_h(addr.pk_seed, &adrs, &sib, &sub))
     }
 }
 
@@ -911,12 +735,7 @@ fn pq_derive_fors_indices(k: usize, a: usize, hmsg: &[u8]) -> Vec<usize> {
         .collect()
 }
 
-fn pq_fors_secret_leaf(
-    sk: &PqSecretKey,
-    tree_idx: u64,
-    kp_idx: u32,
-    global_u: u32,
-) -> [u8; 32] {
+fn pq_fors_secret_leaf(sk: &PqSecretKey, tree_idx: u64, kp_idx: u32, global_u: u32) -> [u8; 32] {
     let adrs = HashAdrs {
         layer: 0,
         tree: tree_idx,
@@ -954,10 +773,12 @@ fn pq_compute_xmss_subtree_root(
 ) -> [u8; 32] {
     let leaf_fn = |kp: usize| pq_compute_wots_pk(params, sk, layer, tree_idx, kp as u32);
     pq_compute_merkle_node(
-        &sk.pk_seed,
-        layer,
-        tree_idx,
-        AdrsKind::Tree,
+        MerkleTreeAddr {
+            pk_seed: &sk.pk_seed,
+            layer,
+            tree: tree_idx,
+            node_kind: AdrsKind::Tree,
+        },
         &leaf_fn,
         params.subtree_height,
         0,
@@ -973,18 +794,32 @@ pub fn derive_pq_public_key(params: &PqHashParams, sk: &PqSecretKey) -> PqPublic
     }
 }
 
-fn pq_grind_tsw_counter(
-    params: &PqHashParams,
-    r_rand: &[u8; 32],
-    pk_seed: &[u8],
-    pk_root: &[u8],
-    mu: &[u8; 32],
+/// What `H_msg` binds besides the grinding counter.
+#[derive(Clone, Copy)]
+struct TswMessage<'a> {
+    r_rand: &'a [u8; 32],
+    pk_seed: &'a [u8],
+    pk_root: &'a [u8],
+    mu: &'a [u8; 32],
     layer_idx: u32,
     tree_idx: u64,
+}
+
+fn pq_grind_tsw_counter(
+    params: &PqHashParams,
+    message: &TswMessage<'_>,
     max_grind: u32,
 ) -> Option<(u32, Vec<usize>, [u8; 32])> {
     for ctr in 0..max_grind {
-        let hmsg = pq_th_hash_msg(r_rand, pk_seed, pk_root, mu, layer_idx, tree_idx, ctr);
+        let hmsg = pq_th_hash_msg(
+            message.r_rand,
+            message.pk_seed,
+            message.pk_root,
+            message.mu,
+            message.layer_idx,
+            message.tree_idx,
+            ctr,
+        );
         let digits = extract_base_w_digits(params.w, params.ell1, &hmsg);
         if check_target_sum(params.w, params.ell1, params.target_sum(), &digits) {
             return Some((ctr, digits, hmsg));
@@ -1016,12 +851,14 @@ pub fn eval_pq_single_sign(
         let tree0 = (leaf_global_idx / sub_leaves) as u64;
         let (ctr0, _, hmsg0) = pq_grind_tsw_counter(
             params,
-            &r_rand,
-            &pk.pk_seed,
-            &pk.pk_root,
-            &mu,
-            0,
-            tree0,
+            &TswMessage {
+                r_rand: &r_rand,
+                pk_seed: &pk.pk_seed,
+                pk_root: &pk.pk_root,
+                mu: &mu,
+                layer_idx: 0,
+                tree_idx: tree0,
+            },
             max_grind,
         )?;
         let idxs = pq_derive_fors_indices(params.fors_trees, params.fors_height, &hmsg0);
@@ -1035,10 +872,12 @@ pub fn eval_pq_single_sign(
             let global_u = j * (1usize << params.fors_height) + idx_j;
             let secret_val = pq_fors_secret_leaf(sk, tree0, kp0, global_u as u32);
             let auth_path = pq_build_merkle_auth_path(
-                &sk.pk_seed,
-                0,
-                tree0,
-                AdrsKind::ForsTree,
+                MerkleTreeAddr {
+                    pk_seed: &sk.pk_seed,
+                    layer: 0,
+                    tree: tree0,
+                    node_kind: AdrsKind::ForsTree,
+                },
                 &leaf_fn,
                 params.fors_height,
                 j,
@@ -1049,10 +888,12 @@ pub fn eval_pq_single_sign(
                 auth_path,
             });
             roots.push(pq_compute_merkle_node(
-                &sk.pk_seed,
-                0,
-                tree0,
-                AdrsKind::ForsTree,
+                MerkleTreeAddr {
+                    pk_seed: &sk.pk_seed,
+                    layer: 0,
+                    tree: tree0,
+                    node_kind: AdrsKind::ForsTree,
+                },
                 &leaf_fn,
                 params.fors_height,
                 j,
@@ -1083,34 +924,38 @@ pub fn eval_pq_single_sign(
         let layer_u32 = layer_idx as u32;
         let (ctr, digits, _) = pq_grind_tsw_counter(
             params,
-            &r_rand,
-            &sk.pk_seed,
-            &pk.pk_root,
-            &cur_root,
-            layer_u32,
-            tree_idx,
+            &TswMessage {
+                r_rand: &r_rand,
+                pk_seed: &sk.pk_seed,
+                pk_root: &pk.pk_root,
+                mu: &cur_root,
+                layer_idx: layer_u32,
+                tree_idx,
+            },
             max_grind,
         )?;
         let mut wots_chains = Vec::with_capacity(params.ell1);
         for (r, &dr) in digits.iter().enumerate() {
             let base = pq_wots_secret_base(sk, layer_u32, tree_idx, kp_idx as u32, r as u32);
-            wots_chains.push(pq_wots_chain_steps(
-                &sk.pk_seed,
-                layer_u32,
-                tree_idx,
-                kp_idx as u32,
-                r as u32,
-                0,
-                dr,
-                base,
-            ));
+            wots_chains.push(
+                WotsChain {
+                    pk_seed: &sk.pk_seed,
+                    layer: layer_u32,
+                    tree: tree_idx,
+                    key_pair: kp_idx as u32,
+                    chain: r as u32,
+                }
+                .advance(0, dr, base),
+            );
         }
         let leaf_fn = |kp: usize| pq_compute_wots_pk(params, sk, layer_u32, tree_idx, kp as u32);
         let auth_path = pq_build_merkle_auth_path(
-            &sk.pk_seed,
-            layer_u32,
-            tree_idx,
-            AdrsKind::Tree,
+            MerkleTreeAddr {
+                pk_seed: &sk.pk_seed,
+                layer: layer_u32,
+                tree: tree_idx,
+                node_kind: AdrsKind::Tree,
+            },
             &leaf_fn,
             params.subtree_height,
             0,
@@ -1177,12 +1022,15 @@ pub fn verify_pq_hash_sig(
         let mut roots = Vec::with_capacity(params.fors_trees);
         for (j, (&idx_j, op)) in idxs.iter().zip(sig.fors_openings.iter()).enumerate() {
             let global_u = j * (1usize << params.fors_height) + idx_j;
-            let leaf_h = pq_fors_leaf_hash(&pk.pk_seed, tree0, kp0, global_u as u32, &op.secret_val);
-            let Some(rj) = walk_merkle_auth_path(
-                &pk.pk_seed,
-                0,
-                tree0,
-                AdrsKind::ForsTree,
+            let leaf_h =
+                pq_fors_leaf_hash(&pk.pk_seed, tree0, kp0, global_u as u32, &op.secret_val);
+            let Some(rj) = walk_path(
+                MerkleTreeAddr {
+                    pk_seed: &pk.pk_seed,
+                    layer: 0,
+                    tree: tree0,
+                    node_kind: AdrsKind::ForsTree,
+                },
                 params.fors_height,
                 j,
                 idx_j,
@@ -1238,11 +1086,13 @@ pub fn verify_pq_hash_sig(
             &digits,
             &lsig.wots_chains,
         );
-        let Some(next_root) = walk_merkle_auth_path(
-            &pk.pk_seed,
-            layer_u32,
-            tree_idx,
-            AdrsKind::Tree,
+        let Some(next_root) = walk_path(
+            MerkleTreeAddr {
+                pk_seed: &pk.pk_seed,
+                layer: layer_u32,
+                tree: tree_idx,
+                node_kind: AdrsKind::Tree,
+            },
             params.subtree_height,
             0,
             kp_idx,
@@ -1537,12 +1387,9 @@ pub fn checked_exact_mxfp4_logits(
         if sh > 8 {
             return None;
         }
-        let dot: i128 = xs
-            .iter()
-            .zip(row.iter())
-            .try_fold(0i128, |acc, (&x, &w)| {
-                acc.checked_add((x as i128).checked_mul(w as i128)?)
-            })?;
+        let dot: i128 = xs.iter().zip(row.iter()).try_fold(0i128, |acc, (&x, &w)| {
+            acc.checked_add((x as i128).checked_mul(w as i128)?)
+        })?;
         let shifted = dot.checked_mul(1i128 << (sh as u32))?;
         out.push(i64::try_from(shifted).ok()?);
     }
@@ -1659,6 +1506,10 @@ impl CandidateComputation {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preserve the public positional API"
+)]
 pub fn candidate_statement_digest(
     suite: &ZkmlSuiteArtifact,
     model_weights_root: &[u8; 32],
@@ -1702,7 +1553,10 @@ pub fn candidate_pow_hash(
 pub fn fpaudit_weights_root(weight_rows: &[Vec<i64>], block_shifts: &[u64]) -> [u8; 32] {
     she_cshake256_32(
         b"OBEND.SHE.FPAUDIT_WEIGHTS/v1",
-        &encode_she_fields(&[encode_int_matrix(weight_rows), encode_nat_list(block_shifts)]),
+        &encode_she_fields(&[
+            encode_int_matrix(weight_rows),
+            encode_nat_list(block_shifts),
+        ]),
     )
 }
 
@@ -1799,10 +1653,9 @@ pub fn verify_exact_recompute_audit(c: &CandidateComputation) -> bool {
         || !a.opened_inputs.iter().all(|&x| is_s8(x))
         || a.opened_weight_rows.is_empty()
         || a.opened_weight_rows.len() != a.opened_block_shifts.len()
-        || !a
-            .opened_weight_rows
-            .iter()
-            .all(|row| row.len() == a.opened_inputs.len() && row.iter().all(|&q| is_e2m1_mantissa(q)))
+        || !a.opened_weight_rows.iter().all(|row| {
+            row.len() == a.opened_inputs.len() && row.iter().all(|&q| is_e2m1_mantissa(q))
+        })
         || !a.opened_block_shifts.iter().all(|&sh| sh <= 8)
     {
         return false;
@@ -1865,6 +1718,10 @@ pub fn proven_zkml_milli_bits(c: &CandidateComputation) -> u64 {
 }
 
 /// Honest builder for grounded `CandidateComputation` with optional PoW grinding (`pow_override = None` grinds live).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preserve the public positional API"
+)]
 pub fn build_honest_candidate(
     suite: &ZkmlSuiteArtifact,
     sensor_seal_digest: [u8; 32],
@@ -1954,8 +1811,13 @@ pub fn build_honest_candidate(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpgradeAuthorityClaim {
     LocalCustodianCeremony,
-    VendorRootDirective { vendor_sig: Vec<u8> },
-    AgencyEmergencyOrder { agency_id: Vec<u8>, agency_sig: Vec<u8> },
+    VendorRootDirective {
+        vendor_sig: Vec<u8>,
+    },
+    AgencyEmergencyOrder {
+        agency_id: Vec<u8>,
+        agency_sig: Vec<u8>,
+    },
 }
 
 impl UpgradeAuthorityClaim {
@@ -2428,10 +2290,10 @@ fn check_custodian_pq_quorum(
         return Err(SheRefusal::RevokedCustodianSigner { signer: rev });
     }
     if st.pq_params.stateful_lean_sig {
-        if let Some((signer, sig)) = sigs
-            .iter()
-            .find(|(s, sg)| st.consumed_custodian_leaves.contains(&(*s, sg.leaf_global_idx)))
-        {
+        if let Some((signer, sig)) = sigs.iter().find(|(s, sg)| {
+            st.consumed_custodian_leaves
+                .contains(&(*s, sg.leaf_global_idx))
+        }) {
             return Err(SheRefusal::ReusedStatefulPqLeaf {
                 signer: *signer,
                 leaf_idx: sig.leaf_global_idx,
@@ -2489,10 +2351,10 @@ fn check_simplex_pq_quorum(
         });
     }
     if st.pq_params.stateful_lean_sig {
-        if let Some((validator, sig)) = sigs
-            .iter()
-            .find(|(v, sg)| st.consumed_simplex_leaves.contains(&(*v, sg.leaf_global_idx)))
-        {
+        if let Some((validator, sig)) = sigs.iter().find(|(v, sg)| {
+            st.consumed_simplex_leaves
+                .contains(&(*v, sg.leaf_global_idx))
+        }) {
             return Err(SheRefusal::ReusedStatefulPqLeaf {
                 signer: *validator,
                 leaf_idx: sig.leaf_global_idx,
@@ -2865,8 +2727,5 @@ pub fn apply_oracle_attested_actuation(
     {
         return Err(SheRefusal::OracleEvidenceBindingMismatch);
     }
-    apply_she_turn(
-        state,
-        &SheTurn::ProposeAndSettleActuation(proposal.clone()),
-    )
+    apply_she_turn(state, &SheTurn::ProposeAndSettleActuation(proposal.clone()))
 }

@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use crate::grain::{ReproducibilityTier, sha256};
+use crate::grain::{sha256, ReproducibilityTier};
 
 /// Standard WebAssembly linear memory page size (`64 KiB`).
 pub const WASM_PAGE_SIZE: usize = 65_536;
@@ -290,17 +290,33 @@ impl fmt::Display for WasmVal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WasmRunError {
     InvalidBudget(String),
-    TierNotServed { tier: WasmCapTier, detail: String },
+    TierNotServed {
+        tier: WasmCapTier,
+        detail: String,
+    },
     InvalidModule(String),
     /// Empty-linker enforcement: any import (`env.*`, `wasi_*`, etc.) fails closed at load time!
-    HostImportDenied { module: String, name: String },
+    HostImportDenied {
+        module: String,
+        name: String,
+    },
     MissingExport(String),
     SignatureMismatch(String),
-    OutOfFuel { max_fuel: u64, consumed: u64 },
-    MemoryLimitExceeded { requested_bytes: usize, max_bytes: usize },
+    OutOfFuel {
+        max_fuel: u64,
+        consumed: u64,
+    },
+    MemoryLimitExceeded {
+        requested_bytes: usize,
+        max_bytes: usize,
+    },
     StackOverflow,
-    CallDepthExceeded { max_depth: usize },
-    WallTimeoutExceeded { limit_ms: u64 },
+    CallDepthExceeded {
+        max_depth: usize,
+    },
+    WallTimeoutExceeded {
+        limit_ms: u64,
+    },
     Trap(String),
 }
 
@@ -319,7 +335,10 @@ impl fmt::Display for WasmRunError {
             Self::MissingExport(name) => write!(f, "wasm export `{name}` not found"),
             Self::SignatureMismatch(m) => write!(f, "wasm entrypoint signature mismatch: {m}"),
             Self::OutOfFuel { max_fuel, consumed } => {
-                write!(f, "wasm execution exhausted fuel budget ({consumed}/{max_fuel})")
+                write!(
+                    f,
+                    "wasm execution exhausted fuel budget ({consumed}/{max_fuel})"
+                )
             }
             Self::MemoryLimitExceeded {
                 requested_bytes,
@@ -507,29 +526,75 @@ enum Insn {
     GlobalSet(u32),
     TableGet(u32),
     TableSet(u32),
-    I32Load { offset: u32 },
-    I64Load { offset: u32 },
-    F32Load { offset: u32 },
-    F64Load { offset: u32 },
-    I32Load8S { offset: u32 },
-    I32Load8U { offset: u32 },
-    I32Load16S { offset: u32 },
-    I32Load16U { offset: u32 },
-    I64Load8S { offset: u32 },
-    I64Load8U { offset: u32 },
-    I64Load16S { offset: u32 },
-    I64Load16U { offset: u32 },
-    I64Load32S { offset: u32 },
-    I64Load32U { offset: u32 },
-    I32Store { offset: u32 },
-    I64Store { offset: u32 },
-    F32Store { offset: u32 },
-    F64Store { offset: u32 },
-    I32Store8 { offset: u32 },
-    I32Store16 { offset: u32 },
-    I64Store8 { offset: u32 },
-    I64Store16 { offset: u32 },
-    I64Store32 { offset: u32 },
+    I32Load {
+        offset: u32,
+    },
+    I64Load {
+        offset: u32,
+    },
+    F32Load {
+        offset: u32,
+    },
+    F64Load {
+        offset: u32,
+    },
+    I32Load8S {
+        offset: u32,
+    },
+    I32Load8U {
+        offset: u32,
+    },
+    I32Load16S {
+        offset: u32,
+    },
+    I32Load16U {
+        offset: u32,
+    },
+    I64Load8S {
+        offset: u32,
+    },
+    I64Load8U {
+        offset: u32,
+    },
+    I64Load16S {
+        offset: u32,
+    },
+    I64Load16U {
+        offset: u32,
+    },
+    I64Load32S {
+        offset: u32,
+    },
+    I64Load32U {
+        offset: u32,
+    },
+    I32Store {
+        offset: u32,
+    },
+    I64Store {
+        offset: u32,
+    },
+    F32Store {
+        offset: u32,
+    },
+    F64Store {
+        offset: u32,
+    },
+    I32Store8 {
+        offset: u32,
+    },
+    I32Store16 {
+        offset: u32,
+    },
+    I64Store8 {
+        offset: u32,
+    },
+    I64Store16 {
+        offset: u32,
+    },
+    I64Store32 {
+        offset: u32,
+    },
     MemorySize,
     MemoryGrow,
     I32Const(i32),
@@ -683,16 +748,34 @@ enum Insn {
     I64TruncSatF64S,
     I64TruncSatF64U,
     // 0xFC 8..17 bulk-memory & bulk-table ops
-    MemoryInit { data_idx: u32 },
-    DataDrop { data_idx: u32 },
+    MemoryInit {
+        data_idx: u32,
+    },
+    DataDrop {
+        data_idx: u32,
+    },
     MemoryCopy,
     MemoryFill,
-    TableInit { elem_idx: u32, table_idx: u32 },
-    ElemDrop { elem_idx: u32 },
-    TableCopy { dst_table: u32, src_table: u32 },
-    TableGrow { table_idx: u32 },
-    TableSize { table_idx: u32 },
-    TableFill { table_idx: u32 },
+    TableInit {
+        elem_idx: u32,
+        table_idx: u32,
+    },
+    ElemDrop {
+        elem_idx: u32,
+    },
+    TableCopy {
+        dst_table: u32,
+        src_table: u32,
+    },
+    TableGrow {
+        table_idx: u32,
+    },
+    TableSize {
+        table_idx: u32,
+    },
+    TableFill {
+        table_idx: u32,
+    },
 }
 
 impl Insn {
@@ -851,7 +934,9 @@ impl<'a> Cursor<'a> {
                 return Ok(result);
             }
         }
-        Err(WasmRunError::InvalidModule("unterminated u32 LEB128".into()))
+        Err(WasmRunError::InvalidModule(
+            "unterminated u32 LEB128".into(),
+        ))
     }
 
     fn read_i32_leb(&mut self) -> Result<i32, WasmRunError> {
@@ -886,7 +971,9 @@ impl<'a> Cursor<'a> {
                     result |= !0i64 << shift;
                 }
                 if !(-(1i64 << 32)..(1i64 << 32)).contains(&result) {
-                    return Err(WasmRunError::InvalidModule("s33 LEB128 out of range".into()));
+                    return Err(WasmRunError::InvalidModule(
+                        "s33 LEB128 out of range".into(),
+                    ));
                 }
                 return Ok(result);
             }
@@ -1132,7 +1219,9 @@ fn parse_wasm_module(
                 for _ in 0..n {
                     let idx = sc.read_u32_leb()? as usize;
                     if idx >= types.len() {
-                        return Err(WasmRunError::InvalidModule("function type index OOB".into()));
+                        return Err(WasmRunError::InvalidModule(
+                            "function type index OOB".into(),
+                        ));
                     }
                     func_type_indices.push(idx);
                 }
@@ -1272,9 +1361,7 @@ fn parse_wasm_module(
                                 ));
                             }
                         }
-                        _ => {
-                            return Err(WasmRunError::InvalidModule("invalid export kind".into()))
-                        }
+                        _ => return Err(WasmRunError::InvalidModule("invalid export kind".into())),
                     }
                     exports.push((name, kind, idx));
                 }
@@ -1295,7 +1382,9 @@ fn parse_wasm_module(
             9 => {
                 let n = sc.read_u32_leb()? as usize;
                 if n > MAX_ELEM_SEGMENTS || n > sc.remaining() {
-                    return Err(WasmRunError::InvalidModule("too many element segments".into()));
+                    return Err(WasmRunError::InvalidModule(
+                        "too many element segments".into(),
+                    ));
                 }
                 let num_funcs = func_type_indices.len();
                 let mut total_elems = 0usize;
@@ -1396,7 +1485,9 @@ fn parse_wasm_module(
             12 => {
                 let dc = sc.read_u32_leb()? as usize;
                 if dc > MAX_DATA_SEGMENTS {
-                    return Err(WasmRunError::InvalidModule("datacount exceeds limit".into()));
+                    return Err(WasmRunError::InvalidModule(
+                        "datacount exceeds limit".into(),
+                    ));
                 }
                 declared_data_count = Some(dc);
             }
@@ -2748,9 +2839,7 @@ fn parse_and_validate_code_body(
                         if (elem_idx as usize) >= ctx.num_elem_segments
                             || (table_idx as usize) >= ctx.tables.len()
                         {
-                            return Err(WasmRunError::InvalidModule(
-                                "table.init index OOB".into(),
-                            ));
+                            return Err(WasmRunError::InvalidModule("table.init index OOB".into()));
                         }
                         ts.pop_expect(ValType::I32)?;
                         ts.pop_expect(ValType::I32)?;
@@ -2763,9 +2852,7 @@ fn parse_and_validate_code_body(
                     13 => {
                         let elem_idx = cur.read_u32_leb()?;
                         if (elem_idx as usize) >= ctx.num_elem_segments {
-                            return Err(WasmRunError::InvalidModule(
-                                "elem.drop index OOB".into(),
-                            ));
+                            return Err(WasmRunError::InvalidModule("elem.drop index OOB".into()));
                         }
                         insns.push(Insn::ElemDrop { elem_idx });
                     }
@@ -2775,9 +2862,7 @@ fn parse_and_validate_code_body(
                         if (dst_table as usize) >= ctx.tables.len()
                             || (src_table as usize) >= ctx.tables.len()
                         {
-                            return Err(WasmRunError::InvalidModule(
-                                "table.copy index OOB".into(),
-                            ));
+                            return Err(WasmRunError::InvalidModule("table.copy index OOB".into()));
                         }
                         ts.pop_expect(ValType::I32)?;
                         ts.pop_expect(ValType::I32)?;
@@ -2790,9 +2875,7 @@ fn parse_and_validate_code_body(
                     15 => {
                         let table_idx = cur.read_u32_leb()?;
                         if (table_idx as usize) >= ctx.tables.len() {
-                            return Err(WasmRunError::InvalidModule(
-                                "table.grow index OOB".into(),
-                            ));
+                            return Err(WasmRunError::InvalidModule("table.grow index OOB".into()));
                         }
                         ts.pop_expect(ValType::I32)?;
                         ts.pop_expect(ValType::FuncRef)?;
@@ -2802,9 +2885,7 @@ fn parse_and_validate_code_body(
                     16 => {
                         let table_idx = cur.read_u32_leb()?;
                         if (table_idx as usize) >= ctx.tables.len() {
-                            return Err(WasmRunError::InvalidModule(
-                                "table.size index OOB".into(),
-                            ));
+                            return Err(WasmRunError::InvalidModule("table.size index OOB".into()));
                         }
                         ts.push_concrete(ValType::I32);
                         insns.push(Insn::TableSize { table_idx });
@@ -2812,9 +2893,7 @@ fn parse_and_validate_code_body(
                     17 => {
                         let table_idx = cur.read_u32_leb()?;
                         if (table_idx as usize) >= ctx.tables.len() {
-                            return Err(WasmRunError::InvalidModule(
-                                "table.fill index OOB".into(),
-                            ));
+                            return Err(WasmRunError::InvalidModule("table.fill index OOB".into()));
                         }
                         ts.pop_expect(ValType::I32)?;
                         ts.pop_expect(ValType::FuncRef)?;
@@ -3123,13 +3202,12 @@ pub fn run_wasm_metered(
     }
 
     // Instantiate bounded linear memory via fallible reservation.
-    let init_mem_bytes = parsed
-        .mem_initial_pages
-        .checked_mul(WASM_PAGE_SIZE)
-        .ok_or(WasmRunError::MemoryLimitExceeded {
+    let init_mem_bytes = parsed.mem_initial_pages.checked_mul(WASM_PAGE_SIZE).ok_or(
+        WasmRunError::MemoryLimitExceeded {
             requested_bytes: usize::MAX,
             max_bytes: budget.max_memory_bytes,
-        })?;
+        },
+    )?;
     if init_mem_bytes > budget.max_memory_bytes {
         return Err(WasmRunError::MemoryLimitExceeded {
             requested_bytes: init_mem_bytes,
@@ -3259,7 +3337,9 @@ pub fn run_wasm_metered(
             .zip(&entry_ty.results)
             .any(|(v, expected)| v.ty() != *expected)
     {
-        return Err(WasmRunError::Trap("unexpected result stack arity or type".into()));
+        return Err(WasmRunError::Trap(
+            "unexpected result stack arity or type".into(),
+        ));
     }
     let tier_rec = ReproducibilityTier::R2DeterministicGrain;
     let egress_rec = EgressPosture::DenyByConstruction;
@@ -3487,9 +3567,7 @@ impl<'a, 'm> VmExec<'a, 'm> {
             let floor = frame.base_stack;
 
             match *insn {
-                Insn::Unreachable => {
-                    return Err(WasmRunError::Trap("unreachable executed".into()))
-                }
+                Insn::Unreachable => return Err(WasmRunError::Trap("unreachable executed".into())),
                 Insn::Nop => frame.pc += 1,
                 Insn::Block {
                     param_len,
@@ -3755,9 +3833,9 @@ impl<'a, 'm> VmExec<'a, 'm> {
                 Insn::TableGet(tidx) => {
                     let elem_idx = self.pop_i32(floor)? as u32 as usize;
                     let tbl = &self.tables[tidx as usize];
-                    let r = *tbl.get(elem_idx).ok_or_else(|| {
-                        WasmRunError::Trap("out of bounds table access".into())
-                    })?;
+                    let r = *tbl
+                        .get(elem_idx)
+                        .ok_or_else(|| WasmRunError::Trap("out of bounds table access".into()))?;
                     self.push_val(WasmVal::FuncRef(r))?;
                     frame.pc += 1;
                 }
@@ -3765,9 +3843,9 @@ impl<'a, 'm> VmExec<'a, 'm> {
                     let r = self.pop_funcref(floor)?;
                     let elem_idx = self.pop_i32(floor)? as u32 as usize;
                     let tbl = &mut self.tables[tidx as usize];
-                    let slot = tbl.get_mut(elem_idx).ok_or_else(|| {
-                        WasmRunError::Trap("out of bounds table access".into())
-                    })?;
+                    let slot = tbl
+                        .get_mut(elem_idx)
+                        .ok_or_else(|| WasmRunError::Trap("out of bounds table access".into()))?;
                     *slot = r;
                     frame.pc += 1;
                 }
@@ -3960,12 +4038,12 @@ impl<'a, 'm> VmExec<'a, 'm> {
                         let extra_fuel = (delta_pages as u64).saturating_mul(8);
                         self.charge_fuel(extra_fuel)?;
                         let add_bytes = new_bytes.saturating_sub(self.memory.len());
-                        self.memory
-                            .try_reserve(add_bytes)
-                            .map_err(|_| WasmRunError::MemoryLimitExceeded {
+                        self.memory.try_reserve(add_bytes).map_err(|_| {
+                            WasmRunError::MemoryLimitExceeded {
                                 requested_bytes: new_bytes,
                                 max_bytes: self.budget.max_memory_bytes,
-                            })?;
+                            }
+                        })?;
                         self.memory.resize(new_bytes, 0u8);
                         *self.peak_memory_bytes = (*self.peak_memory_bytes).max(new_bytes);
                         self.push_val(WasmVal::I32(cur_pages as i32))?;
@@ -4654,8 +4732,8 @@ impl<'a, 'm> VmExec<'a, 'm> {
                             return Err(WasmRunError::Trap("out of bounds table access".into()));
                         }
                         if n > 0 {
-                            let tmp =
-                                self.tables[src_table as usize][s as usize..s_end as usize].to_vec();
+                            let tmp = self.tables[src_table as usize][s as usize..s_end as usize]
+                                .to_vec();
                             self.tables[dst_table as usize][d as usize..d_end as usize]
                                 .copy_from_slice(&tmp);
                         }
@@ -4726,7 +4804,8 @@ mod tests {
         0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, // type 0: (i32, i32) -> i32
         0x03, 0x02, 0x01, 0x00, // func 0 -> type 0
         0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00, // export "run" -> func 0
-        0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b, // local.get 0; local.get 1; i32.add; end
+        0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a,
+        0x0b, // local.get 0; local.get 1; i32.add; end
     ];
 
     // Infinite loop `(module (func (export "run") (loop (br 0))))` (`CAP-23` exploit payload)
@@ -4740,9 +4819,8 @@ mod tests {
 
     // Host import sneak attempt `(module (import "env" "sneak" (func)))`
     const WASM_IMPORT_SNEAK: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-        0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
-        0x02, 0x0d, 0x01, 0x03, b'e', b'n', b'v', 0x05, b's', b'n', b'e', b'a', b'k', 0x00, 0x00,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x02,
+        0x0d, 0x01, 0x03, b'e', b'n', b'v', 0x05, b's', b'n', b'e', b'a', b'k', 0x00, 0x00,
     ];
 
     #[test]
@@ -4822,13 +4900,11 @@ mod tests {
     fn bulk_memory_fill_charges_proportional_fuel_before_copying() {
         // `(module (memory 1) (func (export "fill") (param i32) i32.const 0 i32.const 0xAA local.get 0 memory.fill))`
         let wasm_fill: &[u8] = &[
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x01, 0x05, 0x01, 0x60, 0x01, 0x7f, 0x00, // (i32) -> ()
-            0x03, 0x02, 0x01, 0x00,
-            0x05, 0x03, 0x01, 0x00, 0x01, // memory 1 page
-            0x07, 0x08, 0x01, 0x04, b'f', b'i', b'l', b'l', 0x00, 0x00,
-            0x0a, 0x0e, 0x01, 0x0c, 0x00,
-            0x41, 0x00, // d = 0
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x01, 0x7f,
+            0x00, // (i32) -> ()
+            0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01, // memory 1 page
+            0x07, 0x08, 0x01, 0x04, b'f', b'i', b'l', b'l', 0x00, 0x00, 0x0a, 0x0e, 0x01, 0x0c,
+            0x00, 0x41, 0x00, // d = 0
             0x41, 0xaa, 0x01, // val = 0xAA
             0x20, 0x00, // n = param 0
             0xfc, 0x0b, 0x00, // memory.fill 0
@@ -4866,13 +4942,10 @@ mod tests {
     fn u32_max_offset_load_never_wraps_and_static_type_confusion_is_rejected() {
         // `(module (memory 1) (func (export "oob") (param i32) (result i32) local.get 0 i32.load offset=0xffffffff))`
         let wasm_u32max_off: &[u8] = &[
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
-            0x03, 0x02, 0x01, 0x00,
-            0x05, 0x03, 0x01, 0x00, 0x01,
-            0x07, 0x07, 0x01, 0x03, b'o', b'o', b'b', 0x00, 0x00,
-            0x0a, 0x0d, 0x01, 0x0b, 0x00,
-            0x20, 0x00, // base = param 0 (pass 1 -> 1 + 0xFFFF_FFFF = 0x1_0000_0000, would wrap to 0 on u32!)
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f,
+            0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x07, 0x01,
+            0x03, b'o', b'o', b'b', 0x00, 0x00, 0x0a, 0x0d, 0x01, 0x0b, 0x00, 0x20,
+            0x00, // base = param 0 (pass 1 -> 1 + 0xFFFF_FFFF = 0x1_0000_0000, would wrap to 0 on u32!)
             0x28, 0x02, 0xff, 0xff, 0xff, 0xff, 0x0f, // i32.load align=4 offset=u32::MAX
             0x0b,
         ];
@@ -4887,12 +4960,10 @@ mod tests {
 
         // Malformed module returning `f32` from `() -> i32` via `br 0` is rejected at load time!
         let bad_branch_type: &[u8] = &[
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, // () -> i32
-            0x03, 0x02, 0x01, 0x00,
-            0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00,
-            0x0a, 0x0b, 0x01, 0x09, 0x00,
-            0x43, 0x00, 0x00, 0x80, 0x3f, // f32.const 1.0
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01,
+            0x7f, // () -> i32
+            0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00, 0x0a,
+            0x0b, 0x01, 0x09, 0x00, 0x43, 0x00, 0x00, 0x80, 0x3f, // f32.const 1.0
             0x0c, 0x00, // br 0 (into i32 result!)
             0x0b,
         ];
@@ -4915,8 +4986,14 @@ mod tests {
         let one = 1.0_f64.to_bits();
         assert_eq!(wasm_f64_min(neg_nan, one), CANON_F64_NAN_BITS);
         assert_eq!(wasm_f64_max(one, neg_nan), CANON_F64_NAN_BITS);
-        assert_eq!(wasm_f64_min((-0.0_f64).to_bits(), 0.0_f64.to_bits()), (-0.0_f64).to_bits());
-        assert_eq!(wasm_f64_max((-0.0_f64).to_bits(), 0.0_f64.to_bits()), 0.0_f64.to_bits());
+        assert_eq!(
+            wasm_f64_min((-0.0_f64).to_bits(), 0.0_f64.to_bits()),
+            (-0.0_f64).to_bits()
+        );
+        assert_eq!(
+            wasm_f64_max((-0.0_f64).to_bits(), 0.0_f64.to_bits()),
+            0.0_f64.to_bits()
+        );
 
         // Verify trapping trunc edge cases (`-0.5 -> 0` for unsigned, `-1.0 -> Trap`, `2^31 -> Trap`).
         assert_eq!(trunc_f64_to_u32(-0.5).unwrap(), 0);
@@ -4930,12 +5007,11 @@ mod tests {
         // 1. Polymorphic unreachable `br_table 0 1` where target 0 expects `f32` and target 1 expects `i32`
         // is valid per Wasm 2.0 / Reference-Types §3.3.8.8 (`gpt-6.2-astra` finding #4).
         let poly_br_table: &[u8] = &[
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, // () -> i32
-            0x03, 0x02, 0x01, 0x00,
-            0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00,
-            0x0a, 0x17, 0x01, 0x15, 0x00,
-            0x41, 0x00, // i32.const 0 (skip unreachable then-branch at runtime while validating it statically!)
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01,
+            0x7f, // () -> i32
+            0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00, 0x0a,
+            0x17, 0x01, 0x15, 0x00, 0x41,
+            0x00, // i32.const 0 (skip unreachable then-branch at runtime while validating it statically!)
             0x04, 0x7d, // if (result f32)
             0x00, // unreachable
             0x0e, 0x01, 0x00, 0x01, // br_table [0 -> f32] default=1 (-> func i32)
@@ -4958,20 +5034,13 @@ mod tests {
 
         // Concrete `f32` operand pushed after `unreachable` before `br_table 0 1` (where target 1 expects `i32`) MUST fail validation!
         let bad_poly_br_table: &[u8] = &[
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
-            0x03, 0x02, 0x01, 0x00,
-            0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00,
-            0x0a, 0x16, 0x01, 0x14, 0x00,
-            0x02, 0x7d,
-            0x00,
-            0x43, 0x00, 0x00, 0x80, 0x3f, // f32.const 1.0
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01,
+            0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00,
+            0x0a, 0x16, 0x01, 0x14, 0x00, 0x02, 0x7d, 0x00, 0x43, 0x00, 0x00, 0x80,
+            0x3f, // f32.const 1.0
             0x41, 0x00, // selector = 0
             0x0e, 0x01, 0x00, 0x01, // target 1 expects i32 != concrete f32!
-            0x0b,
-            0x1a,
-            0x41, 0x07,
-            0x0b,
+            0x0b, 0x1a, 0x41, 0x07, 0x0b,
         ];
         assert!(matches!(
             run_wasm_metered(
@@ -4986,12 +5055,9 @@ mod tests {
 
         // 2. Padded LEB128 reserved zero byte (`0x80, 0x00`) on `memory.size` is rejected (`gpt-6.2-astra` finding #6).
         let padded_memsize: &[u8] = &[
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
-            0x03, 0x02, 0x01, 0x00,
-            0x05, 0x03, 0x01, 0x00, 0x01,
-            0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00,
-            0x0a, 0x07, 0x01, 0x05, 0x00, 0x3f, 0x80, 0x00, 0x0b,
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01,
+            0x7f, 0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x07, 0x01, 0x03,
+            b'r', b'u', b'n', 0x00, 0x00, 0x0a, 0x07, 0x01, 0x05, 0x00, 0x3f, 0x80, 0x00, 0x0b,
         ];
         assert!(matches!(
             run_wasm_metered(
@@ -5006,12 +5072,10 @@ mod tests {
 
         // 3. Module-declared `(memory 1 1)` returns `-1` on `memory.grow(1)` even under a 1-page host budget (`gpt-6.2-astra` finding #7).
         let mem_max_1: &[u8] = &[
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
-            0x03, 0x02, 0x01, 0x00,
-            0x05, 0x04, 0x01, 0x01, 0x01, 0x01, // (memory 1 1)
-            0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00,
-            0x0a, 0x08, 0x01, 0x06, 0x00, 0x41, 0x01, 0x40, 0x00, 0x0b, // i32.const 1; memory.grow 0
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01,
+            0x7f, 0x03, 0x02, 0x01, 0x00, 0x05, 0x04, 0x01, 0x01, 0x01, 0x01, // (memory 1 1)
+            0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00, 0x0a, 0x08, 0x01, 0x06, 0x00,
+            0x41, 0x01, 0x40, 0x00, 0x0b, // i32.const 1; memory.grow 0
         ];
         let mg_rec = run_wasm_metered(
             WasmCapTier::Sandboxed,
@@ -5029,16 +5093,11 @@ mod tests {
             // Type 0: () -> (), Type 1: () -> i32
             0x01, 0x08, 0x02, 0x60, 0x00, 0x00, 0x60, 0x00, 0x01, 0x7f,
             // Func 0 (start: () -> ()), Func 1 (callee: () -> i32), Func 2 (run: () -> i32)
-            0x03, 0x04, 0x03, 0x00, 0x01, 0x01,
-            // Table 0: funcref min=1
-            0x04, 0x04, 0x01, 0x70, 0x00, 0x01,
-            // Memory 0: min=1
-            0x05, 0x03, 0x01, 0x00, 0x01,
-            // Export "run" -> func 2
-            0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x02,
-            // Start -> func 0
-            0x08, 0x01, 0x00,
-            // Element 0 (passive mode=1, elemkind=0x00, [func 1])
+            0x03, 0x04, 0x03, 0x00, 0x01, 0x01, // Table 0: funcref min=1
+            0x04, 0x04, 0x01, 0x70, 0x00, 0x01, // Memory 0: min=1
+            0x05, 0x03, 0x01, 0x00, 0x01, // Export "run" -> func 2
+            0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x02, // Start -> func 0
+            0x08, 0x01, 0x00, // Element 0 (passive mode=1, elemkind=0x00, [func 1])
             0x09, 0x05, 0x01, 0x01, 0x00, 0x01, 0x01,
             // DataCount = 1 (section 12 precedes Code section 10!)
             0x0c, 0x01, 0x01,
@@ -5046,15 +5105,10 @@ mod tests {
             // Func 0 (start): memory.init 0 (d=0, s=0, n=4); data.drop 0; table.init 0 0 (d=0, s=0, n=1); elem.drop 0; end
             // Func 1: i32.const 0; i32.load align=4 offset=0; end
             // Func 2 ("run"): i32.const 0; call_indirect (type 1, table 0); end
-            0x0a, 0x2e, 0x03,
-            0x1c, 0x00,
-            0x41, 0x00, 0x41, 0x00, 0x41, 0x04, 0xfc, 0x08, 0x00, 0x00,
-            0xfc, 0x09, 0x00,
-            0x41, 0x00, 0x41, 0x00, 0x41, 0x01, 0xfc, 0x0c, 0x00, 0x00,
-            0xfc, 0x0d, 0x00,
-            0x0b,
-            0x07, 0x00, 0x41, 0x00, 0x28, 0x02, 0x00, 0x0b,
-            0x07, 0x00, 0x41, 0x00, 0x11, 0x01, 0x00, 0x0b,
+            0x0a, 0x2e, 0x03, 0x1c, 0x00, 0x41, 0x00, 0x41, 0x00, 0x41, 0x04, 0xfc, 0x08, 0x00,
+            0x00, 0xfc, 0x09, 0x00, 0x41, 0x00, 0x41, 0x00, 0x41, 0x01, 0xfc, 0x0c, 0x00, 0x00,
+            0xfc, 0x0d, 0x00, 0x0b, 0x07, 0x00, 0x41, 0x00, 0x28, 0x02, 0x00, 0x0b, 0x07, 0x00,
+            0x41, 0x00, 0x11, 0x01, 0x00, 0x0b,
             // Data 0 (passive mode=1, bytes=[0x78, 0x56, 0x34, 0x12] -> 0x1234_5678 LE)
             0x0b, 0x07, 0x01, 0x01, 0x04, 0x78, 0x56, 0x34, 0x12,
         ];

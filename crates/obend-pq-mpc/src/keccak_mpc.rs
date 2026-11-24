@@ -13,8 +13,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use obend_crypto_exec::goldilocks::{GOLDILOCKS_PRIME, Goldilocks};
-use obend_crypto_exec::transcript::{
-    Cshake256Xof, KECCAK_ROUND_CONSTANTS, SHAKE256_RATE_BYTES, cshake256_customization_prefix,
+use obend_crypto_exec::transcript::cshake256_customization_prefix;
+use obend_keccak::{
+    Cshake256, KECCAK_ROTATION_OFFSETS, KECCAK_ROUND_CONSTANTS, SHAKE256_RATE_BYTES,
 };
 
 /// Domain customization tag for the 256-bit `cSHAKE256` MPC CSPRNG.
@@ -36,7 +37,7 @@ pub const fn batch_lane_mask(batch_len: usize) -> u64 {
 /// Intentionally implements neither `Clone` nor unredacted `Debug`, and scrubs buffered words +
 /// ratchets the internal sponge state on `Drop` (`#![forbid(unsafe_code)]`).
 pub struct MpcCsprng {
-    xof: Cshake256Xof,
+    xof: Cshake256,
     word_buf: [u64; 17],
     word_pos: usize,
 }
@@ -44,7 +45,7 @@ pub struct MpcCsprng {
 impl MpcCsprng {
     /// Initialize an independent 256-bit CSPRNG stream from 32 bytes of entropy and an explicit domain tag.
     pub fn from_seed(mut seed: [u8; 32], domain_sep: &[u8]) -> Self {
-        let mut xof = Cshake256Xof::new(MPC_CSPRNG_CUSTOMIZATION);
+        let mut xof = Cshake256::customized(MPC_CSPRNG_CUSTOMIZATION);
         let dom_len = (domain_sep.len() as u64).to_be_bytes();
         xof.absorb(&dom_len);
         xof.absorb(domain_sep);
@@ -157,11 +158,6 @@ impl Drop for MpcCsprng {
         core::hint::black_box((&self.word_buf, &wipe));
     }
 }
-
-/// FIPS 202 rho rotation offsets indexed by `x + 5 * y`.
-const ROTATION_OFFSETS: [u32; 25] = [
-    0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
-];
 
 // ============================================================================
 // 1. Wiedemann Binary Tower Arithmetic (`TowerElem 3` = GF(2^8), `TowerElem 7` = GF(2^128))
@@ -476,7 +472,7 @@ fn linear_theta_rho_pi_u64(planes: &mut [u64; 1600]) -> Box<[u64; 1600]> {
         let x = source % 5;
         let y = source / 5;
         let target = y + 5 * ((2 * x + 3 * y) % 5);
-        let rot = (ROTATION_OFFSETS[source] as usize) & 63;
+        let rot = (KECCAK_ROTATION_OFFSETS[source] as usize) & 63;
         let src_base = 64 * source;
         let dst_base = 64 * target;
         for z in 0..64 {
@@ -1189,7 +1185,7 @@ fn linear_theta_rho_pi_gf256(
         let x = source % 5;
         let y = source / 5;
         let target = y + 5 * ((2 * x + 3 * y) % 5);
-        let rot = (ROTATION_OFFSETS[source] as usize) & 63;
+        let rot = (KECCAK_ROTATION_OFFSETS[source] as usize) & 63;
         let src_base = 64 * source;
         let dst_base = 64 * target;
         for z in 0..64 {
@@ -2036,10 +2032,22 @@ fn tower_mul_from_nibbles(basis: &[[u128; 16]; 16], value: u64) -> Tower128 {
         };
     }
     Tower128(
-        column!(0) ^ column!(1) ^ column!(2) ^ column!(3)
-            ^ column!(4) ^ column!(5) ^ column!(6) ^ column!(7)
-            ^ column!(8) ^ column!(9) ^ column!(10) ^ column!(11)
-            ^ column!(12) ^ column!(13) ^ column!(14) ^ column!(15),
+        column!(0)
+            ^ column!(1)
+            ^ column!(2)
+            ^ column!(3)
+            ^ column!(4)
+            ^ column!(5)
+            ^ column!(6)
+            ^ column!(7)
+            ^ column!(8)
+            ^ column!(9)
+            ^ column!(10)
+            ^ column!(11)
+            ^ column!(12)
+            ^ column!(13)
+            ^ column!(14)
+            ^ column!(15),
     )
 }
 
@@ -2193,7 +2201,7 @@ pub fn verify_authenticated_tower_transcript_2lane(
             return false;
         }
     }
-    let mut xof = Cshake256Xof::new(b"OBEND.PQ.TOWER.MAC/v2");
+    let mut xof = Cshake256::customized(b"OBEND.PQ.TOWER.MAC/v2");
     xof.absorb(&(context_binding.len() as u64).to_be_bytes());
     xof.absorb(context_binding);
     xof.absorb(&(opened_diffs.len() as u64).to_be_bytes());
@@ -2201,7 +2209,7 @@ pub fn verify_authenticated_tower_transcript_2lane(
         xof.absorb(&word.to_le_bytes());
     }
     for (shares, tags) in transcript.shares.iter().zip(&transcript.tags) {
-        let mut commitment = Cshake256Xof::new(b"OBEND.PQ.TOWER.PREOPEN/v1");
+        let mut commitment = Cshake256::customized(b"OBEND.PQ.TOWER.PREOPEN/v1");
         for (&share, &(hi, lo)) in shares.iter().zip(tags) {
             commitment.absorb(&share.to_le_bytes());
             commitment.absorb(&hi.0.to_le_bytes());

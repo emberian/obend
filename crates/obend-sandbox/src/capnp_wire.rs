@@ -146,7 +146,9 @@ impl<'a> Message<'a> {
                     let tag = read_u64(lseg, pad2_byte)
                         .ok_or(CapnpError::OutOfBounds("double-far tag"))?;
                     if far & 3 != 2 || ((far >> 2) & 1) != 0 {
-                        return Err(CapnpError::Framing("double-far first word not a single far ptr"));
+                        return Err(CapnpError::Framing(
+                            "double-far first word not a single far ptr",
+                        ));
                     }
                     let content_word = ((far >> 3) & 0x1fff_ffff) as usize;
                     let content_seg = (far >> 32) as usize;
@@ -449,11 +451,7 @@ impl<'a, 'm> List<'a, 'm> {
             .checked_add(1)
             .and_then(|w| w.checked_add(body_words))
             .ok_or(CapnpError::ListTooLarge)?;
-        if total_words
-            .checked_mul(8)
-            .ok_or(CapnpError::ListTooLarge)?
-            > s.len()
-        {
+        if total_words.checked_mul(8).ok_or(CapnpError::ListTooLarge)? > s.len() {
             return Err(CapnpError::ListTooLarge);
         }
         let mut out = Vec::with_capacity(elem_count);
@@ -537,7 +535,13 @@ impl Builder {
         self.buf[byte_off..byte_off + data.len()].copy_from_slice(data);
     }
 
-    pub(crate) fn struct_ptr_at(&mut self, slot: usize, target_word: usize, dwords: u16, pwords: u16) {
+    pub(crate) fn struct_ptr_at(
+        &mut self,
+        slot: usize,
+        target_word: usize,
+        dwords: u16,
+        pwords: u16,
+    ) {
         let off = target_word as i64 - (slot as i64 + 1);
         let off30 = (off as u64) & 0x3fff_ffff;
         let p = (off30 << 2) | ((dwords as u64) << 32) | ((pwords as u64) << 48);
@@ -754,7 +758,10 @@ pub fn write_bridge_config(cfg: &WireBridgeConfig<'_>) -> Vec<u8> {
         let tag = ((cfg.permissions.len() as u64) << 2) | ((DW as u64) << 32) | ((PW as u64) << 48);
         b.put_word(tag_word, tag);
         let off = tag_word as i64 - ((vi) as i64 + 1);
-        let p = 1 | (((off as u64) & 0x3fff_ffff) << 2) | (7u64 << 32) | (((cfg.permissions.len() * STRIDE) as u64) << 35);
+        let p = 1
+            | (((off as u64) & 0x3fff_ffff) << 2)
+            | (7u64 << 32)
+            | (((cfg.permissions.len() * STRIDE) as u64) << 35);
         b.put_word(vi, p);
         for (i, perm) in cfg.permissions.iter().enumerate() {
             let base = tag_word + 1 + i * STRIDE;
@@ -773,7 +780,10 @@ pub fn write_bridge_config(cfg: &WireBridgeConfig<'_>) -> Vec<u8> {
         let tag = ((cfg.roles.len() as u64) << 2) | ((DW as u64) << 32) | ((PW as u64) << 48);
         b.put_word(tag_word, tag);
         let off = tag_word as i64 - ((vi + 1) as i64 + 1);
-        let p = 1 | (((off as u64) & 0x3fff_ffff) << 2) | (7u64 << 32) | (((cfg.roles.len() * STRIDE) as u64) << 35);
+        let p = 1
+            | (((off as u64) & 0x3fff_ffff) << 2)
+            | (7u64 << 32)
+            | (((cfg.roles.len() * STRIDE) as u64) << 35);
         b.put_word(vi + 1, p);
         for (i, role) in cfg.roles.iter().enumerate() {
             let base = tag_word + 1 + i * STRIDE;

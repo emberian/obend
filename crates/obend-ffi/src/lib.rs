@@ -46,8 +46,12 @@ mod tests {
         }
         // A bare id is not a receipt: the verifier needs the frame with the payload it opens.
         assert!(!session.verify_receipt(&tid).expect("bare id"));
-        let receipt = session.commit_payload(b"cell_alpha=42").expect("commit payload");
-        assert!(session.verify_receipt(&receipt).expect("verify committed frame"));
+        let receipt = session
+            .commit_payload(b"cell_alpha=42")
+            .expect("commit payload");
+        assert!(session
+            .verify_receipt(&receipt)
+            .expect("verify committed frame"));
     }
 
     #[test]
@@ -127,7 +131,10 @@ mod tests {
         assert_eq!(init_json["status"], "accepted");
         assert_eq!(init_json["cellCount"], 3);
         assert_eq!(init_json["cells"][1]["values"][0], 300);
-        let clean_receipt_before = init_json["cells"][2]["receiptHex"].as_str().unwrap().to_string();
+        let clean_receipt_before = init_json["cells"][2]["receiptHex"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Scrubbing a read-only proof badge MUST fail closed (`TurnRefused`)
         let bad_scrub = br#"{"cellKey":"pcb_cell","fieldName":"drcVerified","newValue":false}"#;
@@ -137,7 +144,9 @@ mod tests {
         // Scrubbing editable `traceWidthUm` updates `pcb_cell` (id 1) and downstream `pde_cell` (id 2),
         // while `unrelated_cell` (id 3) stays outside `dirtyCone` with its exact cached 256-bit receipt!
         let ok_scrub = br#"{"cellKey":"pcb_cell","fieldName":"traceWidthUm","newValue":200}"#;
-        let scrub_bytes = session.scrub_projection_cell(ok_scrub).expect("scrub traceWidthUm");
+        let scrub_bytes = session
+            .scrub_projection_cell(ok_scrub)
+            .expect("scrub traceWidthUm");
         let scrub_json: serde_json::Value = serde_json::from_slice(&scrub_bytes).unwrap();
         assert_eq!(scrub_json["status"], "accepted");
         assert_eq!(scrub_json["dirtyCone"], serde_json::json!([1, 2]));

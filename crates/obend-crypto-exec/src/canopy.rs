@@ -52,7 +52,10 @@ pub enum CanopyError {
     InvalidBlowupFactor(usize),
     InvalidQueryCount(usize),
     InvalidVariableCount(usize),
-    InsufficientQuerySoundness { bits: usize, required: usize },
+    InsufficientQuerySoundness {
+        bits: usize,
+        required: usize,
+    },
     UdrRadiusViolation {
         radius: usize,
         min_distance: usize,
@@ -181,9 +184,14 @@ impl CanopyParams {
             return 0;
         }
         match self.regime {
-            ProximityRegime::UniqueDecodingRadius =>
-                self.num_queries / if self.blowup_factor == 2 { 3 } else { 2 },
-            _ => self.num_queries.saturating_mul(self.blowup_factor.ilog2() as usize) / 2,
+            ProximityRegime::UniqueDecodingRadius => {
+                self.num_queries / if self.blowup_factor == 2 { 3 } else { 2 }
+            }
+            _ => {
+                self.num_queries
+                    .saturating_mul(self.blowup_factor.ilog2() as usize)
+                    / 2
+            }
         }
     }
 
@@ -214,7 +222,8 @@ impl CanopyParams {
     /// Check integer unique-decoding radius bound `2 * radius < d = L - C + 1` for a given `msg_cols`.
     pub fn check_code_dimensions(&self, msg_cols: usize) -> Result<usize, CanopyError> {
         self.validate_min_soundness(1)?;
-        let codeword_cols = msg_cols.checked_mul(self.blowup_factor)
+        let codeword_cols = msg_cols
+            .checked_mul(self.blowup_factor)
             .ok_or(CanopyError::InvalidBlowupFactor(self.blowup_factor))?;
         let min_distance = codeword_cols - msg_cols + 1;
         if self.regime == ProximityRegime::UniqueDecodingRadius {
@@ -410,7 +419,9 @@ pub fn canopy_commit(
     table: &[Goldilocks],
     salt_seed: Option<&[u8; 32]>,
 ) -> Result<CanopyProverState, CanopyError> {
-    if num_vars > 24 { return Err(CanopyError::InvalidVariableCount(num_vars)); }
+    if num_vars > 24 {
+        return Err(CanopyError::InvalidVariableCount(num_vars));
+    }
     let expected_len = 1usize << num_vars;
     if table.len() != expected_len {
         return Err(CanopyError::TableSizeMismatch {
@@ -643,8 +654,7 @@ pub fn canopy_open(
     // `ifold` step 2: absorb folded row vectors & squeeze combination scalar `beta` + query indices
     absorb_ifold_vectors(tr, &u_eval, &u_prox);
     let _beta = tr.squeeze_ext2();
-    let query_indices =
-        tr.squeeze_distinct_query_indices(params.num_queries, state.codeword_cols);
+    let query_indices = tr.squeeze_distinct_query_indices(params.num_queries, state.codeword_cols);
 
     // `iacc` step 3: extract queried columns + pruned shared-subtree multiproof
     let mut opened_columns = Vec::with_capacity(query_indices.len());
@@ -684,7 +694,9 @@ pub fn canopy_verify(
     tr: &mut FenziTranscript<InstanceBound>,
 ) -> Result<HashInvocationStats, CanopyError> {
     let num_vars = comm.num_vars as usize;
-    if num_vars > 24 { return Err(CanopyError::InvalidVariableCount(num_vars)); }
+    if num_vars > 24 {
+        return Err(CanopyError::InvalidVariableCount(num_vars));
+    }
     if eval_point.len() != num_vars {
         return Err(CanopyError::PointDimensionMismatch {
             expected: num_vars,
@@ -840,7 +852,9 @@ pub fn verify_independent_merkle_baseline(
     tr: &mut FenziTranscript<InstanceBound>,
 ) -> Result<HashInvocationStats, CanopyError> {
     let num_vars = comm.num_vars as usize;
-    if num_vars > 24 { return Err(CanopyError::InvalidVariableCount(num_vars)); }
+    if num_vars > 24 {
+        return Err(CanopyError::InvalidVariableCount(num_vars));
+    }
     let (row_vars, col_vars) = split_var_counts(num_vars);
     let num_rows = 1usize << row_vars;
     let msg_cols = 1usize << col_vars;
@@ -903,7 +917,8 @@ pub fn verify_independent_merkle_baseline(
                 col_idx: expected_idx,
             });
         }
-        let mut cur = hash_canopy_column_leaf(expected_idx, &col_open.values, col_open.salt.as_ref());
+        let mut cur =
+            hash_canopy_column_leaf(expected_idx, &col_open.values, col_open.salt.as_ref());
         leaf_hashes += 1;
 
         let mut node = codeword_cols + expected_idx;
@@ -1025,34 +1040,42 @@ mod tests {
 
     #[test]
     fn test_proximity_guard_refuses_binary_non_udr() {
-        assert!(CanopyParams::new(
-            DomainKind::BinaryAdditive,
-            ProximityRegime::JohnsonBound,
-            4,
-            256
-        )
-        .is_err());
-        assert!(CanopyParams::new(
-            DomainKind::BinaryAdditive,
-            ProximityRegime::CapacityBound,
-            4,
-            256
-        )
-        .is_err());
-        assert!(CanopyParams::new(
-            DomainKind::BinaryAdditive,
-            ProximityRegime::UniqueDecodingRadius,
-            4,
-            256
-        )
-        .is_ok());
-        assert!(CanopyParams::new(
-            DomainKind::PrimeField,
-            ProximityRegime::CapacityBound,
-            4,
-            256
-        )
-        .is_ok());
+        assert!(
+            CanopyParams::new(
+                DomainKind::BinaryAdditive,
+                ProximityRegime::JohnsonBound,
+                4,
+                256
+            )
+            .is_err()
+        );
+        assert!(
+            CanopyParams::new(
+                DomainKind::BinaryAdditive,
+                ProximityRegime::CapacityBound,
+                4,
+                256
+            )
+            .is_err()
+        );
+        assert!(
+            CanopyParams::new(
+                DomainKind::BinaryAdditive,
+                ProximityRegime::UniqueDecodingRadius,
+                4,
+                256
+            )
+            .is_ok()
+        );
+        assert!(
+            CanopyParams::new(
+                DomainKind::PrimeField,
+                ProximityRegime::CapacityBound,
+                4,
+                256
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1060,10 +1083,14 @@ mod tests {
         let params = CanopyParams::default_128bit(); // blowup = 4, queries = 32
         let num_vars = 12usize; // 4096 Goldilocks evaluations -> 64 x 64 matrix -> 64 x 256 RS matrix
         let table: Vec<Goldilocks> = (0..(1usize << num_vars))
-            .map(|i| Goldilocks::from_u64_reduced((i as u64).wrapping_mul(0x517C_C1B7_2722_0A95) + 19))
+            .map(|i| {
+                Goldilocks::from_u64_reduced((i as u64).wrapping_mul(0x517C_C1B7_2722_0A95) + 19)
+            })
             .collect();
         let point: Vec<GoldilocksExt2> = (0..num_vars)
-            .map(|i| GoldilocksExt2::from_canonical_u64_pair(17 + 5 * i as u64, 99 + i as u64).unwrap())
+            .map(|i| {
+                GoldilocksExt2::from_canonical_u64_pair(17 + 5 * i as u64, 99 + i as u64).unwrap()
+            })
             .collect();
         let claimed = mle_eval_base_at_ext2(&table, &point).unwrap();
 
@@ -1079,8 +1106,15 @@ mod tests {
         let proof = canopy_open(&params, &state, &point, &mut p_tr).unwrap();
 
         let mut v_tr = base_tr.clone();
-        let canopy_stats =
-            canopy_verify(&params, &state.commitment, &point, claimed, &proof, &mut v_tr).unwrap();
+        let canopy_stats = canopy_verify(
+            &params,
+            &state.commitment,
+            &point,
+            claimed,
+            &proof,
+            &mut v_tr,
+        )
+        .unwrap();
         assert_eq!(p_tr.state(), v_tr.state());
 
         // Compare against independent Merkle openings on the exact same commitment & transcript
@@ -1111,7 +1145,17 @@ mod tests {
         let mut bad_leaf = proof.clone();
         bad_leaf.opened_columns[0].values[0] += Goldilocks::ONE;
         let mut t_tr = base_tr.clone();
-        assert!(canopy_verify(&params, &state.commitment, &point, claimed, &bad_leaf, &mut t_tr).is_err());
+        assert!(
+            canopy_verify(
+                &params,
+                &state.commitment,
+                &point,
+                claimed,
+                &bad_leaf,
+                &mut t_tr
+            )
+            .is_err()
+        );
 
         // Tamper 2: mutate an auxiliary sibling digest -> rejected!
         let mut bad_sib = proof.clone();
@@ -1122,27 +1166,46 @@ mod tests {
             bad_sib.aux_siblings.push([1; 32]);
         }
         let mut t_tr = base_tr.clone();
-        assert!(canopy_verify(&params, &state.commitment, &point, claimed, &bad_sib, &mut t_tr).is_err());
+        assert!(
+            canopy_verify(
+                &params,
+                &state.commitment,
+                &point,
+                claimed,
+                &bad_sib,
+                &mut t_tr
+            )
+            .is_err()
+        );
 
         // Tamper 3: append an extra unread auxiliary sibling -> rejected!
         let mut extra_sib = proof.clone();
         extra_sib.aux_siblings.push([0u8; 32]);
         let mut t_tr = base_tr.clone();
         assert!(matches!(
-            canopy_verify(&params, &state.commitment, &point, claimed, &extra_sib, &mut t_tr),
+            canopy_verify(
+                &params,
+                &state.commitment,
+                &point,
+                claimed,
+                &extra_sib,
+                &mut t_tr
+            ),
             Err(CanopyError::UnconsumedAuxiliarySiblings { remaining: 1 })
         ));
 
         // Tamper 4: mutate claimed evaluation -> rejected!
         let mut t_tr = base_tr.clone();
-        assert!(canopy_verify(
-            &params,
-            &state.commitment,
-            &point,
-            claimed + GoldilocksExt2::ONE,
-            &proof,
-            &mut t_tr
-        )
-        .is_err());
+        assert!(
+            canopy_verify(
+                &params,
+                &state.commitment,
+                &point,
+                claimed + GoldilocksExt2::ONE,
+                &proof,
+                &mut t_tr
+            )
+            .is_err()
+        );
     }
 }

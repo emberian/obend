@@ -1,8 +1,8 @@
 //! Prepaid confined sessions and archive-first custody. Authentication and kernel-proof
 //! verification are explicit host-supplied interfaces; hashes never stand in for signatures.
 use crate::grain::{
-    digest_slot_entries, GrainCapabilities, GrainExecutionReceipt, GrainExecutor, GrainProgram, GrainTermination,
-    ReproducibilityTier,
+    digest_slot_entries, GrainCapabilities, GrainExecutionReceipt, GrainExecutor, GrainProgram,
+    GrainTermination, ReproducibilityTier,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,9 +43,15 @@ fn hash(domain: &str, xs: &[Vec<u8>]) -> Digest {
 fn merkle_root(xs: &[Vec<u8>]) -> Digest {
     let mut tail = hash("OBEND.CUSTODY.MERKLE.EMPTY/v1", &[]);
     for x in xs.iter().rev() {
-        tail = hash("OBEND.CUSTODY.MERKLE.NODE/v1", &[vec![1], x.clone(), tail.to_vec()]);
+        tail = hash(
+            "OBEND.CUSTODY.MERKLE.NODE/v1",
+            &[vec![1], x.clone(), tail.to_vec()],
+        );
     }
-    hash("OBEND.CUSTODY.MERKLE.ROOT/v1", &[nat(xs.len() as u64), tail.to_vec()])
+    hash(
+        "OBEND.CUSTODY.MERKLE.ROOT/v1",
+        &[nat(xs.len() as u64), tail.to_vec()],
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,7 +103,11 @@ impl PrepaidLease {
     }
     pub fn valid(&self) -> bool {
         self.remaining.checked_add(self.drawn) == Some(self.initial_budget)
-            && self.next_due.checked_sub(self.start_period).and_then(|n| n.checked_mul(self.rent)) == Some(self.drawn)
+            && self
+                .next_due
+                .checked_sub(self.start_period)
+                .and_then(|n| n.checked_mul(self.rent))
+                == Some(self.drawn)
     }
     pub fn state_root(&self) -> Digest {
         merkle_root(
@@ -130,7 +140,10 @@ impl PrepaidLease {
             return Err(LeaseError::InsufficientBudget);
         }
         let next = self.next_due.checked_add(1).ok_or(LeaseError::Overflow)?;
-        let drawn = self.drawn.checked_add(self.rent).ok_or(LeaseError::Overflow)?;
+        let drawn = self
+            .drawn
+            .checked_add(self.rent)
+            .ok_or(LeaseError::Overflow)?;
         self.next_due = next;
         self.remaining -= self.rent;
         self.drawn = drawn;
@@ -202,12 +215,21 @@ fn caps_subset(c: &GrainCapabilities, p: &GrainCapabilities) -> bool {
         && c.allowed_emit_slots.iter().all(|k| writes.contains(k))
         && (!c.allow_hash_digest || p.allow_hash_digest)
 }
-fn authority_root(doors: &BTreeSet<String>, caps: &BTreeSet<u64>, gc: &GrainCapabilities) -> Digest {
+fn authority_root(
+    doors: &BTreeSet<String>,
+    caps: &BTreeSet<u64>,
+    gc: &GrainCapabilities,
+) -> Digest {
     // Runtime hostcall rights extend the formal custom-capability namespace explicitly.
     hash(
         "OBEND.CUSTODY.AUTHORITY/v1",
         &[
-            fields(&doors.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>()),
+            fields(
+                &doors
+                    .iter()
+                    .map(|s| s.as_bytes().to_vec())
+                    .collect::<Vec<_>>(),
+            ),
             fields(&caps.iter().copied().map(nat).collect::<Vec<_>>()),
             fields(
                 &gc.allowed_read_slots
@@ -308,7 +330,10 @@ impl ConfinedGrainSession {
     pub fn write_memory(&mut self, key: Vec<u8>, value: Vec<u8>) {
         self.memory.insert(key, value);
         let root = compute_var_data_root(&self.memory);
-        self.mind_root = hash("OBEND.CUSTODY.MIND/v1", &[nat(self.lease.lease_id), root.to_vec()]);
+        self.mind_root = hash(
+            "OBEND.CUSTODY.MIND/v1",
+            &[nat(self.lease.lease_id), root.to_vec()],
+        );
         self.checkpoint_root = self.state_root();
     }
     pub fn execute(
@@ -324,39 +349,67 @@ impl ConfinedGrainSession {
             return Err(LeaseError::InvalidState);
         }
         let quanta = budget.max_fuel.div_ceil(self.lease.rent).max(1);
-        let cost = quanta.checked_mul(self.lease.rent).ok_or(LeaseError::Overflow)?;
+        let cost = quanta
+            .checked_mul(self.lease.rent)
+            .ok_or(LeaseError::Overflow)?;
         let mut charged = self.lease.clone();
         charged.discharge_period(period, charged.rent)?;
         if cost > self.lease.remaining {
             return Err(LeaseError::InsufficientBudget);
         }
-        charged.next_due = self.lease.next_due.checked_add(quanta).ok_or(LeaseError::Overflow)?;
-        charged.drawn = self.lease.drawn.checked_add(cost).ok_or(LeaseError::Overflow)?;
+        charged.next_due = self
+            .lease
+            .next_due
+            .checked_add(quanta)
+            .ok_or(LeaseError::Overflow)?;
+        charged.drawn = self
+            .lease
+            .drawn
+            .checked_add(cost)
+            .ok_or(LeaseError::Overflow)?;
         charged.remaining = self.lease.remaining - cost;
         let executor = GrainExecutor::new(budget, self.grain_capabilities.clone());
         let receipt = executor.execute(program, inputs);
         let payload = execution_payload(&receipt, turn_request_digest(program, inputs, &executor));
         self.lease = charged;
-        self.receipt_head = hash("OBEND.CUSTODY.RECEIPT/v1", &[self.receipt_head.to_vec(), payload.to_vec()]);
+        self.receipt_head = hash(
+            "OBEND.CUSTODY.RECEIPT/v1",
+            &[self.receipt_head.to_vec(), payload.to_vec()],
+        );
         self.turn_receipts.push(payload);
         for (slot, bytes) in &receipt.emitted_slots {
-            self.memory.insert(slot.to_be_bytes().to_vec(), bytes.clone());
+            self.memory
+                .insert(slot.to_be_bytes().to_vec(), bytes.clone());
         }
-        self.mind_root =
-            hash("OBEND.CUSTODY.MIND/v1", &[nat(self.lease.lease_id), compute_var_data_root(&self.memory).to_vec()]);
+        self.mind_root = hash(
+            "OBEND.CUSTODY.MIND/v1",
+            &[
+                nat(self.lease.lease_id),
+                compute_var_data_root(&self.memory).to_vec(),
+            ],
+        );
         self.checkpoint_root = self.state_root();
         Ok(receipt)
     }
     pub fn verify_receipt_chain(&self, parent: Digest) -> bool {
         self.genesis.parent_checkpoint == parent
-            && self.genesis.authority_root == authority_root(&self.egress_doors, &self.caps, &self.grain_capabilities)
-            && self.turn_receipts.iter().fold(self.genesis.commitment(), |head, r| {
-                hash("OBEND.CUSTODY.RECEIPT/v1", &[head.to_vec(), r.to_vec()])
-            }) == self.receipt_head
+            && self.genesis.authority_root
+                == authority_root(&self.egress_doors, &self.caps, &self.grain_capabilities)
+            && self
+                .turn_receipts
+                .iter()
+                .fold(self.genesis.commitment(), |head, r| {
+                    hash("OBEND.CUSTODY.RECEIPT/v1", &[head.to_vec(), r.to_vec()])
+                })
+                == self.receipt_head
     }
     /// Checks everything before mutation. Repeated calls cannot reuse an issued child identity.
     /// All descendants share the allocation registry, including allocations made later by siblings.
-    pub fn fork_two(&mut self, a: ConfinedForkSpec, b: ConfinedForkSpec) -> Result<(Self, Self), ForkError> {
+    pub fn fork_two(
+        &mut self,
+        a: ConfinedForkSpec,
+        b: ConfinedForkSpec,
+    ) -> Result<(Self, Self), ForkError> {
         if !self.lease.valid() {
             return Err(ForkError::InvalidParent);
         }
@@ -373,17 +426,26 @@ impl ConfinedGrainSession {
             if !c.egress_doors.is_subset(&self.egress_doors) {
                 return Err(ForkError::AmplifiedEgress);
             }
-            if !c.caps.is_subset(&self.caps) || !caps_subset(&c.grain_capabilities, &self.grain_capabilities) {
+            if !c.caps.is_subset(&self.caps)
+                || !caps_subset(&c.grain_capabilities, &self.grain_capabilities)
+            {
                 return Err(ForkError::AmplifiedCapability);
             }
         }
-        let sum = a.budget.checked_add(b.budget).ok_or(ForkError::BudgetOverdraw)?;
+        let sum = a
+            .budget
+            .checked_add(b.budget)
+            .ok_or(ForkError::BudgetOverdraw)?;
         if sum > self.lease.remaining {
             return Err(ForkError::BudgetOverdraw);
         }
         let make = |s: ConfinedForkSpec| {
-            let lease = PrepaidLease::new(s.lease_id, self.lease.next_due, self.lease.rent, s.budget);
-            let mind_root = hash("OBEND.CUSTODY.MIND/v1", &[nat(s.lease_id), self.mind_root.to_vec()]);
+            let lease =
+                PrepaidLease::new(s.lease_id, self.lease.next_due, self.lease.rent, s.budget);
+            let mind_root = hash(
+                "OBEND.CUSTODY.MIND/v1",
+                &[nat(s.lease_id), self.mind_root.to_vec()],
+            );
             let genesis = ForkGenesis {
                 parent_checkpoint: self.checkpoint_root,
                 child_id: s.lease_id,
@@ -393,7 +455,10 @@ impl ConfinedGrainSession {
             };
             let head = genesis.commitment();
             let mut c = Self {
-                frozen_grain: FrozenGrain { grain: s.lease_id, refs: self.frozen_grain.refs.clone() },
+                frozen_grain: FrozenGrain {
+                    grain: s.lease_id,
+                    refs: self.frozen_grain.refs.clone(),
+                },
                 lease,
                 mind_root,
                 egress_doors: s.egress_doors,
@@ -428,7 +493,12 @@ pub fn compute_var_data_root(entries: &BTreeMap<Vec<u8>, Vec<u8>>) -> Digest {
     merkle_root(
         &entries
             .iter()
-            .map(|(path, bytes)| fields(&[path.clone(), hash("OBEND.CUSTODY.CONTENT/v1", std::slice::from_ref(bytes)).to_vec()]))
+            .map(|(path, bytes)| {
+                fields(&[
+                    path.clone(),
+                    hash("OBEND.CUSTODY.CONTENT/v1", std::slice::from_ref(bytes)).to_vec(),
+                ])
+            })
             .collect::<Vec<_>>(),
     )
 }
@@ -452,7 +522,14 @@ pub struct SignedGrainPackage {
 }
 impl SignedGrainPackage {
     pub fn digest(&self) -> Digest {
-        hash("OBEND.CUSTODY.PACKAGE/v1", &[self.publisher.to_vec(), self.bytes.clone(), self.program_digest.to_vec()])
+        hash(
+            "OBEND.CUSTODY.PACKAGE/v1",
+            &[
+                self.publisher.to_vec(),
+                self.bytes.clone(),
+                self.program_digest.to_vec(),
+            ],
+        )
     }
     pub fn verify(&self, trusted: Digest, auth: &impl CustodyAuthenticator) -> bool {
         self.publisher == trusted && auth.verify(&trusted, &self.digest(), &self.signature)
@@ -525,7 +602,14 @@ pub struct AriadneTicket {
 }
 impl AriadneTicket {
     fn message(&self) -> Digest {
-        hash("OBEND.CUSTODY.TICKET/v1", &[nat(self.seq_no), self.req_digest.to_vec(), self.mmr_root.to_vec()])
+        hash(
+            "OBEND.CUSTODY.TICKET/v1",
+            &[
+                nat(self.seq_no),
+                self.req_digest.to_vec(),
+                self.mmr_root.to_vec(),
+            ],
+        )
     }
     pub fn verify(&self, trusted: Digest, auth: &impl CustodyAuthenticator) -> bool {
         self.signer == trusted && auth.verify(&trusted, &self.message(), &self.signature)
@@ -554,27 +638,51 @@ impl AriadneIngressLog {
             "OBEND.CUSTODY.MMR.ROOT/v1",
             &[
                 nat(self.leaves.len() as u64),
-                fields(&self.peaks.iter().rev().map(|p| p.root.to_vec()).collect::<Vec<_>>()),
+                fields(
+                    &self
+                        .peaks
+                        .iter()
+                        .rev()
+                        .map(|p| p.root.to_vec())
+                        .collect::<Vec<_>>(),
+                ),
             ],
         )
     }
     fn push(&mut self, req: Digest) {
         let mut peak = Peak {
             height: 0,
-            root: hash("OBEND.CUSTODY.MOUNTAIN/v1", &[vec![0], nat(self.leaves.len() as u64), req.to_vec()]),
+            root: hash(
+                "OBEND.CUSTODY.MOUNTAIN/v1",
+                &[vec![0], nat(self.leaves.len() as u64), req.to_vec()],
+            ),
         };
         while self.peaks.last().is_some_and(|p| p.height == peak.height) {
             let left = self.peaks.pop().expect("equal-height peak");
-            peak.root = hash("OBEND.CUSTODY.MOUNTAIN/v1", &[vec![1], left.root.to_vec(), peak.root.to_vec()]);
+            peak.root = hash(
+                "OBEND.CUSTODY.MOUNTAIN/v1",
+                &[vec![1], left.root.to_vec(), peak.root.to_vec()],
+            );
             peak.height += 1;
         }
         self.peaks.push(peak);
         self.leaves.push(req);
     }
-    pub fn commit(&mut self, req: Digest, signer: Digest, auth: &impl CustodyAuthenticator) -> AriadneTicket {
+    pub fn commit(
+        &mut self,
+        req: Digest,
+        signer: Digest,
+        auth: &impl CustodyAuthenticator,
+    ) -> AriadneTicket {
         let seq_no = self.len() as u64;
         self.push(req);
-        let mut t = AriadneTicket { seq_no, req_digest: req, mmr_root: self.root(), signer, signature: vec![] };
+        let mut t = AriadneTicket {
+            seq_no,
+            req_digest: req,
+            mmr_root: self.root(),
+            signer,
+            signature: vec![],
+        };
         t.signature = auth.sign(&t.message());
         t
     }
@@ -612,7 +720,10 @@ impl AriadneIngressLog {
         if prefix.root() != t.mmr_root || trace.len() <= k || trace.len() > self.len() {
             return false;
         }
-        trace.iter().enumerate().all(|(i, (seq, r))| *seq == i as u64 && self.leaves[i] == *r)
+        trace
+            .iter()
+            .enumerate()
+            .all(|(i, (seq, r))| *seq == i as u64 && self.leaves[i] == *r)
     }
 }
 
@@ -630,9 +741,20 @@ impl SettlementRecord {
         after.discharge_period(period, after.rent)?;
         let receipt = hash(
             "OBEND.CUSTODY.SETTLE/v1",
-            &[nat(before.lease_id), nat(period), before.state_root().to_vec(), after.state_root().to_vec()],
+            &[
+                nat(before.lease_id),
+                nat(period),
+                before.state_root().to_vec(),
+                after.state_root().to_vec(),
+            ],
         );
-        Ok(Self { lease_id: before.lease_id, period, before, after, receipt })
+        Ok(Self {
+            lease_id: before.lease_id,
+            period,
+            before,
+            after,
+            receipt,
+        })
     }
     fn valid(&self) -> bool {
         Self::new(self.before.clone(), self.period).as_ref() == Ok(self)
@@ -697,10 +819,15 @@ struct Archive {
     ingress: AriadneIngressLog,
 }
 // Canonical sorted rows keep byte paths lossless and reject duplicate keys during decode.
-fn serialize_var<S: serde::Serializer>(var: &BTreeMap<Vec<u8>, Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+fn serialize_var<S: serde::Serializer>(
+    var: &BTreeMap<Vec<u8>, Vec<u8>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
     var.iter().collect::<Vec<_>>().serialize(s)
 }
-fn deserialize_var<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, D::Error> {
+fn deserialize_var<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, D::Error> {
     let rows = Vec::<(Vec<u8>, Vec<u8>)>::deserialize(d)?;
     if !rows.windows(2).all(|p| p[0].0 < p[1].0) {
         return Err(serde::de::Error::custom("noncanonical var paths"));
@@ -726,7 +853,10 @@ impl Archive {
         hash(
             "OBEND.CUSTODY.ARCHIVE/v1",
             &[
-                self.previous.as_ref().map(|a| a.receipt_head.to_vec()).unwrap_or_default(),
+                self.previous
+                    .as_ref()
+                    .map(|a| a.receipt_head.to_vec())
+                    .unwrap_or_default(),
                 nat(self.anchor.generation),
                 self.anchor.package_digest.to_vec(),
                 self.anchor.var_data_root.to_vec(),
@@ -742,7 +872,11 @@ impl Archive {
 
 const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, CustodyError> {
-    let mut file = match OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path) {
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+    {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -751,7 +885,9 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, C
         return Err(CustodyError::Refused(CustodyPoisonReason::Malformed));
     }
     let mut bytes = Vec::new();
-    Read::by_ref(&mut file).take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
+    Read::by_ref(&mut file)
+        .take(MAX_RECORD_BYTES + 1)
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_RECORD_BYTES {
         return Err(CustodyError::Refused(CustodyPoisonReason::Malformed));
     }
@@ -799,7 +935,10 @@ impl GrainCustodyHost {
         auth: &impl CustodyAuthenticator,
     ) -> Result<Self, CustodyError> {
         fs::create_dir_all(path.as_ref())?;
-        if fs::symlink_metadata(path.as_ref())?.file_type().is_symlink() {
+        if fs::symlink_metadata(path.as_ref())?
+            .file_type()
+            .is_symlink()
+        {
             return Err(CustodyError::Refused(CustodyPoisonReason::Malformed));
         }
         let dir = path.as_ref().to_path_buf();
@@ -818,7 +957,15 @@ impl GrainCustodyHost {
         let archive = read_json::<Archive>(&dir.join("archive.json"))?;
         let anchor = read_json(&dir.join("anchor.json"))?;
         let ingress = read_json(&dir.join("ingress.json"))?.unwrap_or_default();
-        let mut host = Self { dir, _lock: lock, trusted, archive, anchor, ingress, status: GrainCustodyStatus::Empty };
+        let mut host = Self {
+            dir,
+            _lock: lock,
+            trusted,
+            archive,
+            anchor,
+            ingress,
+            status: GrainCustodyStatus::Empty,
+        };
         host.status = host.classify(auth);
         Ok(host)
     }
@@ -871,7 +1018,12 @@ impl GrainCustodyHost {
         {
             return S::Poisoned(P::Ingress);
         }
-        if !a.executions.iter().enumerate().all(|(i, (k, r, _))| *k == i as u64 && a.ingress.leaves.get(i) == Some(r)) {
+        if !a
+            .executions
+            .iter()
+            .enumerate()
+            .all(|(i, (k, r, _))| *k == i as u64 && a.ingress.leaves.get(i) == Some(r))
+        {
             return S::Poisoned(P::Ingress);
         }
         if !a.settlements.iter().all(SettlementRecord::valid)
@@ -900,13 +1052,20 @@ impl GrainCustodyHost {
             _ => S::Poisoned(P::Divergence),
         }
     }
-    pub fn reopen(&mut self, auth: &impl CustodyAuthenticator) -> Result<GrainCustodyStatus, CustodyError> {
+    pub fn reopen(
+        &mut self,
+        auth: &impl CustodyAuthenticator,
+    ) -> Result<GrainCustodyStatus, CustodyError> {
         self.archive = read_json::<Archive>(&self.dir.join("archive.json"))?;
         self.ingress = read_json(&self.dir.join("ingress.json"))?.unwrap_or_default();
         self.status = self.classify(auth);
         Ok(self.status.clone())
     }
-    fn persist_archive(&mut self, mut a: Archive, auth: &impl CustodyAuthenticator) -> Result<(), CustodyError> {
+    fn persist_archive(
+        &mut self,
+        mut a: Archive,
+        auth: &impl CustodyAuthenticator,
+    ) -> Result<(), CustodyError> {
         a.anchor.var_data_root = compute_var_data_root(&a.var);
         a.anchor.lease_root = a.lease.state_root();
         a.ingress = self.ingress.clone();
@@ -962,12 +1121,20 @@ impl GrainCustodyHost {
         )?;
         self.recover_one_ahead(auth)
     }
-    pub fn recover_one_ahead(&mut self, auth: &impl CustodyAuthenticator) -> Result<(), CustodyError> {
+    pub fn recover_one_ahead(
+        &mut self,
+        auth: &impl CustodyAuthenticator,
+    ) -> Result<(), CustodyError> {
         self.reopen(auth)?;
         if self.status != GrainCustodyStatus::RecoveryRequired {
             return Err(CustodyError::NotReady);
         }
-        let anchor = self.archive.as_ref().ok_or(CustodyError::NotReady)?.anchor.clone();
+        let anchor = self
+            .archive
+            .as_ref()
+            .ok_or(CustodyError::NotReady)?
+            .anchor
+            .clone();
         durable_write(&self.dir, "anchor.json", &anchor)?;
         self.anchor = Some(anchor);
         self.status = GrainCustodyStatus::Ready;
@@ -979,7 +1146,11 @@ impl GrainCustodyHost {
         }
         let mut a = self.archive.clone().ok_or(CustodyError::NotReady)?;
         a.previous = Some(a.anchor.clone());
-        a.anchor.generation = a.anchor.generation.checked_add(1).ok_or(CustodyError::Overflow)?;
+        a.anchor.generation = a
+            .anchor
+            .generation
+            .checked_add(1)
+            .ok_or(CustodyError::Overflow)?;
         Ok(a)
     }
     pub fn checkpoint(
@@ -995,7 +1166,11 @@ impl GrainCustodyHost {
     }
     /// The durable pending record is a before/after pair. Replay applies the after image
     /// exactly once, and returns the original receipt even when the anchor write crashed.
-    pub fn settle_or_replay(&mut self, period: u64, auth: &impl CustodyAuthenticator) -> Result<Digest, CustodyError> {
+    pub fn settle_or_replay(
+        &mut self,
+        period: u64,
+        auth: &impl CustodyAuthenticator,
+    ) -> Result<Digest, CustodyError> {
         self.reopen(auth)?;
         if self.status == GrainCustodyStatus::RecoveryRequired {
             self.recover_one_ahead(auth)?;
@@ -1004,13 +1179,18 @@ impl GrainCustodyHost {
             return Err(CustodyError::NotReady);
         }
         let current = self.archive.as_ref().ok_or(CustodyError::NotReady)?;
-        if let Some(r) = current.settlements.iter().find(|r| r.lease_id == current.lease.lease_id && r.period == period)
+        if let Some(r) = current
+            .settlements
+            .iter()
+            .find(|r| r.lease_id == current.lease.lease_id && r.period == period)
         {
             return Ok(r.receipt);
         }
         let pending = read_json::<SettlementRecord>(&self.dir.join("settlement.json"))?;
         let record = match pending {
-            Some(r) if r.after == current.lease => SettlementRecord::new(current.lease.clone(), period)?,
+            Some(r) if r.after == current.lease => {
+                SettlementRecord::new(current.lease.clone(), period)?
+            }
             Some(r) if r.before == current.lease && r.period == period && r.valid() => r,
             Some(_) => return Err(CustodyError::Refused(CustodyPoisonReason::Lease)),
             None => SettlementRecord::new(current.lease.clone(), period)?,
@@ -1085,14 +1265,17 @@ impl GrainCustodyHost {
             return Err(CustodyError::RequestMismatch);
         }
         let receipt = executor.execute(program, inputs);
-        if executor.tier == ReproducibilityTier::R4KernelProved && !auth.verify_kernel_receipt(&receipt, proof) {
+        if executor.tier == ReproducibilityTier::R4KernelProved
+            && !auth.verify_kernel_receipt(&receipt, proof)
+        {
             return Err(CustodyError::MissingKernelProof);
         }
         // Custody binds the complete receipt, including termination and machine outputs,
         // beyond the narrower legacy execution-receipt commitment.
         let full = execution_payload(&receipt, ticket.message());
         for (slot, bytes) in &receipt.emitted_slots {
-            a.var.insert(format!("slot/{slot}").into_bytes(), bytes.clone());
+            a.var
+                .insert(format!("slot/{slot}").into_bytes(), bytes.clone());
         }
         a.executions.push((ticket.seq_no, req, full));
         self.persist_archive(a, auth)?;
@@ -1130,7 +1313,11 @@ fn execution_payload(r: &GrainExecutionReceipt, ticket: Digest) -> Digest {
     )
 }
 /// Binds the exact executor policy and resource envelope as well as program and inputs.
-pub fn turn_request_digest(p: &GrainProgram, inputs: &[(u64, Vec<u8>)], e: &GrainExecutor) -> Digest {
+pub fn turn_request_digest(
+    p: &GrainProgram,
+    inputs: &[(u64, Vec<u8>)],
+    e: &GrainExecutor,
+) -> Digest {
     hash(
         "OBEND.CUSTODY.REQUEST/v1",
         &[
@@ -1139,9 +1326,26 @@ pub fn turn_request_digest(p: &GrainProgram, inputs: &[(u64, Vec<u8>)], e: &Grai
             nat(e.budget.max_fuel),
             nat(e.budget.max_memory_bytes as u64),
             nat(e.budget.max_output_bytes as u64),
-            fields(&e.capabilities.allowed_read_slots.iter().copied().map(nat).collect::<Vec<_>>()),
-            fields(&e.capabilities.allowed_emit_slots.iter().copied().map(nat).collect::<Vec<_>>()),
-            vec![u8::from(e.capabilities.allow_hash_digest), e.tier.tag_byte()],
+            fields(
+                &e.capabilities
+                    .allowed_read_slots
+                    .iter()
+                    .copied()
+                    .map(nat)
+                    .collect::<Vec<_>>(),
+            ),
+            fields(
+                &e.capabilities
+                    .allowed_emit_slots
+                    .iter()
+                    .copied()
+                    .map(nat)
+                    .collect::<Vec<_>>(),
+            ),
+            vec![
+                u8::from(e.capabilities.allow_hash_digest),
+                e.tier.tag_byte(),
+            ],
         ],
     )
 }
@@ -1180,7 +1384,16 @@ mod tests {
         }
     }
     fn test_program() -> GrainProgram {
-        GrainProgram::new("emit", vec![GrainOp::EmitSlot { slot_id: 1, data: b"result".to_vec() }, GrainOp::Halt])
+        GrainProgram::new(
+            "emit",
+            vec![
+                GrainOp::EmitSlot {
+                    slot_id: 1,
+                    data: b"result".to_vec(),
+                },
+                GrainOp::Halt,
+            ],
+        )
     }
     fn package() -> SignedGrainPackage {
         let mut p = SignedGrainPackage {
@@ -1195,18 +1408,31 @@ mod tests {
     fn host(t: &Temp) -> GrainCustodyHost {
         let mut h = GrainCustodyHost::open(&t.0, [7; 32], &Auth).unwrap();
         assert_eq!(h.status(), &GrainCustodyStatus::Empty);
-        h.install(package(), PrepaidLease::new(1, 0, 10, 100), FrozenGrain { grain: 1, refs: vec![] }, &Auth).unwrap();
+        h.install(
+            package(),
+            PrepaidLease::new(1, 0, 10, 100),
+            FrozenGrain {
+                grain: 1,
+                refs: vec![],
+            },
+            &Auth,
+        )
+        .unwrap();
         h
     }
     // Parallel process-spawn tests can briefly inherit this test's file description
     // between fork and exec. Reopen tests own their directory and have dropped the
     // writer. Give that inherited descriptor time to close, but fail on a lasting lock.
-    fn reopen_after_drop(mut open: impl FnMut() -> Result<GrainCustodyHost, CustodyError>) -> GrainCustodyHost {
+    fn reopen_after_drop(
+        mut open: impl FnMut() -> Result<GrainCustodyHost, CustodyError>,
+    ) -> GrainCustodyHost {
         use std::time::{Duration, Instant};
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             match open() {
-                Err(CustodyError::Locked) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(1)),
+                Err(CustodyError::Locked) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1))
+                }
                 result => return result.unwrap(),
             }
         }
@@ -1217,7 +1443,10 @@ mod tests {
             ["api:443".into()].into(),
             [1, 2].into(),
             GrainCapabilities::allow_all(&[1, 2]),
-            FrozenGrain { grain: 1, refs: vec![] },
+            FrozenGrain {
+                grain: 1,
+                refs: vec![],
+            },
         )
         .unwrap()
     }
@@ -1231,7 +1460,9 @@ mod tests {
         }
     }
     fn mutate(t: &Temp, f: impl FnOnce(&mut Archive)) {
-        let mut a = read_json::<Archive>(&t.0.join("archive.json")).unwrap().unwrap();
+        let mut a = read_json::<Archive>(&t.0.join("archive.json"))
+            .unwrap()
+            .unwrap();
         f(&mut a);
         durable_write(&t.0, "archive.json", &a).unwrap();
     }
@@ -1240,15 +1471,15 @@ mod tests {
         assert_eq!(
             PrepaidLease::new(1, 0, 10, 100).state_root(),
             [
-                10, 109, 57, 143, 13, 113, 96, 249, 210, 40, 202, 84, 43, 89, 143, 81, 156, 102, 184, 77, 112, 182, 82,
-                234, 220, 103, 77, 21, 228, 173, 25, 61
+                10, 109, 57, 143, 13, 113, 96, 249, 210, 40, 202, 84, 43, 89, 143, 81, 156, 102,
+                184, 77, 112, 182, 82, 234, 220, 103, 77, 21, 228, 173, 25, 61
             ]
         );
         assert_eq!(
             compute_var_data_root(&[(vec![120], b"abc".to_vec())].into()),
             [
-                240, 65, 64, 145, 126, 136, 96, 128, 102, 23, 43, 57, 253, 74, 196, 95, 211, 8, 126, 209, 72, 102, 18,
-                184, 210, 8, 75, 23, 249, 237, 46, 115
+                240, 65, 64, 145, 126, 136, 96, 128, 102, 23, 43, 57, 253, 74, 196, 95, 211, 8,
+                126, 209, 72, 102, 18, 184, 210, 8, 75, 23, 249, 237, 46, 115
             ]
         );
         let mut log = AriadneIngressLog::default();
@@ -1257,8 +1488,8 @@ mod tests {
         assert_eq!(
             log.root(),
             [
-                24, 37, 34, 139, 251, 190, 210, 234, 68, 118, 155, 54, 247, 38, 17, 58, 106, 124, 159, 74, 156, 254,
-                161, 54, 245, 207, 119, 70, 114, 106, 236, 117
+                24, 37, 34, 139, 251, 190, 210, 234, 68, 118, 155, 54, 247, 38, 17, 58, 106, 124,
+                159, 74, 156, 254, 161, 54, 245, 207, 119, 70, 114, 106, 236, 117
             ]
         );
     }
@@ -1278,9 +1509,17 @@ mod tests {
             signature: vec![],
         };
         let lease = PrepaidLease::new(257, 128, 10, 100);
-        let session =
-            ConfinedGrainSession::new(lease.clone(), doors, caps, gc, FrozenGrain { grain: 257, refs: vec![] })
-                .unwrap();
+        let session = ConfinedGrainSession::new(
+            lease.clone(),
+            doors,
+            caps,
+            gc,
+            FrozenGrain {
+                grain: 257,
+                refs: vec![],
+            },
+        )
+        .unwrap();
         let settlement = SettlementRecord::new(lease, 128).unwrap();
         let mut ingress = AriadneIngressLog::default();
         ingress.push([1; 32]);
@@ -1303,21 +1542,36 @@ mod tests {
             lease: settlement.after.clone(),
             anchor,
             previous: Some(previous),
-            frozen_grain: FrozenGrain { grain: 257, refs: vec![] },
+            frozen_grain: FrozenGrain {
+                grain: 257,
+                refs: vec![],
+            },
             transition: [0; 32],
             transition_signature: vec![],
             settlements: vec![settlement],
             ingress,
             executions: vec![(0, [1; 32], [5; 32])],
         };
-        assert_eq!(hex(authority), "073cd30c52c70354069f7752ce084f869bab1a22418b931297fdce2f726d0ed9");
-        assert_eq!(hex(archive.package.digest()), "cb7bfdba43c79d62764d185088fe2340325237b8fc86626c04694e3b75170bd7");
-        assert_eq!(hex(session.state_root()), "68e2cbe03a4dfe7e41fed63a8de29df8edb6905b2ed9398e8c3b354608978a56");
+        assert_eq!(
+            hex(authority),
+            "073cd30c52c70354069f7752ce084f869bab1a22418b931297fdce2f726d0ed9"
+        );
+        assert_eq!(
+            hex(archive.package.digest()),
+            "cb7bfdba43c79d62764d185088fe2340325237b8fc86626c04694e3b75170bd7"
+        );
+        assert_eq!(
+            hex(session.state_root()),
+            "68e2cbe03a4dfe7e41fed63a8de29df8edb6905b2ed9398e8c3b354608978a56"
+        );
         assert_eq!(
             hex(archive.transition_digest()),
             "2304c16c0e41ca4b4a7c4e33fb3f31759efd64c0cab5851785645e4918290a62"
         );
-        assert_eq!(hex(archive.ingress.root()), "1825228bfbbed2ea44769b36f726113a6a7c9f4a9cfea136f5cf7746726aec75");
+        assert_eq!(
+            hex(archive.ingress.root()),
+            "1825228bfbbed2ea44769b36f726113a6a7c9f4a9cfea136f5cf7746726aec75"
+        );
         assert_eq!(
             authority,
             authority_root(
@@ -1371,37 +1625,96 @@ mod tests {
     fn execution_lease_atomicity_and_schedule() {
         let mut p = parent();
         let program = GrainProgram::new("halt", vec![GrainOp::Halt]);
-        let before = (p.lease.clone(), p.state_root(), p.memory.clone(), p.turn_receipts.clone());
+        let before = (
+            p.lease.clone(),
+            p.state_root(),
+            p.memory.clone(),
+            p.turn_receipts.clone(),
+        );
         assert_eq!(
-            p.execute(0, &program, &[], GrainBudget::new(101, 1024, 1024)).unwrap_err(),
+            p.execute(0, &program, &[], GrainBudget::new(101, 1024, 1024))
+                .unwrap_err(),
             LeaseError::InsufficientBudget
         );
-        assert_eq!(before, (p.lease.clone(), p.state_root(), p.memory.clone(), p.turn_receipts.clone()));
-        p.execute(0, &program, &[], GrainBudget::new(11, 1024, 1024)).unwrap();
-        assert_eq!((p.lease.remaining, p.lease.drawn, p.lease.next_due), (80, 20, 2));
+        assert_eq!(
+            before,
+            (
+                p.lease.clone(),
+                p.state_root(),
+                p.memory.clone(),
+                p.turn_receipts.clone()
+            )
+        );
+        p.execute(0, &program, &[], GrainBudget::new(11, 1024, 1024))
+            .unwrap();
+        assert_eq!(
+            (p.lease.remaining, p.lease.drawn, p.lease.next_due),
+            (80, 20, 2)
+        );
         assert!(p.lease.valid());
         assert_ne!(before.1, p.state_root());
-        let after = (p.lease.clone(), p.state_root(), p.memory.clone(), p.turn_receipts.clone());
-        assert_eq!(p.execute(1, &program, &[], GrainBudget::new(10, 1024, 1024)).unwrap_err(), LeaseError::Replay);
-        assert_eq!(p.execute(3, &program, &[], GrainBudget::new(10, 1024, 1024)).unwrap_err(), LeaseError::OffSchedule);
-        assert_eq!(after, (p.lease.clone(), p.state_root(), p.memory.clone(), p.turn_receipts.clone()));
+        let after = (
+            p.lease.clone(),
+            p.state_root(),
+            p.memory.clone(),
+            p.turn_receipts.clone(),
+        );
+        assert_eq!(
+            p.execute(1, &program, &[], GrainBudget::new(10, 1024, 1024))
+                .unwrap_err(),
+            LeaseError::Replay
+        );
+        assert_eq!(
+            p.execute(3, &program, &[], GrainBudget::new(10, 1024, 1024))
+                .unwrap_err(),
+            LeaseError::OffSchedule
+        );
+        assert_eq!(
+            after,
+            (
+                p.lease.clone(),
+                p.state_root(),
+                p.memory.clone(),
+                p.turn_receipts.clone()
+            )
+        );
     }
     #[test]
     fn lineage_and_sibling_allocations_are_shared() {
         let mut p = parent();
         let (mut a, mut b) = p.fork_two(spec(2, 30), spec(3, 30)).unwrap();
-        assert!(matches!(a.fork_two(spec(1, 1), spec(4, 1)), Err(ForkError::DuplicateIdentity)));
-        assert!(matches!(a.fork_two(spec(3, 1), spec(4, 1)), Err(ForkError::DuplicateIdentity)));
+        assert!(matches!(
+            a.fork_two(spec(1, 1), spec(4, 1)),
+            Err(ForkError::DuplicateIdentity)
+        ));
+        assert!(matches!(
+            a.fork_two(spec(3, 1), spec(4, 1)),
+            Err(ForkError::DuplicateIdentity)
+        ));
         let _ = a.fork_two(spec(4, 1), spec(5, 1)).unwrap();
-        assert!(matches!(b.fork_two(spec(4, 1), spec(6, 1)), Err(ForkError::DuplicateIdentity)));
-        assert!(matches!(p.fork_two(spec(5, 1), spec(6, 1)), Err(ForkError::DuplicateIdentity)));
+        assert!(matches!(
+            b.fork_two(spec(4, 1), spec(6, 1)),
+            Err(ForkError::DuplicateIdentity)
+        ));
+        assert!(matches!(
+            p.fork_two(spec(5, 1), spec(6, 1)),
+            Err(ForkError::DuplicateIdentity)
+        ));
     }
     #[test]
     fn one_ahead_recomputed_roots_need_signature() {
         for target in 0..3 {
             let t = Temp::new();
             let mut h = host(&t);
-            h.checkpoint([(vec![1], vec![2])].into(), FrozenGrain { grain: 1, refs: vec![] }, &Auth).unwrap();
+            h.checkpoint(
+                [(vec![1], vec![2])].into(),
+                FrozenGrain {
+                    grain: 1,
+                    refs: vec![],
+                },
+                &Auth,
+            )
+            .unwrap();
             drop(h);
             mutate(&t, |a| {
                 match target {
@@ -1421,7 +1734,10 @@ mod tests {
                 a.anchor.receipt_head = a.transition;
             });
             let mut h = reopen_after_drop(|| GrainCustodyHost::open(&t.0, [7; 32], &Auth));
-            assert_eq!(h.status(), &GrainCustodyStatus::Poisoned(CustodyPoisonReason::BrokenReceipt));
+            assert_eq!(
+                h.status(),
+                &GrainCustodyStatus::Poisoned(CustodyPoisonReason::BrokenReceipt)
+            );
             assert!(h.recover_one_ahead(&Auth).is_err());
         }
     }
@@ -1429,8 +1745,9 @@ mod tests {
     fn cshake_nist_vector() {
         let got = cshake(b"Email Signature", &[0, 1, 2, 3]);
         let expected = [
-            0xd0, 0x08, 0x82, 0x8e, 0x2b, 0x80, 0xac, 0x9d, 0x22, 0x18, 0xff, 0xee, 0x1d, 0x07, 0x0c, 0x48, 0xb8, 0xe4,
-            0xc8, 0x7b, 0xff, 0x32, 0xc9, 0x69, 0x9d, 0x5b, 0x68, 0x96, 0xee, 0xe0, 0xed, 0xd1,
+            0xd0, 0x08, 0x82, 0x8e, 0x2b, 0x80, 0xac, 0x9d, 0x22, 0x18, 0xff, 0xee, 0x1d, 0x07,
+            0x0c, 0x48, 0xb8, 0xe4, 0xc8, 0x7b, 0xff, 0x32, 0xc9, 0x69, 0x9d, 0x5b, 0x68, 0x96,
+            0xee, 0xe0, 0xed, 0xd1,
         ];
         assert_eq!(got, expected);
     }
@@ -1447,7 +1764,10 @@ mod tests {
             assert!(l.valid());
         }
         assert_eq!((l.remaining(), l.drawn()), (0, 30));
-        assert_eq!(l.discharge_period(7, 10), Err(LeaseError::InsufficientBudget));
+        assert_eq!(
+            l.discharge_period(7, 10),
+            Err(LeaseError::InsufficientBudget)
+        );
         assert_eq!(l.discharge_period(6, 10), Err(LeaseError::Replay));
     }
     #[test]
@@ -1481,7 +1801,10 @@ mod tests {
         p.write_memory(b"x".to_vec(), b"old".to_vec());
         let root = p.checkpoint_root();
         let (mut a, b) = p.fork_two(spec(2, 30), spec(3, 20)).unwrap();
-        assert_eq!(p.lease.remaining() + a.lease.remaining() + b.lease.remaining(), 100);
+        assert_eq!(
+            p.lease.remaining() + a.lease.remaining() + b.lease.remaining(),
+            100
+        );
         assert!(p.lease.valid());
         assert_ne!(a.mind_root(), b.mind_root());
         assert!(a.genesis().verify(root, a.receipt_head()));
@@ -1503,41 +1826,62 @@ mod tests {
     #[test]
     fn fork_duplicate_ids_refused() {
         let mut p = parent();
-        assert!(matches!(p.fork_two(spec(2, 1), spec(2, 1)), Err(ForkError::DuplicateIdentity)));
+        assert!(matches!(
+            p.fork_two(spec(2, 1), spec(2, 1)),
+            Err(ForkError::DuplicateIdentity)
+        ));
         assert_eq!(p.lease.remaining(), 100);
     }
     #[test]
     fn fork_reissued_ids_refused() {
         let mut p = parent();
         p.fork_two(spec(2, 1), spec(3, 1)).unwrap();
-        assert!(matches!(p.fork_two(spec(2, 1), spec(4, 1)), Err(ForkError::DuplicateIdentity)));
+        assert!(matches!(
+            p.fork_two(spec(2, 1), spec(4, 1)),
+            Err(ForkError::DuplicateIdentity)
+        ));
     }
     #[test]
     fn fork_egress_amplification_refused() {
         let mut p = parent();
         let mut a = spec(2, 1);
         a.egress_doors.insert("evil:443".into());
-        assert!(matches!(p.fork_two(a, spec(3, 1)), Err(ForkError::AmplifiedEgress)));
+        assert!(matches!(
+            p.fork_two(a, spec(3, 1)),
+            Err(ForkError::AmplifiedEgress)
+        ));
     }
     #[test]
     fn fork_caps_amplification_refused() {
         let mut p = parent();
         let mut a = spec(2, 1);
         a.caps.insert(999);
-        assert!(matches!(p.fork_two(a, spec(3, 1)), Err(ForkError::AmplifiedCapability)));
+        assert!(matches!(
+            p.fork_two(a, spec(3, 1)),
+            Err(ForkError::AmplifiedCapability)
+        ));
     }
     #[test]
     fn fork_grain_caps_amplification_refused() {
         let mut p = parent();
         let mut a = spec(2, 1);
         a.grain_capabilities.allowed_emit_slots.push(999);
-        assert!(matches!(p.fork_two(a, spec(3, 1)), Err(ForkError::AmplifiedCapability)));
+        assert!(matches!(
+            p.fork_two(a, spec(3, 1)),
+            Err(ForkError::AmplifiedCapability)
+        ));
     }
     #[test]
     fn fork_budget_overflow_refused() {
         let mut p = parent();
-        assert!(matches!(p.fork_two(spec(2, u64::MAX), spec(3, 1)), Err(ForkError::BudgetOverdraw)));
-        assert!(matches!(p.fork_two(spec(2, 51), spec(3, 50)), Err(ForkError::BudgetOverdraw)));
+        assert!(matches!(
+            p.fork_two(spec(2, u64::MAX), spec(3, 1)),
+            Err(ForkError::BudgetOverdraw)
+        ));
+        assert!(matches!(
+            p.fork_two(spec(2, 51), spec(3, 50)),
+            Err(ForkError::BudgetOverdraw)
+        ));
         assert_eq!(p.lease.remaining(), 100);
     }
     #[test]
@@ -1545,8 +1889,12 @@ mod tests {
         let t = Temp::new();
         let mut h = host(&t);
         let p = test_program();
-        for tier in [ReproducibilityTier::R2DeterministicGrain, ReproducibilityTier::R3ReceiptAttested] {
-            let e = GrainExecutor::new(GrainBudget::default(), GrainCapabilities::allow_all(&[1])).with_tier(tier);
+        for tier in [
+            ReproducibilityTier::R2DeterministicGrain,
+            ReproducibilityTier::R3ReceiptAttested,
+        ] {
+            let e = GrainExecutor::new(GrainBudget::default(), GrainCapabilities::allow_all(&[1]))
+                .with_tier(tier);
             let r = turn_request_digest(&p, &[], &e);
             let ticket = h.commit_ingress(r, [7; 32], &Auth.sign(&r), &Auth).unwrap();
             let receipt = h.execute_turn(&ticket, &p, &[], &e, &[], &Auth).unwrap();
@@ -1566,7 +1914,10 @@ mod tests {
             .with_tier(ReproducibilityTier::R4KernelProved);
         let r = turn_request_digest(&p, &[], &e);
         let ticket = h.commit_ingress(r, [7; 32], &Auth.sign(&r), &Auth).unwrap();
-        assert!(matches!(h.execute_turn(&ticket, &p, &[], &e, &[], &Auth), Err(CustodyError::MissingKernelProof)));
+        assert!(matches!(
+            h.execute_turn(&ticket, &p, &[], &e, &[], &Auth),
+            Err(CustodyError::MissingKernelProof)
+        ));
     }
     #[test]
     fn var_tampering_poisoned() {
@@ -1575,20 +1926,34 @@ mod tests {
         mutate(&t, |a| {
             a.var.insert(b"x".to_vec(), vec![1]);
         });
-        assert_eq!(h.reopen(&Auth).unwrap(), GrainCustodyStatus::Poisoned(CustodyPoisonReason::VarData));
+        assert_eq!(
+            h.reopen(&Auth).unwrap(),
+            GrainCustodyStatus::Poisoned(CustodyPoisonReason::VarData)
+        );
     }
     #[test]
     fn package_tampering_poisoned() {
         let t = Temp::new();
         let mut h = host(&t);
         mutate(&t, |a| a.package.bytes.push(1));
-        assert_eq!(h.reopen(&Auth).unwrap(), GrainCustodyStatus::Poisoned(CustodyPoisonReason::Package));
+        assert_eq!(
+            h.reopen(&Auth).unwrap(),
+            GrainCustodyStatus::Poisoned(CustodyPoisonReason::Package)
+        );
     }
     #[test]
     fn one_ahead_recovery() {
         let t = Temp::new();
         let mut h = host(&t);
-        h.checkpoint([(b"x".to_vec(), vec![1])].into(), FrozenGrain { grain: 1, refs: vec![] }, &Auth).unwrap();
+        h.checkpoint(
+            [(b"x".to_vec(), vec![1])].into(),
+            FrozenGrain {
+                grain: 1,
+                refs: vec![],
+            },
+            &Auth,
+        )
+        .unwrap();
         drop(h);
         let mut h = reopen_after_drop(|| GrainCustodyHost::open(&t.0, [7; 32], &Auth));
         assert_eq!(h.status(), &GrainCustodyStatus::RecoveryRequired);
@@ -1606,7 +1971,10 @@ mod tests {
             a.anchor.receipt_head = a.transition;
             a.transition_signature = Auth.sign(&a.transition);
         });
-        assert_eq!(h.reopen(&Auth).unwrap(), GrainCustodyStatus::Poisoned(CustodyPoisonReason::Divergence));
+        assert_eq!(
+            h.reopen(&Auth).unwrap(),
+            GrainCustodyStatus::Poisoned(CustodyPoisonReason::Divergence)
+        );
     }
     #[test]
     fn settlement_crash_replay_once() {
@@ -1647,7 +2015,13 @@ mod tests {
         let trace = vec![(0, [1; 32]), (1, [2; 32])];
         assert!(log.verify_non_omission(&t, [7; 32], &Auth, &trace, log.root()));
         assert!(!log.verify_non_omission(&t, [7; 32], &Auth, &trace[1..], log.root()));
-        assert!(!log.verify_non_omission(&t, [7; 32], &Auth, &[(0, [9; 32]), (1, [2; 32])], log.root()));
+        assert!(!log.verify_non_omission(
+            &t,
+            [7; 32],
+            &Auth,
+            &[(0, [9; 32]), (1, [2; 32])],
+            log.root()
+        ));
         log.leaves[0] = [9; 32];
         assert!(!log.verify_non_omission(&t, [7; 32], &Auth, &trace, log.root()));
     }
@@ -1660,7 +2034,10 @@ mod tests {
         let r = turn_request_digest(&p, &[], &e);
         let ticket = h.commit_ingress(r, [7; 32], &Auth.sign(&r), &Auth).unwrap();
         e.budget.max_fuel += 1;
-        assert!(matches!(h.execute_turn(&ticket, &p, &[], &e, &[], &Auth), Err(CustodyError::RequestMismatch)));
+        assert!(matches!(
+            h.execute_turn(&ticket, &p, &[], &e, &[], &Auth),
+            Err(CustodyError::RequestMismatch)
+        ));
     }
     #[test]
     fn unsigned_program_swap_refused() {
@@ -1670,28 +2047,52 @@ mod tests {
         let e = GrainExecutor::new(GrainBudget::default(), GrainCapabilities::allow_all(&[]));
         let r = turn_request_digest(&p, &[], &e);
         let ticket = h.commit_ingress(r, [7; 32], &Auth.sign(&r), &Auth).unwrap();
-        assert!(matches!(h.execute_turn(&ticket, &p, &[], &e, &[], &Auth), Err(CustodyError::RequestMismatch)));
+        assert!(matches!(
+            h.execute_turn(&ticket, &p, &[], &e, &[], &Auth),
+            Err(CustodyError::RequestMismatch)
+        ));
     }
     #[test]
     fn retained_anchor_detects_local_rollback() {
         let t = Temp::new();
         let mut h = host(&t);
-        let old = read_json::<Archive>(&t.0.join("archive.json")).unwrap().unwrap();
-        h.checkpoint([(vec![1], vec![2])].into(), FrozenGrain { grain: 1, refs: vec![] }, &Auth).unwrap();
+        let old = read_json::<Archive>(&t.0.join("archive.json"))
+            .unwrap()
+            .unwrap();
+        h.checkpoint(
+            [(vec![1], vec![2])].into(),
+            FrozenGrain {
+                grain: 1,
+                refs: vec![],
+            },
+            &Auth,
+        )
+        .unwrap();
         h.recover_one_ahead(&Auth).unwrap();
         let retained = h.anchor().unwrap().clone();
         drop(h);
         durable_write(&t.0, "archive.json", &old).unwrap();
         durable_write(&t.0, "anchor.json", &old.anchor).unwrap();
-        let h = reopen_after_drop(|| GrainCustodyHost::open_at(&t.0, [7; 32], retained.clone(), &Auth));
-        assert_eq!(h.status(), &GrainCustodyStatus::Poisoned(CustodyPoisonReason::Rollback));
+        let h =
+            reopen_after_drop(|| GrainCustodyHost::open_at(&t.0, [7; 32], retained.clone(), &Auth));
+        assert_eq!(
+            h.status(),
+            &GrainCustodyStatus::Poisoned(CustodyPoisonReason::Rollback)
+        );
     }
     #[test]
     fn child_receipt_chain_survives_turns_and_detects_forgery() {
         let mut p = parent();
         let root = p.checkpoint_root();
         let (mut a, b) = p.fork_two(spec(2, 20), spec(3, 20)).unwrap();
-        let r = a.execute(a.lease.next_due, &test_program(), &[], GrainBudget::new(10, 1024, 1024)).unwrap();
+        let r = a
+            .execute(
+                a.lease.next_due,
+                &test_program(),
+                &[],
+                GrainBudget::new(10, 1024, 1024),
+            )
+            .unwrap();
         assert_eq!(r.termination, GrainTermination::CapabilityDenied);
         assert!(a.verify_receipt_chain(root));
         assert!(b.verify_receipt_chain(root));
@@ -1703,6 +2104,9 @@ mod tests {
     fn exclusive_writer_lock() {
         let t = Temp::new();
         let _h = host(&t);
-        assert!(matches!(GrainCustodyHost::open(&t.0, [7; 32], &Auth), Err(CustodyError::Locked)));
+        assert!(matches!(
+            GrainCustodyHost::open(&t.0, [7; 32], &Auth),
+            Err(CustodyError::Locked)
+        ));
     }
 }

@@ -268,7 +268,10 @@ pub fn inspect_app_in_root(
     let slug = validate_app_slug(raw_slug)?;
     let app_dir = workspace_root.join("apps").join(slug);
     if !app_dir.is_dir() {
-        return Err(format!("App directory does not exist: `{}`", app_dir.display()));
+        return Err(format!(
+            "App directory does not exist: `{}`",
+            app_dir.display()
+        ));
     }
     Ok(build_app_detail(workspace_root, slug, include_svg))
 }
@@ -282,7 +285,9 @@ fn build_app_detail(workspace_root: &Path, slug: &str, include_svg: bool) -> App
     let mut obend_layers = Vec::with_capacity(obend_paths.len());
     for p in &obend_paths {
         if let Ok(source) = fs::read_to_string(p) {
-            let meta_size = fs::metadata(p).map(|m| m.len()).unwrap_or(source.len() as u64);
+            let meta_size = fs::metadata(p)
+                .map(|m| m.len())
+                .unwrap_or(source.len() as u64);
             let filename = p
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -310,7 +315,9 @@ fn build_app_detail(workspace_root: &Path, slug: &str, include_svg: bool) -> App
     let mut lec_specs = Vec::with_capacity(smt2_paths.len());
     for p in &smt2_paths {
         if let Ok(source) = fs::read_to_string(p) {
-            let meta_size = fs::metadata(p).map(|m| m.len()).unwrap_or(source.len() as u64);
+            let meta_size = fs::metadata(p)
+                .map(|m| m.len())
+                .unwrap_or(source.len() as u64);
             let filename = p
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -326,7 +333,9 @@ fn build_app_detail(workspace_root: &Path, slug: &str, include_svg: bool) -> App
     let mut rtl_modules = Vec::with_capacity(sv_paths.len());
     for p in &sv_paths {
         if let Ok(source) = fs::read_to_string(p) {
-            let meta_size = fs::metadata(p).map(|m| m.len()).unwrap_or(source.len() as u64);
+            let meta_size = fs::metadata(p)
+                .map(|m| m.len())
+                .unwrap_or(source.len() as u64);
             let filename = p
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -372,7 +381,9 @@ fn build_app_detail(workspace_root: &Path, slug: &str, include_svg: bool) -> App
         });
         let ngc = ngc_candidates.first().and_then(|p| {
             let text = fs::read_to_string(p).ok()?;
-            let size_bytes = fs::metadata(p).map(|m| m.len()).unwrap_or(text.len() as u64);
+            let size_bytes = fs::metadata(p)
+                .map(|m| m.len())
+                .unwrap_or(text.len() as u64);
             Some(parse_ngc_text(
                 to_rel_slash(workspace_root, p),
                 size_bytes,
@@ -558,8 +569,8 @@ pub fn parse_smt2_text(
                 logic = Some(l.to_string());
             }
         }
-        declare_const_count += code.matches("(declare-const ").count()
-            + code.matches("(declare-fun ").count();
+        declare_const_count +=
+            code.matches("(declare-const ").count() + code.matches("(declare-fun ").count();
         define_fun_count += code.matches("(define-fun ").count();
         assert_count += code.matches("(assert ").count() + usize::from(code == "(assert");
         check_sat_count += code.matches("(check-sat)").count();
@@ -621,10 +632,7 @@ pub fn vcd_bits_to_hex(bits: &[u8]) -> String {
     if bits.is_empty() {
         return "0x0".to_string();
     }
-    if bits
-        .iter()
-        .any(|&b| matches!(b, b'x' | b'X' | b'z' | b'Z'))
-    {
+    if bits.iter().any(|&b| matches!(b, b'x' | b'X' | b'z' | b'Z')) {
         let has_z = bits.iter().any(|&b| b == b'z' || b == b'Z');
         return if has_z {
             "0xZ".to_string()
@@ -634,7 +642,10 @@ pub fn vcd_bits_to_hex(bits: &[u8]) -> String {
     }
 
     // Strip leading '0's while keeping at least 1 bit
-    let first_one = bits.iter().position(|&b| b != b'0').unwrap_or(bits.len() - 1);
+    let first_one = bits
+        .iter()
+        .position(|&b| b != b'0')
+        .unwrap_or(bits.len() - 1);
     let trimmed = &bits[first_one..];
     let rem = trimmed.len() % 4;
     let mut hex = String::with_capacity(2 + trimmed.len().div_ceil(4));
@@ -1125,13 +1136,12 @@ pub fn render_vcd_waveform_svg(
                 if s_idx == 0 {
                     let _ = write!(&mut path_d, "M {wave_x0:.1} {y:.1} L {x:.1} {y:.1}");
                 } else {
-                    let prev_y = if sig.samples[s_idx - 1].1 == "0x1"
-                        || sig.samples[s_idx - 1].1 == "1"
-                    {
-                        y_hi
-                    } else {
-                        y_lo
-                    };
+                    let prev_y =
+                        if sig.samples[s_idx - 1].1 == "0x1" || sig.samples[s_idx - 1].1 == "1" {
+                            y_hi
+                        } else {
+                            y_lo
+                        };
                     let _ = write!(&mut path_d, " L {x:.1} {prev_y:.1} L {x:.1} {y:.1}");
                 }
                 if s_idx + 1 == sig.samples.len() {
@@ -1204,10 +1214,7 @@ pub fn parse_stl_bytes(rel_path: String, bytes: &[u8]) -> StlArtifactStats {
         let looks_ascii = bytes.starts_with(b"solid ") && expected_len != size_bytes;
 
         if !looks_ascii {
-            let header_end = bytes[..80]
-                .iter()
-                .position(|&b| b == 0)
-                .unwrap_or(80);
+            let header_end = bytes[..80].iter().position(|&b| b == 0).unwrap_or(80);
             let header_text = String::from_utf8_lossy(&bytes[..header_end])
                 .trim()
                 .to_string();
@@ -1482,9 +1489,9 @@ impl ProjectionCard {
         }
         match self {
             Self::PcbMultiphysicsDfm(c) => match field_name {
-                "drcVerified" | "impedanceOhm" | "tempestMarginDb" => {
-                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
-                }
+                "drcVerified" | "impedanceOhm" | "tempestMarginDb" => Err(format!(
+                    "Refused scrub on read-only badge field '{field_name}'"
+                )),
                 "traceWidthUm" => {
                     c.trace_width_um = new_val.max(1);
                     c.impedance_ohm = (8_500 / c.trace_width_um.max(25)).clamp(25, 120);
@@ -1502,25 +1509,27 @@ impl ProjectionCard {
                 other => Err(format!("Unknown PCB projection field '{other}'")),
             },
             Self::FeecSimplicialFem(c) => match field_name {
-                "pragerSyngeGap" | "cohomologyBetti" => {
-                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
-                }
+                "pragerSyngeGap" | "cohomologyBetti" => Err(format!(
+                    "Refused scrub on read-only badge field '{field_name}'"
+                )),
                 "polynomialOrder" => {
                     c.polynomial_order = new_val.max(1);
-                    c.prager_synge_gap_ppm = 1_000 / (c.polynomial_order * c.mesh_refinement.max(1));
+                    c.prager_synge_gap_ppm =
+                        1_000 / (c.polynomial_order * c.mesh_refinement.max(1));
                     Ok(())
                 }
                 "meshRefinement" => {
                     c.mesh_refinement = new_val.max(1);
-                    c.prager_synge_gap_ppm = 1_000 / (c.polynomial_order.max(1) * c.mesh_refinement);
+                    c.prager_synge_gap_ppm =
+                        1_000 / (c.polynomial_order.max(1) * c.mesh_refinement);
                     Ok(())
                 }
                 other => Err(format!("Unknown FEEC projection field '{other}'")),
             },
             Self::PdeConservation(c) => match field_name {
-                "entropyResidual" | "hyperbolicCert" => {
-                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
-                }
+                "entropyResidual" | "hyperbolicCert" => Err(format!(
+                    "Refused scrub on read-only badge field '{field_name}'"
+                )),
                 "cflMilli" => {
                     c.cfl_milli = new_val;
                     c.hyperbolic_badge.verified = new_val <= 1_000;
@@ -1533,9 +1542,9 @@ impl ProjectionCard {
                 other => Err(format!("Unknown PDE projection field '{other}'")),
             },
             Self::Vehicle6DofTrajectory(c) => match field_name {
-                "se3SymplecticCert" | "energyDriftPpm" => {
-                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
-                }
+                "se3SymplecticCert" | "energyDriftPpm" => Err(format!(
+                    "Refused scrub on read-only badge field '{field_name}'"
+                )),
                 "thrustN" => {
                     c.thrust_n = new_val;
                     Ok(())
@@ -1548,12 +1557,14 @@ impl ProjectionCard {
                     c.horizon_steps = new_val.max(1);
                     Ok(())
                 }
-                other => Err(format!("Unknown 6DOF trajectory projection field '{other}'")),
+                other => Err(format!(
+                    "Unknown 6DOF trajectory projection field '{other}'"
+                )),
             },
             Self::ZkCustodyReceipt(c) => match field_name {
-                "merkleRoot" | "custodyProof" => {
-                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
-                }
+                "merkleRoot" | "custodyProof" => Err(format!(
+                    "Refused scrub on read-only badge field '{field_name}'"
+                )),
                 "epochLimit" => {
                     c.epoch_limit = new_val;
                     Ok(())
@@ -1565,14 +1576,16 @@ impl ProjectionCard {
                 other => Err(format!("Unknown ZK custody projection field '{other}'")),
             },
             Self::FrustumRedactedView(c) => match field_name {
-                "commitmentRoot" | "redactionProof" => {
-                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
-                }
+                "commitmentRoot" | "redactionProof" => Err(format!(
+                    "Refused scrub on read-only badge field '{field_name}'"
+                )),
                 "maxDepth" => {
                     c.max_depth = new_val;
                     Ok(())
                 }
-                other => Err(format!("Unknown frustum redaction projection field '{other}'")),
+                other => Err(format!(
+                    "Unknown frustum redaction projection field '{other}'"
+                )),
             },
         }
     }
@@ -1600,10 +1613,7 @@ impl ProjectionCard {
             ),
             Self::PdeConservation(c) => format!(
                 "CFL=0.{:03} cells={} residual={}ppb verified={}",
-                c.cfl_milli,
-                c.grid_cells,
-                c.entropy_residual_ppb,
-                c.hyperbolic_badge.verified
+                c.cfl_milli, c.grid_cells, c.entropy_residual_ppb, c.hyperbolic_badge.verified
             ),
             Self::Vehicle6DofTrajectory(c) => format!(
                 "thrust={}N mass={}kg steps={} drift={}ppm verified={}",

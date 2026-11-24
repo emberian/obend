@@ -124,7 +124,12 @@ fn ngc_smt2_sv_and_obend_parsers_and_slug_validation_work() {
     assert_eq!(smt_stats.check_sat_count, 1);
 
     let sv = "module top_core(input logic clk);\n  always_ff @(posedge clk) begin end\nendmodule\n";
-    let sv_stats = parse_sv_summary("top.sv".to_string(), "apps/top.sv".to_string(), sv.len() as u64, sv);
+    let sv_stats = parse_sv_summary(
+        "top.sv".to_string(),
+        "apps/top.sv".to_string(),
+        sv.len() as u64,
+        sv,
+    );
     assert_eq!(sv_stats.module_names, vec!["top_core"]);
     assert_eq!(sv_stats.always_ff_count, 1);
 
@@ -152,8 +157,9 @@ fn pide_notebook_runner_elaborates_obend_cells_and_refuses_non_obend() {
         NotebookCell {
             id: "c1".to_string(),
             kind: "obendCode".to_string(),
-            source: "edition ObjectiveBend 1\nlaw cap: new.count <= 100\ndef mainVal() -> Nat:\n  7n\n"
-                .to_string(),
+            source:
+                "edition ObjectiveBend 1\nlaw cap: new.count <= 100\ndef mainVal() -> Nat:\n  7n\n"
+                    .to_string(),
             status: "ready".to_string(),
         },
         NotebookCell {
@@ -284,7 +290,10 @@ fn incremental_dirty_cone_transclusion_and_bidirectional_scrubbing_preserve_clea
         status: "ready".to_string(),
     });
     let r5 = runner.execute_workbook_incremental(&cyclic_cells);
-    assert!(r5.results[4].1.is_err(), "self-citation cycle must be refused");
+    assert!(
+        r5.results[4].1.is_err(),
+        "self-citation cycle must be refused"
+    );
     assert_eq!(runner.cell_eval_count("c_isolated"), 1);
 
     // Pass 7 (Stage-2/3 Astra hardening): unregistered lens scrub must fail closed,
@@ -298,7 +307,10 @@ fn incremental_dirty_cone_transclusion_and_bidirectional_scrubbing_preserve_clea
     runner.set_section("TranscludedBridge", "Pulls from ![[DanglingLateSec]]");
     let r6 = runner.execute_workbook_incremental(&cells);
     assert_eq!(r6.dirty_cone, vec!["c_transcluded"]);
-    runner.set_section("DanglingLateSec", "Now resolved! Cyclic [[TranscludedBridge]]");
+    runner.set_section(
+        "DanglingLateSec",
+        "Now resolved! Cyclic [[TranscludedBridge]]",
+    );
     let r7 = runner.execute_workbook_incremental(&cells);
     assert_eq!(
         r7.dirty_cone,
@@ -443,9 +455,15 @@ fn kernel_workbook_ffi_and_multi_projection_cards_end_to_end() {
     assert!(cards[4].scrub_field("custodyProof", 0).is_err());
     assert!(cards[5].scrub_field("commitmentRoot", 0).is_err());
 
-    cards[0].scrub_field("traceWidthUm", 100).expect("scrub pcb width");
-    cards[1].scrub_field("polynomialOrder", 4).expect("scrub feec order");
-    cards[2].scrub_field("cflMilli", 500).expect("scrub pde cfl");
+    cards[0]
+        .scrub_field("traceWidthUm", 100)
+        .expect("scrub pcb width");
+    cards[1]
+        .scrub_field("polynomialOrder", 4)
+        .expect("scrub feec order");
+    cards[2]
+        .scrub_field("cflMilli", 500)
+        .expect("scrub pde cfl");
     cards[3].scrub_field("thrustN", 1200).expect("scrub thrust");
     cards[4].scrub_field("epochLimit", 64).expect("scrub epoch");
     cards[5].scrub_field("maxDepth", 8).expect("scrub depth");
@@ -457,11 +475,17 @@ fn kernel_workbook_ffi_and_multi_projection_cards_end_to_end() {
 
     // 3. Adversarial FFI boundary checks: invalid UTF-8, undeclared cite:: read, and read-only kernel scrub
     assert!(
-        runner.session_mut().step_workbook(&[0xFF, 0xFE, 0xFD]).is_err(),
+        runner
+            .session_mut()
+            .step_workbook(&[0xFF, 0xFE, 0xFD])
+            .is_err(),
         "invalid UTF-8 bytes must fail closed"
     );
     assert!(
-        runner.session_mut().scrub_projection_cell(&[0xFF, 0xFE]).is_err(),
+        runner
+            .session_mut()
+            .scrub_projection_cell(&[0xFF, 0xFE])
+            .is_err(),
         "invalid UTF-8 scrub bytes must fail closed"
     );
     assert!(
@@ -501,8 +525,12 @@ fn discover_workspace_apps_finds_relativity_z4c_with_lec_and_vcd() {
 
     assert_eq!(rel.obend_layer_count, 3);
     assert!(rel.smt2_lec_present);
-    assert!(rel.smt2_files.contains(&"BonaMassoZ4c1D_lec.smt2".to_string()));
-    assert!(rel.sv_files.contains(&"BonaMassoZ4c1D_axis0.sv".to_string()));
+    assert!(rel
+        .smt2_files
+        .contains(&"BonaMassoZ4c1D_lec.smt2".to_string()));
+    assert!(rel
+        .sv_files
+        .contains(&"BonaMassoZ4c1D_axis0.sv".to_string()));
     assert!(rel.vcd_present);
     assert_eq!(rel.vcd_build_status, "built");
     assert!(rel.vcd_signal_count > 0);

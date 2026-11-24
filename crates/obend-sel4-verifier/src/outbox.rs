@@ -41,13 +41,13 @@ pub enum OutboxHashAlg {
 
 /// Streaming domain-separated 256-bit hasher abstracting `cSHAKE256` and `SHA-256` without heap allocation.
 enum DomainHasher {
-    Cshake(Sponge),
+    Cshake(Cshake256),
     Sha(Sha256),
 }
 impl DomainHasher {
     fn new(alg: OutboxHashAlg, domain: &[u8]) -> Self {
         match alg {
-            OutboxHashAlg::Cshake256 => Self::Cshake(customized(domain)),
+            OutboxHashAlg::Cshake256 => Self::Cshake(Cshake256::customized(domain)),
             OutboxHashAlg::Sha256 => {
                 let mut h = Sha256::new();
                 h.update(&(domain.len() as u64).to_be_bytes());
@@ -64,7 +64,7 @@ impl DomainHasher {
     }
     fn finish(self) -> Digest {
         match self {
-            Self::Cshake(s) => s.digest(),
+            Self::Cshake(s) => s.finalize_32(),
             Self::Sha(h) => h.finalize(),
         }
     }
@@ -101,7 +101,11 @@ pub fn effect_commit_digest(
 }
 
 /// Derive the 256-bit domain-separated outbox nullifier digest (`IrreversibleOutbox.lean:133-136`).
-pub fn outbox_nullifier_digest(alg: OutboxHashAlg, gatekeeper_pd: u64, nullifier_id: u64) -> Digest {
+pub fn outbox_nullifier_digest(
+    alg: OutboxHashAlg,
+    gatekeeper_pd: u64,
+    nullifier_id: u64,
+) -> Digest {
     let mut h = DomainHasher::new(alg, OUTBOX_NULLIFIER_DOMAIN);
     h.update(&gatekeeper_pd.to_be_bytes());
     h.update(&nullifier_id.to_be_bytes());
@@ -204,7 +208,11 @@ impl<const LEAVES: usize> EffectsMerkleTree<LEAVES> {
         }
         nodes[0]
     }
-    pub fn open<const DEPTH: usize>(&self, alg: OutboxHashAlg, index: usize) -> Option<[Digest; DEPTH]> {
+    pub fn open<const DEPTH: usize>(
+        &self,
+        alg: OutboxHashAlg,
+        index: usize,
+    ) -> Option<[Digest; DEPTH]> {
         if index >= LEAVES || (1usize << DEPTH) != LEAVES {
             return None;
         }
@@ -296,8 +304,8 @@ pub fn derive_finalize_slot_pubkey(
     let k = u64::try_from(chain.len()).ok()?;
     let chain_bytes_len = k.checked_mul(42)?.checked_add(1)?;
     let target_bytes_len = chain_bytes_len.checked_add(1)?;
-    let signable_len = (8u64 + SIMPLEX_AUTH_DOMAIN.len() as u64 + 8 + 8 + 1)
-        .checked_add(target_bytes_len)?;
+    let signable_len =
+        (8u64 + SIMPLEX_AUTH_DOMAIN.len() as u64 + 8 + 8 + 1).checked_add(target_bytes_len)?;
     let content_len = signable_len.checked_add(1)?;
 
     let mut h = DomainHasher::new(alg, SIMPLEX_SLOT_SIG_DOMAIN);
@@ -361,8 +369,8 @@ impl<const MAX_N: usize, const MAX_VIEWS: usize> SimplexCommittee<MAX_N, MAX_VIE
         if self.n < min_n {
             return None;
         }
-        for v in 0..self.active_views {
-            for pk in &self.slot_pubkeys[v][..self.n] {
+        for view in &self.slot_pubkeys[..self.active_views] {
+            for pk in &view[..self.n] {
                 if ct_eq_digest(pk, &[0u8; 32]) {
                     return None;
                 }
@@ -388,8 +396,8 @@ impl<const MAX_N: usize, const MAX_VIEWS: usize> SimplexCommittee<MAX_N, MAX_VIE
         h.update(&(self.f as u64).to_be_bytes());
         h.update(&self.base_view.to_be_bytes());
         h.update(&(self.active_views as u64).to_be_bytes());
-        for v in 0..self.active_views.min(MAX_VIEWS) {
-            for pk in &self.slot_pubkeys[v][..self.n.min(MAX_N)] {
+        for view in &self.slot_pubkeys[..self.active_views.min(MAX_VIEWS)] {
+            for pk in &view[..self.n.min(MAX_N)] {
                 h.update(pk);
             }
         }
@@ -459,7 +467,9 @@ pub fn verify_fin_cert<
     committee: &SimplexCommittee<MAX_N, MAX_VIEWS>,
     cert: &SimplexFinCert<MAX_CHAIN, MAX_SIGNERS>,
 ) -> Result<Digest, OutboxRefusal> {
-    let required = committee.quorum().ok_or(OutboxRefusal::InvalidCommitteeBounds)?;
+    let required = committee
+        .quorum()
+        .ok_or(OutboxRefusal::InvalidCommitteeBounds)?;
     if cert.view == 0 {
         return Err(OutboxRefusal::MalformedChain);
     }
@@ -509,9 +519,14 @@ pub fn verify_fin_cert<
         let Some(expected_pk) = committee.slot_pubkey(cert.view, signer_idx) else {
             return Err(OutboxRefusal::UnfinalizedTip);
         };
-        let derived_pk =
-            derive_finalize_slot_pubkey(committee.hash_alg, vote.signer_id, cert.view, chain, &vote.sig_salt)
-                .ok_or(OutboxRefusal::MalformedChain)?;
+        let derived_pk = derive_finalize_slot_pubkey(
+            committee.hash_alg,
+            vote.signer_id,
+            cert.view,
+            chain,
+            &vote.sig_salt,
+        )
+        .ok_or(OutboxRefusal::MalformedChain)?;
         if !ct_eq_digest(&derived_pk, expected_pk) {
             return Err(OutboxRefusal::InvalidFinalizeSignature {
                 signer_id: vote.signer_id,
@@ -522,7 +537,11 @@ pub fn verify_fin_cert<
 }
 
 /// Pin `(gatekeeper_pd, high_water_nullifier)` into `FullPinnedPublicInputs::revoked_root`.
-pub fn outbox_window_digest(alg: OutboxHashAlg, gatekeeper_pd: u64, high_water_nullifier: u64) -> Digest {
+pub fn outbox_window_digest(
+    alg: OutboxHashAlg,
+    gatekeeper_pd: u64,
+    high_water_nullifier: u64,
+) -> Digest {
     let mut h = DomainHasher::new(alg, OUTBOX_WINDOW_DOMAIN);
     h.update(&gatekeeper_pd.to_be_bytes());
     h.update(&high_water_nullifier.to_be_bytes());
@@ -613,7 +632,8 @@ impl<const MAX_N: usize, const MAX_VIEWS: usize> OutboxFinalityVerifier<MAX_N, M
             OutboxEffectClass::IrreversibleActuation,
             payload_slice,
         );
-        let expected_turn_hash = outbox_turn_digest(alg, &eff_commit, &r.effects_root, r.leaf_index);
+        let expected_turn_hash =
+            outbox_turn_digest(alg, &eff_commit, &r.effects_root, r.leaf_index);
         if !ct_eq_digest(&pi.turn_hash, &expected_turn_hash) {
             return Err(OutboxRefusal::InstanceMismatch);
         }
@@ -733,9 +753,8 @@ mod tests {
         let mut slot_pubkeys = [[[0x44u8; 32]; 6]; 4];
         for (i, pk) in slot_pubkeys[0].iter_mut().enumerate().take(n) {
             let salt = make_salt(i, 0x77);
-            *pk =
-                derive_finalize_slot_pubkey(alg, i as u64, view, &chain[..chain_len], &salt)
-                    .unwrap();
+            *pk = derive_finalize_slot_pubkey(alg, i as u64, view, &chain[..chain_len], &salt)
+                .unwrap();
         }
         let mut votes = [ValidatorFinalizeVote::ZERO; 5];
         for (idx, &s) in signers.iter().enumerate() {
@@ -802,8 +821,7 @@ mod tests {
     #[test]
     fn cap30_cshake256_and_sha256_fincert_and_effects_root_settle_through_verifier_pd() {
         for alg in [OutboxHashAlg::Cshake256, OutboxHashAlg::Sha256] {
-            let (v, b) =
-                build_honest_outbox_fixture(alg, 5, 1, &[0, 1, 3, 4], 10, 0, 1, 2);
+            let (v, b) = build_honest_outbox_fixture(alg, 5, 1, &[0, 1, 3, 4], 10, 0, 1, 2);
             assert!(v.check(&b.public_inputs, &b.challenge0, &b.receipt).is_ok());
             assert!(verify_cipherclerk(&v, &b));
 
@@ -829,7 +847,11 @@ mod tests {
             let (v_under, b_under) =
                 build_honest_outbox_fixture(alg, 5, 1, &[0, 1, 2], 10, 0, 1, 2);
             assert_eq!(
-                v_under.check(&b_under.public_inputs, &b_under.challenge0, &b_under.receipt),
+                v_under.check(
+                    &b_under.public_inputs,
+                    &b_under.challenge0,
+                    &b_under.receipt
+                ),
                 Err(OutboxRefusal::UnderQuorum {
                     got: 3,
                     required: 4
@@ -838,8 +860,7 @@ mod tests {
             assert!(!verify_cipherclerk(&v_under, &b_under));
 
             // Duplicate signer padding 3 distinct signers to 4 entries (`[0, 1, 2, 1]`) is rejected!
-            let (v_dup, b_dup) =
-                build_honest_outbox_fixture(alg, 5, 1, &[0, 1, 2, 1], 10, 0, 1, 2);
+            let (v_dup, b_dup) = build_honest_outbox_fixture(alg, 5, 1, &[0, 1, 2, 1], 10, 0, 1, 2);
             assert_eq!(
                 v_dup.check(&b_dup.public_inputs, &b_dup.challenge0, &b_dup.receipt),
                 Err(OutboxRefusal::DuplicateSigner { signer_id: 1 })
@@ -896,11 +917,13 @@ mod tests {
             // S4 second-preimage attempt: presenting internal node `root` at depth 0 as a leaf
             // fails because depth-0 `effects_merkle_leaf` prefixes `0x00 || be8(0)`, never `0x01`!
             assert!(!verify_effects_merkle_proof(alg, 0, 0, &root, &[], &root));
-            assert_ne!(effects_merkle_leaf(alg, 0, &l0), effects_merkle_node(alg, &l0, &l1));
+            assert_ne!(
+                effects_merkle_leaf(alg, 0, &l0),
+                effects_merkle_node(alg, &l0, &l1)
+            );
 
             // Zero-check / empty-payload / replayed-nullifier attempts are refused:
-            let (v, mut b) =
-                build_honest_outbox_fixture(alg, 4, 1, &[0, 1, 2], 5, 5, 1, 2);
+            let (v, mut b) = build_honest_outbox_fixture(alg, 4, 1, &[0, 1, 2], 5, 5, 1, 2);
             assert_eq!(
                 v.check(&b.public_inputs, &b.challenge0, &b.receipt),
                 Err(OutboxRefusal::StaleOrReplayedNullifier)
@@ -916,8 +939,7 @@ mod tests {
     #[test]
     fn cap30_cross_view_slot_signature_replay_is_rejected() {
         for alg in [OutboxHashAlg::Cshake256, OutboxHashAlg::Sha256] {
-            let (mut v, mut b) =
-                build_honest_outbox_fixture(alg, 5, 1, &[0, 1, 2, 3], 10, 0, 1, 2);
+            let (mut v, mut b) = build_honest_outbox_fixture(alg, 5, 1, &[0, 1, 2, 3], 10, 0, 1, 2);
             // Populate active_views = 2 (`view = 2` in slot 0, distinct keys for `view = 3` in slot 1)
             v.committee.active_views = 2;
             let chain_v3 = [
@@ -929,8 +951,7 @@ mod tests {
             ];
             for (i, pk) in v.committee.slot_pubkeys[1].iter_mut().enumerate().take(5) {
                 let salt_v3 = make_salt(i, 0x99);
-                *pk =
-                    derive_finalize_slot_pubkey(alg, i as u64, 3, &chain_v3, &salt_v3).unwrap();
+                *pk = derive_finalize_slot_pubkey(alg, i as u64, 3, &chain_v3, &salt_v3).unwrap();
             }
             // Re-pin actor_vk_digest & challenge0 to the 2-view committee, then try presenting
             // `view = 2` sig_salts against `view = 3`:

@@ -127,9 +127,17 @@ impl DeviceRole {
                     DmaRegionKind::DisplayFramebuffer,
                     IoPerm::ReadOnly,
                 )
-                | (Self::Gpu, DmaRegionKind::DisplayFramebuffer, IoPerm::ReadOnly)
+                | (
+                    Self::Gpu,
+                    DmaRegionKind::DisplayFramebuffer,
+                    IoPerm::ReadOnly
+                )
                 | (Self::Gpu, DmaRegionKind::GpuScratchPool, _)
-                | (Self::CameraCsi2, DmaRegionKind::CameraRing, IoPerm::WriteOnly)
+                | (
+                    Self::CameraCsi2,
+                    DmaRegionKind::CameraRing,
+                    IoPerm::WriteOnly
+                )
         )
     }
 }
@@ -428,10 +436,7 @@ pub struct DmaSimReport {
 pub enum EmitError {
     BufferTooSmall,
     InvalidPolicy(IommuRefusal),
-    ReservedIpcVaddrCollision {
-        stream_id: u32,
-        iova: u64,
-    },
+    ReservedIpcVaddrCollision { stream_id: u32, iova: u64 },
 }
 
 fn ranges_overlap(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> Option<bool> {
@@ -440,7 +445,12 @@ fn ranges_overlap(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> Option<
     Some(!(a_end <= b_start || b_end <= a_start))
 }
 
-fn range_contains(outer_start: u64, outer_len: u64, inner_start: u64, inner_len: u64) -> Option<bool> {
+fn range_contains(
+    outer_start: u64,
+    outer_len: u64,
+    inner_start: u64,
+    inner_len: u64,
+) -> Option<bool> {
     let outer_end = outer_start.checked_add(outer_len)?;
     let inner_end = inner_start.checked_add(inner_len)?;
     Some(inner_start >= outer_start && inner_end <= outer_end)
@@ -461,7 +471,7 @@ fn check_loader_window(phys_start: u64, phys_end: u64) -> Result<(), IommuRefusa
 ///
 /// Streaming `#![no_std]` implementation with zero heap allocation and no fixed-capacity truncation.
 pub fn smmu_manifest_digest(policy: &ChokepointIommuPolicy<'_>) -> Digest {
-    let mut s = customized(SMMU_MANIFEST_DOMAIN);
+    let mut s = Cshake256::customized(SMMU_MANIFEST_DOMAIN);
     field(&mut s, &[policy.arch.tag_byte()]);
     field(&mut s, &[u8::from(policy.default_deny_unmapped)]);
     field(&mut s, &policy.rootserver_phys_start.to_be_bytes());
@@ -515,7 +525,7 @@ pub fn smmu_manifest_digest(policy: &ChokepointIommuPolicy<'_>) -> Digest {
         }
     }
 
-    s.digest()
+    s.finalize_32()
 }
 
 /// Fail-closed verifier for a Stage-2 SMMUv3 / RISC-V IOMMU chokepoint policy.
@@ -673,13 +683,8 @@ pub fn verify_iommu_policy(policy: &ChokepointIommuPolicy<'_>) -> Result<Digest,
             }
 
             // Reject any DMA mapping overlapping the Microkit root-server physical span.
-            if ranges_overlap(
-                reg.paddr,
-                reg.size,
-                policy.rootserver_phys_start,
-                root_span,
-            )
-            .unwrap_or(true)
+            if ranges_overlap(reg.paddr, reg.size, policy.rootserver_phys_start, root_span)
+                .unwrap_or(true)
             {
                 return Err(IommuRefusal::OverlappingRootServerSpan {
                     stream_id: st.stream_id.0,
@@ -716,7 +721,8 @@ pub fn verify_iommu_policy(policy: &ChokepointIommuPolicy<'_>) -> Result<Digest,
 
             // Intra-stream IOVA uniqueness (no overlapping IOVA translations in one Stage-2 table).
             for other_reg in &st.regions[r_idx + 1..] {
-                if ranges_overlap(reg.iova, reg.size, other_reg.iova, other_reg.size).unwrap_or(true)
+                if ranges_overlap(reg.iova, reg.size, other_reg.iova, other_reg.size)
+                    .unwrap_or(true)
                 {
                     return Err(IommuRefusal::OverlappingStreamIova {
                         stream_id: st.stream_id.0,
@@ -1091,7 +1097,9 @@ pub fn emit_microkit_system_xml(
     if policy.rootserver_phys_start != desc.rootserver_phys_start
         || policy.rootserver_phys_end != desc.rootserver_phys_end
     {
-        return Err(EmitError::InvalidPolicy(IommuRefusal::RootServerSpanMismatch));
+        return Err(EmitError::InvalidPolicy(
+            IommuRefusal::RootServerSpanMismatch,
+        ));
     }
     let digest = verify_iommu_policy(policy).map_err(EmitError::InvalidPolicy)?;
 
@@ -1243,7 +1251,9 @@ pub fn emit_dtb_iommus_binding(
     w.write_bytes(b"  /* default-deny: FaultOnUnmappedStream */\n};\n")?;
 
     // Reserved-memory block pinning root-server + all protected frame ranges as `no-map`.
-    w.write_bytes(b"reserved-memory {\n  #address-cells = <2>;\n  #size-cells = <2>;\n  ranges;\n")?;
+    w.write_bytes(
+        b"reserved-memory {\n  #address-cells = <2>;\n  #size-cells = <2>;\n  ranges;\n",
+    )?;
     w.write_bytes(b"  microkit-rootserver {\n    reg = <")?;
     w.write_hex_u64(policy.rootserver_phys_start >> 32)?;
     w.write_bytes(b" ")?;
@@ -1695,11 +1705,13 @@ pub const fn decode_stage2_l2_desc(desc: u64) -> Option<DecodedL2Desc> {
                 return None;
             }
             // Bits [20:12] MUST be zero on a 2 MiB L2 block descriptor!
-            let allowed = STAGE2_S2XN_MASK | STAGE2_OA_2M_MASK | STAGE2_AF_BIT | STAGE2_S2AP_MASK | 0b11;
+            let allowed =
+                STAGE2_S2XN_MASK | STAGE2_OA_2M_MASK | STAGE2_AF_BIT | STAGE2_S2AP_MASK | 0b11;
             if (desc & !allowed) != 0 {
                 return None;
             }
-            let Some(perm) = IoPerm::from_s2ap((desc & STAGE2_S2AP_MASK) >> STAGE2_S2AP_SHIFT) else {
+            let Some(perm) = IoPerm::from_s2ap((desc & STAGE2_S2AP_MASK) >> STAGE2_S2AP_SHIFT)
+            else {
                 return None;
             };
             Some(DecodedL2Desc::Block2MiB {
@@ -1899,7 +1911,10 @@ impl<const MAX_TABLES: usize> RadixTableArena<MAX_TABLES> {
             .ok_or(RadixBuildError::UnalignedOrOutOfRangeArenaBase(
                 self.arena_base_paddr,
             ))?;
-        if paddr.checked_add(PAGE_SIZE_4K).is_none_or(|end| end > SMMUV3_ADDR_LIMIT_48BIT) {
+        if paddr
+            .checked_add(PAGE_SIZE_4K)
+            .is_none_or(|end| end > SMMUV3_ADDR_LIMIT_48BIT)
+        {
             return Err(RadixBuildError::UnalignedOrOutOfRangeArenaBase(paddr));
         }
         self.used_tables += 1;
@@ -2143,12 +2158,13 @@ impl<const MAX_TABLES: usize> RadixTableArena<MAX_TABLES> {
             let vmid = st.stream_id.0 as u16;
             let (l0_idx, l0_pa) = self.alloc_table()?;
             for reg in st.regions {
-                let reg_iova_end = reg.iova.checked_add(reg.size).ok_or(
-                    RadixBuildError::AddressExceeds48Bit {
-                        stream_id: st.stream_id.0,
-                        addr: reg.iova,
-                    },
-                )?;
+                let reg_iova_end =
+                    reg.iova
+                        .checked_add(reg.size)
+                        .ok_or(RadixBuildError::AddressExceeds48Bit {
+                            stream_id: st.stream_id.0,
+                            addr: reg.iova,
+                        })?;
                 let reg_paddr_end = reg.paddr.checked_add(reg.size).ok_or(
                     RadixBuildError::AddressExceeds48Bit {
                         stream_id: st.stream_id.0,
@@ -2223,20 +2239,20 @@ impl<const MAX_TABLES: usize> RadixTableArena<MAX_TABLES> {
                                 });
                             }
                             self.tables[l3_idx][i3] = encode_stage2_page4k_desc(cur_pa, reg.perm)
-                                .ok_or(RadixBuildError::AddressExceeds48Bit {
+                                .ok_or(
+                                RadixBuildError::AddressExceeds48Bit {
                                     stream_id: st.stream_id.0,
                                     addr: cur_pa,
-                                })?;
+                                },
+                            )?;
                         }
                     }
                     off += step;
                 }
             }
             let sid_idx = st.stream_id.0 as usize;
-            self.stream_table[sid_idx] =
-                SmmuV3Ste::pack_stage2(vmid, l0_pa).map_err(|_| {
-                    RadixBuildError::UnalignedOrOutOfRangeArenaBase(l0_pa)
-                })?;
+            self.stream_table[sid_idx] = SmmuV3Ste::pack_stage2(vmid, l0_pa)
+                .map_err(|_| RadixBuildError::UnalignedOrOutOfRangeArenaBase(l0_pa))?;
         }
 
         // Enforce that the entire allocated SMMU arena (Stream Table + CmdQ + all L0..L3 tables)
@@ -2370,30 +2386,36 @@ impl<const MAX_TABLES: usize> RadixTableArena<MAX_TABLES> {
                 iova,
             });
         }
-        let l0_idx = self.lookup_table_index(l0_paddr).ok_or(DmaFault::UnmappedIova {
-            stream_id: stream_id.0,
-            iova,
-        })?;
+        let l0_idx = self
+            .lookup_table_index(l0_paddr)
+            .ok_or(DmaFault::UnmappedIova {
+                stream_id: stream_id.0,
+                iova,
+            })?;
         let d0 = self.tables[l0_idx][((iova >> 39) & 0x1ff) as usize];
         let l1_pa = decode_stage2_table_desc(d0).ok_or(DmaFault::UnmappedIova {
             stream_id: stream_id.0,
             iova,
         })?;
 
-        let l1_idx = self.lookup_table_index(l1_pa).ok_or(DmaFault::UnmappedIova {
-            stream_id: stream_id.0,
-            iova,
-        })?;
+        let l1_idx = self
+            .lookup_table_index(l1_pa)
+            .ok_or(DmaFault::UnmappedIova {
+                stream_id: stream_id.0,
+                iova,
+            })?;
         let d1 = self.tables[l1_idx][((iova >> 30) & 0x1ff) as usize];
         let l2_pa = decode_stage2_table_desc(d1).ok_or(DmaFault::UnmappedIova {
             stream_id: stream_id.0,
             iova,
         })?;
 
-        let l2_idx = self.lookup_table_index(l2_pa).ok_or(DmaFault::UnmappedIova {
-            stream_id: stream_id.0,
-            iova,
-        })?;
+        let l2_idx = self
+            .lookup_table_index(l2_pa)
+            .ok_or(DmaFault::UnmappedIova {
+                stream_id: stream_id.0,
+                iova,
+            })?;
         let d2 = self.tables[l2_idx][((iova >> 21) & 0x1ff) as usize];
         match decode_stage2_l2_desc(d2).ok_or(DmaFault::UnmappedIova {
             stream_id: stream_id.0,
@@ -2559,18 +2581,9 @@ pub const CMD_OP_SYNC: u8 = 0x46;
 /// 128-bit (`[u64; 2]`) Arm SMMUv3 Command Queue Entry (IHI 0070 §4.1 / §4.3.1 / §4.4.3.1–2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmmuCmd {
-    CfgiSte {
-        stream_id: StreamId,
-        leaf: bool,
-    },
-    TlbiS2Ipa {
-        vmid: u16,
-        ipa: u64,
-        leaf: bool,
-    },
-    TlbiS12Vmall {
-        vmid: u16,
-    },
+    CfgiSte { stream_id: StreamId, leaf: bool },
+    TlbiS2Ipa { vmid: u16, ipa: u64, leaf: bool },
+    TlbiS12Vmall { vmid: u16 },
     Sync,
 }
 
@@ -2874,11 +2887,7 @@ impl<const MAX_IOTLB: usize, const MAX_CMDS: usize> SmmuIotlbEngine<MAX_IOTLB, M
                             }
                         }
                     }
-                    SmmuCmd::TlbiS2Ipa {
-                        vmid,
-                        ipa,
-                        leaf: _,
-                    } => {
+                    SmmuCmd::TlbiS2Ipa { vmid, ipa, leaf: _ } => {
                         for slot in &mut self.iotlb {
                             if slot.live && slot.vmid == vmid {
                                 let gran = slot.granule.bytes();
@@ -3004,9 +3013,9 @@ impl<const MAX_IOTLB: usize, const MAX_CMDS: usize> SmmuIotlbEngine<MAX_IOTLB, M
     /// Arm IHI 0070 §3.21.1.1 two-barrier completion ordering: returns the slice of synced commands
     /// executed in a strictly LATER `CMD_SYNC` batch AFTER `CMD_CFGI_STE(stream_id, leaf=false)` + `CMD_SYNC`!
     fn synced_after_cfgi(&self, stream_id: StreamId) -> Option<&[SmmuCmd]> {
-        let pos = self.synced_cmds[..self.synced_len]
-            .iter()
-            .position(|c| matches!(c, SmmuCmd::CfgiSte { stream_id: s, leaf: false } if *s == stream_id))?;
+        let pos = self.synced_cmds[..self.synced_len].iter().position(
+            |c| matches!(c, SmmuCmd::CfgiSte { stream_id: s, leaf: false } if *s == stream_id),
+        )?;
         let cfgi_batch = self.synced_batches[pos];
         let mut after = pos + 1;
         while after < self.synced_len && self.synced_batches[after] <= cfgi_batch {
@@ -3134,8 +3143,13 @@ impl<const MAX_IOTLB: usize, const MAX_CMDS: usize> SmmuIotlbEngine<MAX_IOTLB, M
         for old_pr in &old_arena.protected_ranges[..old_arena.protected_range_count] {
             let still_covered = new_policy.protected_ranges.iter().any(|new_pr| {
                 new_pr.class == old_pr.class
-                    && range_contains(new_pr.base_paddr, new_pr.size, old_pr.base_paddr, old_pr.size)
-                        .unwrap_or(false)
+                    && range_contains(
+                        new_pr.base_paddr,
+                        new_pr.size,
+                        old_pr.base_paddr,
+                        old_pr.size,
+                    )
+                    .unwrap_or(false)
             });
             if !still_covered {
                 return Err(TlbiReconfigError::ProtectedRangeWeakened {
@@ -3492,4 +3506,3 @@ mod whitebox_iotlb_tests {
         assert_eq!(out_arena.active_stream_limit(), 0);
     }
 }
-

@@ -16,44 +16,44 @@ pub mod spk;
 pub mod wasm_budget;
 
 pub use bwrap::{
-    BubblewrapRunner, SandboxBackend, SandboxConfig, SandboxError, SandboxRunReceipt,
-    DEFAULT_MAX_PROCESS_OUTPUT_BYTES, install_pdeathsig_sigkill,
+    install_pdeathsig_sigkill, BubblewrapRunner, SandboxBackend, SandboxConfig, SandboxError,
+    SandboxRunReceipt, DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
 };
 pub use gate::{GateStatus, LaunchGate};
 pub use grain::{
-    GrainBudget, GrainCapabilities, GrainExecutionReceipt, GrainExecutor, GrainOp, GrainProgram,
-    GrainTermination, ReproducibilityTier, GRAIN_PAGE_SIZE, digest_slot_entries, sha256,
+    digest_slot_entries, sha256, GrainBudget, GrainCapabilities, GrainExecutionReceipt,
+    GrainExecutor, GrainOp, GrainProgram, GrainTermination, ReproducibilityTier, GRAIN_PAGE_SIZE,
 };
 pub use line_channel::{
-    BodyChannel, BodyMsg, ConfinedAction, ConfinedBrain, DEFAULT_MAX_LINE_BYTES, DoneNote,
-    LineChannel, MAX_CONSECUTIVE_EMPTY_LINES, MapError, Proposal, Verdict, map_proposal,
+    map_proposal, BodyChannel, BodyMsg, ConfinedAction, ConfinedBrain, DoneNote, LineChannel,
+    MapError, Proposal, Verdict, DEFAULT_MAX_LINE_BYTES, MAX_CONSECUTIVE_EMPTY_LINES,
 };
 pub use meter::CpuMeter;
 pub use policy::{
-    AddFdError, AllowedEndpoint, BpfInsn, CheckedAddFdSpec, ConfinementPolicy, ConnectFilterError,
-    DoorMode, EnvAllowlistPolicy, EnvPolicyError, FORBIDDEN_ENV_KEYS, SeccompProfileSpec,
     build_hardened_seccomp_bpf, check_addfd_ioctl_result, eval_seccomp_bpf,
-    validate_connect_sockaddr,
+    validate_connect_sockaddr, AddFdError, AllowedEndpoint, BpfInsn, CheckedAddFdSpec,
+    ConfinementPolicy, ConnectFilterError, DoorMode, EnvAllowlistPolicy, EnvPolicyError,
+    SeccompProfileSpec, FORBIDDEN_ENV_KEYS,
 };
 pub use secret_seal::{
-    SECRET_ENVELOPE_MAGIC, SecretMetadata, SecretSealError, SecretSlotId, SecretValue,
-    SlotBoundSecretStore, chacha20_poly1305_open, chacha20_poly1305_seal, seal_secret_for_slot,
-    unseal_secret_for_slot,
+    chacha20_poly1305_open, chacha20_poly1305_seal, seal_secret_for_slot, unseal_secret_for_slot,
+    SecretMetadata, SecretSealError, SecretSlotId, SecretValue, SlotBoundSecretStore,
+    SECRET_ENVELOPE_MAGIC,
 };
 pub use spk::{
-    AppId, BRIDGE_CONFIG_PATH, BridgeConfig, Ed25519SigningKey, FileContent, MANIFEST_PATH,
-    ManifestError, PermissionDef, Role, SPK_MAGIC, Spk, SpkAction, SpkArchive, SpkBuilder,
-    SpkCommand, SpkError, SpkFile, SpkManifest, decode_bridge_config_capnp, ed25519_verify_strict,
-    sandstorm_base32_encode, xz_compress, xz_decompress_bounded,
+    decode_bridge_config_capnp, ed25519_verify_strict, sandstorm_base32_encode, xz_compress,
+    xz_decompress_bounded, AppId, BridgeConfig, Ed25519SigningKey, FileContent, ManifestError,
+    PermissionDef, Role, Spk, SpkAction, SpkArchive, SpkBuilder, SpkCommand, SpkError, SpkFile,
+    SpkManifest, BRIDGE_CONFIG_PATH, MANIFEST_PATH, SPK_MAGIC,
 };
 pub use wasm_budget::{
-    EgressPosture, WASM_PAGE_SIZE, WasmCapTier, WasmExecutionBudget, WasmExecutionReceipt,
-    WasmRunError, WasmVal, run_wasm_metered, wasm_egress_posture,
+    run_wasm_metered, wasm_egress_posture, EgressPosture, WasmCapTier, WasmExecutionBudget,
+    WasmExecutionReceipt, WasmRunError, WasmVal, WASM_PAGE_SIZE,
 };
 
 pub use cloud_custody::{
-    AriadneIngressLog, AriadneTicket, ConfinedForkSpec, ConfinedGrainSession, CustodyAuthenticator,
-    CustodyDigest, CustodyError, CustodyPoisonReason, ForkError, ForkGenesis, GrainCustodyAnchor,
-    GrainCustodyHost, GrainCustodyStatus, LeaseError, PrepaidLease, SignedGrainPackage,
-    compute_var_data_root, turn_request_digest,
+    compute_var_data_root, turn_request_digest, AriadneIngressLog, AriadneTicket, ConfinedForkSpec,
+    ConfinedGrainSession, CustodyAuthenticator, CustodyDigest, CustodyError, CustodyPoisonReason,
+    ForkError, ForkGenesis, GrainCustodyAnchor, GrainCustodyHost, GrainCustodyStatus, LeaseError,
+    PrepaidLease, SignedGrainPackage,
 };

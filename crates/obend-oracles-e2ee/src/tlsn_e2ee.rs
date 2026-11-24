@@ -189,10 +189,19 @@ pub enum OracleError {
     HostHeaderMismatch,
     RequestPathMismatch,
     MalformedHttpResponse,
-    UnauthedBodyBytes { range_start: usize, range_end: usize },
+    UnauthedBodyBytes {
+        range_start: usize,
+        range_end: usize,
+    },
     ControlPlaneInjection,
-    BodyTooLarge { actual: usize, max: usize },
-    JsonPathTooDeep { depth: usize, max: usize },
+    BodyTooLarge {
+        actual: usize,
+        max: usize,
+    },
+    JsonPathTooDeep {
+        depth: usize,
+        max: usize,
+    },
     JsonMalformed,
     JsonDuplicateKey(String),
     JsonFieldNotFound(String),
@@ -218,7 +227,8 @@ fn validate_http_request(
         return Err(OracleError::ControlPlaneInjection);
     }
     let header_end = find_header_body_split(sent).ok_or(OracleError::MalformedHttpRequest)?;
-    let head = std::str::from_utf8(&sent[..header_end]).map_err(|_| OracleError::MalformedHttpRequest)?;
+    let head =
+        std::str::from_utf8(&sent[..header_end]).map_err(|_| OracleError::MalformedHttpRequest)?;
     let mut lines = head.split("\r\n");
     let req_line = lines.next().ok_or(OracleError::MalformedHttpRequest)?;
     let mut parts = req_line.split(' ');
@@ -272,7 +282,8 @@ fn parse_http_response(recv: &[u8]) -> Result<(u16, usize, usize, &[u8]), Oracle
         return Err(OracleError::ControlPlaneInjection);
     }
     let split = find_header_body_split(recv).ok_or(OracleError::MalformedHttpResponse)?;
-    let head = std::str::from_utf8(&recv[..split]).map_err(|_| OracleError::MalformedHttpResponse)?;
+    let head =
+        std::str::from_utf8(&recv[..split]).map_err(|_| OracleError::MalformedHttpResponse)?;
     let mut lines = head.split("\r\n");
     let status_line = lines.next().ok_or(OracleError::MalformedHttpResponse)?;
     let status_line_end = status_line.len();
@@ -906,11 +917,23 @@ pub struct CallTreeRecording {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallTreeError {
     EmptyRecording,
-    HopFailed { index: usize, error: OracleError },
-    EdgeOutOfBounds { edge_index: usize },
-    EdgeNotCausalOrder { edge_index: usize },
-    EdgeBindingMissing { edge_index: usize },
-    RootDigestMismatch { expected: [u8; 32], computed: [u8; 32] },
+    HopFailed {
+        index: usize,
+        error: OracleError,
+    },
+    EdgeOutOfBounds {
+        edge_index: usize,
+    },
+    EdgeNotCausalOrder {
+        edge_index: usize,
+    },
+    EdgeBindingMissing {
+        edge_index: usize,
+    },
+    RootDigestMismatch {
+        expected: [u8; 32],
+        computed: [u8; 32],
+    },
 }
 
 /// Sealed verified multi-hop `calltree` execution DAG.
@@ -1471,8 +1494,14 @@ mod notary_signature_tests {
     #[test]
     fn genuine_p256_and_ed25519_notary_signatures_verify() {
         for (signer, alg) in [
-            (FixtureSigner::p256(b"notary-p256"), SignatureAlgorithm::EcdsaP256Sha256),
-            (FixtureSigner::ed25519(b"notary-ed"), SignatureAlgorithm::Ed25519),
+            (
+                FixtureSigner::p256(b"notary-p256"),
+                SignatureAlgorithm::EcdsaP256Sha256,
+            ),
+            (
+                FixtureSigner::ed25519(b"notary-ed"),
+                SignatureAlgorithm::Ed25519,
+            ),
         ] {
             let reg = registry(&[&signer]);
             let mut env = envelope();
@@ -1714,21 +1743,49 @@ mod notary_signature_tests {
         let frame_nonce = [0x09u8; 12];
         let pt = b"confidential prompt over attested TEE+ML-KEM-768 channel";
         let sealed = ch
-            .seal_frame(&client_key, &frame_nonce, "inv-42", ChannelDirection::Request, pt)
+            .seal_frame(
+                &client_key,
+                &frame_nonce,
+                "inv-42",
+                ChannelDirection::Request,
+                pt,
+            )
             .unwrap();
         let opened = ch
-            .open_frame(&enclave_key, &frame_nonce, "inv-42", ChannelDirection::Request, &sealed)
+            .open_frame(
+                &enclave_key,
+                &frame_nonce,
+                "inv-42",
+                ChannelDirection::Request,
+                &sealed,
+            )
             .unwrap();
         assert_eq!(opened, pt);
 
         // Wrong invocation nonce or direction fails Poly1305 AAD authentication fail-closed.
         assert!(matches!(
-            ch.open_frame(&enclave_key, &frame_nonce, "inv-43", ChannelDirection::Request, &sealed),
-            Err(E2eeChannelError::AeadFailure(crate::chacha20poly1305::AeadError::AuthenticationFailed))
+            ch.open_frame(
+                &enclave_key,
+                &frame_nonce,
+                "inv-43",
+                ChannelDirection::Request,
+                &sealed
+            ),
+            Err(E2eeChannelError::AeadFailure(
+                crate::chacha20poly1305::AeadError::AuthenticationFailed
+            ))
         ));
         assert!(matches!(
-            ch.open_frame(&enclave_key, &frame_nonce, "inv-42", ChannelDirection::Response, &sealed),
-            Err(E2eeChannelError::AeadFailure(crate::chacha20poly1305::AeadError::AuthenticationFailed))
+            ch.open_frame(
+                &enclave_key,
+                &frame_nonce,
+                "inv-42",
+                ChannelDirection::Response,
+                &sealed
+            ),
+            Err(E2eeChannelError::AeadFailure(
+                crate::chacha20poly1305::AeadError::AuthenticationFailed
+            ))
         ));
     }
 }

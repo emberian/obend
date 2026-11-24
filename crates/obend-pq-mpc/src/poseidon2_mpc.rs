@@ -1307,7 +1307,7 @@ pub fn verify_authenticated_ext2_transcript(
             return false;
         }
     }
-    let mut xof = obend_crypto_exec::transcript::Cshake256Xof::new(b"OBEND.PQ.EXT2.MAC/v2");
+    let mut xof = obend_keccak::Cshake256::customized(b"OBEND.PQ.EXT2.MAC/v2");
     xof.absorb(&(context_binding.len() as u64).to_be_bytes());
     xof.absorb(context_binding);
     xof.absorb(&(opened_deltas.len() as u64).to_be_bytes());
@@ -1315,8 +1315,7 @@ pub fn verify_authenticated_ext2_transcript(
         xof.absorb(&word.to_be_bytes());
     }
     for (shares, tags) in transcript.shares.iter().zip(&transcript.tags) {
-        let mut commitment =
-            obend_crypto_exec::transcript::Cshake256Xof::new(b"OBEND.PQ.EXT2.PREOPEN/v1");
+        let mut commitment = obend_keccak::Cshake256::customized(b"OBEND.PQ.EXT2.PREOPEN/v1");
         for (share, tag) in shares.iter().zip(tags) {
             commitment.absorb(&share.to_be_bytes());
             commitment.absorb(&tag.to_be_bytes());

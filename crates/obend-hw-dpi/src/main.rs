@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 //! Isolated stdio framed binary DPI process binary for `obend-hw-dpi`.
 
-use std::io;
 use obend_hw_dpi::Ospc4TileHardwareSim;
+use std::io;
 
 fn main() -> io::Result<()> {
     let stdin = io::stdin();

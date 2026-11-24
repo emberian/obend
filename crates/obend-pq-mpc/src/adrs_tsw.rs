@@ -11,7 +11,7 @@
 use alloc::vec::Vec;
 
 use obend_crypto_exec::goldilocks::Goldilocks;
-use obend_crypto_exec::transcript::Cshake256Xof;
+use obend_keccak::Cshake256;
 
 use crate::poseidon2_mpc::poseidon2_hash32;
 
@@ -158,7 +158,7 @@ pub fn encode_multi_frame(fields: &[&[u8]]) -> Vec<u8> {
 /// Evaluate `cSHAKE256(custom, msg)` returning 32 bytes, matching `Obend.Digest.Cshake256.cshake256Bytes`.
 #[inline]
 pub fn cshake256_hash32(custom: &[u8], msg: &[u8]) -> [u8; 32] {
-    let mut xof = Cshake256Xof::new(custom);
+    let mut xof = Cshake256::customized(custom);
     xof.absorb(msg);
     let mut out = [0u8; 32];
     xof.squeeze(&mut out);
@@ -207,11 +207,8 @@ impl TweakableHashSuite for Poseidon2Suite {
 pub fn th_preimage(role_tag: &[u8], pk_seed: &[u8], adrs: &HashAdrs, args: &[&[u8]]) -> Vec<u8> {
     let adrs_bytes = encode_adrs(adrs);
     let count = 3 + args.len();
-    let payload_cap: usize = role_tag.len()
-        + pk_seed.len()
-        + 32
-        + args.iter().map(|a| a.len() + 2).sum::<usize>()
-        + 8;
+    let payload_cap: usize =
+        role_tag.len() + pk_seed.len() + 32 + args.iter().map(|a| a.len() + 2).sum::<usize>() + 8;
     let mut out = Vec::with_capacity(payload_cap);
     push_leb128(&mut out, count);
     push_leb128(&mut out, role_tag.len());
@@ -287,7 +284,13 @@ pub fn th_prf_msg<S: TweakableHashSuite>(
     opt_rand: &[u8],
     mu: &[u8; 32],
 ) -> [u8; 32] {
-    th_call(suite, TAG_PRF_MSG, &[], &HashAdrs::ZERO, &[sk_prf, opt_rand, mu])
+    th_call(
+        suite,
+        TAG_PRF_MSG,
+        &[],
+        &HashAdrs::ZERO,
+        &[sk_prf, opt_rand, mu],
+    )
 }
 
 #[inline]
@@ -390,7 +393,9 @@ pub fn grind_tsw_counter<S: TweakableHashSuite>(
     max_grind: u32,
 ) -> Option<(u32, Vec<usize>, [u8; 32])> {
     for ctr in 0..max_grind {
-        let hmsg = th_hash_msg(suite, r_rand, pk_seed, pk_root, mu, layer_idx, tree_idx, ctr);
+        let hmsg = th_hash_msg(
+            suite, r_rand, pk_seed, pk_root, mu, layer_idx, tree_idx, ctr,
+        );
         let digits = extract_base_w_digits(w, ell1, &hmsg);
         if check_target_sum(w, ell1, target, &digits) {
             return Some((ctr, digits, hmsg));
@@ -691,15 +696,7 @@ pub fn recover_wots_pk_from_sig<S: TweakableHashSuite>(
         let sig_val = sig_chains.get(r).copied().unwrap_or([0u8; 32]);
         let rem = (params.w - 1).saturating_sub(dr);
         endpoints.push(wots_chain_steps(
-            suite,
-            pk_seed,
-            layer,
-            tree,
-            kp,
-            r as u32,
-            dr as u32,
-            rem,
-            sig_val,
+            suite, pk_seed, layer, tree, kp, r as u32, dr as u32, rem, sig_val,
         ));
     }
     let adrs = HashAdrs {
@@ -979,7 +976,9 @@ pub fn compute_xmss_subtree_root<S: TweakableHashSuite>(
     let leaf_count = 1usize << params.subtree_height;
     let mut leaves = Vec::with_capacity(leaf_count);
     for kp in 0..leaf_count {
-        leaves.push(compute_wots_pk(suite, params, sk, layer, tree_idx, kp as u32));
+        leaves.push(compute_wots_pk(
+            suite, params, sk, layer, tree_idx, kp as u32,
+        ));
     }
     let (root, _) = build_merkle_from_leaves_topdown(
         suite,
@@ -1023,7 +1022,16 @@ pub fn eval_single_sign<S: TweakableHashSuite>(
         return None;
     }
     let pk = derive_public_key(suite, params, sk);
-    eval_single_sign_with_pk(suite, params, sk, &pk, msg, opt_rand, leaf_global_idx, max_grind)
+    eval_single_sign_with_pk(
+        suite,
+        params,
+        sk,
+        &pk,
+        msg,
+        opt_rand,
+        leaf_global_idx,
+        max_grind,
+    )
 }
 
 /// Single-party signer given already-enrolled `PqPublicKey`.
@@ -1153,7 +1161,9 @@ pub fn eval_single_sign_with_pk<S: TweakableHashSuite>(
         }
         let mut subtree_leaves = Vec::with_capacity(sub_leaves);
         for kp in 0..sub_leaves {
-            subtree_leaves.push(compute_wots_pk(suite, params, sk, layer_u32, tree_idx, kp as u32));
+            subtree_leaves.push(compute_wots_pk(
+                suite, params, sk, layer_u32, tree_idx, kp as u32,
+            ));
         }
         let (next_root, auth_path) = build_merkle_from_leaves_topdown(
             suite,
@@ -1265,7 +1275,12 @@ pub fn verify_pq_hash_sig<S: TweakableHashSuite>(
             chain_idx: 0,
             hash_step: 0,
         };
-        th_tweak_tl(suite, &pk.pk_seed, &fors_pk_pk_adrs_fix(fors_pk_adrs), &roots)
+        th_tweak_tl(
+            suite,
+            &pk.pk_seed,
+            &fors_pk_pk_adrs_fix(fors_pk_adrs),
+            &roots,
+        )
     };
 
     let mut cur_global = sig.leaf_global_idx;

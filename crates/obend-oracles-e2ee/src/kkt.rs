@@ -140,7 +140,9 @@ impl SddFactorWitness {
         }
         for e in &self.edges {
             let off = if e.negative_offdiag {
-                e.weight.checked_neg().ok_or(SddFactorError::ArithmeticOverflow)?
+                e.weight
+                    .checked_neg()
+                    .ok_or(SddFactorError::ArithmeticOverflow)?
             } else {
                 e.weight
             };
@@ -175,7 +177,9 @@ impl SddFactorWitness {
                 let a = p[row * n + col]
                     .checked_abs()
                     .ok_or(SddFactorError::ArithmeticOverflow)?;
-                sum = sum.checked_add(a).ok_or(SddFactorError::ArithmeticOverflow)?;
+                sum = sum
+                    .checked_add(a)
+                    .ok_or(SddFactorError::ArithmeticOverflow)?;
             }
             row_radii[row] = sum;
         }
@@ -557,14 +561,20 @@ pub struct KktResidualReport {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QpProblemBindingError {
-    ScaleMismatch { certificate: u32, expected: u32 },
+    ScaleMismatch {
+        certificate: u32,
+        expected: u32,
+    },
     DimensionMismatch {
         certificate_n: usize,
         certificate_mc: usize,
         program_n: usize,
         program_mc: usize,
     },
-    FieldMismatch { field: &'static str, index: usize },
+    FieldMismatch {
+        field: &'static str,
+        index: usize,
+    },
 }
 
 fn row_dot(row: &[i128], v: &[i128]) -> Option<i128> {
@@ -1019,7 +1029,11 @@ impl VerifiedExactQpCertificate {
         &self.report
     }
     pub fn solution(&self) -> (&[i128], &[i128], u32) {
-        (&self.bundle.kkt.x, &self.bundle.kkt.y, self.bundle.kkt.scale)
+        (
+            &self.bundle.kkt.x,
+            &self.bundle.kkt.y,
+            self.bundle.kkt.scale,
+        )
     }
 }
 

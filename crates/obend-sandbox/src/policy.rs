@@ -137,7 +137,10 @@ impl EnvAllowlistPolicy {
 
     /// Validate all configured keys/values and scrub `parent_env` down to the exact allowed map.
     /// Explicit variables override passthrough variables of the same name.
-    pub fn validate_and_resolve<I>(&self, parent_env: I) -> Result<BTreeMap<String, String>, EnvPolicyError>
+    pub fn validate_and_resolve<I>(
+        &self,
+        parent_env: I,
+    ) -> Result<BTreeMap<String, String>, EnvPolicyError>
     where
         I: IntoIterator<Item = (String, String)>,
     {
@@ -265,12 +268,17 @@ pub fn parse_egress_grant(raw: &str) -> Option<AllowedEndpoint> {
 }
 
 pub fn expand_static_grants(grants: &[String]) -> Vec<AllowedEndpoint> {
-    grants.iter().filter_map(|s| parse_egress_grant(s)).collect()
+    grants
+        .iter()
+        .filter_map(|s| parse_egress_grant(s))
+        .collect()
 }
 
 /// Exact-match admission check for a supervised `AF_INET` `connect(2)` target.
 pub fn admits_ipv4_endpoint(allowed_v4: &[([u8; 4], u16)], ip: [u8; 4], port: u16) -> bool {
-    allowed_v4.iter().any(|&(a_ip, a_port)| a_ip == ip && a_port == port)
+    allowed_v4
+        .iter()
+        .any(|&(a_ip, a_port)| a_ip == ip && a_port == port)
 }
 
 /// Reason a trapped `connect(2)` `sockaddr` buffer was rejected by the supervisor.
@@ -286,13 +294,22 @@ impl fmt::Display for ConnectFilterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TruncatedSockaddr { len } => {
-                write!(f, "sockaddr length {len} shorter than sockaddr_in (16 bytes)")
+                write!(
+                    f,
+                    "sockaddr length {len} shorter than sockaddr_in (16 bytes)"
+                )
             }
             Self::AfUnixForbidden => {
-                write!(f, "AF_UNIX connect is strictly forbidden by confinement policy")
+                write!(
+                    f,
+                    "AF_UNIX connect is strictly forbidden by confinement policy"
+                )
             }
             Self::UnsupportedAddressFamily(fam) => {
-                write!(f, "connect address family {fam} not permitted (only AF_INET allowed)")
+                write!(
+                    f,
+                    "connect address family {fam} not permitted (only AF_INET allowed)"
+                )
             }
             Self::EndpointNotGranted { ip, port } => write!(
                 f,
@@ -742,7 +759,10 @@ impl fmt::Display for AddFdError {
                 "ADDFD target fd {requested} exceeds allowed descriptor bound {max_bound}"
             ),
             Self::ProtectedEndpointFdCollision(fd) => {
-                write!(f, "refusing ADDFD overwrite of protected IPC endpoint fd {fd}")
+                write!(
+                    f,
+                    "refusing ADDFD overwrite of protected IPC endpoint fd {fd}"
+                )
             }
         }
     }
@@ -891,7 +911,11 @@ impl ConfinementPolicy {
     }
 
     /// Build the default-deny seccomp-cBPF filter matching this policy for `spec`.
-    pub fn build_seccomp_bpf(&self, spec: &SeccompProfileSpec, notify_connect: bool) -> Vec<BpfInsn> {
+    pub fn build_seccomp_bpf(
+        &self,
+        spec: &SeccompProfileSpec,
+        notify_connect: bool,
+    ) -> Vec<BpfInsn> {
         let mode = if self.unshare_net {
             DoorMode::Sealed
         } else {
@@ -934,26 +958,51 @@ mod tests {
         assert!(!resolved.contains_key("OPENAI_API_KEY"));
         assert!(!resolved.contains_key("GITHUB_TOKEN"));
         assert!(!resolved.contains_key("LD_PRELOAD"));
-        assert_eq!(resolved.get("SAFE_LOCALE_HINT").map(String::as_str), Some("en_US"));
+        assert_eq!(
+            resolved.get("SAFE_LOCALE_HINT").map(String::as_str),
+            Some("en_US")
+        );
         assert_eq!(resolved.get("HOME").map(String::as_str), Some("/workspace"));
 
         // Attempting to allowlist LD_PRELOAD or DYLD_INSERT_LIBRARIES fails closed.
-        for bad in ["LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "BAD=KEY", ""] {
+        for bad in [
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "BASH_ENV",
+            "BAD=KEY",
+            "",
+        ] {
             let p = EnvAllowlistPolicy::strict().with_passthrough_key(bad);
-            assert!(p.validate_and_resolve(std::iter::empty()).is_err(), "must reject {bad}");
+            assert!(
+                p.validate_and_resolve(std::iter::empty()).is_err(),
+                "must reject {bad}"
+            );
         }
     }
 
     #[test]
     fn test_seccomp_bpf_blocks_af_unix_and_non_null_sendto_on_both_arches() {
-        for spec in [SeccompProfileSpec::linux_x86_64(), SeccompProfileSpec::linux_aarch64()] {
+        for spec in [
+            SeccompProfileSpec::linux_x86_64(),
+            SeccompProfileSpec::linux_aarch64(),
+        ] {
             let sealed = build_hardened_seccomp_bpf(&spec, DoorMode::Sealed, false);
             assert_eq!(
-                eval_seccomp_bpf(&sealed, spec.arch, spec.socket_nr, [LINUX_AF_UNIX as u64, 1, 0, 0, 0, 0]),
+                eval_seccomp_bpf(
+                    &sealed,
+                    spec.arch,
+                    spec.socket_nr,
+                    [LINUX_AF_UNIX as u64, 1, 0, 0, 0, 0]
+                ),
                 SECCOMP_RET_ERRNO_EPERM
             );
             assert_eq!(
-                eval_seccomp_bpf(&sealed, spec.arch, spec.socket_nr, [LINUX_AF_INET as u64, 1, 0, 0, 0, 0]),
+                eval_seccomp_bpf(
+                    &sealed,
+                    spec.arch,
+                    spec.socket_nr,
+                    [LINUX_AF_INET as u64, 1, 0, 0, 0, 0]
+                ),
                 SECCOMP_RET_ERRNO_EPERM
             );
             // Connected send(fd, buf, len, 0) -> sendto with args[4] == 0 is allowed; non-null dest_addr is EPERM!
@@ -962,28 +1011,60 @@ mod tests {
                 SECCOMP_RET_ALLOW
             );
             assert_eq!(
-                eval_seccomp_bpf(&sealed, spec.arch, spec.sendto_nr, [3, 0x1000, 16, 0, 0x7fff_0000, 110]),
+                eval_seccomp_bpf(
+                    &sealed,
+                    spec.arch,
+                    spec.sendto_nr,
+                    [3, 0x1000, 16, 0, 0x7fff_0000, 110]
+                ),
                 SECCOMP_RET_ERRNO_EPERM
             );
             assert_eq!(
-                eval_seccomp_bpf(&sealed, spec.arch, spec.sendto_nr, [3, 0x1000, 16, 0, 1u64 << 32, 110]),
+                eval_seccomp_bpf(
+                    &sealed,
+                    spec.arch,
+                    spec.sendto_nr,
+                    [3, 0x1000, 16, 0, 1u64 << 32, 110]
+                ),
                 SECCOMP_RET_ERRNO_EPERM
             );
 
             // ProviderNotify allows ONLY AF_INET + SOCK_STREAM, rejecting AF_UNIX / SOCK_DGRAM / high-word smuggling.
             let notify = build_hardened_seccomp_bpf(&spec, DoorMode::ProviderNotify, true);
             assert_eq!(
-                eval_seccomp_bpf(&notify, spec.arch, spec.socket_nr, [LINUX_AF_UNIX as u64, LINUX_SOCK_STREAM as u64, 0, 0, 0, 0]),
+                eval_seccomp_bpf(
+                    &notify,
+                    spec.arch,
+                    spec.socket_nr,
+                    [LINUX_AF_UNIX as u64, LINUX_SOCK_STREAM as u64, 0, 0, 0, 0]
+                ),
                 SECCOMP_RET_ERRNO_EPERM,
                 "AF_UNIX socket must be blocked in ProviderNotify"
             );
             assert_eq!(
-                eval_seccomp_bpf(&notify, spec.arch, spec.socket_nr, [LINUX_AF_INET as u64, 2 /* SOCK_DGRAM */, 0, 0, 0, 0]),
+                eval_seccomp_bpf(
+                    &notify,
+                    spec.arch,
+                    spec.socket_nr,
+                    [LINUX_AF_INET as u64, 2 /* SOCK_DGRAM */, 0, 0, 0, 0]
+                ),
                 SECCOMP_RET_ERRNO_EPERM,
                 "SOCK_DGRAM must be blocked in ProviderNotify"
             );
             assert_eq!(
-                eval_seccomp_bpf(&notify, spec.arch, spec.socket_nr, [(1u64 << 32) | LINUX_AF_INET as u64, LINUX_SOCK_STREAM as u64, 0, 0, 0, 0]),
+                eval_seccomp_bpf(
+                    &notify,
+                    spec.arch,
+                    spec.socket_nr,
+                    [
+                        (1u64 << 32) | LINUX_AF_INET as u64,
+                        LINUX_SOCK_STREAM as u64,
+                        0,
+                        0,
+                        0,
+                        0
+                    ]
+                ),
                 SECCOMP_RET_ERRNO_EPERM,
                 "64-bit high-word domain smuggling must be blocked"
             );
@@ -992,12 +1073,24 @@ mod tests {
                     &notify,
                     spec.arch,
                     spec.socket_nr,
-                    [LINUX_AF_INET as u64, (LINUX_SOCK_STREAM | LINUX_SOCK_CLOEXEC | LINUX_SOCK_NONBLOCK) as u64, 0, 0, 0, 0]
+                    [
+                        LINUX_AF_INET as u64,
+                        (LINUX_SOCK_STREAM | LINUX_SOCK_CLOEXEC | LINUX_SOCK_NONBLOCK) as u64,
+                        0,
+                        0,
+                        0,
+                        0
+                    ]
                 ),
                 SECCOMP_RET_ALLOW
             );
             assert_eq!(
-                eval_seccomp_bpf(&notify, spec.arch, spec.connect_nr, [4, 0x2000, 16, 0, 0, 0]),
+                eval_seccomp_bpf(
+                    &notify,
+                    spec.arch,
+                    spec.connect_nr,
+                    [4, 0x2000, 16, 0, 0, 0]
+                ),
                 SECCOMP_RET_USER_NOTIF
             );
             // Foreign arch is killed immediately.
@@ -1042,7 +1135,10 @@ mod tests {
         assert_eq!(ok.target_fd, 5);
         assert_eq!(ok.newfd_flags, libc::O_CLOEXEC as u32);
         // Failed ioctl never reports success
-        assert_eq!(check_addfd_ioctl_result(-1, Some(libc::EBADF)), Err(-libc::EBADF));
+        assert_eq!(
+            check_addfd_ioctl_result(-1, Some(libc::EBADF)),
+            Err(-libc::EBADF)
+        );
         assert_eq!(check_addfd_ioctl_result(-1, None), Err(-libc::EPERM));
         assert_eq!(check_addfd_ioctl_result(5, None), Ok(5));
 

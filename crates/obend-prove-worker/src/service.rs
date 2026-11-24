@@ -1094,7 +1094,10 @@ where
     /// Current monotonic minimum active epoch floor.
     pub fn min_active_epoch(&self) -> u64 {
         let (mutex, _) = &*self.inner;
-        mutex.lock().expect("prove service state mutex").min_active_epoch
+        mutex
+            .lock()
+            .expect("prove service state mutex")
+            .min_active_epoch
     }
 
     /// Number of retained settled tombstones (always `<= max_retained_settled`).

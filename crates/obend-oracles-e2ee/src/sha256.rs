@@ -54,12 +54,9 @@ impl Sha256 {
                 self.buf_len = 0;
             }
         }
-        let chunks = data.chunks_exact(64);
-        let rem = chunks.remainder();
-        for chunk in chunks {
-            let mut block = [0u8; 64];
-            block.copy_from_slice(chunk);
-            compress(&mut self.state, &block);
+        let (blocks, rem) = data.as_chunks::<64>();
+        for block in blocks {
+            compress(&mut self.state, block);
         }
         if !rem.is_empty() {
             self.buf[..rem.len()].copy_from_slice(rem);
@@ -217,7 +214,7 @@ pub fn hex_encode_lower(bytes: &[u8]) -> String {
 /// Strict ASCII hex decoding (even length, ASCII hex digits only, no whitespace).
 pub fn hex_decode_strict(s: &str) -> Option<Vec<u8>> {
     let bytes = s.as_bytes();
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     let nibble = |c: u8| -> Option<u8> {
@@ -229,7 +226,7 @@ pub fn hex_decode_strict(s: &str) -> Option<Vec<u8>> {
         }
     };
     let mut out = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
+    for pair in bytes.as_chunks::<2>().0 {
         let hi = nibble(pair[0])?;
         let lo = nibble(pair[1])?;
         out.push((hi << 4) | lo);
@@ -241,7 +238,7 @@ pub fn hex_decode_strict(s: &str) -> Option<Vec<u8>> {
 /// trailing bits, no whitespace).
 pub fn base64_decode_strict(s: &str) -> Option<Vec<u8>> {
     let b = s.as_bytes();
-    if b.len() % 4 != 0 {
+    if !b.len().is_multiple_of(4) {
         return None;
     }
     let val = |c: u8| -> Option<u8> {
@@ -256,7 +253,7 @@ pub fn base64_decode_strict(s: &str) -> Option<Vec<u8>> {
     };
     let mut out = Vec::with_capacity((b.len() / 4) * 3);
     let total_chunks = b.len() / 4;
-    for (idx, chunk) in b.chunks_exact(4).enumerate() {
+    for (idx, chunk) in b.as_chunks::<4>().0.iter().enumerate() {
         let is_last = idx + 1 == total_chunks;
         let c0 = val(chunk[0])?;
         let c1 = val(chunk[1])?;

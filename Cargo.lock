@@ -93,6 +93,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 [[package]]
 name = "obend-crypto-exec"
 version = "0.1.0"
+dependencies = [
+ "obend-keccak",
+]
 
 [[package]]
 name = "obend-ffi"
@@ -119,23 +122,34 @@ name = "obend-hw-dpi"
 version = "0.1.0"
 
 [[package]]
+name = "obend-keccak"
+version = "0.1.0"
+
+[[package]]
 name = "obend-lightclients"
 version = "0.1.0"
 
 [[package]]
 name = "obend-oracles-e2ee"
 version = "0.1.0"
+dependencies = [
+ "obend-keccak",
+]
 
 [[package]]
 name = "obend-pq-mpc"
 version = "0.1.0"
 dependencies = [
  "obend-crypto-exec",
+ "obend-keccak",
 ]
 
 [[package]]
 name = "obend-prove-worker"
 version = "0.1.0"
+dependencies = [
+ "obend-keccak",
+]
 
 [[package]]
 name = "obend-sandbox"
@@ -151,10 +165,16 @@ dependencies = [
 [[package]]
 name = "obend-sel4-verifier"
 version = "0.1.0"
+dependencies = [
+ "obend-keccak",
+]
 
 [[package]]
 name = "obend-surfaces"
 version = "0.1.0"
+dependencies = [
+ "obend-keccak",
+]
 
 [[package]]
 name = "proc-macro2"

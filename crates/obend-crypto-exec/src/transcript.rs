@@ -1,54 +1,41 @@
-//! Keccak-f[1600], NIST SP 800-185 `cSHAKE256` / `SHAKE256` (matching `Obend.Digest.Cshake256`),
-//! and the compile-time typestate `FenziTranscript<Phase>` (`Unbound -> RelationBound -> InstanceBound`).
+//! `cSHAKE256` framing over [`obend_keccak`] (matching `Obend.Digest.Cshake256`) and the
+//! compile-time typestate `FenziTranscript<Phase>` (`Unbound -> RelationBound -> InstanceBound`).
 //!
 //! Closing **Fenzi `ePrint 2026/1838`** (delayed circuit-relation binding) and **`F3`/`F5`**
 //! (premature challenge squeezing prior to absorbing `(vk_digest, circuit_desc, comm, claimed_sum, point)`):
 //! challenge-squeezing methods exist **only** on `FenziTranscript<InstanceBound>`.
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use obend_keccak::{Cshake256, bytepad_encoded_strings};
+
+pub use obend_keccak::{
+    KECCAK_ROUND_CONSTANTS, SHAKE256_RATE_BYTES, cshake256_32, keccak_f1600, shake256_32,
+};
+
 use crate::goldilocks::{Goldilocks, GoldilocksExt2};
 
-/// Sponge rate of SHAKE256 / cSHAKE256 in bytes ($1088 / 8 = 136$).
-pub const SHAKE256_RATE_BYTES: usize = 136;
+/// SHAKE256 rate in 64-bit lanes.
+pub const SHAKE256_RATE_LANES: usize = SHAKE256_RATE_BYTES / 8;
 
-/// Number of 64-bit lanes in the SHAKE256 / cSHAKE256 rate ($136 / 8 = 17$).
-pub const SHAKE256_RATE_LANES: usize = 17;
+/// Streaming cSHAKE256 with an empty function name and caller-supplied customization.
+#[derive(Clone)]
+pub struct Cshake256Xof(Cshake256);
 
-/// Standard 24 FIPS 202 Keccak-f[1600] round constants.
-pub const KECCAK_ROUND_CONSTANTS: [u64; 24] = [
-    0x0000_0000_0000_0001,
-    0x0000_0000_0000_8082,
-    0x8000_0000_0000_808a,
-    0x8000_0000_8000_8000,
-    0x0000_0000_0000_808b,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8009,
-    0x0000_0000_0000_008a,
-    0x0000_0000_0000_0088,
-    0x0000_0000_8000_8009,
-    0x0000_0000_8000_000a,
-    0x0000_0000_8000_808b,
-    0x8000_0000_0000_008b,
-    0x8000_0000_0000_8089,
-    0x8000_0000_0000_8003,
-    0x8000_0000_0000_8002,
-    0x8000_0000_0000_0080,
-    0x0000_0000_0000_800a,
-    0x8000_0000_8000_000a,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8080,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8008,
-];
+impl Cshake256Xof {
+    pub fn new(customization: &[u8]) -> Self {
+        Self(Cshake256::customized(customization))
+    }
 
-/// FIPS 202 rho rotation offsets indexed by `x + 5 * y`.
-const ROTATION_OFFSETS: [u32; 25] = [
-    0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
-];
+    pub fn absorb(&mut self, data: &[u8]) {
+        self.0.absorb(data);
+    }
+
+    pub fn squeeze(&mut self, out: &mut [u8]) {
+        self.0.squeeze(out);
+    }
+}
 
 /// Domain customization strings matching `Obend.Crypto.Transcript`.
 pub const FS_SEED_CUSTOMIZATION: &[u8] = b"OBEND.CRYPTO.FS.SEED/v1";
@@ -62,111 +49,28 @@ pub const DUAL_TRACK1_LABEL: &[u8] = b"DUAL.TRACK1";
 pub const DUAL_TRACK2_LABEL: &[u8] = b"DUAL.TRACK2";
 pub const DUAL_JOIN_LABEL: &[u8] = b"DUAL.JOIN";
 
-/// Exact 24-round Keccak-f[1600] permutation over 25 little-endian 64-bit lanes.
-pub fn keccak_f1600(state: &mut [u64; 25]) {
-    // Fixed lane indices avoid debug-mode Range iterator calls and let the
-    // compiler resolve lane arithmetic and bounds checks even at opt-level=0.
-    macro_rules! lanes5 {
-        ($f:ident) => {
-            $f!(0);
-            $f!(1);
-            $f!(2);
-            $f!(3);
-            $f!(4);
-        };
-    }
-    let mut round = 0;
-    while round < 24 {
-        // Theta
-        let mut c = [0u64; 5];
-        macro_rules! parity {
-            ($x:expr) => {
-                c[$x] = state[$x] ^ state[$x + 5] ^ state[$x + 10]
-                    ^ state[$x + 15] ^ state[$x + 20];
-            };
-        }
-        lanes5!(parity);
-        macro_rules! theta {
-            ($x:expr) => {
-                let d = c[($x + 4) % 5] ^ c[($x + 1) % 5].rotate_left(1);
-                state[$x] ^= d;
-                state[$x + 5] ^= d;
-                state[$x + 10] ^= d;
-                state[$x + 15] ^= d;
-                state[$x + 20] ^= d;
-            };
-        }
-        lanes5!(theta);
-
-        // Rho + Pi
-        let mut b = [0u64; 25];
-        macro_rules! rho_pi {
-            ($x:expr, $y:expr) => {
-                b[$y + 5 * ((2 * $x + 3 * $y) % 5)] =
-                    state[$x + 5 * $y].rotate_left(ROTATION_OFFSETS[$x + 5 * $y]);
-            };
-        }
-        macro_rules! rho_row {
-            ($y:expr) => {
-                rho_pi!(0, $y);
-                rho_pi!(1, $y);
-                rho_pi!(2, $y);
-                rho_pi!(3, $y);
-                rho_pi!(4, $y);
-            };
-        }
-        lanes5!(rho_row);
-
-        // Chi
-        macro_rules! chi {
-            ($x:expr, $y:expr) => {
-                state[5 * $y + $x] = b[5 * $y + $x]
-                    ^ ((!b[5 * $y + (($x + 1) % 5)]) & b[5 * $y + (($x + 2) % 5)]);
-            };
-        }
-        macro_rules! chi_row {
-            ($y:expr) => {
-                chi!(0, $y);
-                chi!(1, $y);
-                chi!(2, $y);
-                chi!(3, $y);
-                chi!(4, $y);
-            };
-        }
-        lanes5!(chi_row);
-
-        // Iota
-        state[0] ^= KECCAK_ROUND_CONSTANTS[round];
-        round += 1;
-    }
+/// Minimal non-empty big-endian representation of an integer.
+pub fn nat_bytes_be(value: usize) -> Vec<u8> {
+    let mut encoded = [0; 9];
+    let len = obend_keccak::left_encode(value as u64, &mut encoded);
+    encoded[1..len].to_vec()
 }
 
-/// SP 800-185 minimal non-empty big-endian byte representation (`[0]` for `0`).
-pub fn nat_bytes_be(mut value: usize) -> Vec<u8> {
-    if value == 0 {
-        return vec![0u8];
-    }
-    let mut le = Vec::with_capacity(8);
-    while value > 0 {
-        le.push((value & 0xFF) as u8);
-        value >>= 8;
-    }
-    le.reverse();
-    le
-}
-
-/// SP 800-185 `left_encode`, matching `Obend.Digest.Cshake256.leftEncode`.
+/// SP 800-185 left_encode as an owned byte string.
 pub fn sp800_185_left_encode(value: usize) -> Vec<u8> {
-    let bytes = nat_bytes_be(value);
-    let mut out = Vec::with_capacity(1 + bytes.len());
-    out.push(bytes.len() as u8);
-    out.extend_from_slice(&bytes);
-    out
+    let mut encoded = [0; 9];
+    let len = obend_keccak::left_encode(value as u64, &mut encoded);
+    encoded[..len].to_vec()
 }
 
 /// SP 800-185 `encode_string`, matching `Obend.Digest.Cshake256.encodeString`.
 pub fn sp800_185_encode_string(bytes: &[u8]) -> Vec<u8> {
-    let mut out = sp800_185_left_encode(bytes.len().saturating_mul(8));
+    let bits = (bytes.len() as u64)
+        .checked_mul(8)
+        .expect("bit length fits in u64");
+    let mut header = [0; 9];
+    let len = obend_keccak::left_encode(bits, &mut header);
+    let mut out = header[..len].to_vec();
     out.extend_from_slice(bytes);
     out
 }
@@ -185,148 +89,13 @@ pub fn sp800_185_bytepad(bytes: &[u8], width: usize) -> Vec<u8> {
     out
 }
 
-/// SP 800-185 cSHAKE256 customization prefix for empty function-name `N = ""` and caller `S`.
+/// SP 800-185 `cSHAKE256` customization prefix for an empty function name and caller `S`.
 pub fn cshake256_customization_prefix(customization: &[u8]) -> Vec<u8> {
-    let mut inner = sp800_185_encode_string(&[]);
-    inner.extend_from_slice(&sp800_185_encode_string(customization));
-    sp800_185_bytepad(&inner, SHAKE256_RATE_BYTES)
-}
-
-#[inline]
-fn xor_rate_block(state: &mut [u64; 25], block: &[u8; SHAKE256_RATE_BYTES]) {
-    for (lane_idx, st_lane) in state.iter_mut().enumerate().take(SHAKE256_RATE_LANES) {
-        let off = 8 * lane_idx;
-        let lane = u64::from_le_bytes([
-            block[off],
-            block[off + 1],
-            block[off + 2],
-            block[off + 3],
-            block[off + 4],
-            block[off + 5],
-            block[off + 6],
-            block[off + 7],
-        ]);
-        *st_lane ^= lane;
-    }
-}
-
-/// Streaming SP 800-185 `cSHAKE256` / `SHAKE256` XOF sponge matching `Obend.Digest.Cshake256`.
-#[derive(Clone)]
-pub struct Cshake256Xof {
-    state: [u64; 25],
-    buf: [u8; SHAKE256_RATE_BYTES],
-    buf_len: usize,
-    suffix: u8,
-    squeezing: bool,
-    squeeze_offset: usize,
-}
-
-impl Drop for Cshake256Xof {
-    fn drop(&mut self) {
-        self.scrub();
-    }
-}
-
-impl Cshake256Xof {
-    fn scrub(&mut self) {
-        self.state.fill(0);
-        self.buf.fill(0);
-        self.buf_len = 0;
-        self.squeeze_offset = 0;
-        self.suffix = 0;
-        self.squeezing = false;
-        core::hint::black_box((&self.state, &self.buf));
-    }
-}
-
-impl Cshake256Xof {
-    /// Initialize `cSHAKE256` with empty function-name `N = ""` and customization `S`.
-    /// Per NIST SP 800-185 §3.3, empty `S` falls back identically to `SHAKE256` (`suffix = 0x1f`).
-    pub fn new(customization: &[u8]) -> Self {
-        let mut xof = Self {
-            state: [0u64; 25],
-            buf: [0u8; SHAKE256_RATE_BYTES],
-            buf_len: 0,
-            suffix: if customization.is_empty() { 0x1f } else { 0x04 },
-            squeezing: false,
-            squeeze_offset: 0,
-        };
-        if !customization.is_empty() {
-            let prefix = cshake256_customization_prefix(customization);
-            xof.absorb(&prefix);
-        }
-        xof
-    }
-
-    /// Absorb arbitrary bytes into the sponge prior to squeezing.
-    pub fn absorb(&mut self, mut data: &[u8]) {
-        assert!(
-            !self.squeezing,
-            "cannot absorb into Cshake256Xof after squeezing began"
-        );
-        while !data.is_empty() {
-            let space = SHAKE256_RATE_BYTES - self.buf_len;
-            let take = space.min(data.len());
-            self.buf[self.buf_len..self.buf_len + take].copy_from_slice(&data[..take]);
-            self.buf_len += take;
-            data = &data[take..];
-            if self.buf_len == SHAKE256_RATE_BYTES {
-                xor_rate_block(&mut self.state, &self.buf);
-                keccak_f1600(&mut self.state);
-                self.buf_len = 0;
-            }
-        }
-    }
-
-    fn finalize_to_squeeze(&mut self) {
-        if self.squeezing {
-            return;
-        }
-        // Multi-rate padding matching `padForRate` in `Obend/Digest/Cshake256/Spec.lean`
-        for b in &mut self.buf[self.buf_len..] {
-            *b = 0;
-        }
-        self.buf[self.buf_len] ^= self.suffix;
-        self.buf[SHAKE256_RATE_BYTES - 1] ^= 0x80;
-        xor_rate_block(&mut self.state, &self.buf);
-        keccak_f1600(&mut self.state);
-        self.squeezing = true;
-        self.squeeze_offset = 0;
-    }
-
-    /// Squeeze arbitrary output bytes from the finalized sponge.
-    pub fn squeeze(&mut self, out: &mut [u8]) {
-        self.finalize_to_squeeze();
-        let mut written = 0usize;
-        while written < out.len() {
-            if self.squeeze_offset == SHAKE256_RATE_BYTES {
-                keccak_f1600(&mut self.state);
-                self.squeeze_offset = 0;
-            }
-            let lane_idx = self.squeeze_offset / 8;
-            let byte_in_lane = self.squeeze_offset % 8;
-            let b = ((self.state[lane_idx] >> (8 * byte_in_lane)) & 0xFF) as u8;
-            out[written] = b;
-            written += 1;
-            self.squeeze_offset += 1;
-        }
-    }
-}
-
-/// Exact 32-byte `cSHAKE256` evaluation matching `Obend.Digest.Cshake256.cshake256Bytes`
-/// and `Obend.Crypto.Transcript.cshake32ByteArray` bit-for-bit.
-pub fn cshake256_32(customization: &[u8], input: &[u8]) -> [u8; 32] {
-    let mut xof = Cshake256Xof::new(customization);
-    xof.absorb(input);
-    let mut out = [0u8; 32];
-    xof.squeeze(&mut out);
-    out
-}
-
-/// Standard uncustomized 32-byte `SHAKE256` helper.
-#[inline]
-pub fn shake256_32(input: &[u8]) -> [u8; 32] {
-    cshake256_32(&[], input)
+    let mut prefix = Vec::with_capacity(SHAKE256_RATE_BYTES);
+    bytepad_encoded_strings::<SHAKE256_RATE_BYTES>(&[&[], customization], |bytes| {
+        prefix.extend_from_slice(bytes);
+    });
+    prefix
 }
 
 // ============================================================================
@@ -590,7 +359,7 @@ impl FenziTranscript<InstanceBound> {
     /// digits ($3^5 = 243 < 256$, extracting up to 5 independent unbiased trits per byte!).
     pub fn squeeze_ternary_trits(&mut self, count: usize) -> Vec<i8> {
         let raw_seed = self.squeeze_challenge_256();
-        let mut xof = Cshake256Xof::new(b"OBEND.CRYPTO.FS.TERNARY/v1");
+        let mut xof = Cshake256::customized(b"OBEND.CRYPTO.FS.TERNARY/v1");
         xof.absorb(&raw_seed);
 
         let mut out = Vec::with_capacity(count);
@@ -642,7 +411,7 @@ impl FenziTranscript<InstanceBound> {
         );
         let target = count.min(domain_size);
         let seed = self.squeeze_challenge_256();
-        let mut xof = Cshake256Xof::new(b"OBEND.CRYPTO.FS.QUERIES/v1");
+        let mut xof = Cshake256::customized(b"OBEND.CRYPTO.FS.QUERIES/v1");
         xof.absorb(&seed);
 
         let mask = domain_size - 1;
@@ -766,26 +535,5 @@ mod tests {
         let bound = rel.bind_instance(b"comm-bytes", sum, &pt);
         assert_eq!(bound.state(), &expected_state);
         assert_eq!(bound.instance_digest(), &expected_state);
-    }
-}
-
-#[cfg(test)]
-mod xof_drop_tests {
-    use super::*;
-    #[test]
-    fn drop_scrubs_sponge_and_buffer() {
-        for squeeze in [false, true] {
-            let mut xof = Cshake256Xof::new(b"scrub-test");
-            xof.absorb(&[0x5a; 200]);
-            if squeeze {
-                xof.squeeze(&mut [0; 17]);
-            }
-            // Invoke the same cleanup body through a helper; Rust forbids explicit Drop calls.
-            xof.scrub();
-            assert_eq!(xof.state, [0; 25]);
-            assert_eq!(xof.buf, [0; SHAKE256_RATE_BYTES]);
-            assert_eq!((xof.buf_len, xof.squeeze_offset), (0, 0));
-            assert!(!xof.squeezing);
-        }
     }
 }

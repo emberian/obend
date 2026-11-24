@@ -3,6 +3,7 @@ members = [
     "crates/obend-sandbox",
     "crates/obend-ffi",
     "crates/obend-gui",
+    "crates/obend-keccak",
     "crates/obend-crypto-exec",
     "crates/obend-sel4-verifier",
     "crates/obend-pq-mpc",

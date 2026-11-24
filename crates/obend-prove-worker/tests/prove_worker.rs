@@ -766,8 +766,7 @@ fn deployed_16bit_pow_grinder_exact_1t_2t_8t_16t_parity() {
     }
 
     for &threads in &[2usize, 8, 16] {
-        let nt = grind_pow_with(&transcript, 16, 1 << 24, win, threads)
-            .expect("NT 16-bit witness");
+        let nt = grind_pow_with(&transcript, 16, 1 << 24, win, threads).expect("NT 16-bit witness");
         assert_eq!(nt, n1, "16-bit PoW mismatch at threads={threads}");
     }
 }

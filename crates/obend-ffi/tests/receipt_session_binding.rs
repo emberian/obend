@@ -12,9 +12,18 @@ fn proposed_but_uncommitted_root_is_refused() {
     assert_eq!(tid.len(), 32);
     // The old path: proposing admitted the id and the payload as roots.
     let one_leaf = encode_receipt(&tid, 1, 0, &[], payload);
-    assert!(!session.verify_receipt(&one_leaf).unwrap(), "a proposal admits no root");
-    assert!(!session.verify_receipt(&tid).unwrap(), "a bare 32-byte root is not a receipt");
-    assert!(!session.verify_receipt(payload).unwrap(), "the payload itself is not a receipt");
+    assert!(
+        !session.verify_receipt(&one_leaf).unwrap(),
+        "a proposal admits no root"
+    );
+    assert!(
+        !session.verify_receipt(&tid).unwrap(),
+        "a bare 32-byte root is not a receipt"
+    );
+    assert!(
+        !session.verify_receipt(payload).unwrap(),
+        "the payload itself is not a receipt"
+    );
 }
 
 #[test]
@@ -46,7 +55,10 @@ fn receipt_is_bound_to_the_committing_session() {
     assert!(!b.verify_receipt(&receipt).unwrap(), "b committed nothing");
     // b can re-derive the same receipt only by committing the same payload itself.
     let again = b.commit_payload(b"committed in a").expect("commit in b");
-    assert_eq!(again, receipt, "the receipt is a function of the payload and the kernel's hash");
+    assert_eq!(
+        again, receipt,
+        "the receipt is a function of the payload and the kernel's hash"
+    );
     assert!(b.verify_receipt(&again).unwrap());
 }
 
@@ -74,7 +86,9 @@ fn weave_of_an_accepted_lrat_witness_commits_a_turn_carrying_it() {
     let mut session = ObendSession::new().expect("session");
     // `p cnf 1 2; 1; -1` is refuted by resolving the two units: LRAT step `3 0 1 2 0`.
     let witness = br#"{"format":"lrat","version":"1","grade":4,"obj":"p cnf 1 2\n1 0\n-1 0\n","cert":"3 0 1 2 0\n"}"#;
-    let tid = session.weave_cert(witness).expect("an accepted witness is proposed");
+    let tid = session
+        .weave_cert(witness)
+        .expect("an accepted witness is proposed");
     assert_eq!(tid.len(), 32);
     // Proposed, not yet committed: its receipt does not verify.
     let receipt = encode_receipt(&tid, 1, 0, &[], witness);

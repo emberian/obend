@@ -9,3 +9,4 @@ license = "Apache-2.0"
 # Zero external dependencies: pure-Rust FIPS 180-4 SHA-256 / HMAC / HKDF,
 # ASN.1 DER RFC 5280 & TCG DICE parser, SPDM 1.1 parser, strict JSON walker,
 # and checked exact i128 SDD/KKT arithmetic (0 floats).
+obend-keccak = { path = "../obend-keccak" }

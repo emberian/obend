@@ -21,9 +21,7 @@ use crate::pikkufold::{
     LatticeParams, RING_DEGREE, RingElem, akita_prove_open, akita_verify_open, commit_ring_witness,
     pack_goldilocks_to_ring_witness, unpack_ring_witness_to_goldilocks,
 };
-use crate::transcript::{
-    DUAL_TRACK1_LABEL, DUAL_TRACK2_LABEL, FenziTranscript, leb128,
-};
+use crate::transcript::{DUAL_TRACK1_LABEL, DUAL_TRACK2_LABEL, FenziTranscript, leb128};
 
 /// Maximum nesting depth permitted by the strict `DetCbor` decoder.
 pub const MAX_CBOR_DEPTH: usize = 64;
@@ -128,33 +126,43 @@ impl CborValue {
                 .map_err(|_| DetCborError::SchemaMismatch(String::from("u64 overflows i64"))),
             Self::NegInt(n) => {
                 if n > (i64::MAX as u64) {
-                    Err(DetCborError::SchemaMismatch(String::from("negint underflows i64")))
+                    Err(DetCborError::SchemaMismatch(String::from(
+                        "negint underflows i64",
+                    )))
                 } else {
                     Ok(!(n as i64))
                 }
             }
-            _ => Err(DetCborError::SchemaMismatch(String::from("expected integer"))),
+            _ => Err(DetCborError::SchemaMismatch(String::from(
+                "expected integer",
+            ))),
         }
     }
 
     pub fn as_u64(&self) -> Result<u64, DetCborError> {
         match *self {
             Self::Unsigned(u) => Ok(u),
-            _ => Err(DetCborError::SchemaMismatch(String::from("expected unsigned integer"))),
+            _ => Err(DetCborError::SchemaMismatch(String::from(
+                "expected unsigned integer",
+            ))),
         }
     }
 
     pub fn as_bytes(&self) -> Result<&[u8], DetCborError> {
         match self {
             Self::Bytes(b) => Ok(b),
-            _ => Err(DetCborError::SchemaMismatch(String::from("expected byte string"))),
+            _ => Err(DetCborError::SchemaMismatch(String::from(
+                "expected byte string",
+            ))),
         }
     }
 
     pub fn as_fixed_bytes<const N: usize>(&self) -> Result<[u8; N], DetCborError> {
         let b = self.as_bytes()?;
         if b.len() != N {
-            return Err(DetCborError::SchemaMismatch(String::from("fixed byte length mismatch")));
+            return Err(DetCborError::SchemaMismatch(String::from(
+                "fixed byte length mismatch",
+            )));
         }
         let mut out = [0u8; N];
         out.copy_from_slice(b);
@@ -164,7 +172,9 @@ impl CborValue {
     pub fn as_text(&self) -> Result<&str, DetCborError> {
         match self {
             Self::Text(s) => Ok(s),
-            _ => Err(DetCborError::SchemaMismatch(String::from("expected text string"))),
+            _ => Err(DetCborError::SchemaMismatch(String::from(
+                "expected text string",
+            ))),
         }
     }
 
@@ -282,11 +292,7 @@ fn read_exact<'a>(input: &'a [u8], cursor: &mut usize, n: usize) -> Result<&'a [
 }
 
 /// Decode and strictly verify shortest-form CBOR argument integer (`ai` in `0..=31`).
-fn read_canonical_argument(
-    input: &[u8],
-    cursor: &mut usize,
-    ai: u8,
-) -> Result<u64, DetCborError> {
+fn read_canonical_argument(input: &[u8], cursor: &mut usize, ai: u8) -> Result<u64, DetCborError> {
     match ai {
         0..=23 => Ok(ai as u64),
         24 => {
@@ -338,11 +344,7 @@ fn read_canonical_argument(
     }
 }
 
-fn decode_item(
-    input: &[u8],
-    cursor: &mut usize,
-    depth: usize,
-) -> Result<CborValue, DetCborError> {
+fn decode_item(input: &[u8], cursor: &mut usize, depth: usize) -> Result<CborValue, DetCborError> {
     if depth > MAX_CBOR_DEPTH {
         return Err(DetCborError::MaxDepthExceeded);
     }
@@ -507,7 +509,9 @@ pub fn check_redaction_span_confinement(
                 b'\\' | b'"' | b'{' | b'}' | b'[' | b']' | b',' | b':' | b'<' | b'>'
             )
         {
-            return Err("smuggled delimiter, escape backslash, quote, or control byte in redacted span");
+            return Err(
+                "smuggled delimiter, escape backslash, quote, or control byte in redacted span",
+            );
         }
     }
 
@@ -706,9 +710,18 @@ impl DualPcsReceipt {
                 .iter()
                 .map(|r| {
                     CborValue::Map(vec![
-                        (CborValue::Text(String::from("k_ll")), encode_ring_cbor(&r.k_ll)),
-                        (CborValue::Text(String::from("k_mid")), encode_ring_cbor(&r.k_mid)),
-                        (CborValue::Text(String::from("k_rr")), encode_ring_cbor(&r.k_rr)),
+                        (
+                            CborValue::Text(String::from("k_ll")),
+                            encode_ring_cbor(&r.k_ll),
+                        ),
+                        (
+                            CborValue::Text(String::from("k_mid")),
+                            encode_ring_cbor(&r.k_mid),
+                        ),
+                        (
+                            CborValue::Text(String::from("k_rr")),
+                            encode_ring_cbor(&r.k_rr),
+                        ),
                         (
                             CborValue::Text(String::from("t_ll")),
                             CborValue::Array(r.t_ll.iter().map(encode_ring_cbor).collect()),
@@ -747,7 +760,10 @@ impl DualPcsReceipt {
         ]);
 
         CborValue::Map(vec![
-            (CborValue::Text(String::from("canopy_commitment")), canopy_comm),
+            (
+                CborValue::Text(String::from("canopy_commitment")),
+                canopy_comm,
+            ),
             (CborValue::Text(String::from("canopy_proof")), canopy_prf),
             (
                 CborValue::Text(String::from("circuit_desc")),
@@ -761,7 +777,10 @@ impl DualPcsReceipt {
                 CborValue::Text(String::from("final_transcript_digest")),
                 CborValue::Bytes(self.final_transcript_digest.to_vec()),
             ),
-            (CborValue::Text(String::from("lattice_commitment")), lat_comm),
+            (
+                CborValue::Text(String::from("lattice_commitment")),
+                lat_comm,
+            ),
             (CborValue::Text(String::from("lattice_proof")), lat_prf),
             (
                 CborValue::Text(String::from("num_vars")),
@@ -1038,8 +1057,7 @@ pub fn prove_dual_pcs_receipt(
         sum_base += x;
     }
     let claimed_hypercube_sum = GoldilocksExt2::from_base(sum_base);
-    let dual_comm_bytes =
-        encode_dual_comm_bytes(&canopy_state.commitment, &lattice_commitment);
+    let dual_comm_bytes = encode_dual_comm_bytes(&canopy_state.commitment, &lattice_commitment);
 
     // Phase 1 -> Phase 2 -> Phase 3 (`Unbound -> RelationBound -> InstanceBound`)
     let mut tr = FenziTranscript::new(b"OBEND.DUAL_PCS.SEED/v1")
@@ -1096,19 +1114,29 @@ pub fn verify_dual_pcs_receipt(
     receipt: &DualPcsReceipt,
 ) -> Result<HashInvocationStats, DetCborError> {
     if receipt.num_vars > 24 {
-        return Err(DetCborError::SchemaMismatch(String::from("num_vars exceeds 24")));
+        return Err(DetCborError::SchemaMismatch(String::from(
+            "num_vars exceeds 24",
+        )));
     }
     if receipt.schema_version != DUAL_PCS_RECEIPT_SCHEMA_VERSION {
-        return Err(DetCborError::SchemaMismatch(String::from("bad schema_version")));
+        return Err(DetCborError::SchemaMismatch(String::from(
+            "bad schema_version",
+        )));
     }
     if receipt.canopy_commitment.num_vars != receipt.num_vars {
-        return Err(DetCborError::SchemaMismatch(String::from("num_vars mismatch")));
+        return Err(DetCborError::SchemaMismatch(String::from(
+            "num_vars mismatch",
+        )));
     }
     let dual_comm_bytes =
         encode_dual_comm_bytes(&receipt.canopy_commitment, &receipt.lattice_commitment);
 
     let mut tr = FenziTranscript::new(b"OBEND.DUAL_PCS.SEED/v1")
-        .bind_relation(&receipt.protocol_id, &receipt.vk_digest, &receipt.circuit_desc)
+        .bind_relation(
+            &receipt.protocol_id,
+            &receipt.vk_digest,
+            &receipt.circuit_desc,
+        )
         .bind_instance(&dual_comm_bytes, receipt.claimed_hypercube_sum, &[]);
 
     let sc_claim = verify_sumcheck_ext2(
@@ -1144,8 +1172,8 @@ pub fn verify_dual_pcs_receipt(
     )?;
     // Check the SAME evaluation as Track H, with canonical 16-bit limbs and zero padding.
     // A short unrelated vector (including zero) must not satisfy this gate.
-    let opened_table = unpack_ring_witness_to_goldilocks(
-        &receipt.lattice_opening, 1usize << receipt.num_vars)?;
+    let opened_table =
+        unpack_ring_witness_to_goldilocks(&receipt.lattice_opening, 1usize << receipt.num_vars)?;
     if commit_ring_witness(lattice_params, &receipt.lattice_opening)? != receipt.lattice_commitment
         || mle_eval_base_at_ext2(&opened_table, &sc_claim.point)? != sc_claim.expected_val
     {
@@ -1173,66 +1201,71 @@ mod tests {
 
     // Adversarial prover recomputes BOTH transcripts and valid openings after selecting
     // an unrelated lattice vector. This is stronger than corrupting a commitment in transit.
-    fn prove_split_tracks(protocol_id: &str, vk_digest: [u8; 32], circuit_desc: &[u8],
-        canopy_params: &CanopyParams, lattice_params: &LatticeParams,
-        num_vars: usize, table: &[Goldilocks]) -> Result<DualPcsReceipt, DetCborError> {
-    let canopy_state = canopy_commit(canopy_params, num_vars, table, None)?;
-    let ring_witness = vec![RingElem::zero(); lattice_params.cols];
-    let lattice_commitment = commit_ring_witness(lattice_params, &ring_witness)?;
+    fn prove_split_tracks(
+        protocol_id: &str,
+        vk_digest: [u8; 32],
+        circuit_desc: &[u8],
+        canopy_params: &CanopyParams,
+        lattice_params: &LatticeParams,
+        num_vars: usize,
+        table: &[Goldilocks],
+    ) -> Result<DualPcsReceipt, DetCborError> {
+        let canopy_state = canopy_commit(canopy_params, num_vars, table, None)?;
+        let ring_witness = vec![RingElem::zero(); lattice_params.cols];
+        let lattice_commitment = commit_ring_witness(lattice_params, &ring_witness)?;
 
-    let mut sum_base = Goldilocks::ZERO;
-    for &x in table {
-        sum_base += x;
-    }
-    let claimed_hypercube_sum = GoldilocksExt2::from_base(sum_base);
-    let dual_comm_bytes =
-        encode_dual_comm_bytes(&canopy_state.commitment, &lattice_commitment);
+        let mut sum_base = Goldilocks::ZERO;
+        for &x in table {
+            sum_base += x;
+        }
+        let claimed_hypercube_sum = GoldilocksExt2::from_base(sum_base);
+        let dual_comm_bytes = encode_dual_comm_bytes(&canopy_state.commitment, &lattice_commitment);
 
-    // Phase 1 -> Phase 2 -> Phase 3 (`Unbound -> RelationBound -> InstanceBound`)
-    let mut tr = FenziTranscript::new(b"OBEND.DUAL_PCS.SEED/v1")
-        .bind_relation(protocol_id, &vk_digest, circuit_desc)
-        .bind_instance(&dual_comm_bytes, claimed_hypercube_sum, &[]);
+        // Phase 1 -> Phase 2 -> Phase 3 (`Unbound -> RelationBound -> InstanceBound`)
+        let mut tr = FenziTranscript::new(b"OBEND.DUAL_PCS.SEED/v1")
+            .bind_relation(protocol_id, &vk_digest, circuit_desc)
+            .bind_instance(&dual_comm_bytes, claimed_hypercube_sum, &[]);
 
-    let (sumcheck_rounds, eval_claim) = prove_multilinear_sumcheck_ext2(table, &mut tr)?;
-    debug_assert_eq!(
-        mle_eval_base_at_ext2(table, &eval_claim.point)?,
-        eval_claim.expected_val
-    );
+        let (sumcheck_rounds, eval_claim) = prove_multilinear_sumcheck_ext2(table, &mut tr)?;
+        debug_assert_eq!(
+            mle_eval_base_at_ext2(table, &eval_claim.point)?,
+            eval_claim.expected_val
+        );
 
-    // Fork into Track H (`Canopy`) & Track L (`PikkuFold`/`Akita`), absorbing reduced point explicitly
-    let mut pt_bytes = leb128(eval_claim.point.len());
-    for z in &eval_claim.point {
-        pt_bytes.extend_from_slice(&z.to_be_bytes());
-    }
-    tr.absorb(b"DUAL.PCS.EVAL_POINT", &pt_bytes);
-    tr.absorb_ext2(b"DUAL.PCS.EVAL_VAL", eval_claim.expected_val);
+        // Fork into Track H (`Canopy`) & Track L (`PikkuFold`/`Akita`), absorbing reduced point explicitly
+        let mut pt_bytes = leb128(eval_claim.point.len());
+        for z in &eval_claim.point {
+            pt_bytes.extend_from_slice(&z.to_be_bytes());
+        }
+        tr.absorb(b"DUAL.PCS.EVAL_POINT", &pt_bytes);
+        tr.absorb_ext2(b"DUAL.PCS.EVAL_VAL", eval_claim.expected_val);
 
-    let mut tr_h = tr.fork(DUAL_TRACK1_LABEL);
-    let mut tr_l = tr.fork(DUAL_TRACK2_LABEL);
+        let mut tr_h = tr.fork(DUAL_TRACK1_LABEL);
+        let mut tr_l = tr.fork(DUAL_TRACK2_LABEL);
 
-    let canopy_proof = canopy_open(canopy_params, &canopy_state, &eval_claim.point, &mut tr_h)?;
-    let lattice_proof =
-        akita_prove_open(lattice_params, &ring_witness, GADGET_LIMB_MAX, &mut tr_l)?;
+        let canopy_proof = canopy_open(canopy_params, &canopy_state, &eval_claim.point, &mut tr_h)?;
+        let lattice_proof =
+            akita_prove_open(lattice_params, &ring_witness, GADGET_LIMB_MAX, &mut tr_l)?;
 
-    tr.join(&tr_h, &tr_l);
+        tr.join(&tr_h, &tr_l);
 
-    Ok(DualPcsReceipt {
-        schema_version: DUAL_PCS_RECEIPT_SCHEMA_VERSION,
-        protocol_id: String::from(protocol_id),
-        vk_digest,
-        circuit_desc: circuit_desc.to_vec(),
-        num_vars: num_vars as u32,
-        claimed_hypercube_sum,
-        sumcheck_rounds,
-        reduced_eval_point: eval_claim.point,
-        reduced_eval_val: eval_claim.expected_val,
-        canopy_commitment: canopy_state.commitment,
-        canopy_proof,
-        lattice_commitment,
-        lattice_proof,
-        lattice_opening: ring_witness,
-        final_transcript_digest: *tr.state(),
-    })
+        Ok(DualPcsReceipt {
+            schema_version: DUAL_PCS_RECEIPT_SCHEMA_VERSION,
+            protocol_id: String::from(protocol_id),
+            vk_digest,
+            circuit_desc: circuit_desc.to_vec(),
+            num_vars: num_vars as u32,
+            claimed_hypercube_sum,
+            sumcheck_rounds,
+            reduced_eval_point: eval_claim.point,
+            reduced_eval_val: eval_claim.expected_val,
+            canopy_commitment: canopy_state.commitment,
+            canopy_proof,
+            lattice_commitment,
+            lattice_proof,
+            lattice_opening: ring_witness,
+            final_transcript_digest: *tr.state(),
+        })
     }
 
     #[test]
@@ -1240,8 +1273,20 @@ mod tests {
         let cp = CanopyParams::default_128bit();
         let lp = LatticeParams::expand_from_seed([0x55; 32], 2, 4).unwrap();
         let table = vec![Goldilocks::ONE; 16];
-        let forged = prove_split_tracks("OBEND.SPLIT_TEST/v1", [1; 32], b"split", &cp, &lp, 4, &table).unwrap();
-        assert_eq!(verify_dual_pcs_receipt(&cp, &lp, &forged), Err(DetCborError::ReducedClaimMismatch));
+        let forged = prove_split_tracks(
+            "OBEND.SPLIT_TEST/v1",
+            [1; 32],
+            b"split",
+            &cp,
+            &lp,
+            4,
+            &table,
+        )
+        .unwrap();
+        assert_eq!(
+            verify_dual_pcs_receipt(&cp, &lp, &forged),
+            Err(DetCborError::ReducedClaimMismatch)
+        );
     }
 
     #[test]
@@ -1257,7 +1302,10 @@ mod tests {
         let bytes = encode_det_cbor(&unsorted).unwrap();
         let decoded = decode_det_cbor(&bytes).unwrap();
         let reencoded = encode_det_cbor(&decoded).unwrap();
-        assert_eq!(bytes, reencoded, "re-encoding must be byte-for-byte identical");
+        assert_eq!(
+            bytes, reencoded,
+            "re-encoding must be byte-for-byte identical"
+        );
 
         // Reject CBOR Null (0xf6 = major 7, ai 22) to match Lean `Obend.Codec.DetCbor`
         assert_eq!(
@@ -1291,7 +1339,10 @@ mod tests {
 
         // Reject duplicate map keys: { "a": 1, "a": 2 } => a2 61 61 01 61 61 02
         let raw_dup_map = [0xa2, 0x61, b'a', 0x01, 0x61, b'a', 0x02];
-        assert_eq!(decode_det_cbor(&raw_dup_map), Err(DetCborError::DuplicateMapKey));
+        assert_eq!(
+            decode_det_cbor(&raw_dup_map),
+            Err(DetCborError::DuplicateMapKey)
+        );
 
         // Reject IEEE-754 floats (half 0xf9, single 0xfa, double 0xfb)
         assert!(matches!(

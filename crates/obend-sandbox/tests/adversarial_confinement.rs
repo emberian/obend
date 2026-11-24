@@ -2,11 +2,11 @@
 //! `manifest.rs:287` role confinement, `LineChannel` flood cap, and slot-path AAD secret sealing).
 
 use obend_sandbox::bwrap::{
-    BubblewrapRunner, DEFAULT_MAX_PROCESS_OUTPUT_BYTES, SandboxBackend, SandboxConfig, SandboxError,
+    BubblewrapRunner, SandboxBackend, SandboxConfig, SandboxError, DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
 };
 use obend_sandbox::capnp_wire::{
-    self, WireBridgeConfig, WirePermissionDef, WireRoleDef, write_bridge_config,
-    write_manifest_capnp,
+    self, write_bridge_config, write_manifest_capnp, WireBridgeConfig, WirePermissionDef,
+    WireRoleDef,
 };
 use obend_sandbox::gate::{GateStatus, LaunchGate};
 use obend_sandbox::line_channel::{
@@ -14,23 +14,23 @@ use obend_sandbox::line_channel::{
 };
 use obend_sandbox::meter::CpuMeter;
 use obend_sandbox::policy::{
-    AddFdError, CheckedAddFdSpec, ConfinementPolicy, ConnectFilterError, DoorMode,
-    EnvAllowlistPolicy, LINUX_AF_INET, LINUX_AF_UNIX, LINUX_SOCK_STREAM, SECCOMP_RET_ALLOW,
-    SECCOMP_RET_ERRNO_EPERM, SECCOMP_RET_KILL_PROCESS, SECCOMP_RET_USER_NOTIF, SeccompProfileSpec,
     build_hardened_seccomp_bpf, check_addfd_ioctl_result, eval_seccomp_bpf,
-    validate_connect_sockaddr,
+    validate_connect_sockaddr, AddFdError, CheckedAddFdSpec, ConfinementPolicy, ConnectFilterError,
+    DoorMode, EnvAllowlistPolicy, SeccompProfileSpec, LINUX_AF_INET, LINUX_AF_UNIX,
+    LINUX_SOCK_STREAM, SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO_EPERM, SECCOMP_RET_KILL_PROCESS,
+    SECCOMP_RET_USER_NOTIF,
 };
 use obend_sandbox::secret_seal::{
-    SecretSealError, SecretSlotId, SlotBoundSecretStore, seal_secret_for_slot,
-    unseal_secret_for_slot,
+    seal_secret_for_slot, unseal_secret_for_slot, SecretSealError, SecretSlotId,
+    SlotBoundSecretStore,
 };
 use obend_sandbox::spk::{
-    AppId, Ed25519SigningKey, MANIFEST_PATH, ManifestError, SPK_MAGIC, Spk, SpkArchive, SpkBuilder,
-    SpkError, SpkFile, SpkManifest, decode_bridge_config_capnp, sandstorm_base32_encode,
-    xz_compress, xz_decompress_bounded,
+    decode_bridge_config_capnp, sandstorm_base32_encode, xz_compress, xz_decompress_bounded, AppId,
+    Ed25519SigningKey, ManifestError, Spk, SpkArchive, SpkBuilder, SpkError, SpkFile, SpkManifest,
+    MANIFEST_PATH, SPK_MAGIC,
 };
 use obend_sandbox::wasm_budget::{
-    WasmCapTier, WasmExecutionBudget, WasmRunError, WasmVal, run_wasm_metered,
+    run_wasm_metered, WasmCapTier, WasmExecutionBudget, WasmRunError, WasmVal,
 };
 use sha2::{Digest, Sha512};
 use std::fs::{self, File};
@@ -331,7 +331,10 @@ fn test_adversarial_cap17_env_leak_seatbelt_seccomp_addfd_and_pdeathsig() {
         CheckedAddFdSpec::validate(3, 8, &[3], 1024),
         Err(AddFdError::ProtectedEndpointFdCollision(3))
     );
-    assert_eq!(check_addfd_ioctl_result(-1, Some(libc::EPERM)), Err(-libc::EPERM));
+    assert_eq!(
+        check_addfd_ioctl_result(-1, Some(libc::EPERM)),
+        Err(-libc::EPERM)
+    );
 
     // 4. Linux `PR_SET_PDEATHSIG(SIGKILL)` supervisor-death grandchild reap verification
     #[cfg(target_os = "linux")]
@@ -367,9 +370,7 @@ fn test_adversarial_cap17_env_leak_seatbelt_seccomp_addfd_and_pdeathsig() {
             libc::close(pipe_fds[1]);
         }
         let mut pid_bytes = [0u8; 4];
-        let n = unsafe {
-            libc::read(pipe_fds[0], pid_bytes.as_mut_ptr() as *mut libc::c_void, 4)
-        };
+        let n = unsafe { libc::read(pipe_fds[0], pid_bytes.as_mut_ptr() as *mut libc::c_void, 4) };
         unsafe {
             libc::close(pipe_fds[0]);
         }
@@ -424,7 +425,10 @@ fn test_adversarial_spk_verify_strict_forgeries_and_system_xz_interop() {
 
     let valid_spk = SpkBuilder::new()
         .manifest_json(manifest_json)
-        .file(SpkFile::executable("start.sh", b"#!/bin/sh\nexec /app\n".to_vec()))
+        .file(SpkFile::executable(
+            "start.sh",
+            b"#!/bin/sh\nexec /app\n".to_vec(),
+        ))
         .pack(&key);
 
     let parsed = Spk::verify_strict(&valid_spk).expect("valid .spk must verify");
@@ -444,7 +448,10 @@ fn test_adversarial_spk_verify_strict_forgeries_and_system_xz_interop() {
     // Attack 1: Bad magic rejected
     let mut bad_magic = valid_spk.clone();
     bad_magic[0] ^= 0x01;
-    assert_eq!(Spk::verify_strict(&bad_magic).unwrap_err(), SpkError::BadMagic);
+    assert_eq!(
+        Spk::verify_strict(&bad_magic).unwrap_err(),
+        SpkError::BadMagic
+    );
 
     // Attack 2: Corrupted archive byte inside valid XZ container -> BadSignature!
     let archive_msg = SpkArchive {
@@ -458,8 +465,7 @@ fn test_adversarial_spk_verify_strict_forgeries_and_system_xz_interop() {
     tampered_archive[last] ^= 0xFF;
     let mut sig_field = sig.to_vec();
     sig_field.extend_from_slice(&hash);
-    let mut plain_tampered =
-        capnp_wire::write_signature(&key.verifying_key_bytes(), &sig_field);
+    let mut plain_tampered = capnp_wire::write_signature(&key.verifying_key_bytes(), &sig_field);
     plain_tampered.extend_from_slice(&tampered_archive);
     let mut spk_tampered = SPK_MAGIC.to_vec();
     spk_tampered.extend_from_slice(&xz_compress(&plain_tampered));
@@ -470,8 +476,8 @@ fn test_adversarial_spk_verify_strict_forgeries_and_system_xz_interop() {
 
     // Attack 3: Non-canonical `s + L` signature malleability -> BadSignature!
     const ELL: [u8; 32] = [
-        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
-        0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
+        0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
     ];
     let mut malleable_sig = sig;
     let mut carry = 0u16;
@@ -512,8 +518,7 @@ fn test_adversarial_spk_verify_strict_forgeries_and_system_xz_interop() {
     let tail_hash: [u8; 64] = Sha512::digest(&arch_plus_tail).into();
     let mut tail_sig_field = key.sign(&tail_hash).to_vec();
     tail_sig_field.extend_from_slice(&tail_hash);
-    let mut plain_tail =
-        capnp_wire::write_signature(&key.verifying_key_bytes(), &tail_sig_field);
+    let mut plain_tail = capnp_wire::write_signature(&key.verifying_key_bytes(), &tail_sig_field);
     plain_tail.extend_from_slice(&arch_plus_tail);
     let mut spk_tail = SPK_MAGIC.to_vec();
     spk_tail.extend_from_slice(&xz_compress(&plain_tail));
@@ -562,7 +567,10 @@ fn test_adversarial_spk_verify_strict_forgeries_and_system_xz_interop() {
             .write_all(&valid_spk[SPK_MAGIC.len()..])
             .unwrap();
         let dec_out = dec.wait_with_output().unwrap();
-        assert!(dec_out.status.success(), "system xz -dc accepted our container");
+        assert!(
+            dec_out.status.success(),
+            "system xz -dc accepted our container"
+        );
 
         // (b) `/usr/bin/xz -6 -c` compresses `dec_out.stdout` with real LZMA2 range-coding,
         //     and our `Spk::verify_strict` decodes and verifies it!
@@ -572,7 +580,11 @@ fn test_adversarial_spk_verify_strict_forgeries_and_system_xz_interop() {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        enc.stdin.take().unwrap().write_all(&dec_out.stdout).unwrap();
+        enc.stdin
+            .take()
+            .unwrap()
+            .write_all(&dec_out.stdout)
+            .unwrap();
         let enc_out = enc.wait_with_output().unwrap();
         assert!(enc_out.status.success());
         let _ = xz_decompress_bounded(&enc_out.stdout, 1024 * 1024).unwrap();
@@ -614,7 +626,10 @@ fn test_adversarial_manifest_rs_287_gitweb_fixture_and_role_escalation_refusal()
     let spk = Spk::verify_strict(&gitweb_spk_bytes).unwrap();
     let manifest = SpkManifest::from_spk(&spk).unwrap();
     assert_eq!(manifest.declared_permissions(), vec!["read", "write"]);
-    assert_eq!(manifest.resolve_role_permissions("guest").unwrap(), vec!["read"]);
+    assert_eq!(
+        manifest.resolve_role_permissions("guest").unwrap(),
+        vec!["read"]
+    );
     assert_eq!(
         manifest.resolve_role_permissions("developer").unwrap(),
         vec!["read", "write"]
@@ -694,11 +709,15 @@ fn test_adversarial_manifest_rs_287_gitweb_fixture_and_role_escalation_refusal()
 #[test]
 fn test_adversarial_line_channel_oversized_frame_wasm_fuel_and_wrong_slot_aad() {
     // 1. Oversized `LineChannel` frame refused & channel poisoned (both newline-free flood and newline-terminated oversize)
-    let smuggled_tail = serde_json::to_string(&BodyMsg::Propose(Proposal::invoke("escalate"))).unwrap();
+    let smuggled_tail =
+        serde_json::to_string(&BodyMsg::Propose(Proposal::invoke("escalate"))).unwrap();
     let flood_payload = format!("{}{}\n", "Z".repeat(512), smuggled_tail);
     let mut ch = LineChannel::new(Cursor::new(flood_payload.into_bytes()), Vec::new())
         .with_max_line_bytes(128);
-    assert!(ch.recv().is_err(), "oversized LineChannel frame must be refused");
+    assert!(
+        ch.recv().is_err(),
+        "oversized LineChannel frame must be refused"
+    );
     assert!(ch.is_poisoned());
     assert!(
         ch.recv().is_err(),
@@ -725,11 +744,9 @@ fn test_adversarial_line_channel_oversized_frame_wasm_fuel_and_wrong_slot_aad() 
 
     // 2. Fuel-metered Wasm execution budget (`CAP-23` infinite loop & memory bomb refused)
     let wasm_loop: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-        0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
-        0x03, 0x02, 0x01, 0x00,
-        0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00,
-        0x0a, 0x09, 0x01, 0x07, 0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x0b,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03,
+        0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00, 0x0a, 0x09, 0x01,
+        0x07, 0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x0b,
     ];
     assert_eq!(
         run_wasm_metered(
@@ -745,12 +762,10 @@ fn test_adversarial_line_channel_oversized_frame_wasm_fuel_and_wrong_slot_aad() 
         })
     );
     let wasm_huge_mem: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-        0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
-        0x03, 0x02, 0x01, 0x00,
-        0x05, 0x03, 0x01, 0x00, 0x20, // 32 initial pages = 2 MiB
-        0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00,
-        0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x07, 0x0b,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
+        0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x20, // 32 initial pages = 2 MiB
+        0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00, 0x0a, 0x06, 0x01, 0x04, 0x00, 0x41,
+        0x07, 0x0b,
     ];
     assert_eq!(
         run_wasm_metered(
@@ -781,7 +796,8 @@ fn test_adversarial_line_channel_oversized_frame_wasm_fuel_and_wrong_slot_aad() 
     let slot_wrong_key = SecretSlotId::new("grain-7", "public_webhook_secret");
     let slot_wrong_ns = SecretSlotId::new("grain-8", "oauth_refresh_token");
 
-    let sealed = seal_secret_for_slot(&master_key, &slot_origin, b"v1", b"rt_super_secret").unwrap();
+    let sealed =
+        seal_secret_for_slot(&master_key, &slot_origin, b"v1", b"rt_super_secret").unwrap();
     assert_eq!(
         unseal_secret_for_slot(&master_key, &slot_origin, b"v1", &sealed)
             .unwrap()
@@ -850,7 +866,10 @@ fn test_adversarial_launch_gate_lifecycle_state_machine() {
     file.write_all(b"malformed_bogus_state\n")
         .expect("write corrupt");
     drop(file);
-    assert!(gate.status().is_err(), "corrupted gate must fail status parse");
+    assert!(
+        gate.status().is_err(),
+        "corrupted gate must fail status parse"
+    );
     assert!(
         gate.transition_to_started().is_err(),
         "transition on corrupted gate must fail"

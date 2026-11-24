@@ -18,7 +18,8 @@ impl CpuMeter {
     }
 
     pub fn read_cgroup_cpu_usec(cgroup_cpu_stat: &Path) -> Result<u64, String> {
-        let content = fs::read_to_string(cgroup_cpu_stat).map_err(|e| format!("cpu.stat read: {e}"))?;
+        let content =
+            fs::read_to_string(cgroup_cpu_stat).map_err(|e| format!("cpu.stat read: {e}"))?;
         Self::parse_cpu_stat(&content).ok_or_else(|| "usage_usec not found in cpu.stat".to_string())
     }
 
@@ -38,8 +39,12 @@ impl CpuMeter {
     }
 
     pub fn read_cpu_record(record_path: &Path) -> Result<u64, String> {
-        let content = fs::read_to_string(record_path).map_err(|e| format!("cpu record read: {e}"))?;
-        let first = content.lines().next().ok_or_else(|| "empty cpu record".to_string())?;
+        let content =
+            fs::read_to_string(record_path).map_err(|e| format!("cpu record read: {e}"))?;
+        let first = content
+            .lines()
+            .next()
+            .ok_or_else(|| "empty cpu record".to_string())?;
         if let Some(rest) = first.strip_prefix("obend-grain-cpu-v1 ") {
             rest.trim()
                 .parse::<u64>()

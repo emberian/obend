@@ -35,15 +35,15 @@ use obend_oracles_e2ee::{
     legacy_withdrawn_cbr_milli_bits, notary_key_fingerprint, proven_zkml_milli_bits, run_she_trace,
     she_floors_digest, she_payload_digest, she_turn_envelope_digest, verify_e2ee_channel,
     verify_intel_tdx, verify_nvidia_gpu, verify_tlsn_transcript, ActuationTurnProposal,
-    BasicConstraints, CertRecord, E2eeChannelInput, E2eeChannelPolicy,
-    FixtureCertSpec, FixtureSigner, FixtureTdxQuoteFields, GpuArch, IntelTdxAttestation,
-    IntelTdxMeasurementPin, IntelTdxPolicy, KeyUsage, MandateAttenuation, NvidiaGpuAttestation,
-    NvidiaGpuPolicy, NvidiaOcspResponse, NvidiaOcspStatus, PinnedNotaryEntry,
-    PinnedNotaryRegistry, SealedOracleIngress, SheFloor, SheRefusal, SheState, SheTurn,
-    SignatureAlgorithm, TlsnTranscriptEnvelope, UpgradeAuthorityClaim, UpgradeJudgeProposal,
-    ZkmlSoundnessRegime, KEY_USAGE_DIGITAL_SIGNATURE, KEY_USAGE_KEY_CERT_SIGN,
-    ML_KEM_768_PUBKEY_LEN, NO_SERVICE_TD, OPAQUE_CHIP_SKU, OPAQUE_FWID, OPAQUE_PROJECT,
-    OPAQUE_PROJECT_SKU, SPDM_NONCE_LEN, SPDM_SIGNATURE_LEN,
+    BasicConstraints, CertRecord, E2eeChannelInput, E2eeChannelPolicy, FixtureCertSpec,
+    FixtureSigner, FixtureTdxQuoteFields, GpuArch, IntelTdxAttestation, IntelTdxMeasurementPin,
+    IntelTdxPolicy, KeyUsage, MandateAttenuation, NvidiaGpuAttestation, NvidiaGpuPolicy,
+    NvidiaOcspResponse, NvidiaOcspStatus, PinnedNotaryEntry, PinnedNotaryRegistry,
+    SealedOracleIngress, SheFloor, SheRefusal, SheState, SheTurn, SignatureAlgorithm,
+    TlsnTranscriptEnvelope, UpgradeAuthorityClaim, UpgradeJudgeProposal, ZkmlSoundnessRegime,
+    KEY_USAGE_DIGITAL_SIGNATURE, KEY_USAGE_KEY_CERT_SIGN, ML_KEM_768_PUBKEY_LEN, NO_SERVICE_TD,
+    OPAQUE_CHIP_SKU, OPAQUE_FWID, OPAQUE_PROJECT, OPAQUE_PROJECT_SKU, SPDM_NONCE_LEN,
+    SPDM_SIGNATURE_LEN,
 };
 
 const OPT_RAND: [u8; 32] = [0x5A; 32];
@@ -51,29 +51,17 @@ const MAX_GRIND: u32 = 4096;
 
 fn canonical_mxfp4_weights() -> (Vec<Vec<i64>>, Vec<u64>) {
     (
-        vec![
-            vec![2, -1, 4, 3],
-            vec![-2, 1, 2, -4],
-            vec![6, -3, 1, 2],
-        ],
+        vec![vec![2, -1, 4, 3], vec![-2, 1, 2, -4], vec![6, -3, 1, 2]],
         vec![0, 1, 0],
     )
 }
 
 fn canonical_round_inputs_t1() -> Vec<Vec<i64>> {
-    vec![
-        vec![3, -2, 5, -1],
-        vec![4, 1, -2, 6],
-        vec![-1, 3, 2, 4],
-    ]
+    vec![vec![3, -2, 5, -1], vec![4, 1, -2, 6], vec![-1, 3, 2, 4]]
 }
 
 fn canonical_round_inputs_t4() -> Vec<Vec<i64>> {
-    vec![
-        vec![2, 5, -3, 1],
-        vec![-4, 2, 3, -1],
-        vec![1, -2, 4, 3],
-    ]
+    vec![vec![2, 5, -3, 1], vec![-4, 2, 3, -1], vec![1, -2, 4, 3]]
 }
 
 fn canonical_weights_root() -> [u8; 32] {
@@ -252,7 +240,8 @@ fn build_signed_turn_1(st0: &SheState, pow_override: Option<u64>) -> ActuationTu
     let simp_msg = she_simplex_qc_msg(st0, &act);
     let cust_msg = she_custodian_actuation_msg(st0, &act);
     act.simplex_qc_signatures = sign_simplex(&st0.pq_params, &simp_msg, &[(0, 0), (1, 0), (2, 0)]);
-    act.custodian_signatures = sign_custodians(&st0.pq_params, &cust_msg, &[(0, 0), (2, 0), (3, 0)]);
+    act.custodian_signatures =
+        sign_custodians(&st0.pq_params, &cust_msg, &[(0, 0), (2, 0), (3, 0)]);
     act
 }
 
@@ -260,7 +249,9 @@ fn build_signed_turn_2(st1: &SheState) -> UpgradeJudgeProposal {
     let mut up = UpgradeJudgeProposal {
         new_judge_digest: [0x55; 32],
         new_model_weights_root: canonical_weights_root(),
-        new_zkml_suite_digest: suite_artifact_digest(&ZkmlSuiteArtifact::canonical_ud100_wide_leaf()),
+        new_zkml_suite_digest: suite_artifact_digest(
+            &ZkmlSuiteArtifact::canonical_ud100_wide_leaf(),
+        ),
         new_floors: upgraded_floors(),
         new_revert_window_steps: 6,
         new_custodian_epoch: 2,
@@ -321,7 +312,8 @@ fn build_signed_turn_4(st3: &SheState) -> ActuationTurnProposal {
     let simp_msg = she_simplex_qc_msg(st3, &act);
     let cust_msg = she_custodian_actuation_msg(st3, &act);
     act.simplex_qc_signatures = sign_simplex(&st3.pq_params, &simp_msg, &[(1, 1), (2, 1), (3, 1)]);
-    act.custodian_signatures = sign_custodians(&st3.pq_params, &cust_msg, &[(0, 2), (1, 2), (2, 2)]);
+    act.custodian_signatures =
+        sign_custodians(&st3.pq_params, &cust_msg, &[(0, 2), (1, 2), (2, 2)]);
     act
 }
 
@@ -361,11 +353,15 @@ fn lean_rust_she_turn_wire_vectors_match_byte_for_byte() {
     );
     assert_eq!(t1.candidate.pow_nonce, LOCKED_POW_TURN_1);
     assert_eq!(
-        hex_encode_lower(&suite_artifact_digest(&ZkmlSuiteArtifact::canonical_ud100_small())),
+        hex_encode_lower(&suite_artifact_digest(
+            &ZkmlSuiteArtifact::canonical_ud100_small()
+        )),
         "fb1c5f28ef8774797858dbb4268130ff259c6ae77a8c75b4d2ecdda06ef278a7"
     );
     assert_eq!(
-        hex_encode_lower(&suite_artifact_digest(&ZkmlSuiteArtifact::canonical_ud100_wide_leaf())),
+        hex_encode_lower(&suite_artifact_digest(
+            &ZkmlSuiteArtifact::canonical_ud100_wide_leaf()
+        )),
         "372ae7d6c020c55d8f2b86cb240771dd07ce5b76ed3515552b79e385fca8e84c"
     );
     assert_eq!(
@@ -393,7 +389,9 @@ fn lean_rust_she_turn_wire_vectors_match_byte_for_byte() {
         "64219a5a05909884b06f5fdeaaa92de2bb91f9364b7696587ff93a856a137198"
     );
     assert_eq!(
-        hex_encode_lower(&she_turn_envelope_digest(&SheTurn::ProposeAndSettleActuation(t1))),
+        hex_encode_lower(&she_turn_envelope_digest(
+            &SheTurn::ProposeAndSettleActuation(t1)
+        )),
         "280faa8cf6ec0297adb3d805b43291770ca4ab2f59ca0e958bafa1fb2fbd47b3"
     );
     assert_eq!(
@@ -401,11 +399,15 @@ fn lean_rust_she_turn_wire_vectors_match_byte_for_byte() {
         "2543e5d467c29c5b99cac0900a64ebf0d759fc8623c8a99c2c662ad11cf35ca4"
     );
     assert_eq!(
-        hex_encode_lower(&she_turn_envelope_digest(&SheTurn::RevokeOrAttenuateMandate(t3))),
+        hex_encode_lower(&she_turn_envelope_digest(
+            &SheTurn::RevokeOrAttenuateMandate(t3)
+        )),
         "4703fd475cbe80a9dee00cc86a023b0341874af30ba13a45aa61080a05f159ac"
     );
     assert_eq!(
-        hex_encode_lower(&she_turn_envelope_digest(&SheTurn::ProposeAndSettleActuation(t4))),
+        hex_encode_lower(&she_turn_envelope_digest(
+            &SheTurn::ProposeAndSettleActuation(t4)
+        )),
         "4ab8149d6eac0744b4696844bb2ce0d872ccc5976859911896e982d6bc4770dc"
     );
 }
@@ -440,9 +442,7 @@ fn multi_turn_sovereign_she_ceremony_conserves_budget_and_verifies_pq_and_zkml()
         end.settled_outbox_actions[0].nullifier,
         end.settled_outbox_actions[1].nullifier
     );
-    assert!(
-        end.settled_outbox_actions[0].sensor_seq < end.settled_outbox_actions[1].sensor_seq
-    );
+    assert!(end.settled_outbox_actions[0].sensor_seq < end.settled_outbox_actions[1].sensor_seq);
 }
 
 #[test]
@@ -467,7 +467,10 @@ fn pq_policy_rejects_weak_half_digest_w16_multilayer_and_nonempty_genesis() {
     let (st0, t1, _, _, _) = build_4turn_ceremony();
     let st1 = apply_she_turn(&st0, &SheTurn::ProposeAndSettleActuation(t1)).unwrap();
     assert!(!st1.well_formed());
-    assert_eq!(run_she_trace(&st1, &[]), Err((0, SheRefusal::MalformedInitialState)));
+    assert_eq!(
+        run_she_trace(&st1, &[]),
+        Err((0, SheRefusal::MalformedInitialState))
+    );
 
     // 4. `zigzag_encode(i64::MIN)` never panics in debug builds (Astra #5 / Fable L1)!
     assert_eq!(zigzag_encode(i64::MIN), u64::MAX);
@@ -574,7 +577,10 @@ fn fpaudit_exact_recompute_catches_steering_commit_after_coin_and_unpinned_suite
     );
     assert!(verify_candidate_computation(&unpinned_suite_turn.candidate));
     assert_eq!(
-        apply_she_turn(&st0, &SheTurn::ProposeAndSettleActuation(unpinned_suite_turn)),
+        apply_she_turn(
+            &st0,
+            &SheTurn::ProposeAndSettleActuation(unpinned_suite_turn)
+        ),
         Err(SheRefusal::ZkmlSuiteNotPinned)
     );
 
@@ -769,7 +775,10 @@ fn forged_pq_signatures_cross_epoch_replay_and_xmss_leaf_reuse_refused() {
         sign_simplex(&st2.pq_params, &simp_msg_st2, &[(1, 1), (2, 1), (3, 1)]);
     cross_epoch_replay.custodian_signatures = t1.custodian_signatures.clone();
     assert_eq!(
-        apply_she_turn(&st2, &SheTurn::ProposeAndSettleActuation(cross_epoch_replay)),
+        apply_she_turn(
+            &st2,
+            &SheTurn::ProposeAndSettleActuation(cross_epoch_replay)
+        ),
         Err(SheRefusal::CustodianEpochMismatch {
             expected: 2,
             actual: 1
@@ -780,7 +789,9 @@ fn forged_pq_signatures_cross_epoch_replay_and_xmss_leaf_reuse_refused() {
     let mut reuse_up = UpgradeJudgeProposal {
         new_judge_digest: [0x55; 32],
         new_model_weights_root: canonical_weights_root(),
-        new_zkml_suite_digest: suite_artifact_digest(&ZkmlSuiteArtifact::canonical_ud100_wide_leaf()),
+        new_zkml_suite_digest: suite_artifact_digest(
+            &ZkmlSuiteArtifact::canonical_ud100_wide_leaf(),
+        ),
         new_floors: upgraded_floors(),
         new_revert_window_steps: 6,
         new_custodian_epoch: 2,

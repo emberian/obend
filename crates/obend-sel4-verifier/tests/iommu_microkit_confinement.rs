@@ -300,7 +300,13 @@ fn canonical_cspaces() -> FourPdCspace<8> {
         .unwrap();
     let _ = cs
         .pd_table_mut(ChokepointRole::Commit)
-        .install_root(3, 203, KernelObject::PpcEndpoint { ep_id: 1 }, CapRights::WO, 0)
+        .install_root(
+            3,
+            203,
+            KernelObject::PpcEndpoint { ep_id: 1 },
+            CapRights::WO,
+            0,
+        )
         .unwrap();
     let _ = cs
         .pd_table_mut(ChokepointRole::Commit)
@@ -327,7 +333,13 @@ fn canonical_cspaces() -> FourPdCspace<8> {
         .unwrap();
     let _ = cs
         .pd_table_mut(ChokepointRole::Commit)
-        .install_root(6, 206, KernelObject::HwTrng { trng_id: 0 }, CapRights::RO, 0)
+        .install_root(
+            6,
+            206,
+            KernelObject::HwTrng { trng_id: 0 },
+            CapRights::RO,
+            0,
+        )
         .unwrap();
 
     let _ = cs
@@ -358,7 +370,13 @@ fn canonical_cspaces() -> FourPdCspace<8> {
         .unwrap();
     let _ = cs
         .pd_table_mut(ChokepointRole::Persist)
-        .install_root(2, 302, KernelObject::PpcEndpoint { ep_id: 1 }, CapRights::RO, 0)
+        .install_root(
+            2,
+            302,
+            KernelObject::PpcEndpoint { ep_id: 1 },
+            CapRights::RO,
+            0,
+        )
         .unwrap();
     let _ = cs
         .pd_table_mut(ChokepointRole::Persist)
@@ -820,9 +838,11 @@ fn refuses_stream_id_alignment_wrap_role_escalation_cross_alias_and_budget_viola
 
     // 10. Root-server + DMA pool hitting or exceeding `10 MiB` (`10 * 1024 * 1024`) rejected!
     let mut over_budget = base;
-    over_budget.dma_pool_size = MAX_ROOTSERVER_SPAN_BYTES - (base.rootserver_phys_end - base.rootserver_phys_start);
+    over_budget.dma_pool_size =
+        MAX_ROOTSERVER_SPAN_BYTES - (base.rootserver_phys_end - base.rootserver_phys_start);
     // Round up to 4KiB boundary so total >= 10 MiB.
-    over_budget.dma_pool_size = (over_budget.dma_pool_size + PAGE_SIZE_4K - 1) & !(PAGE_SIZE_4K - 1);
+    over_budget.dma_pool_size =
+        (over_budget.dma_pool_size + PAGE_SIZE_4K - 1) & !(PAGE_SIZE_4K - 1);
     assert!(matches!(
         verify_iommu_policy(&over_budget),
         Err(IommuRefusal::PhysicalBudgetExceeded { .. })
@@ -1303,7 +1323,9 @@ fn refuses_loader_collision_outside_pool_overlap_iova_missing_protection_and_gpu
     );
     assert_eq!(
         emit_microkit_system_xml(&base, &mismatched_desc, &mut buf),
-        Err(EmitError::InvalidPolicy(IommuRefusal::RootServerSpanMismatch))
+        Err(EmitError::InvalidPolicy(
+            IommuRefusal::RootServerSpanMismatch
+        ))
     );
 
     // 8. `translate_dma` zero-length and wrapping transfer checks.
@@ -1551,7 +1573,10 @@ fn coupled_copy_before_verify_and_adversarial_dma_burst_preserves_settled_actuat
         |n, leaf_ro| persist.handle_ppc_append(n, leaf_ro),
         &mut egress,
     );
-    assert!(ok, "copy-before-verify + SMMU confinement must settle authentic payload");
+    assert!(
+        ok,
+        "copy-before-verify + SMMU confinement must settle authentic payload"
+    );
     assert_eq!(commit.height(), 1);
     assert_eq!(commit.forwarded(), 1);
     assert_eq!(persist.entries(), 1);
@@ -1642,7 +1667,10 @@ fn smmuv3_ste_riscv_ddt_stage2_descriptors_and_cmdq_match_locked_bit_layouts() {
     assert_eq!(RiscvDdtEntry::ABORT.decode(), Ok(DecodedRiscvDdte::Abort));
     let mut bad_rv_ats = ddte;
     bad_rv_ats.words[0] |= 1 << 1; // EN_ATS=1
-    assert_eq!(bad_rv_ats.decode(), Err(DdteDecodeError::PcieAtsOrPriEnabled));
+    assert_eq!(
+        bad_rv_ats.decode(),
+        Err(DdteDecodeError::PcieAtsOrPriEnabled)
+    );
     let mut bad_rv_bare = ddte;
     bad_rv_bare.words[1] &= !(0xfu64 << 60); // MODE=0 Bare bypass!
     assert_eq!(
@@ -1717,7 +1745,8 @@ fn smmuv3_ste_riscv_ddt_stage2_descriptors_and_cmdq_match_locked_bit_layouts() {
 }
 
 #[test]
-fn differential_fuzzer_2000_ops_proves_walk_smmuv3_stage2_equals_translate_dma_and_protects_tables() {
+fn differential_fuzzer_2000_ops_proves_walk_smmuv3_stage2_equals_translate_dma_and_protects_tables()
+{
     // 0. Coalescable IOVA-adjacent + PA-contiguous + same-permission regions cannot be distinguished
     //    by pure hardware Stage-2 PTEs (`RegionsNonCoalescable`), so `RadixTableArena::compile` refuses them!
     let coalescable_adj = [
@@ -2076,9 +2105,7 @@ fn stateful_iotlb_refuses_unsynced_reconfig_and_enforces_tlbi_sync_epoch_safety(
     engine
         .submit_raw_cmd([0x0000_0010_0000_0003, 0])
         .expect("raw CMD_CFGI_STE");
-    engine
-        .submit_raw_cmd([0x46, 0])
-        .expect("raw CMD_SYNC");
+    engine.submit_raw_cmd([0x46, 0]).expect("raw CMD_SYNC");
     assert_eq!(
         engine.live_entry_count(),
         1,
@@ -2122,7 +2149,11 @@ fn stateful_iotlb_refuses_unsynced_reconfig_and_enforces_tlbi_sync_epoch_safety(
         .unwrap();
         engine.submit_raw_cmd(words).unwrap();
     }
-    assert_eq!(engine.live_entry_count(), 1, "pending TLBI must not evict before CMD_SYNC");
+    assert_eq!(
+        engine.live_entry_count(),
+        1,
+        "pending TLBI must not evict before CMD_SYNC"
+    );
     assert_eq!(
         engine
             .unmap_or_reassign_dma_region(
@@ -2261,13 +2292,22 @@ fn stateful_iotlb_refuses_unsynced_reconfig_and_enforces_tlbi_sync_epoch_safety(
     engine
         .submit_cmd(SmmuCmd::TlbiS12Vmall { vmid: vmid_ingress })
         .unwrap();
-    assert_eq!(engine.live_entry_count(), 1, "pending TLBI_S12_VMALL must wait for CMD_SYNC");
+    assert_eq!(
+        engine.live_entry_count(),
+        1,
+        "pending TLBI_S12_VMALL must wait for CMD_SYNC"
+    );
     engine.submit_cmd(SmmuCmd::Sync).unwrap();
-    assert_eq!(engine.live_entry_count(), 0, "synced TLBI_S12_VMALL evicts vmid_ingress IOTLB entries");
+    assert_eq!(
+        engine.live_entry_count(),
+        0,
+        "synced TLBI_S12_VMALL evicts vmid_ingress IOTLB entries"
+    );
 }
 
 #[test]
-fn stateful_iotlb_enforces_arena_base_binding_cfgi_ordering_subtree_coherence_queue_bounds_and_multi_epoch() {
+fn stateful_iotlb_enforces_arena_base_binding_cfgi_ordering_subtree_coherence_queue_bounds_and_multi_epoch(
+) {
     // 1. CommandQueueFull on both pending queue and synced window (`MAX_CMDS = 2`):
     let mut tiny_q = SmmuIotlbEngine::<4, 2>::new();
     tiny_q
@@ -2744,4 +2784,3 @@ fn stateful_iotlb_enforces_arena_base_binding_cfgi_ordering_subtree_coherence_qu
         })
     );
 }
-

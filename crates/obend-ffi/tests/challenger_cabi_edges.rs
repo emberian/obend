@@ -6,9 +6,7 @@ use std::ptr;
 use std::thread;
 
 fn build_padded_obend_cell(value: usize, min_bytes: usize) -> Vec<u8> {
-    let mut text = format!(
-        "edition ObjectiveBend 1\ndef cellValue() -> Nat:\n  {value}n\n"
-    );
+    let mut text = format!("edition ObjectiveBend 1\ndef cellValue() -> Nat:\n  {value}n\n");
     while text.len() < min_bytes {
         let pad_len = (min_bytes - text.len()).min(120);
         text.push('#');
@@ -73,7 +71,9 @@ fn test_cabi_truncated_receipts() {
     assert!(!session.verify_receipt(&[0xDD; 32]).unwrap());
     assert!(!session.verify_receipt(&[0xEE; 128]).unwrap());
 
-    let tid = session.propose_turn(b"receipt_payload").expect("propose_turn");
+    let tid = session
+        .propose_turn(b"receipt_payload")
+        .expect("propose_turn");
     assert!(!session.verify_receipt(&tid).unwrap());
     let committed = session
         .commit_payload(b"receipt_payload")
@@ -106,7 +106,13 @@ fn test_cabi_lowlevel_null_pointer_rejection() {
         let mut out_len = 0usize;
 
         assert_eq!(
-            sys::obend_eval_cell(ptr::null_mut(), b"abc".as_ptr(), 3, &mut out_ptr, &mut out_len),
+            sys::obend_eval_cell(
+                ptr::null_mut(),
+                b"abc".as_ptr(),
+                3,
+                &mut out_ptr,
+                &mut out_len
+            ),
             -1
         );
         assert_eq!(

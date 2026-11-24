@@ -90,11 +90,11 @@ pub struct OspcDpiReq {
     pub tile0_cam_wdata: u64, // 64 bits
     pub tile0_cam_qtag: u64,  // 64 bits
     // Tile 1 (`tile1_discrtree_lut`)
-    pub tile1_step_en: u8,     // 1 bit (< 2)
-    pub tile1_sym_tag: u8,     // 6 bits (< 64)
-    pub tile1_lut_we: u8,      // 1 bit (< 2)
-    pub tile1_lut_waddr: u16,  // 12 bits (< 4096)
-    pub tile1_lut_wdata: u64,  // 64 bits
+    pub tile1_step_en: u8,    // 1 bit (< 2)
+    pub tile1_sym_tag: u8,    // 6 bits (< 64)
+    pub tile1_lut_we: u8,     // 1 bit (< 2)
+    pub tile1_lut_waddr: u16, // 12 bits (< 4096)
+    pub tile1_lut_wdata: u64, // 64 bits
     // Tile 2 (`tile2_deltanet_redex`)
     pub tile2_redex_en: u8,    // 1 bit (< 2)
     pub tile2_peer_word: u64,  // 64 bits
@@ -120,11 +120,11 @@ pub struct OspcDpiResp {
     pub tile0_cam_hit: u8,    // 1 bit
     pub tile1_trie_state: u8, // 6 bits (< 64)
     pub tile1_logup_hits: u32,
-    pub tile1_hit_valid: u8,  // 1 bit
+    pub tile1_hit_valid: u8,   // 1 bit
     pub tile2_redex_valid: u8, // 1 bit
     pub tile2_redex_count: u32,
-    pub tile2_linear_ok: u8,  // 1 bit
-    pub tile3_conflict: u8,   // 1 bit
+    pub tile2_linear_ok: u8, // 1 bit
+    pub tile3_conflict: u8,  // 1 bit
     pub tile3_assign_pos: u32,
     pub tile3_assign_neg: u32,
     pub receipt_limb0: u64,
@@ -465,7 +465,9 @@ impl Ospc4TileHardwareSim {
         ];
         for (idx, &b) in OSPC_HW_DPI_DOMAIN.as_bytes().iter().enumerate() {
             let lane = idx & 3;
-            h[lane] = h[lane].wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(b as u64);
+            h[lane] = h[lane]
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .wrapping_add(b as u64);
             h[lane] ^= h[(lane + 1) & 3].rotate_right(23);
         }
         for i in 0..4 {
@@ -490,7 +492,11 @@ impl Ospc4TileHardwareSim {
         let entails_lo = (self.face_lo64 & !req.tile0_in_lo64) == 0;
         let entails_hi = (self.face_hi17 & (req.tile0_in_hi17 ^ 0x1FFFF)) == 0;
         let tile0_entails: u8 = if entails_lo && entails_hi { 1 } else { 0 };
-        let tile0_cam_hit: u8 = if self.cam_q == req.tile0_cam_qtag { 1 } else { 0 };
+        let tile0_cam_hit: u8 = if self.cam_q == req.tile0_cam_qtag {
+            1
+        } else {
+            0
+        };
 
         let t1_entry_valid: u8 = if self.trie_q > 0 { 1 } else { 0 };
         let tile1_hit_valid: u8 = req.tile1_step_en & t1_entry_valid;
@@ -528,8 +534,14 @@ impl Ospc4TileHardwareSim {
             (0u64, 0u32)
         } else {
             match req.tile0_op_sel {
-                1 => (self.face_lo64 & req.tile0_in_lo64, self.face_hi17 & req.tile0_in_hi17),
-                2 => (self.face_lo64 | req.tile0_in_lo64, self.face_hi17 | req.tile0_in_hi17),
+                1 => (
+                    self.face_lo64 & req.tile0_in_lo64,
+                    self.face_hi17 & req.tile0_in_hi17,
+                ),
+                2 => (
+                    self.face_lo64 | req.tile0_in_lo64,
+                    self.face_hi17 | req.tile0_in_hi17,
+                ),
                 3 => (req.tile0_in_lo64, req.tile0_in_hi17),
                 _ => (self.face_lo64, self.face_hi17),
             }
@@ -595,7 +607,12 @@ impl Ospc4TileHardwareSim {
             } else {
                 self.assign_neg
             };
-            let cf = self.conflict_latched | (if req.tile3_step_en == 1 && is_conflict { 1 } else { 0 });
+            let cf = self.conflict_latched
+                | (if req.tile3_step_en == 1 && is_conflict {
+                    1
+                } else {
+                    0
+                });
             (ap, an, cf)
         };
         let c_addr = req.tile3_clause_addr as usize;
@@ -648,7 +665,11 @@ impl Ospc4TileHardwareSim {
     }
 
     /// Serve a length-framed request/response stream over arbitrary `Read`/`Write` pipes until EOF.
-    pub fn serve_stream<R: Read, W: Write>(&mut self, reader: &mut R, writer: &mut W) -> io::Result<usize> {
+    pub fn serve_stream<R: Read, W: Write>(
+        &mut self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> io::Result<usize> {
         let mut served = 0usize;
         let mut req_buf = [0u8; ODPI_REQ_FRAME_LEN];
         loop {
@@ -783,11 +804,17 @@ mod tests {
         let mut bad_dom_req = sample_req(0);
         bad_dom_req.domain = ClockDomain::FabricCfg;
         let raw_bad_dom = encode_req(&bad_dom_req).unwrap();
-        assert_eq!(sim.step_frame(&raw_bad_dom), Err(OspcDpiError::DomainViolation));
+        assert_eq!(
+            sim.step_frame(&raw_bad_dom),
+            Err(OspcDpiError::DomainViolation)
+        );
 
         // Wrong sequence number (`seq_no = 5 != 0`) refused
         let raw_bad_seq = encode_req(&sample_req(5)).unwrap();
-        assert_eq!(sim.step_frame(&raw_bad_seq), Err(OspcDpiError::SequenceMismatch));
+        assert_eq!(
+            sim.step_frame(&raw_bad_seq),
+            Err(OspcDpiError::SequenceMismatch)
+        );
 
         // DeltaNet linearity violation (`redex_en = 1`, `lin_pair = 0`) refused
         let mut bad_lin = sample_req(0);
@@ -839,7 +866,9 @@ mod tests {
         let mut sim = Ospc4TileHardwareSim::new();
         let mut cursor = std::io::Cursor::new(wire_in);
         let mut wire_out = Vec::new();
-        let served = sim.serve_stream(&mut cursor, &mut wire_out).expect("stream succeeds");
+        let served = sim
+            .serve_stream(&mut cursor, &mut wire_out)
+            .expect("stream succeeds");
         assert_eq!(served, 2);
         assert_eq!(wire_out.len(), 2 * ODPI_RESP_FRAME_LEN);
 
@@ -853,7 +882,10 @@ mod tests {
         let r1 = decode_resp(&wire_out[ODPI_RESP_FRAME_LEN..]).unwrap();
         assert_eq!(r1.seq_no, 1);
         assert_eq!(r1.cycle_count, 2);
-        assert_eq!(r1.tile0_face_lo64, 0x0123_4567_89AB_CDEF & 0x0000_FFFF_0000_FFFF);
+        assert_eq!(
+            r1.tile0_face_lo64,
+            0x0123_4567_89AB_CDEF & 0x0000_FFFF_0000_FFFF
+        );
         assert_eq!(r1.tile0_face_hi17, 0x1_5A5A & 0x0_0F0F);
         assert_eq!(r1.tile0_cam_hit, 1);
         assert_eq!(r1.tile2_redex_valid, 1);

@@ -70,9 +70,8 @@ const MASK51: u64 = (1u64 << 51) - 1;
 
 /// Group order $\ell = 2^{252} + 27742317777372353535851937790883648493$ (little-endian bytes).
 pub const ED25519_L: [u8; 32] = [
-    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
-    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x10,
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -432,8 +431,7 @@ impl GeP3 {
     }
 
     fn eq_proj(self, rhs: Self) -> bool {
-        self.x.mul(rhs.z).eq_ct(rhs.x.mul(self.z))
-            && self.y.mul(rhs.z).eq_ct(rhs.y.mul(self.z))
+        self.x.mul(rhs.z).eq_ct(rhs.x.mul(self.z)) && self.y.mul(rhs.z).eq_ct(rhs.y.mul(self.z))
     }
 
     /// Returns `true` iff $P$ lies in the 8-torsion subgroup ($[8]P = \mathcal{O}$).
@@ -726,7 +724,9 @@ fn decode_xz_varint(buf: &[u8], pos: &mut usize) -> Result<u64, SpkError> {
         val |= u64::from(b & 0x7F) << (i * 7);
         if (b & 0x80) == 0 {
             if val > (i64::MAX as u64) {
-                return Err(SpkError::Decompress("xz varint exceeds 63-bit bound".into()));
+                return Err(SpkError::Decompress(
+                    "xz varint exceeds 63-bit bound".into(),
+                ));
             }
             return Ok(val);
         }
@@ -802,7 +802,9 @@ struct RangeDecoder<'a> {
 impl<'a> RangeDecoder<'a> {
     fn new(buf: &'a [u8]) -> Result<Self, SpkError> {
         if buf.len() < 5 || buf[0] != 0x00 {
-            return Err(SpkError::Decompress("invalid LZMA2 range coder init".into()));
+            return Err(SpkError::Decompress(
+                "invalid LZMA2 range coder init".into(),
+            ));
         }
         let code = u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]);
         Ok(Self {
@@ -1011,15 +1013,17 @@ impl Lzma2State {
                 if self.state >= 7 {
                     let dist = (self.reps[0] as usize) + 1;
                     if dist > rel_pos || dist > dict_limit {
-                        return Err(SpkError::Decompress("LZMA2 matched literal distance OOB".into()));
+                        return Err(SpkError::Decompress(
+                            "LZMA2 matched literal distance OOB".into(),
+                        ));
                     }
                     let mut match_byte = out[out.len() - dist];
                     while symbol < 0x100 {
                         let match_bit = (match_byte >> 7) & 1;
                         match_byte <<= 1;
-                        let bit = rc.decode_bit(
-                            &mut probs[0x100 + ((match_bit as usize) << 8) + symbol],
-                        )? as usize;
+                        let bit = rc
+                            .decode_bit(&mut probs[0x100 + ((match_bit as usize) << 8) + symbol])?
+                            as usize;
                         symbol = (symbol << 1) | bit;
                         if bit != match_bit as usize {
                             while symbol < 0x100 {
@@ -1101,7 +1105,9 @@ impl Lzma2State {
                     || lookback > dict_limit
                     || out.len() + len > target_end
                 {
-                    return Err(SpkError::Decompress("LZMA2 match distance/length OOB".into()));
+                    return Err(SpkError::Decompress(
+                        "LZMA2 match distance/length OOB".into(),
+                    ));
                 }
                 for _ in 0..len {
                     let b = out[out.len() - lookback];
@@ -1111,7 +1117,9 @@ impl Lzma2State {
         }
         rc.normalize()?;
         if rc.code != 0 || rc.pos != pack.len() {
-            return Err(SpkError::Decompress("LZMA2 chunk trailing/corrupt range state".into()));
+            return Err(SpkError::Decompress(
+                "LZMA2 chunk trailing/corrupt range state".into(),
+            ));
         }
         Ok(())
     }
@@ -1185,7 +1193,9 @@ pub fn xz_decompress_bounded(input: &[u8], limit: usize) -> Result<Vec<u8>, SpkE
         let dict_prop = hdr[hpos];
         hpos += 1;
         if dict_prop > 40 || hdr[hpos..hdr_size - 4].iter().any(|&b| b != 0) {
-            return Err(SpkError::Decompress("invalid LZMA2 dictionary prop or header pad".into()));
+            return Err(SpkError::Decompress(
+                "invalid LZMA2 dictionary prop or header pad".into(),
+            ));
         }
         let dict_limit = if dict_prop == 40 {
             0xFFFF_FFFFusize
@@ -1208,7 +1218,9 @@ pub fn xz_decompress_bounded(input: &[u8], limit: usize) -> Result<Vec<u8>, SpkE
             }
             if ctrl == 0x01 || ctrl == 0x02 {
                 if ctrl == 0x02 && !lzma.dict_initialized {
-                    return Err(SpkError::Decompress("LZMA2 chunk missing initial dict reset".into()));
+                    return Err(SpkError::Decompress(
+                        "LZMA2 chunk missing initial dict reset".into(),
+                    ));
                 }
                 if ctrl == 0x01 {
                     lzma.dict_initialized = true;
@@ -1238,11 +1250,13 @@ pub fn xz_decompress_bounded(input: &[u8], limit: usize) -> Result<Vec<u8>, SpkE
                     lzma.dict_initialized = true;
                     lzma.dict_reset_pos = out.len();
                 } else if !lzma.dict_initialized {
-                    return Err(SpkError::Decompress("LZMA2 compressed chunk missing dict reset".into()));
+                    return Err(SpkError::Decompress(
+                        "LZMA2 compressed chunk missing dict reset".into(),
+                    ));
                 }
-                let hdr4 = input
-                    .get(pos..pos + 4)
-                    .ok_or_else(|| SpkError::Decompress("LZMA2 compressed header truncated".into()))?;
+                let hdr4 = input.get(pos..pos + 4).ok_or_else(|| {
+                    SpkError::Decompress("LZMA2 compressed header truncated".into())
+                })?;
                 pos += 4;
                 let unpack_size = (((ctrl & 0x1F) as usize) << 16)
                     + usize::from(u16::from_be_bytes([hdr4[0], hdr4[1]]))
@@ -1276,9 +1290,9 @@ pub fn xz_decompress_bounded(input: &[u8], limit: usize) -> Result<Vec<u8>, SpkE
                 } else if reset_mode == 1 {
                     lzma.reset_probs();
                 }
-                let pack_slice = input
-                    .get(pos..pos + pack_size)
-                    .ok_or_else(|| SpkError::Decompress("LZMA2 compressed payload truncated".into()))?;
+                let pack_slice = input.get(pos..pos + pack_size).ok_or_else(|| {
+                    SpkError::Decompress("LZMA2 compressed payload truncated".into())
+                })?;
                 pos += pack_size;
                 lzma.decode_compressed_chunk(pack_slice, unpack_size, &mut out, dict_limit)?;
             } else {
@@ -1292,10 +1306,14 @@ pub fn xz_decompress_bounded(input: &[u8], limit: usize) -> Result<Vec<u8>, SpkE
         let block_out = &out[out_block_start..];
         let uncomp_size = block_out.len() as u64;
         if declared_comp.is_some_and(|dc| dc != comp_size) {
-            return Err(SpkError::Decompress("xz block compressed size mismatch".into()));
+            return Err(SpkError::Decompress(
+                "xz block compressed size mismatch".into(),
+            ));
         }
         if declared_uncomp.is_some_and(|du| du != uncomp_size) {
-            return Err(SpkError::Decompress("xz block uncompressed size mismatch".into()));
+            return Err(SpkError::Decompress(
+                "xz block uncompressed size mismatch".into(),
+            ));
         }
 
         while !(pos - block_start).is_multiple_of(4) {
@@ -1340,7 +1358,9 @@ pub fn xz_decompress_bounded(input: &[u8], limit: usize) -> Result<Vec<u8>, SpkE
     pos += 1;
     let num_records = decode_xz_varint(input, &mut pos)? as usize;
     if num_records != blocks.len() {
-        return Err(SpkError::Decompress("xz index record count mismatch".into()));
+        return Err(SpkError::Decompress(
+            "xz index record count mismatch".into(),
+        ));
     }
     for &(want_unpadded, want_uncomp) in &blocks {
         let got_unpadded = decode_xz_varint(input, &mut pos)?;
@@ -1376,7 +1396,9 @@ pub fn xz_decompress_bounded(input: &[u8], limit: usize) -> Result<Vec<u8>, SpkE
     let backward_size =
         (u32::from_le_bytes([footer[4], footer[5], footer[6], footer[7]]) as usize + 1) * 4;
     if backward_size != index_total || footer[8..10] != stream_flags {
-        return Err(SpkError::Decompress("xz footer backward_size/flags mismatch".into()));
+        return Err(SpkError::Decompress(
+            "xz footer backward_size/flags mismatch".into(),
+        ));
     }
     if pos != input.len() {
         return Err(SpkError::Decompress(
@@ -1679,7 +1701,10 @@ impl fmt::Display for SpkError {
             SpkError::TooLarge => write!(f, ".spk exceeds selected decompressed size limit"),
             SpkError::Truncated => write!(f, ".spk payload truncated"),
             SpkError::BadSignature => {
-                write!(f, ".spk signature failed strict SHA-512 + Ed25519 verification")
+                write!(
+                    f,
+                    ".spk signature failed strict SHA-512 + Ed25519 verification"
+                )
             }
             SpkError::Archive(e) => write!(f, ".spk archive decode failed: {e}"),
             SpkError::TrailingBytes { count } => {
@@ -1801,8 +1826,7 @@ impl SpkBuilder {
     }
 
     pub fn bridge_config_capnp(mut self, bytes: Vec<u8>) -> Self {
-        self.files
-            .push(SpkFile::regular(BRIDGE_CONFIG_PATH, bytes));
+        self.files.push(SpkFile::regular(BRIDGE_CONFIG_PATH, bytes));
         self
     }
 
@@ -1936,7 +1960,10 @@ pub enum ManifestError {
     InvalidPermissionName(String),
     DuplicatePermissionName(String),
     /// Role attempts to grant an undeclared permission name or out-of-range bit index (`manifest.rs:287` escalation guard!).
-    RolePermissionEscalation { role: String, detail: String },
+    RolePermissionEscalation {
+        role: String,
+        detail: String,
+    },
     AmbiguousDefaultRole,
     InvalidApiPath(String),
     UnknownRole(String),
@@ -2008,9 +2035,13 @@ fn validate_canonical_api_path(path: &str) -> Result<Option<String>, ManifestErr
 /// Validate and normalize a [`BridgeConfig`] (for both JSON and Cap'n Proto decode paths),
 /// rejecting duplicate/header-unsafe permission names, out-of-bounds or undeclared role grants,
 /// and multiple default roles.
-fn normalize_and_validate_bridge_config(mut cfg: BridgeConfig) -> Result<BridgeConfig, ManifestError> {
+fn normalize_and_validate_bridge_config(
+    mut cfg: BridgeConfig,
+) -> Result<BridgeConfig, ManifestError> {
     if cfg.permissions.len() > 4096 || cfg.roles.len() > 4096 {
-        return Err(ManifestError::Malformed("ViewInfo exceeds 4096 entry bound".into()));
+        return Err(ManifestError::Malformed(
+            "ViewInfo exceeds 4096 entry bound".into(),
+        ));
     }
     let mut seen = BTreeSet::new();
     for p in &cfg.permissions {
@@ -2421,7 +2452,7 @@ impl SpkManifest {
 mod tests {
     use super::*;
     use crate::capnp_wire::{
-        WireBridgeConfig, WirePermissionDef, WireRoleDef, write_bridge_config, write_manifest_capnp,
+        write_bridge_config, write_manifest_capnp, WireBridgeConfig, WirePermissionDef, WireRoleDef,
     };
 
     fn hex_decode(h: &str) -> Vec<u8> {
@@ -2445,14 +2476,12 @@ mod tests {
         let key1 = Ed25519SigningKey::from_bytes(sk1.as_slice().try_into().unwrap());
         assert_eq!(&key1.verifying_key_bytes()[..], &pk1[..]);
         assert_eq!(&key1.sign(b"")[..], &sig1[..]);
-        assert!(
-            ed25519_verify_strict(
-                pk1.as_slice().try_into().unwrap(),
-                b"",
-                sig1.as_slice().try_into().unwrap()
-            )
-            .is_ok()
-        );
+        assert!(ed25519_verify_strict(
+            pk1.as_slice().try_into().unwrap(),
+            b"",
+            sig1.as_slice().try_into().unwrap()
+        )
+        .is_ok());
 
         let sk2 = hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb");
         let pk2 = hex_decode("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c");
@@ -2460,14 +2489,12 @@ mod tests {
         let key2 = Ed25519SigningKey::from_bytes(sk2.as_slice().try_into().unwrap());
         assert_eq!(&key2.verifying_key_bytes()[..], &pk2[..]);
         assert_eq!(&key2.sign(&[0x72])[..], &sig2[..]);
-        assert!(
-            ed25519_verify_strict(
-                pk2.as_slice().try_into().unwrap(),
-                &[0x72],
-                sig2.as_slice().try_into().unwrap()
-            )
-            .is_ok()
-        );
+        assert!(ed25519_verify_strict(
+            pk2.as_slice().try_into().unwrap(),
+            &[0x72],
+            sig2.as_slice().try_into().unwrap()
+        )
+        .is_ok());
 
         // Small-order identity key `[1, 0, ..., 0]` universal forgery MUST fail `verify_strict`!
         let mut identity = [0u8; 32];

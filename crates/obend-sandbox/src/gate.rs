@@ -240,7 +240,10 @@ mod tests {
             "unit space",
             "unit;rm",
         ] {
-            assert!(LaunchGate::try_new(&tmp, bad).is_err(), "must reject '{bad}'");
+            assert!(
+                LaunchGate::try_new(&tmp, bad).is_err(),
+                "must reject '{bad}'"
+            );
             let g = LaunchGate::new(&tmp, bad);
             assert!(g.init().is_err());
             assert!(g.status().is_err());
@@ -273,7 +276,10 @@ mod tests {
             .into_iter()
             .map(|h| usize::from(h.join().unwrap()))
             .sum();
-        assert_eq!(wins, 1, "TOCTOU race check: exactly 1 contender may transition Armed -> Started");
+        assert_eq!(
+            wins, 1,
+            "TOCTOU race check: exactly 1 contender may transition Armed -> Started"
+        );
         assert_eq!(gate.status().unwrap(), GateStatus::Started);
         let _ = fs::remove_dir_all(&tmp);
     }

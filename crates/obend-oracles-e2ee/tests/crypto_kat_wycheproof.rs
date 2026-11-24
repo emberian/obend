@@ -49,7 +49,10 @@ fn run_wycheproof(text: &str, alg: SignatureAlgorithm, raw: bool) -> Tally {
                         tally.valid_ok += 1;
                     }
                     "invalid" => {
-                        assert!(!ok, "wycheproof tcId {tc} ({alg:?}) INVALID signature accepted");
+                        assert!(
+                            !ok,
+                            "wycheproof tcId {tc} ({alg:?}) INVALID signature accepted"
+                        );
                         tally.invalid_rejected += 1;
                     }
                     _ => tally.acceptable += 1,
@@ -66,19 +69,79 @@ macro_rules! wycheproof_test {
         #[test]
         fn $name() {
             let t = run_wycheproof(include_str!(concat!("vectors/", $file)), $alg, $raw);
-            assert_eq!((t.valid_ok, t.invalid_rejected), ($valid, $invalid), "{t:?}");
+            assert_eq!(
+                (t.valid_ok, t.invalid_rejected),
+                ($valid, $invalid),
+                "{t:?}"
+            );
         }
     };
 }
 
-wycheproof_test!(wycheproof_ecdsa_p256_sha256_der, "wycheproof_ecdsa_secp256r1_sha256.txt", SignatureAlgorithm::EcdsaP256Sha256, false, 174, 310);
-wycheproof_test!(wycheproof_ecdsa_p384_sha384_der, "wycheproof_ecdsa_secp384r1_sha384.txt", SignatureAlgorithm::EcdsaP384Sha384, false, 194, 310);
-wycheproof_test!(wycheproof_ecdsa_p256_sha256_p1363, "wycheproof_ecdsa_secp256r1_sha256_p1363.txt", SignatureAlgorithm::EcdsaP256Sha256, true, 173, 89);
-wycheproof_test!(wycheproof_ecdsa_p384_sha384_p1363, "wycheproof_ecdsa_secp384r1_sha384_p1363.txt", SignatureAlgorithm::EcdsaP384Sha384, true, 193, 87);
-wycheproof_test!(wycheproof_ed25519, "wycheproof_ed25519.txt", SignatureAlgorithm::Ed25519, false, 117, 64);
-wycheproof_test!(wycheproof_rsa_pkcs1_2048_sha256, "wycheproof_rsa_signature_2048_sha256.txt", SignatureAlgorithm::RsaPkcs1Sha256, false, 9, 249);
-wycheproof_test!(wycheproof_rsa_pss_2048_sha256_s32, "wycheproof_rsa_pss_2048_sha256_mgf1_32.txt", SignatureAlgorithm::RsaPssSha256, false, 63, 45);
-wycheproof_test!(wycheproof_rsa_pss_4096_sha384_s48, "wycheproof_rsa_pss_4096_sha384_mgf1_48.txt", SignatureAlgorithm::RsaPssSha384, false, 95, 46);
+wycheproof_test!(
+    wycheproof_ecdsa_p256_sha256_der,
+    "wycheproof_ecdsa_secp256r1_sha256.txt",
+    SignatureAlgorithm::EcdsaP256Sha256,
+    false,
+    174,
+    310
+);
+wycheproof_test!(
+    wycheproof_ecdsa_p384_sha384_der,
+    "wycheproof_ecdsa_secp384r1_sha384.txt",
+    SignatureAlgorithm::EcdsaP384Sha384,
+    false,
+    194,
+    310
+);
+wycheproof_test!(
+    wycheproof_ecdsa_p256_sha256_p1363,
+    "wycheproof_ecdsa_secp256r1_sha256_p1363.txt",
+    SignatureAlgorithm::EcdsaP256Sha256,
+    true,
+    173,
+    89
+);
+wycheproof_test!(
+    wycheproof_ecdsa_p384_sha384_p1363,
+    "wycheproof_ecdsa_secp384r1_sha384_p1363.txt",
+    SignatureAlgorithm::EcdsaP384Sha384,
+    true,
+    193,
+    87
+);
+wycheproof_test!(
+    wycheproof_ed25519,
+    "wycheproof_ed25519.txt",
+    SignatureAlgorithm::Ed25519,
+    false,
+    117,
+    64
+);
+wycheproof_test!(
+    wycheproof_rsa_pkcs1_2048_sha256,
+    "wycheproof_rsa_signature_2048_sha256.txt",
+    SignatureAlgorithm::RsaPkcs1Sha256,
+    false,
+    9,
+    249
+);
+wycheproof_test!(
+    wycheproof_rsa_pss_2048_sha256_s32,
+    "wycheproof_rsa_pss_2048_sha256_mgf1_32.txt",
+    SignatureAlgorithm::RsaPssSha256,
+    false,
+    63,
+    45
+);
+wycheproof_test!(
+    wycheproof_rsa_pss_4096_sha384_s48,
+    "wycheproof_rsa_pss_4096_sha384_mgf1_48.txt",
+    SignatureAlgorithm::RsaPssSha384,
+    false,
+    95,
+    46
+);
 
 /// pyca/cryptography (OpenSSL) ECDSA signatures with random nonces: verify-only KATs, plus
 /// RFC 6979 deterministic signatures that our fixture signer must reproduce byte-for-byte.

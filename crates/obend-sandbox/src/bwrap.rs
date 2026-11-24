@@ -3,12 +3,12 @@ use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::grain::{ReproducibilityTier, sha256};
-use crate::policy::{EnvAllowlistPolicy, parse_egress_grant};
+use crate::grain::{sha256, ReproducibilityTier};
+use crate::policy::{parse_egress_grant, EnvAllowlistPolicy};
 
 /// Default maximum combined stdout/stderr capture size (4 MiB) for a sandboxed child process.
 pub const DEFAULT_MAX_PROCESS_OUTPUT_BYTES: usize = 4 * 1024 * 1024;

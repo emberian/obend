@@ -9,7 +9,7 @@
 
 use std::sync::OnceLock;
 
-use crate::bigint::{limbs_from_be, limbs_ge, limbs_from_hex, Limbs, Mont};
+use crate::bigint::{limbs_from_be, limbs_from_hex, limbs_ge, Limbs, Mont};
 use crate::sha512::Sha512;
 
 type Fe = Limbs<4>;
@@ -36,9 +36,8 @@ struct Point {
 fn ctx() -> &'static Ctx {
     static CTX: OnceLock<Ctx> = OnceLock::new();
     CTX.get_or_init(|| {
-        let f = Mont::<4>::from_hex(
-            "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed",
-        );
+        let f =
+            Mont::<4>::from_hex("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
         let l_limbs =
             limbs_from_hex::<4>("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed");
         let l = Mont::<4>::new(l_limbs).expect("odd group order");
@@ -46,14 +45,12 @@ fn ctx() -> &'static Ctx {
         let d = f.mul(&f.neg(&f.from_u64(121_665)), &f.inv(&f.from_u64(121_666)));
         let d2 = f.double(&d);
         // sqrt(-1) = 2^((p-1)/4), (p-1)/4 = 2^253 - 5.
-        let e14 = limbs_from_hex::<4>(
-            "1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffb",
-        );
+        let e14 =
+            limbs_from_hex::<4>("1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffb");
         let sqrt_m1 = f.pow_limbs(&f.from_u64(2), &e14);
         // (p-5)/8 = 2^252 - 3.
-        let p58 = limbs_from_hex::<4>(
-            "0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd",
-        );
+        let p58 =
+            limbs_from_hex::<4>("0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd");
         let mut c = Ctx {
             f,
             l,
@@ -322,7 +319,9 @@ mod tests {
         let sig = a64(&h(sig));
         let _ = seed;
         // Non-canonical S + ℓ (malleability) is refused.
-        let l_le = reversed(&h("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed"));
+        let l_le = reversed(&h(
+            "1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed",
+        ));
         let mut s_plus_l = [0u8; 64];
         s_plus_l[..32].copy_from_slice(&sig[..32]);
         let mut carry = 0u16;

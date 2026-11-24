@@ -214,10 +214,10 @@ impl<const N: usize> Mont<N> {
     pub fn mul(&self, a: &Limbs<N>, b: &Limbs<N>) -> Limbs<N> {
         let mut t = [0u64; N];
         let mut t_n = 0u64;
-        for i in 0..N {
+        for &b_limb in b {
             let mut c = 0u64;
             for j in 0..N {
-                let (lo, hi) = mac(t[j], a[j], b[i], c);
+                let (lo, hi) = mac(t[j], a[j], b_limb, c);
                 t[j] = lo;
                 c = hi;
             }
@@ -313,8 +313,8 @@ impl<const N: usize> Mont<N> {
         let pad = (4 - bytes.len() % 4) % 4;
         let mut buf = vec![0u8; pad];
         buf.extend_from_slice(bytes);
-        for chunk in buf.chunks_exact(4) {
-            let d = u64::from(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        for chunk in buf.as_chunks::<4>().0 {
+            let d = u64::from(u32::from_be_bytes(*chunk));
             acc = self.add(&self.mul(&acc, &base), &self.from_u64(d));
         }
         acc
@@ -376,7 +376,8 @@ mod tests {
         let a = m.from_u64(123_456_789);
         let b = m.from_u64(987_654_321);
         let prod = m.from_mont(&m.mul(&a, &b));
-        assert_eq!(prod[0], (123_456_789u128 * 987_654_321u128 % ((1u128 << 61) - 1)) as u64);
+        // The product is below the modulus 2^61 - 1.
+        assert_eq!(prod[0], 123_456_789u64 * 987_654_321);
         let inv = m.inv(&a);
         assert_eq!(m.mul(&inv, &a), m.one());
         assert_eq!(m.add(&m.sub(&a, &b), &b), a);
@@ -385,7 +386,8 @@ mod tests {
 
     #[test]
     fn reduce_matches_strict_for_small_inputs() {
-        let m = Mont::<4>::from_hex("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff");
+        let m =
+            Mont::<4>::from_hex("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff");
         let bytes = [0x12u8, 0x34, 0x56, 0x78, 0x9a];
         assert_eq!(m.from_be_reduce(&bytes), m.from_be_strict(&bytes).unwrap());
         // p itself reduces to zero and is refused by the strict decoder.

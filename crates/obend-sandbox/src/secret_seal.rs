@@ -200,12 +200,8 @@ fn chacha20_block(key: &[u8; 32], counter: u32, nonce: &[u8; 12]) -> [u8; 64] {
     initial[2] = 0x7962_2d32;
     initial[3] = 0x6b20_6574;
     for i in 0..8 {
-        initial[4 + i] = u32::from_le_bytes([
-            key[4 * i],
-            key[4 * i + 1],
-            key[4 * i + 2],
-            key[4 * i + 3],
-        ]);
+        initial[4 + i] =
+            u32::from_le_bytes([key[4 * i], key[4 * i + 1], key[4 * i + 2], key[4 * i + 3]]);
     }
     initial[12] = counter;
     initial[13] = u32::from_le_bytes([nonce[0], nonce[1], nonce[2], nonce[3]]);
@@ -443,7 +439,9 @@ pub fn chacha20_poly1305_open(
     ciphertext_and_tag: &[u8],
 ) -> Result<Vec<u8>, SecretSealError> {
     if ciphertext_and_tag.len() < TAG_LEN {
-        return Err(SecretSealError::MalformedEnvelope("ciphertext shorter than Poly1305 tag"));
+        return Err(SecretSealError::MalformedEnvelope(
+            "ciphertext shorter than Poly1305 tag",
+        ));
     }
     let (ct, claimed_tag) = ciphertext_and_tag.split_at(ciphertext_and_tag.len() - TAG_LEN);
 
@@ -674,8 +672,8 @@ impl SlotBoundSecretStore {
                 labels: BTreeMap::new(),
             }
         };
-        let meta_bytes = serde_json::to_vec(&meta)
-            .map_err(|e| SecretSealError::Serialization(e.to_string()))?;
+        let meta_bytes =
+            serde_json::to_vec(&meta).map_err(|e| SecretSealError::Serialization(e.to_string()))?;
         self.atomic_write_0600(&meta_path, &meta_bytes)
     }
 
@@ -766,10 +764,8 @@ mod tests {
 
     #[test]
     fn wrong_slot_or_spliced_file_unseal_is_refused() {
-        let dir = std::env::temp_dir().join(format!(
-            "obend_secret_seal_test_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("obend_secret_seal_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let store = SlotBoundSecretStore::new(&dir, [0x42u8; 32]);
 
@@ -798,7 +794,10 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(store.get(&slot_b), Err(SecretSealError::AuthenticationFailed)),
+            matches!(
+                store.get(&slot_b),
+                Err(SecretSealError::AuthenticationFailed)
+            ),
             "swapping ciphertext across slots MUST fail AEAD slot-path AAD authentication!"
         );
 

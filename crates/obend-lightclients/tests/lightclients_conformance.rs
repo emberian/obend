@@ -20,17 +20,17 @@ use obend_lightclients::bls12_381::{
     G1Affine, G2Affine, DST_POP,
 };
 use obend_lightclients::{
-    compute_comet_block_id_hash, compute_eth_signing_root, compute_fork_digest,
-    compute_ics23_root, compute_sync_committee_root, compute_validator_set_hash,
-    cosmos_denom_asset_id, decode_bank_balance_kv, ed25519, encode_canonical_precommit_vote,
-    is_valid_merkle_branch, period_of_slot, sha256, sha256_pair, verify_comet_header_s11,
+    compute_comet_block_id_hash, compute_eth_signing_root, compute_fork_digest, compute_ics23_root,
+    compute_sync_committee_root, compute_validator_set_hash, cosmos_denom_asset_id,
+    decode_bank_balance_kv, ed25519, encode_canonical_precommit_vote, is_valid_merkle_branch,
+    period_of_slot, sha256, sha256_pair, verify_comet_header_s11,
     verify_cosmos_bank_balance_envelope, verify_eth_header_s11, BeaconBlockHeader,
-    CometAdvanceMode, CometBlockId, CometCommitSig, CometGateError, CometHeader,
-    CometHeaderUpdate, CometTrustAnchor, CometValidator, EnvelopeError, EthGateError,
-    EthHeaderUpdate, EthTrustAnchor, ExecutionPayloadHeader, Ics23ExistenceProof, Ics23InnerOp,
-    Ics23LeafOp, Ics23TwoLevelProof, BALANCES_PREFIX, BANK_STORE_KEY, COSMOS_CHAIN_TAG,
-    EXECUTION_PAYLOAD_DEPTH, EXECUTION_PAYLOAD_SUBTREE_INDEX, FINALIZED_ROOT_DEPTH_ELECTRA,
-    FINALIZED_ROOT_SUBTREE_INDEX, SECONDS_PER_SLOT, SYNC_COMMITTEE_BITS_BYTES, SYNC_COMMITTEE_SIZE,
+    CometAdvanceMode, CometBlockId, CometCommitSig, CometGateError, CometHeader, CometHeaderUpdate,
+    CometTrustAnchor, CometValidator, EnvelopeError, EthGateError, EthHeaderUpdate, EthTrustAnchor,
+    ExecutionPayloadHeader, Ics23ExistenceProof, Ics23InnerOp, Ics23LeafOp, Ics23TwoLevelProof,
+    BALANCES_PREFIX, BANK_STORE_KEY, COSMOS_CHAIN_TAG, EXECUTION_PAYLOAD_DEPTH,
+    EXECUTION_PAYLOAD_SUBTREE_INDEX, FINALIZED_ROOT_DEPTH_ELECTRA, FINALIZED_ROOT_SUBTREE_INDEX,
+    SECONDS_PER_SLOT, SYNC_COMMITTEE_BITS_BYTES, SYNC_COMMITTEE_SIZE,
 };
 
 fn build_merkle_root(leaf: &[u8; 32], branch: &[[u8; 32]], index: u64) -> [u8; 32] {
@@ -279,7 +279,8 @@ fn eth_electra_s11_real_bls_sync_aggregate_and_attacks() {
     let now = 1_780_000_120;
 
     assert_eq!(period_of_slot(u.signature_slot), 1800);
-    let v = verify_eth_header_s11(&anchor, &u, now).expect("real 397/512 BLS SyncAggregate accepts");
+    let v =
+        verify_eth_header_s11(&anchor, &u, now).expect("real 397/512 BLS SyncAggregate accepts");
     assert_eq!(v.chain_id(), 1);
     assert_eq!(v.finalized_slot(), 14_745_600);
     assert_eq!(
@@ -429,7 +430,11 @@ fn bls12_381_rfc9380_ethereum_kat_and_rogue_subgroup_refusals() {
     let mut inf_g2 = [0u8; 96];
     inf_g2[0] = 0xc0;
     assert!(g2_from_compressed(&inf_g2).unwrap().is_identity());
-    assert!(!fast_aggregate_verify_bytes(&[pk1, pk2, pk3], &msg, &inf_g2));
+    assert!(!fast_aggregate_verify_bytes(
+        &[pk1, pk2, pk3],
+        &msg,
+        &inf_g2
+    ));
 
     // Official Ethereum `deserialization_fails_not_in_G1` & `deserialization_fails_not_in_G2` vectors.
     let non_subgroup_g1: [u8; 48] = unhex(
@@ -451,7 +456,11 @@ fn bls12_381_rfc9380_ethereum_kat_and_rogue_subgroup_refusals() {
         g2_from_compressed(&non_subgroup_g2),
         Err(BlsError::NotInSubgroup)
     );
-    assert!(!fast_aggregate_verify_bytes(&[pk1, pk2, pk3], &msg, &non_subgroup_g2));
+    assert!(!fast_aggregate_verify_bytes(
+        &[pk1, pk2, pk3],
+        &msg,
+        &non_subgroup_g2
+    ));
 
     // Rogue-key cancellation (`PK` paired with `-PK` so `agg_pk == O`) refused.
     let g1 = G1Affine::generator();
@@ -487,10 +496,14 @@ fn cosmoshub_4_mainnet_height_31989761_header_and_ed25519_vote_kat() {
         last_commit_hash: unhex("a147d9d2d13266c526558862f6f7be91570f794f662f12210c00ea790b2d2871"),
         data_hash: unhex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
         validators_hash: h32("76cc8f2f5536f372a50b2d705b0d23e91c2068df11972389bcc50ba2b5e4a3ac"),
-        next_validators_hash: h32("76cc8f2f5536f372a50b2d705b0d23e91c2068df11972389bcc50ba2b5e4a3ac"),
+        next_validators_hash: h32(
+            "76cc8f2f5536f372a50b2d705b0d23e91c2068df11972389bcc50ba2b5e4a3ac",
+        ),
         consensus_hash: h32("20ca5e3f42e07a0cdb7bd986eff1947a23fc27ff47204303e082bc44bb348e0b"),
         app_hash: h32("9dd53e05c32bba32d5f0c0d16fe4384dcdaca28be4d6e372818c0e9b54dbe37f"),
-        last_results_hash: unhex("6c47cc6495fedefffa1df1c7ce451426e1db91e8fec6773f0d69767ce2fde60c"),
+        last_results_hash: unhex(
+            "6c47cc6495fedefffa1df1c7ce451426e1db91e8fec6773f0d69767ce2fde60c",
+        ),
         evidence_hash: unhex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
         proposer_address: h20("56b2f053ad136642d3fc9098fb2dd01454f396d5"),
     };
@@ -518,7 +531,10 @@ fn cosmoshub_4_mainnet_height_31989761_header_and_ed25519_vote_kat() {
     assert!(ed25519::verify_strict(&val0_pk, &vote_bytes, &sig0));
 }
 
-fn make_comet_validators(tag: &[u8], powers: &[u64]) -> (Vec<[u8; 32]>, Vec<CometValidator>, [u8; 32]) {
+fn make_comet_validators(
+    tag: &[u8],
+    powers: &[u64],
+) -> (Vec<[u8; 32]>, Vec<CometValidator>, [u8; 32]) {
     let mut seeds = Vec::with_capacity(powers.len());
     let mut vals = Vec::with_capacity(powers.len());
     for (i, &power) in powers.iter().enumerate() {
@@ -831,7 +847,11 @@ fn comet_s11_real_ed25519_quorum_and_two_level_ics23_sealed_holding() {
         Err(CometGateError::TrustedStateExpired)
     );
     assert_eq!(
-        decode_bank_balance_kv(BANK_STORE_KEY, &[0x00, 5, b'u', b'a', b't', b'o', b'm'], b"10"),
+        decode_bank_balance_kv(
+            BANK_STORE_KEY,
+            &[0x00, 5, b'u', b'a', b't', b'o', b'm'],
+            b"10"
+        ),
         Err(EnvelopeError::NotBalanceKey)
     );
 }

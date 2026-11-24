@@ -9,7 +9,8 @@ fn test_session_lifecycle_elaborates_obend_and_refuses_non_obend() {
     // Arbitrary non-.obend bytes fail closed rather than echoing.
     assert!(session.eval_cell(b"42").is_err());
 
-    let obend_src = b"edition ObjectiveBend 1\nlaw bounded_x: new.x <= 64\ndef answer() -> Nat:\n  42n\n";
+    let obend_src =
+        b"edition ObjectiveBend 1\nlaw bounded_x: new.x <= 64\ndef answer() -> Nat:\n  42n\n";
     let out = session.eval_cell(obend_src).expect("elaborate .obend cell");
     let parsed: Value = serde_json::from_slice(&out).expect("JSON summary");
     assert_eq!(parsed["schema"], "obend.ffi.elaboration.v1");
@@ -22,8 +23,11 @@ fn test_replay_world_turn_proposal_and_commit() {
     let mut session = ObendSession::new().unwrap();
 
     // Open a page in `Obend.Vault.Replay.World` via a genuine `Replay.Turn` JSON payload.
-    let open_turn = br##"{"turn":"open","files":[["note.md","# Note\n\ncount: 1\n"]],"environment":null}"##;
-    let tid = session.propose_turn(open_turn).expect("propose Replay open turn");
+    let open_turn =
+        br##"{"turn":"open","files":[["note.md","# Note\n\ncount: 1\n"]],"environment":null}"##;
+    let tid = session
+        .propose_turn(open_turn)
+        .expect("propose Replay open turn");
     assert_eq!(tid.len(), 32);
     session.commit_turn(&tid).expect("commit Replay open turn");
 
@@ -33,8 +37,12 @@ fn test_replay_world_turn_proposal_and_commit() {
 
     // Writing to the opened page succeeds and steps `Replay.World`.
     let good_write = br##"{"turn":"write","page":"note.md","text":"# Note\n\ncount: 2\n"}"##;
-    let tid2 = session.propose_turn(good_write).expect("propose Replay write turn");
-    session.commit_turn(&tid2).expect("commit Replay write turn");
+    let tid2 = session
+        .propose_turn(good_write)
+        .expect("propose Replay write turn");
+    session
+        .commit_turn(&tid2)
+        .expect("commit Replay write turn");
 }
 
 #[test]

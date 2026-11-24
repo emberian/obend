@@ -38,8 +38,7 @@ fn main() {
     let lib_dylib2 = lake_lib_dir.join("libObend.dylib");
 
     let has_libobend = lib_so.exists() || lib_dylib.exists();
-    let has_native =
-        has_libobend || lib_a.exists() || lib_so2.exists() || lib_dylib2.exists();
+    let has_native = has_libobend || lib_a.exists() || lib_so2.exists() || lib_dylib2.exists();
 
     if !has_native {
         if !allow_stub {
@@ -78,7 +77,10 @@ fn main() {
                     .output()
             })
             .expect("Failed to locate Lean sysroot via lean --print-prefix");
-        String::from_utf8(out.stdout).expect("Valid UTF8").trim().to_string()
+        String::from_utf8(out.stdout)
+            .expect("Valid UTF8")
+            .trim()
+            .to_string()
     });
 
     let lean_include = std::path::PathBuf::from(&lean_sysroot).join("include");

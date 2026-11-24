@@ -39,12 +39,12 @@ use obend_oracles_e2ee::{
     FixtureCertSpec, FixtureNitroDocFields, FixtureSigner, FixtureSnpReportFields,
     FixtureTdxQuoteFields, GpuArch, IntelTdxAttestation, IntelTdxMeasurementPin, IntelTdxPolicy,
     KeyUsage, NvidiaGpuAttestation, NvidiaGpuPolicy, NvidiaOcspResponse, NvidiaOcspStatus,
-    NvidiaRimManifest, OracleError, PinnedNotaryEntry, PinnedNotaryRegistry,
-    QpProblemBindingError, SddFactorEdge, SddFactorError, SddFactorWitness, SignatureAlgorithm,
-    SubjectPublicKey, TcbPosture, TeeError, TeeVendor, TlsnTranscriptEnvelope,
-    KEY_USAGE_CRL_SIGN, KEY_USAGE_DIGITAL_SIGNATURE, KEY_USAGE_KEY_CERT_SIGN,
-    ML_KEM_768_PUBKEY_LEN, NO_SERVICE_TD, OPAQUE_CHIP_SKU, OPAQUE_FWID, OPAQUE_PROJECT,
-    OPAQUE_PROJECT_SKU, QP_CERT_EXACT_SCALE, SNP_REPORT_LEN,
+    NvidiaRimManifest, OracleError, PinnedNotaryEntry, PinnedNotaryRegistry, QpProblemBindingError,
+    SddFactorEdge, SddFactorError, SddFactorWitness, SignatureAlgorithm, SubjectPublicKey,
+    TcbPosture, TeeError, TeeVendor, TlsnTranscriptEnvelope, KEY_USAGE_CRL_SIGN,
+    KEY_USAGE_DIGITAL_SIGNATURE, KEY_USAGE_KEY_CERT_SIGN, ML_KEM_768_PUBKEY_LEN, NO_SERVICE_TD,
+    OPAQUE_CHIP_SKU, OPAQUE_FWID, OPAQUE_PROJECT, OPAQUE_PROJECT_SKU, QP_CERT_EXACT_SCALE,
+    SNP_REPORT_LEN,
 };
 
 const NOW: u64 = 1_780_000_000;
@@ -72,16 +72,25 @@ fn base64_encode_std(input: &[u8]) -> String {
     out
 }
 
-fn issue_ca_cert(
-    subject_cn: &str,
-    issuer_cn: &str,
+/// Who a fixture certificate names and who signs it.
+struct CertIdentity<'a> {
+    subject_cn: &'a str,
+    issuer_cn: &'a str,
     serial: u8,
-    path_len: Option<u8>,
-    crl: bool,
-    subject_signer: &FixtureSigner,
-    issuer_signer: &FixtureSigner,
+    subject_signer: &'a FixtureSigner,
+    issuer_signer: &'a FixtureSigner,
     sig_alg: SignatureAlgorithm,
-) -> CertRecord {
+}
+
+fn issue_ca_cert(identity: CertIdentity<'_>, path_len: Option<u8>, crl: bool) -> CertRecord {
+    let CertIdentity {
+        subject_cn,
+        issuer_cn,
+        serial,
+        subject_signer,
+        issuer_signer,
+        sig_alg,
+    } = identity;
     let bits = KEY_USAGE_KEY_CERT_SIGN | if crl { KEY_USAGE_CRL_SIGN } else { 0 };
     let der = fixture_issue_cert_der(
         &FixtureCertSpec {
@@ -107,15 +116,18 @@ fn issue_ca_cert(
 }
 
 fn issue_leaf_cert(
-    subject_cn: &str,
-    issuer_cn: &str,
-    serial: u8,
+    identity: CertIdentity<'_>,
     fwid: Option<[u8; 48]>,
     amd_vcek_ext: Option<(AmdSnpTcbVersion, [u8; 64])>,
-    subject_signer: &FixtureSigner,
-    issuer_signer: &FixtureSigner,
-    sig_alg: SignatureAlgorithm,
 ) -> CertRecord {
+    let CertIdentity {
+        subject_cn,
+        issuer_cn,
+        serial,
+        subject_signer,
+        issuer_signer,
+        sig_alg,
+    } = identity;
     let der = fixture_issue_cert_der(
         &FixtureCertSpec {
             subject_cn,
@@ -385,69 +397,79 @@ fn cap24_rfc5280_real_x509_chains_and_cryptographic_forgery_refusals() {
     let rogue_k = FixtureSigner::p384(b"cap24-rogue");
 
     let root = issue_ca_cert(
-        "Root",
-        "Root",
-        1,
+        CertIdentity {
+            subject_cn: "Root",
+            issuer_cn: "Root",
+            serial: 1,
+            subject_signer: &root_k,
+            issuer_signer: &root_k,
+            sig_alg: SignatureAlgorithm::EcdsaP384Sha384,
+        },
         Some(1),
         true,
-        &root_k,
-        &root_k,
-        SignatureAlgorithm::EcdsaP384Sha384,
     );
     let inter = issue_ca_cert(
-        "Intermediate",
-        "Root",
-        2,
+        CertIdentity {
+            subject_cn: "Intermediate",
+            issuer_cn: "Root",
+            serial: 2,
+            subject_signer: &inter_k,
+            issuer_signer: &root_k,
+            sig_alg: SignatureAlgorithm::EcdsaP384Sha384,
+        },
         Some(0),
         true,
-        &inter_k,
-        &root_k,
-        SignatureAlgorithm::EcdsaP384Sha384,
     );
     let leaf = issue_leaf_cert(
-        "Leaf",
-        "Intermediate",
-        3,
+        CertIdentity {
+            subject_cn: "Leaf",
+            issuer_cn: "Intermediate",
+            serial: 3,
+            subject_signer: &leaf_k,
+            issuer_signer: &inter_k,
+            sig_alg: SignatureAlgorithm::EcdsaP384Sha384,
+        },
         None,
         None,
-        &leaf_k,
-        &inter_k,
-        SignatureAlgorithm::EcdsaP384Sha384,
     );
     let pinned_root = root.cert_sha256();
 
-    assert!(
-        verify_rfc5280_cert_chain(&[root.clone(), inter.clone(), leaf.clone()], &pinned_root, NOW)
-            .is_ok()
-    );
-    let ed_root_k = FixtureSigner::ed25519(b"ed-root");
-    let rsa_leaf_k = FixtureSigner::rsa(2048);
-    let ed_root = issue_ca_cert(
-        "EdRoot",
-        "EdRoot",
-        10,
-        Some(0),
-        true,
-        &ed_root_k,
-        &ed_root_k,
-        SignatureAlgorithm::Ed25519,
-    );
-    let rsa_leaf = issue_leaf_cert(
-        "RsaLeaf",
-        "EdRoot",
-        11,
-        None,
-        None,
-        &rsa_leaf_k,
-        &ed_root_k,
-        SignatureAlgorithm::Ed25519,
-    );
     assert!(verify_rfc5280_cert_chain(
-        &[ed_root.clone(), rsa_leaf],
-        &ed_root.cert_sha256(),
+        &[root.clone(), inter.clone(), leaf.clone()],
+        &pinned_root,
         NOW
     )
     .is_ok());
+    let ed_root_k = FixtureSigner::ed25519(b"ed-root");
+    let rsa_leaf_k = FixtureSigner::rsa(2048);
+    let ed_root = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "EdRoot",
+            issuer_cn: "EdRoot",
+            serial: 10,
+            subject_signer: &ed_root_k,
+            issuer_signer: &ed_root_k,
+            sig_alg: SignatureAlgorithm::Ed25519,
+        },
+        Some(0),
+        true,
+    );
+    let rsa_leaf = issue_leaf_cert(
+        CertIdentity {
+            subject_cn: "RsaLeaf",
+            issuer_cn: "EdRoot",
+            serial: 11,
+            subject_signer: &rsa_leaf_k,
+            issuer_signer: &ed_root_k,
+            sig_alg: SignatureAlgorithm::Ed25519,
+        },
+        None,
+        None,
+    );
+    assert!(
+        verify_rfc5280_cert_chain(&[ed_root.clone(), rsa_leaf], &ed_root.cert_sha256(), NOW)
+            .is_ok()
+    );
 
     let mut tampered_der = leaf.cert_der().to_vec();
     let cn_pos = tampered_der
@@ -466,14 +488,16 @@ fn cap24_rfc5280_real_x509_chains_and_cryptographic_forgery_refusals() {
     );
 
     let wrong_issuer_leaf = issue_leaf_cert(
-        "Leaf",
-        "Intermediate",
-        3,
+        CertIdentity {
+            subject_cn: "Leaf",
+            issuer_cn: "Intermediate",
+            serial: 3,
+            subject_signer: &leaf_k,
+            issuer_signer: &rogue_k,
+            sig_alg: SignatureAlgorithm::EcdsaP384Sha384,
+        },
         None,
         None,
-        &leaf_k,
-        &rogue_k,
-        SignatureAlgorithm::EcdsaP384Sha384,
     );
     assert_eq!(
         verify_rfc5280_cert_chain(
@@ -548,14 +572,16 @@ fn cap24_rfc5280_real_x509_chains_and_cryptographic_forgery_refusals() {
 
     let forged_child_k = FixtureSigner::p384(b"forged-child");
     let forged_child = issue_leaf_cert(
-        "ForgedChild",
-        "Leaf",
-        4,
+        CertIdentity {
+            subject_cn: "ForgedChild",
+            issuer_cn: "Leaf",
+            serial: 4,
+            subject_signer: &forged_child_k,
+            issuer_signer: &leaf_k,
+            sig_alg: SignatureAlgorithm::EcdsaP384Sha384,
+        },
         None,
         None,
-        &forged_child_k,
-        &leaf_k,
-        SignatureAlgorithm::EcdsaP384Sha384,
     );
     assert_eq!(
         verify_rfc5280_cert_chain(
@@ -588,19 +614,25 @@ fn cap24_rfc5280_real_x509_chains_and_cryptographic_forgery_refusals() {
     );
     let bad_ku_inter = CertRecord::from_der(&bad_ku_inter_der).unwrap();
     assert_eq!(
-        verify_rfc5280_cert_chain(&[root.clone(), bad_ku_inter, leaf.clone()], &pinned_root, NOW),
+        verify_rfc5280_cert_chain(
+            &[root.clone(), bad_ku_inter, leaf.clone()],
+            &pinned_root,
+            NOW
+        ),
         Err(CertChainError::MissingKeyCertSign { index: 1 })
     );
 
     let strict_root = issue_ca_cert(
-        "Root",
-        "Root",
-        1,
+        CertIdentity {
+            subject_cn: "Root",
+            issuer_cn: "Root",
+            serial: 1,
+            subject_signer: &root_k,
+            issuer_signer: &root_k,
+            sig_alg: SignatureAlgorithm::EcdsaP384Sha384,
+        },
         Some(0),
         true,
-        &root_k,
-        &root_k,
-        SignatureAlgorithm::EcdsaP384Sha384,
     );
     assert_eq!(
         verify_rfc5280_cert_chain(
@@ -616,17 +648,23 @@ fn cap24_rfc5280_real_x509_chains_and_cryptographic_forgery_refusals() {
     );
 
     let ca_as_leaf = issue_ca_cert(
-        "LeafCA",
-        "Intermediate",
-        3,
+        CertIdentity {
+            subject_cn: "LeafCA",
+            issuer_cn: "Intermediate",
+            serial: 3,
+            subject_signer: &leaf_k,
+            issuer_signer: &inter_k,
+            sig_alg: SignatureAlgorithm::EcdsaP384Sha384,
+        },
         None,
         false,
-        &leaf_k,
-        &inter_k,
-        SignatureAlgorithm::EcdsaP384Sha384,
     );
     assert_eq!(
-        verify_rfc5280_cert_chain(&[root.clone(), inter.clone(), ca_as_leaf], &pinned_root, NOW),
+        verify_rfc5280_cert_chain(
+            &[root.clone(), inter.clone(), ca_as_leaf],
+            &pinned_root,
+            NOW
+        ),
         Err(CertChainError::LeafMustNotBeCa)
     );
 
@@ -657,34 +695,40 @@ fn cap25_amd_sev_snp_real_rsa4096_pss_crl_and_vcek_p384_signatures() {
     let chip_id = [0x11u8; 64];
 
     let ark = issue_ca_cert(
-        "AMD-ARK-Genoa",
-        "AMD-ARK-Genoa",
-        1,
+        CertIdentity {
+            subject_cn: "AMD-ARK-Genoa",
+            issuer_cn: "AMD-ARK-Genoa",
+            serial: 1,
+            subject_signer: &ark_k,
+            issuer_signer: &ark_k,
+            sig_alg: SignatureAlgorithm::RsaPssSha384,
+        },
         Some(1),
         true,
-        &ark_k,
-        &ark_k,
-        SignatureAlgorithm::RsaPssSha384,
     );
     let ask = issue_ca_cert(
-        "AMD-ASK-Genoa",
-        "AMD-ARK-Genoa",
-        2,
+        CertIdentity {
+            subject_cn: "AMD-ASK-Genoa",
+            issuer_cn: "AMD-ARK-Genoa",
+            serial: 2,
+            subject_signer: &ask_k,
+            issuer_signer: &ark_k,
+            sig_alg: SignatureAlgorithm::RsaPssSha384,
+        },
         Some(0),
         true,
-        &ask_k,
-        &ark_k,
-        SignatureAlgorithm::RsaPssSha384,
     );
     let vcek = issue_leaf_cert(
-        "AMD-VCEK-Chip42",
-        "AMD-ASK-Genoa",
-        3,
+        CertIdentity {
+            subject_cn: "AMD-VCEK-Chip42",
+            issuer_cn: "AMD-ASK-Genoa",
+            serial: 3,
+            subject_signer: &vcek_k,
+            issuer_signer: &ask_k,
+            sig_alg: SignatureAlgorithm::RsaPssSha384,
+        },
         None,
         Some((min_tcb, chip_id)),
-        &vcek_k,
-        &ask_k,
-        SignatureAlgorithm::RsaPssSha384,
     );
 
     let launch_meas = [0x5Au8; 48];
@@ -832,14 +876,16 @@ fn cap25_amd_sev_snp_real_rsa4096_pss_crl_and_vcek_p384_signatures() {
     let mut low_tcb_val = min_tcb;
     low_tcb_val.microcode = 71;
     let low_vcek = issue_leaf_cert(
-        "AMD-VCEK-Chip42",
-        "AMD-ASK-Genoa",
-        4,
+        CertIdentity {
+            subject_cn: "AMD-VCEK-Chip42",
+            issuer_cn: "AMD-ASK-Genoa",
+            serial: 4,
+            subject_signer: &vcek_k,
+            issuer_signer: &ask_k,
+            sig_alg: SignatureAlgorithm::RsaPssSha384,
+        },
         None,
         Some((low_tcb_val, chip_id)),
-        &vcek_k,
-        &ask_k,
-        SignatureAlgorithm::RsaPssSha384,
     );
     let mut low_fields = fields.clone();
     low_fields.reported_tcb = low_tcb_val;
@@ -875,34 +921,40 @@ fn cap26_intel_tdx_real_p256_qe_and_quote_signatures() {
     let rogue_att_k = FixtureSigner::p256(b"rogue-att-key");
 
     let intel_root = issue_ca_cert(
-        "Intel-SGX-Root",
-        "Intel-SGX-Root",
-        1,
+        CertIdentity {
+            subject_cn: "Intel-SGX-Root",
+            issuer_cn: "Intel-SGX-Root",
+            serial: 1,
+            subject_signer: &root_k,
+            issuer_signer: &root_k,
+            sig_alg: SignatureAlgorithm::EcdsaP256Sha256,
+        },
         Some(1),
         true,
-        &root_k,
-        &root_k,
-        SignatureAlgorithm::EcdsaP256Sha256,
     );
     let pck_ca = issue_ca_cert(
-        "Intel-PCK-CA",
-        "Intel-SGX-Root",
-        2,
+        CertIdentity {
+            subject_cn: "Intel-PCK-CA",
+            issuer_cn: "Intel-SGX-Root",
+            serial: 2,
+            subject_signer: &pck_ca_k,
+            issuer_signer: &root_k,
+            sig_alg: SignatureAlgorithm::EcdsaP256Sha256,
+        },
         Some(0),
         true,
-        &pck_ca_k,
-        &root_k,
-        SignatureAlgorithm::EcdsaP256Sha256,
     );
     let pck_leaf = issue_leaf_cert(
-        "Intel-PCK-Leaf",
-        "Intel-PCK-CA",
-        3,
+        CertIdentity {
+            subject_cn: "Intel-PCK-Leaf",
+            issuer_cn: "Intel-PCK-CA",
+            serial: 3,
+            subject_signer: &pck_leaf_k,
+            issuer_signer: &pck_ca_k,
+            sig_alg: SignatureAlgorithm::EcdsaP256Sha256,
+        },
         None,
         None,
-        &pck_leaf_k,
-        &pck_ca_k,
-        SignatureAlgorithm::EcdsaP256Sha256,
     );
     let pck_chain = vec![intel_root.clone(), pck_ca, pck_leaf];
 
@@ -1055,14 +1107,91 @@ fn make_nvidia_fixture(
     let vbios_leaf_k = FixtureSigner::p384(b"nv-vbios-rim-leaf");
 
     let alg = SignatureAlgorithm::EcdsaP384Sha384;
-    let dev_root = issue_ca_cert("NV-Dev-Root", "NV-Dev-Root", 1, Some(1), true, &dev_root_k, &dev_root_k, alg);
-    let dev_inter = issue_ca_cert("NV-Dev-L1", "NV-Dev-Root", 2, Some(0), true, &dev_inter_k, &dev_root_k, alg);
-    let dev_leaf = issue_leaf_cert("NV-GPU-Leaf", "NV-Dev-L1", 3, Some(fwid), None, &dev_leaf_k, &dev_inter_k, alg);
+    let dev_root = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "NV-Dev-Root",
+            issuer_cn: "NV-Dev-Root",
+            serial: 1,
+            subject_signer: &dev_root_k,
+            issuer_signer: &dev_root_k,
+            sig_alg: alg,
+        },
+        Some(1),
+        true,
+    );
+    let dev_inter = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "NV-Dev-L1",
+            issuer_cn: "NV-Dev-Root",
+            serial: 2,
+            subject_signer: &dev_inter_k,
+            issuer_signer: &dev_root_k,
+            sig_alg: alg,
+        },
+        Some(0),
+        true,
+    );
+    let dev_leaf = issue_leaf_cert(
+        CertIdentity {
+            subject_cn: "NV-GPU-Leaf",
+            issuer_cn: "NV-Dev-L1",
+            serial: 3,
+            subject_signer: &dev_leaf_k,
+            issuer_signer: &dev_inter_k,
+            sig_alg: alg,
+        },
+        Some(fwid),
+        None,
+    );
 
-    let rim_root = issue_ca_cert("NV-CoRIM-Root", "NV-CoRIM-Root", 10, Some(1), true, &rim_root_k, &rim_root_k, alg);
-    let rim_inter = issue_ca_cert("NV-CoRIM-L1", "NV-CoRIM-Root", 11, Some(0), true, &rim_inter_k, &rim_root_k, alg);
-    let drv_leaf = issue_leaf_cert("NV-Drv-RIM", "NV-CoRIM-L1", 12, None, None, &drv_leaf_k, &rim_inter_k, alg);
-    let vbios_leaf = issue_leaf_cert("NV-VBIOS-RIM", "NV-CoRIM-L1", 13, None, None, &vbios_leaf_k, &rim_inter_k, alg);
+    let rim_root = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "NV-CoRIM-Root",
+            issuer_cn: "NV-CoRIM-Root",
+            serial: 10,
+            subject_signer: &rim_root_k,
+            issuer_signer: &rim_root_k,
+            sig_alg: alg,
+        },
+        Some(1),
+        true,
+    );
+    let rim_inter = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "NV-CoRIM-L1",
+            issuer_cn: "NV-CoRIM-Root",
+            serial: 11,
+            subject_signer: &rim_inter_k,
+            issuer_signer: &rim_root_k,
+            sig_alg: alg,
+        },
+        Some(0),
+        true,
+    );
+    let drv_leaf = issue_leaf_cert(
+        CertIdentity {
+            subject_cn: "NV-Drv-RIM",
+            issuer_cn: "NV-CoRIM-L1",
+            serial: 12,
+            subject_signer: &drv_leaf_k,
+            issuer_signer: &rim_inter_k,
+            sig_alg: alg,
+        },
+        None,
+        None,
+    );
+    let vbios_leaf = issue_leaf_cert(
+        CertIdentity {
+            subject_cn: "NV-VBIOS-RIM",
+            issuer_cn: "NV-CoRIM-L1",
+            serial: 13,
+            subject_signer: &vbios_leaf_k,
+            issuer_signer: &rim_inter_k,
+            sig_alg: alg,
+        },
+        None,
+        None,
+    );
 
     let m1 = vec![0xAAu8; 48];
     let m2 = vec![0xBBu8; 48];
@@ -1245,14 +1374,16 @@ fn cap26_nvidia_hopper_and_blackwell_real_spdm_ocsp_and_rim_signatures() {
         let mut bad_fwid = fwid;
         bad_fwid[47] ^= 1;
         let bad_leaf = issue_leaf_cert(
-            "NV-GPU-Leaf",
-            "NV-Dev-L1",
-            3,
+            CertIdentity {
+                subject_cn: "NV-GPU-Leaf",
+                issuer_cn: "NV-Dev-L1",
+                serial: 3,
+                subject_signer: &keys.dev_leaf_k,
+                issuer_signer: &keys.dev_inter_k,
+                sig_alg: SignatureAlgorithm::EcdsaP384Sha384,
+            },
             Some(bad_fwid),
             None,
-            &keys.dev_leaf_k,
-            &keys.dev_inter_k,
-            SignatureAlgorithm::EcdsaP384Sha384,
         );
         let mut forged_cert_fwid = att.clone();
         forged_cert_fwid.device_cert_chain[2] = bad_leaf;
@@ -1272,14 +1403,16 @@ fn cap26_nvidia_hopper_and_blackwell_real_spdm_ocsp_and_rim_signatures() {
         // CAP-24 attack on GPU chain: Leaf-signed child cert appended to device chain!
         let rogue_child_k = FixtureSigner::p384(b"rogue-gpu-child");
         let rogue_child = issue_leaf_cert(
-            "RogueGpuChild",
-            "NV-GPU-Leaf",
-            99,
+            CertIdentity {
+                subject_cn: "RogueGpuChild",
+                issuer_cn: "NV-GPU-Leaf",
+                serial: 99,
+                subject_signer: &rogue_child_k,
+                issuer_signer: &keys.dev_leaf_k,
+                sig_alg: SignatureAlgorithm::EcdsaP384Sha384,
+            },
             Some(fwid),
             None,
-            &rogue_child_k,
-            &keys.dev_leaf_k,
-            SignatureAlgorithm::EcdsaP384Sha384,
         );
         let mut leaf_forged = att.clone();
         fixture_sign_spdm_report(&mut leaf_forged.spdm_report_bytes, &rogue_child_k);
@@ -1324,9 +1457,42 @@ fn aws_nitro_real_cose_es384_and_honest_tcb_posture() {
     let leaf_k = FixtureSigner::p384(b"nitro-leaf");
     let alg = SignatureAlgorithm::EcdsaP384Sha384;
 
-    let root = issue_ca_cert("AWS-Nitro-Root-G1", "AWS-Nitro-Root-G1", 1, Some(1), false, &root_k, &root_k, alg);
-    let inter = issue_ca_cert("AWS-Nitro-Regional", "AWS-Nitro-Root-G1", 2, Some(0), false, &inter_k, &root_k, alg);
-    let leaf = issue_leaf_cert("AWS-NSM-Leaf", "AWS-Nitro-Regional", 3, None, None, &leaf_k, &inter_k, alg);
+    let root = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "AWS-Nitro-Root-G1",
+            issuer_cn: "AWS-Nitro-Root-G1",
+            serial: 1,
+            subject_signer: &root_k,
+            issuer_signer: &root_k,
+            sig_alg: alg,
+        },
+        Some(1),
+        false,
+    );
+    let inter = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "AWS-Nitro-Regional",
+            issuer_cn: "AWS-Nitro-Root-G1",
+            serial: 2,
+            subject_signer: &inter_k,
+            issuer_signer: &root_k,
+            sig_alg: alg,
+        },
+        Some(0),
+        false,
+    );
+    let leaf = issue_leaf_cert(
+        CertIdentity {
+            subject_cn: "AWS-NSM-Leaf",
+            issuer_cn: "AWS-Nitro-Regional",
+            serial: 3,
+            subject_signer: &leaf_k,
+            issuer_signer: &inter_k,
+            sig_alg: alg,
+        },
+        None,
+        None,
+    );
     let chain = vec![root.clone(), inter, leaf];
 
     let pcr0 = [0x10u8; 48];
@@ -1493,8 +1659,9 @@ fn v3_rogue_notary_key_and_v4_redaction_and_calltree() {
         server_name: "api.github.com".to_string(),
         expected_path: "/repos/obend/oracle?price=98450.25".to_string(),
         connection_time: NOW - 5,
-        sent_bytes: b"GET /repos/obend/oracle?price=98450.25 HTTP/1.1\r\nHost: api.github.com\r\n\r\n"
-            .to_vec(),
+        sent_bytes:
+            b"GET /repos/obend/oracle?price=98450.25 HTTP/1.1\r\nHost: api.github.com\r\n\r\n"
+                .to_vec(),
         recv_bytes: b"HTTP/1.1 200 OK\r\n\r\n{\"ok\":true}".to_vec(),
         unauthed_recv_ranges: vec![],
         notary_public_key: ed_notary.public_key(),
@@ -1560,9 +1727,42 @@ fn e2ee_channel_binding_mitm_and_replay_refusal() {
     let att_k = FixtureSigner::p256(b"e2ee-att-key");
     let alg = SignatureAlgorithm::EcdsaP256Sha256;
 
-    let intel_root = issue_ca_cert("Intel-SGX-Root", "Intel-SGX-Root", 1, Some(1), true, &root_k, &root_k, alg);
-    let pck_ca = issue_ca_cert("Intel-PCK-CA", "Intel-SGX-Root", 2, Some(0), true, &ca_k, &root_k, alg);
-    let pck_leaf = issue_leaf_cert("Intel-PCK-Leaf", "Intel-PCK-CA", 3, None, None, &leaf_k, &ca_k, alg);
+    let intel_root = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "Intel-SGX-Root",
+            issuer_cn: "Intel-SGX-Root",
+            serial: 1,
+            subject_signer: &root_k,
+            issuer_signer: &root_k,
+            sig_alg: alg,
+        },
+        Some(1),
+        true,
+    );
+    let pck_ca = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "Intel-PCK-CA",
+            issuer_cn: "Intel-SGX-Root",
+            serial: 2,
+            subject_signer: &ca_k,
+            issuer_signer: &root_k,
+            sig_alg: alg,
+        },
+        Some(0),
+        true,
+    );
+    let pck_leaf = issue_leaf_cert(
+        CertIdentity {
+            subject_cn: "Intel-PCK-Leaf",
+            issuer_cn: "Intel-PCK-CA",
+            serial: 3,
+            subject_signer: &leaf_k,
+            issuer_signer: &ca_k,
+            sig_alg: alg,
+        },
+        None,
+        None,
+    );
 
     let pin = IntelTdxMeasurementPin {
         mr_td: [0x11; 48],
@@ -1613,8 +1813,14 @@ fn e2ee_channel_binding_mitm_and_replay_refusal() {
         e2e_pubkey_b64: pubkey_b64,
     };
     let ch_policy = E2eeChannelPolicy::default();
-    let channel = verify_e2ee_channel(&ch_policy, &input, &cpu_tee, &[gpu_tee.clone()], NOW)
-        .expect("CPU+GPU bound E2EE channel passes");
+    let channel = verify_e2ee_channel(
+        &ch_policy,
+        &input,
+        &cpu_tee,
+        std::slice::from_ref(&gpu_tee),
+        NOW,
+    )
+    .expect("CPU+GPU bound E2EE channel passes");
 
     let shared = [0x91u8; 32];
     let kem_ct = [0x24u8; 1088];
@@ -1645,13 +1851,19 @@ fn e2ee_channel_binding_mitm_and_replay_refusal() {
     let mut mitm_input = input.clone();
     mitm_input.e2e_pubkey_b64 = base64_encode_std(&mitm_pk);
     assert_eq!(
-        verify_e2ee_channel(&ch_policy, &mitm_input, &cpu_tee, &[gpu_tee.clone()], NOW),
+        verify_e2ee_channel(
+            &ch_policy,
+            &mitm_input,
+            &cpu_tee,
+            std::slice::from_ref(&gpu_tee),
+            NOW
+        ),
         Err(E2eeChannelError::ReportDataBindingMismatch)
     );
 
     let two_gpu_policy = E2eeChannelPolicy {
         min_gpus: 2,
-        ..ch_policy.clone()
+        ..ch_policy
     };
     assert_eq!(
         verify_e2ee_channel(
@@ -1827,9 +2039,42 @@ fn fhsdd001_and_fhqpb001_exact_kkt_matrix_pin_and_attested_quote() {
     let inter_k = FixtureSigner::p384(b"solver-nitro-inter");
     let leaf_k = FixtureSigner::p384(b"solver-nitro-leaf");
     let alg = SignatureAlgorithm::EcdsaP384Sha384;
-    let root = issue_ca_cert("AWS-Nitro-Root-G1", "AWS-Nitro-Root-G1", 1, Some(1), false, &root_k, &root_k, alg);
-    let inter = issue_ca_cert("AWS-Nitro-Regional", "AWS-Nitro-Root-G1", 2, Some(0), false, &inter_k, &root_k, alg);
-    let leaf = issue_leaf_cert("AWS-NSM-Solver", "AWS-Nitro-Regional", 3, None, None, &leaf_k, &inter_k, alg);
+    let root = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "AWS-Nitro-Root-G1",
+            issuer_cn: "AWS-Nitro-Root-G1",
+            serial: 1,
+            subject_signer: &root_k,
+            issuer_signer: &root_k,
+            sig_alg: alg,
+        },
+        Some(1),
+        false,
+    );
+    let inter = issue_ca_cert(
+        CertIdentity {
+            subject_cn: "AWS-Nitro-Regional",
+            issuer_cn: "AWS-Nitro-Root-G1",
+            serial: 2,
+            subject_signer: &inter_k,
+            issuer_signer: &root_k,
+            sig_alg: alg,
+        },
+        Some(0),
+        false,
+    );
+    let leaf = issue_leaf_cert(
+        CertIdentity {
+            subject_cn: "AWS-NSM-Solver",
+            issuer_cn: "AWS-Nitro-Regional",
+            serial: 3,
+            subject_signer: &leaf_k,
+            issuer_signer: &inter_k,
+            sig_alg: alg,
+        },
+        None,
+        None,
+    );
 
     let pcr0 = [0xA1u8; 48];
     let pcr1 = [0xA2u8; 48];

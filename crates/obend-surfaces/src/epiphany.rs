@@ -397,10 +397,7 @@ pub enum EpiphanyRefusal {
         attempted_seq: u64,
     },
     /// A sensor frame attempted to use `u64::MAX`, risking monotone counter overflow/wraparound.
-    SensorSeqOverflow {
-        sensor_id: u64,
-        attempted_seq: u64,
-    },
+    SensorSeqOverflow { sensor_id: u64, attempted_seq: u64 },
     /// A streaming scanline packet violated geometry, duplicate-line, or full-frame coverage rules.
     ScanlineStreamViolation { reason: &'static str },
     /// A sealed sensor frame's 256-bit `OBEND.SHE.SENSOR_SEAL/v1` digest did not match.
@@ -497,7 +494,8 @@ impl TrustedConsentChromePlane {
         }
         if self.band_bg.a != 255 || self.led_color.a != 255 {
             return Err(EpiphanyRefusal::InvalidGeometry {
-                reason: "trusted consent band and sensor LED colors must be strictly opaque (a == 255)",
+                reason:
+                    "trusted consent band and sensor LED colors must be strictly opaque (a == 255)",
             });
         }
         if let Some(modal) = &self.modal {
@@ -517,10 +515,7 @@ impl TrustedConsentChromePlane {
     /// Returns true if `(x, y)` lies inside hardware-protected consent chrome.
     pub fn is_protected_pixel(&self, x: u32, y: u32) -> bool {
         self.consent_band.rect.contains(x, y)
-            || self
-                .modal
-                .as_ref()
-                .is_some_and(|m| m.rect.contains(x, y))
+            || self.modal.as_ref().is_some_and(|m| m.rect.contains(x, y))
     }
 
     /// Hardware-attested chrome pixel at `(x, y)` (`a == 255` on every protected pixel,
@@ -1028,7 +1023,9 @@ pub fn compile_belief_view_node(
     spec: &BeliefOverlaySpec,
     policy: IntrusionPolicy,
 ) -> Result<CompiledBeliefOverlay, EpiphanyRefusal> {
-    if viewport.is_empty() || consent_band.rect.is_empty() || !consent_band.rect.fits_within(viewport)
+    if viewport.is_empty()
+        || consent_band.rect.is_empty()
+        || !consent_band.rect.fits_within(viewport)
     {
         return Err(EpiphanyRefusal::InvalidGeometry {
             reason: "viewport and trusted consent band must be non-empty and in-bounds",
@@ -1244,156 +1241,11 @@ impl EpiphanyCompositor {
 }
 
 // ---------------------------------------------------------------------------
-// Zero-Dep NIST SP 800-185 cSHAKE256 + LEB128 Framing
-// (Byte-identical to `crates/obend-sel4-verifier/src/lib.rs` & `Obend.Crypto.cshake32ByteArray`)
+// cSHAKE256 + LEB128 Framing
 // ---------------------------------------------------------------------------
 
-const RATE: usize = 136;
-
-const RC: [u64; 24] = [
-    0x0000000000000001,
-    0x0000000000008082,
-    0x800000000000808a,
-    0x8000000080008000,
-    0x000000000000808b,
-    0x0000000080000001,
-    0x8000000080008081,
-    0x8000000000008009,
-    0x000000000000008a,
-    0x0000000000000088,
-    0x0000000080008009,
-    0x000000008000000a,
-    0x000000008000808b,
-    0x800000000000008b,
-    0x8000000000008089,
-    0x8000000000008003,
-    0x8000000000008002,
-    0x8000000000000080,
-    0x000000000000800a,
-    0x800000008000000a,
-    0x8000000080008081,
-    0x8000000000008080,
-    0x0000000080000001,
-    0x8000000080008008,
-];
-
-const ROT: [u32; 25] = [
-    0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
-];
-
-fn keccak_f1600(a: &mut [u64; 25]) {
-    for rc in RC {
-        let mut c = [0u64; 5];
-        for x in 0..5 {
-            c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
-        }
-        for x in 0..5 {
-            let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
-            for y in 0..5 {
-                a[x + 5 * y] ^= d;
-            }
-        }
-        let mut b = [0u64; 25];
-        for y in 0..5 {
-            for x in 0..5 {
-                b[y + 5 * ((2 * x + 3 * y) % 5)] = a[x + 5 * y].rotate_left(ROT[x + 5 * y]);
-            }
-        }
-        for y in 0..5 {
-            for x in 0..5 {
-                a[x + 5 * y] = b[x + 5 * y] ^ ((!b[(x + 1) % 5 + 5 * y]) & b[(x + 2) % 5 + 5 * y]);
-            }
-        }
-        a[0] ^= rc;
-    }
-}
-
-fn left_encode(value: u64, out: &mut [u8; 9]) -> usize {
-    let n = ((64 - value.leading_zeros()).max(1) as usize).div_ceil(8);
-    out[0] = n as u8;
-    for i in 0..n {
-        out[i + 1] = (value >> (8 * (n - i - 1))) as u8;
-    }
-    n + 1
-}
-
-struct Sponge {
-    lanes: [u64; 25],
-    pos: usize,
-}
-
-impl Sponge {
-    fn new() -> Self {
-        Self {
-            lanes: [0; 25],
-            pos: 0,
-        }
-    }
-
-    fn absorb(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.lanes[self.pos / 8] ^= (b as u64) << (8 * (self.pos % 8));
-            self.pos += 1;
-            if self.pos == RATE {
-                keccak_f1600(&mut self.lanes);
-                self.pos = 0;
-            }
-        }
-    }
-
-    fn left(&mut self, n: u64) {
-        let mut bytes = [0u8; 9];
-        let len = left_encode(n, &mut bytes);
-        self.absorb(&bytes[..len]);
-    }
-
-    fn encode_string(&mut self, s: &[u8]) {
-        self.left(
-            u64::try_from(s.len())
-                .expect("slice length")
-                .checked_mul(8)
-                .expect("bit length"),
-        );
-        self.absorb(s);
-    }
-
-    fn finish(mut self, suffix: u8, out: &mut [u8]) {
-        self.lanes[self.pos / 8] ^= (suffix as u64) << (8 * (self.pos % 8));
-        self.lanes[(RATE - 1) / 8] ^= 0x80u64 << (8 * ((RATE - 1) % 8));
-        keccak_f1600(&mut self.lanes);
-        self.pos = 0;
-        for b in out {
-            if self.pos == RATE {
-                keccak_f1600(&mut self.lanes);
-                self.pos = 0;
-            }
-            *b = (self.lanes[self.pos / 8] >> (8 * (self.pos % 8))) as u8;
-            self.pos += 1;
-        }
-    }
-}
-
-fn customized(custom: &[u8]) -> Sponge {
-    let mut s = Sponge::new();
-    if !custom.is_empty() {
-        s.left(RATE as u64);
-        s.encode_string(&[]);
-        s.encode_string(custom);
-        while s.pos != 0 {
-            s.absorb(&[0]);
-        }
-    }
-    s
-}
-
-/// NIST SP 800-185 `cSHAKE256` (`N = ""`, `S = custom`, 32-byte digest).
-pub fn cshake256_32(custom: &[u8], input: &[u8]) -> Digest {
-    let mut s = customized(custom);
-    s.absorb(input);
-    let mut out = [0u8; 32];
-    s.finish(if custom.is_empty() { 0x1f } else { 0x04 }, &mut out);
-    out
-}
+pub use obend_keccak::cshake256_32;
+use obend_keccak::Cshake256;
 
 /// Constant-time 256-bit digest equality check.
 pub fn ct_eq_digest(a: &Digest, b: &Digest) -> bool {
@@ -1423,7 +1275,7 @@ fn push_list_field(buf: &mut Vec<u8>, bytes: &[u8]) {
     buf.extend_from_slice(bytes);
 }
 
-fn absorb_list_field(s: &mut Sponge, bytes: &[u8]) {
+fn absorb_list_field(s: &mut Cshake256, bytes: &[u8]) {
     let mut len_buf = Vec::with_capacity(10);
     push_leb128(&mut len_buf, bytes.len() as u64);
     s.absorb(&len_buf);
@@ -1643,7 +1495,7 @@ pub fn compute_sensor_seal(
 ) -> Digest {
     let boxes_bytes = encode_redact_boxes(redact_boxes);
     let tiles_bytes = encode_tiles_field(redacted_tiles);
-    let mut s = customized(SENSOR_SEAL_DOMAIN.as_bytes());
+    let mut s = Cshake256::customized(SENSOR_SEAL_DOMAIN.as_bytes());
     absorb_list_field(&mut s, &sensor_id.to_be_bytes());
     absorb_list_field(&mut s, &mono_seq.to_be_bytes());
     absorb_list_field(&mut s, &width.to_be_bytes());
@@ -1651,7 +1503,7 @@ pub fn compute_sensor_seal(
     absorb_list_field(&mut s, &boxes_bytes);
     absorb_list_field(&mut s, &tiles_bytes);
     let mut out = [0u8; 32];
-    s.finish(0x04, &mut out);
+    s.squeeze(&mut out);
     out
 }
 
@@ -1758,12 +1610,8 @@ impl SensorFrameSealer {
                 attempted_seq: frame.mono_seq,
             });
         }
-        let redacted_tiles = redact_sensor_tiles(
-            frame.width,
-            frame.height,
-            &frame.tiles,
-            &frame.redact_boxes,
-        )?;
+        let redacted_tiles =
+            redact_sensor_tiles(frame.width, frame.height, &frame.tiles, &frame.redact_boxes)?;
         let seal_digest = compute_sensor_seal(
             frame.sensor_id,
             frame.mono_seq,
@@ -1836,7 +1684,12 @@ impl ScanlineConsentMuxRtlModel {
     }
 
     /// Combinational output (`comb_pixel`) matching `evalModuleOutputs scanlineConsentMuxRtl`.
-    pub const fn eval_comb(py: u16, consent_height: u16, chrome_pixel: u32, belief_pixel: u32) -> u64 {
+    pub const fn eval_comb(
+        py: u16,
+        consent_height: u16,
+        chrome_pixel: u32,
+        belief_pixel: u32,
+    ) -> u64 {
         if py < consent_height {
             chrome_pixel as u64
         } else {
@@ -1882,7 +1735,14 @@ impl CameraScanlineRoiZeroerRtlModel {
         }
     }
 
-    pub const fn in_roi_box(px: u16, py: u16, roi_x0: u16, roi_x1: u16, roi_y0: u16, roi_y1: u16) -> bool {
+    pub const fn in_roi_box(
+        px: u16,
+        py: u16,
+        roi_x0: u16,
+        roi_x1: u16,
+        roi_y0: u16,
+        roi_y1: u16,
+    ) -> bool {
         px >= roi_x0 && px < roi_x1 && py >= roi_y0 && py < roi_y1
     }
 

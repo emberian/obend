@@ -48,7 +48,10 @@ fn test_challenger_pool_concurrent_flood() {
         h.join().unwrap();
     }
 
-    assert_eq!(counter.load(Ordering::SeqCst), num_threads * jobs_per_thread);
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        num_threads * jobs_per_thread
+    );
 }
 
 #[test]
@@ -116,7 +119,10 @@ fn test_challenger_pool_reentrant_deadlock() {
     });
 
     let res = rx.recv().unwrap();
-    assert!(res.is_err(), "Nested dispatch on single-worker pool must deadlock");
+    assert!(
+        res.is_err(),
+        "Nested dispatch on single-worker pool must deadlock"
+    );
 }
 
 #[test]
@@ -124,4 +130,3 @@ fn test_challenger_pool_reentrant_deadlock() {
 fn test_challenger_pool_zero_workers_rejected() {
     let _pool = LeanWorkerPool::new(0);
 }
-

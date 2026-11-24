@@ -127,28 +127,28 @@ impl SeatLeg {
 
 /// Domain-separated 256-bit leaf digest for `(seat_id, balance)` in the `Seat` Merkle tree.
 pub fn deos_seat_leaf(seat_id: u64, balance: i64) -> Digest {
-    let mut s = customized(b"obend.deos.seat.leaf.v1");
+    let mut s = Cshake256::customized(b"obend.deos.seat.leaf.v1");
     s.absorb(&seat_id.to_be_bytes());
     s.absorb(&balance.to_be_bytes());
-    s.digest()
+    s.finalize_32()
 }
 
 /// Domain-separated, level-pinned 256-bit internal node digest in the `Seat` Merkle tree.
 pub fn deos_seat_parent(level: u8, left: &Digest, right: &Digest) -> Digest {
-    let mut s = customized(b"obend.deos.seat.node.v1");
+    let mut s = Cshake256::customized(b"obend.deos.seat.node.v1");
     s.absorb(&[level]);
     s.absorb(left);
     s.absorb(right);
-    s.digest()
+    s.finalize_32()
 }
 
 /// Domain-separated 256-bit composite DeOS state root binding both the `Seat` balance
 /// Merkle root and the `Canopy` polynomial commitment root.
 pub fn deos_state_root(seat_root: &Digest, canopy_root: &Digest) -> Digest {
-    let mut s = customized(b"obend.deos.state.root.v1");
+    let mut s = Cshake256::customized(b"obend.deos.state.root.v1");
     s.absorb(seat_root);
     s.absorb(canopy_root);
-    s.digest()
+    s.finalize_32()
 }
 
 /// Recompute the 256-bit `Seat` Merkle root implied by `(seat_id, balance)` and `path`.
@@ -328,12 +328,12 @@ impl SeatMerkleTree {
 /// its parent lacks.
 pub fn deos_lineage(grant: &BiscuitHop, hops: &[BiscuitHop]) -> Option<Digest> {
     let step = |tag: &[u8], prev: &Digest, h: &BiscuitHop| {
-        let mut s = customized(tag);
+        let mut s = Cshake256::customized(tag);
         s.absorb(prev);
         s.absorb(&h.rights.to_be_bytes());
         s.absorb(&h.holder);
         s.absorb(&h.channel);
-        s.digest()
+        s.finalize_32()
     };
     let mut lineage = step(b"obend.deos.lineage.root.v1", &[0; 32], grant);
     let mut rights = grant.rights;
@@ -351,16 +351,16 @@ pub fn deos_nullifier(lineage: &Digest) -> Digest {
 }
 /// The turn descriptor `turn_hash` pins: the lineage, its nullifier, and every leg's `(seat_id, pre, delta)`.
 pub fn deos_turn_digest(lineage: &Digest, nullifier: &Digest, legs: &[SeatLeg]) -> Digest {
-    let mut s = customized(b"obend.deos.turn.v1");
+    let mut s = Cshake256::customized(b"obend.deos.turn.v1");
     s.absorb(lineage);
     s.absorb(nullifier);
-    s.left(legs.len() as u64);
+    s.absorb_left_encode(legs.len() as u64);
     for l in legs {
         s.absorb(&l.seat_id.to_be_bytes());
         s.absorb(&l.pre.to_be_bytes());
         s.absorb(&l.delta.to_be_bytes());
     }
-    s.digest()
+    s.finalize_32()
 }
 /// No balance starts or ends negative, no sum overflows, and the changes cancel.
 pub fn seat_conserved(legs: &[SeatLeg]) -> bool {
@@ -427,12 +427,12 @@ impl<const N: usize> NullifierWindow<N> {
         true
     }
     pub fn root(&self) -> Digest {
-        let mut s = customized(b"obend.deos.nullifier-window.v1");
-        s.left(self.len as u64);
+        let mut s = Cshake256::customized(b"obend.deos.nullifier-window.v1");
+        s.absorb_left_encode(self.len as u64);
         for d in &self.spent[..self.len] {
             s.absorb(d);
         }
-        s.digest()
+        s.finalize_32()
     }
 }
 #[derive(Clone, Copy)]
@@ -644,7 +644,8 @@ impl<const COLS: usize, const DEG: usize, const LAYERS: usize, const W: usize, c
         if deos_state_root(&r.pre_seat_root, &r.pre_canopy_root) != pi.pre_state_root {
             return Err(SeatStateRoot);
         }
-        let post_seat_root = apply_seat_legs_merkle(&r.pre_seat_root, &r.legs).ok_or(SeatStateRoot)?;
+        let post_seat_root =
+            apply_seat_legs_merkle(&r.pre_seat_root, &r.legs).ok_or(SeatStateRoot)?;
         if deos_state_root(&post_seat_root, &r.post_canopy_root) != pi.post_state_root {
             return Err(SeatStateRoot);
         }
@@ -943,8 +944,7 @@ mod tests {
             },
         ];
         assert!(seat_conserved(&forged_legs));
-        let fake_post_seat =
-            compute_seat_merkle_root(10, 40, &forged_legs[1].merkle_path).unwrap();
+        let fake_post_seat = compute_seat_merkle_root(10, 40, &forged_legs[1].merkle_path).unwrap();
         let (v, forged_bundle) = prove_raw(
             pre_seat_root,
             fake_post_seat,
@@ -970,7 +970,10 @@ mod tests {
             0,
             None,
         );
-        assert_eq!(verdict(&v_stale_post, &stale_post_bundle), Err(SeatStateRoot));
+        assert_eq!(
+            verdict(&v_stale_post, &stale_post_bundle),
+            Err(SeatStateRoot)
+        );
 
         // 3. Duplicate `seat_id` in the same turn (seat 0 listed twice with delta 0, 0).
         let dup_path = tree.open(0).unwrap();
@@ -1093,7 +1096,10 @@ mod tests {
         ];
         let parsed_wire = decode_turn_wire(expected_wire).unwrap();
         let mut wire_out = [0u8; 256];
-        assert_eq!(encode_turn_wire(parsed_wire, &mut wire_out), Some(expected_wire));
+        assert_eq!(
+            encode_turn_wire(parsed_wire, &mut wire_out),
+            Some(expected_wire)
+        );
 
         // Full Merkle-authenticated `DeosTurnReceipt` roundtrip.
         let mut tree = default_tree();
@@ -1299,18 +1305,20 @@ mod tests {
     fn unbalanced_seat_is_refused() {
         let root = default_tree().root();
         for legs in [
-            [raw_leg(0, 100, -40), raw_leg(1, 5, 41)],          // net mint
-            [raw_leg(0, 100, -41), raw_leg(1, 5, 40)],          // net burn
-            [raw_leg(0, 10, -11), raw_leg(1, 0, 11)],           // negative post-balance
-            [raw_leg(0, -1, 1), raw_leg(1, 1, -1)],             // negative pre-balance
-            [raw_leg(0, i64::MAX, 1), raw_leg(1, 5, -1)],       // balance overflow
+            [raw_leg(0, 100, -40), raw_leg(1, 5, 41)],    // net mint
+            [raw_leg(0, 100, -41), raw_leg(1, 5, 40)],    // net burn
+            [raw_leg(0, 10, -11), raw_leg(1, 0, 11)],     // negative post-balance
+            [raw_leg(0, -1, 1), raw_leg(1, 1, -1)],       // negative pre-balance
+            [raw_leg(0, i64::MAX, 1), raw_leg(1, 5, -1)], // balance overflow
             [raw_leg(0, 0, i64::MAX), raw_leg(1, 0, i64::MAX)], // net overflow
         ] {
             assert!(!seat_conserved(&legs));
             let (v, b) = prove_raw(root, root, [0x33; 32], legs, 0b011, &[], 0, None);
             assert_eq!(verdict(&v, &b), Err(UnbalancedSeat));
         }
-        assert!(seat_conserved(&[raw_leg(0, i64::MAX, 0), raw_leg(1, 0, 0)]) && seat_conserved(&[]));
+        assert!(
+            seat_conserved(&[raw_leg(0, i64::MAX, 0), raw_leg(1, 0, 0)]) && seat_conserved(&[])
+        );
         // Legs edited after proving no longer hash to the pinned turn descriptor.
         let (v, mut b) = prove(DEFAULT_DELTAS, 0b011, &[], 0);
         b.receipt.legs[1].delta = 41;

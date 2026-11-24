@@ -11,8 +11,8 @@
 
 use obend_sandbox::sha256;
 use obend_sandbox::wasm_budget::{
-    CANON_F64_NAN_BITS, WASM_PAGE_SIZE, WasmCapTier, WasmExecutionBudget, WasmRunError, WasmVal,
-    run_wasm_metered,
+    run_wasm_metered, WasmCapTier, WasmExecutionBudget, WasmRunError, WasmVal, CANON_F64_NAN_BITS,
+    WASM_PAGE_SIZE,
 };
 
 const RUSTC_GUEST_WASM: &[u8] = include_bytes!("../testdata/rustc_guest/rustc_guest.wasm");
@@ -219,11 +219,7 @@ fn executes_real_rustc_f64_series_and_canonicalizes_all_arithmetic_nans() {
         (1024.75_f64, -0.0625_f64, 30u32),
     ] {
         let expected_bits = native_f64_series(x, y, steps).to_bits();
-        let args = [
-            WasmVal::f64(x),
-            WasmVal::f64(y),
-            WasmVal::I32(steps as i32),
-        ];
+        let args = [WasmVal::f64(x), WasmVal::f64(y), WasmVal::I32(steps as i32)];
         let rec = run_wasm_metered(
             WasmCapTier::Sandboxed,
             RUSTC_GUEST_WASM,
@@ -241,11 +237,11 @@ fn executes_real_rustc_f64_series_and_canonicalizes_all_arithmetic_nans() {
     let neg_payload_nan = 0xfff8_dead_beef_1234_u64;
     let sig_nan = 0x7ff0_0000_0000_0001_u64;
     for &(a_bits, b_bits, op_kind) in &[
-        (neg_payload_nan, 1.0_f64.to_bits(), 0u32),          // f64.add with -NaN payload
-        (0.0_f64.to_bits(), 0.0_f64.to_bits(), 1u32),        // f64.div 0.0 / 0.0 (-qNaN on x86_64!)
-        ((-1.0_f64).to_bits(), 0, 2u32),                     // f64.sqrt(-1.0)
-        (sig_nan, 0, 3u32),                                  // f64.floor(sNaN)
-        (neg_payload_nan, 0, 4u32),                          // f32.demote_f64 + f64.promote_f32(-NaN)
+        (neg_payload_nan, 1.0_f64.to_bits(), 0u32), // f64.add with -NaN payload
+        (0.0_f64.to_bits(), 0.0_f64.to_bits(), 1u32), // f64.div 0.0 / 0.0 (-qNaN on x86_64!)
+        ((-1.0_f64).to_bits(), 0, 2u32),            // f64.sqrt(-1.0)
+        (sig_nan, 0, 3u32),                         // f64.floor(sNaN)
+        (neg_payload_nan, 0, 4u32),                 // f32.demote_f64 + f64.promote_f32(-NaN)
     ] {
         let rec = run_wasm_metered(
             WasmCapTier::Sandboxed,
@@ -289,14 +285,11 @@ fn executes_real_rustc_f64_series_and_canonicalizes_all_arithmetic_nans() {
     );
     // Also verify Wasm `0xA4` (`f64.min`) and `0xA5` (`f64.max`) opcodes directly propagate NaN to canonical quiet NaN!
     let wasm_f64_min_max: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-        0x01, 0x07, 0x01, 0x60, 0x02, 0x7c, 0x7c, 0x01, 0x7c, // (f64, f64) -> f64
-        0x03, 0x03, 0x02, 0x00, 0x00,
-        0x07, 0x0d, 0x02,
-        0x03, b'm', b'i', b'n', 0x00, 0x00,
-        0x03, b'm', b'a', b'x', 0x00, 0x01,
-        0x0a, 0x11, 0x02,
-        0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0xa4, 0x0b, // f64.min
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7c, 0x7c,
+        0x01, 0x7c, // (f64, f64) -> f64
+        0x03, 0x03, 0x02, 0x00, 0x00, 0x07, 0x0d, 0x02, 0x03, b'm', b'i', b'n', 0x00, 0x00, 0x03,
+        b'm', b'a', b'x', 0x00, 0x01, 0x0a, 0x11, 0x02, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0xa4,
+        0x0b, // f64.min
         0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0xa5, 0x0b, // f64.max
     ];
     for ep in ["min", "max"] {
@@ -336,7 +329,10 @@ fn executes_bounded_heap_bump_allocation_and_traps_confinement_violations() {
     .unwrap();
     let packed = heap_rec.results[0].as_i64().unwrap() as u64;
     let reported_total_pages = (packed >> 32) as usize;
-    assert_eq!(heap_rec.peak_memory_bytes, reported_total_pages * WASM_PAGE_SIZE);
+    assert_eq!(
+        heap_rec.peak_memory_bytes,
+        reported_total_pages * WASM_PAGE_SIZE
+    );
     assert_eq!(packed & 0xffff_ffff, expected_word_sum & 0xffff_ffff);
 
     // 2. `spin_forever` compiled by `rustc` deterministically halts with `OutOfFuel` (with wall timeout disabled so host scheduling never races fuel).
@@ -388,14 +384,10 @@ fn executes_bounded_heap_bump_allocation_and_traps_confinement_violations() {
     assert!(matches!(oob_guest, Err(WasmRunError::Trap(ref m)) if m.contains("out of bounds")));
 
     let wasm_u32_max_offset: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-        0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
-        0x03, 0x02, 0x01, 0x00,
-        0x05, 0x03, 0x01, 0x00, 0x01,
-        0x07, 0x07, 0x01, 0x03, b'o', b'o', b'b', 0x00, 0x00,
-        0x0a, 0x0d, 0x01, 0x0b, 0x00,
-        0x20, 0x00,
-        0x28, 0x02, 0xff, 0xff, 0xff, 0xff, 0x0f, // i32.load align=4 offset=u32::MAX
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01,
+        0x7f, 0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x07, 0x01, 0x03, b'o',
+        b'o', b'b', 0x00, 0x00, 0x0a, 0x0d, 0x01, 0x0b, 0x00, 0x20, 0x00, 0x28, 0x02, 0xff, 0xff,
+        0xff, 0xff, 0x0f, // i32.load align=4 offset=u32::MAX
         0x0b,
     ];
     let oob_wrap = run_wasm_metered(
@@ -413,23 +405,18 @@ fn executes_bounded_heap_bump_allocation_and_traps_confinement_violations() {
     let wasm_indirect_sig_mismatch: &[u8] = &[
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
         // Section 1 (Type): type 0 = (i64) -> i64, type 1 = (i32) -> i32
-        0x01, 0x0b, 0x02,
-        0x60, 0x01, 0x7e, 0x01, 0x7e,
-        0x60, 0x01, 0x7f, 0x01, 0x7f,
+        0x01, 0x0b, 0x02, 0x60, 0x01, 0x7e, 0x01, 0x7e, 0x60, 0x01, 0x7f, 0x01, 0x7f,
         // Section 3 (Function): func 0 -> type 0, func 1 -> type 1
-        0x03, 0x03, 0x02, 0x00, 0x01,
-        // Section 4 (Table): 1 funcref table, min 2
-        0x04, 0x04, 0x01, 0x70, 0x00, 0x02,
-        // Section 7 (Export): "probe" -> func 1
+        0x03, 0x03, 0x02, 0x00, 0x01, // Section 4 (Table): 1 funcref table, min 2
+        0x04, 0x04, 0x01, 0x70, 0x00, 0x02, // Section 7 (Export): "probe" -> func 1
         0x07, 0x09, 0x01, 0x05, b'p', b'r', b'o', b'b', b'e', 0x00, 0x01,
         // Section 9 (Element): active table 0 at offset 0 -> [func 0] (leaving slot 1 = null!)
         0x09, 0x07, 0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 0x00,
         // Section 10 (Code):
         // func 0: local.get 0; end (len = 4)
         // func 1: i32.const 42; local.get 0; call_indirect (type 1, table 0); end (len = 9)
-        0x0a, 0x10, 0x02,
-        0x04, 0x00, 0x20, 0x00, 0x0b,
-        0x09, 0x00, 0x41, 0x2a, 0x20, 0x00, 0x11, 0x01, 0x00, 0x0b,
+        0x0a, 0x10, 0x02, 0x04, 0x00, 0x20, 0x00, 0x0b, 0x09, 0x00, 0x41, 0x2a, 0x20, 0x00, 0x11,
+        0x01, 0x00, 0x0b,
     ];
     // Slot 0 holds `(i64) -> i64`, called as `(i32) -> i32` -> Trap("indirect call type mismatch")
     let sig_trap = run_wasm_metered(
@@ -470,5 +457,8 @@ fn executes_bounded_heap_bump_allocation_and_traps_confinement_violations() {
         &[WasmVal::I32(1)],
         &heap_budget,
     );
-    assert!(matches!(host_sig_err, Err(WasmRunError::SignatureMismatch(_))));
+    assert!(matches!(
+        host_sig_err,
+        Err(WasmRunError::SignatureMismatch(_))
+    ));
 }

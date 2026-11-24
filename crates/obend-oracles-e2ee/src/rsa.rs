@@ -17,12 +17,12 @@ pub const RSA_MAX_BITS: usize = 4096;
 
 /// RFC 8017 §9.2 note 1 DigestInfo prefixes.
 const DIGEST_INFO_SHA256: &[u8] = &[
-    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-    0x05, 0x00, 0x04, 0x20,
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+    0x00, 0x04, 0x20,
 ];
 const DIGEST_INFO_SHA384: &[u8] = &[
-    0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
-    0x05, 0x00, 0x04, 0x30,
+    0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05,
+    0x00, 0x04, 0x30,
 ];
 
 fn modulus(n: &[u8]) -> Result<(Limbs<LIMBS>, usize), CryptoError> {
@@ -55,7 +55,7 @@ pub fn validate_public_key(n: &[u8], e: &[u8]) -> Result<(), CryptoError> {
 fn public_op(n: &[u8], e: &[u8], sig: &[u8]) -> Result<(Vec<u8>, usize), CryptoError> {
     validate_public_key(n, e)?;
     let (n_l, bits) = modulus(n)?;
-    let k = (bits + 7) / 8;
+    let k = bits.div_ceil(8);
     if sig.len() != k {
         return Err(CryptoError::BadSignatureLength);
     }
@@ -79,7 +79,7 @@ fn emsa_pkcs1v15_encode(hash: HashAlg, msg: &[u8], k: usize) -> Result<Vec<u8>, 
     }
     let mut em = Vec::with_capacity(k);
     em.extend_from_slice(&[0x00, 0x01]);
-    em.extend(std::iter::repeat(0xffu8).take(k - t_len - 3));
+    em.extend(std::iter::repeat_n(0xffu8, k - t_len - 3));
     em.push(0x00);
     em.extend_from_slice(prefix);
     em.extend_from_slice(&hash.digest(msg));
@@ -135,7 +135,7 @@ pub fn verify_pss(
     let bad = CryptoError::BadPadding;
     let (em_full, mod_bits) = public_op(n, e, sig)?;
     let em_bits = mod_bits - 1;
-    let em_len = (em_bits + 7) / 8;
+    let em_len = em_bits.div_ceil(8);
     let k = em_full.len();
     // I2OSP(m, emLen): when emLen < k the leading octet must be zero.
     if k > em_len && em_full[0] != 0 {
@@ -207,7 +207,7 @@ impl FixtureRsaKey {
         let m = Mont::<LIMBS>::new(n_l).expect("odd modulus");
         let x = m.from_be_strict(em).expect("EM < n");
         let s = m.pow_be(&x, &unhex(self.d_hex));
-        m.to_be(&s, (bits + 7) / 8)
+        m.to_be(&s, bits.div_ceil(8))
     }
 }
 
@@ -231,7 +231,7 @@ pub(crate) fn fixture_sign_pss(key: &FixtureRsaKey, hash: HashAlg, msg: &[u8]) -
     let (_, mod_bits) = modulus(&n).expect("fixture modulus");
     let k = n.len();
     let em_bits = mod_bits - 1;
-    let em_len = (em_bits + 7) / 8;
+    let em_len = em_bits.div_ceil(8);
     let h_len = hash.output_len();
     let mut tagged = b"OBEND.FIXTURE.PSS.SALT/v1".to_vec();
     tagged.extend_from_slice(msg);
@@ -241,7 +241,11 @@ pub(crate) fn fixture_sign_pss(key: &FixtureRsaKey, hash: HashAlg, msg: &[u8]) -
     let mut db = vec![0u8; db_len - salt.len() - 1];
     db.push(0x01);
     db.extend_from_slice(&salt);
-    let mut masked: Vec<u8> = db.iter().zip(mgf1(hash, &hh, db_len)).map(|(a, b)| a ^ b).collect();
+    let mut masked: Vec<u8> = db
+        .iter()
+        .zip(mgf1(hash, &hh, db_len))
+        .map(|(a, b)| a ^ b)
+        .collect();
     let zero_bits = 8 * em_len - em_bits;
     if zero_bits > 0 {
         masked[0] &= 0xffu8 >> zero_bits;
@@ -364,7 +368,10 @@ mod tests {
         lax_prefix.extend_from_slice(&HashAlg::Sha256.digest(MSG));
         assert!(em.starts_with(&lax_prefix));
         // ... and the strict re-encoding verifier refuses it.
-        assert_eq!(verify_pkcs1v15(&n, &e3, HashAlg::Sha256, MSG, &forged), Err(CryptoError::BadPadding));
+        assert_eq!(
+            verify_pkcs1v15(&n, &e3, HashAlg::Sha256, MSG, &forged),
+            Err(CryptoError::BadPadding)
+        );
     }
 
     #[test]
@@ -385,20 +392,41 @@ mod tests {
         let n = RSA2048.n();
         let s = fixture_sign_pkcs1v15(&RSA2048, HashAlg::Sha256, MSG);
         // s >= n, short signature, and prepended zero are refused.
-        assert_eq!(verify_pkcs1v15(&n, E65537, HashAlg::Sha256, MSG, &n), Err(CryptoError::RsaSignatureOutOfRange));
-        assert_eq!(verify_pkcs1v15(&n, E65537, HashAlg::Sha256, MSG, &s[1..]), Err(CryptoError::BadSignatureLength));
+        assert_eq!(
+            verify_pkcs1v15(&n, E65537, HashAlg::Sha256, MSG, &n),
+            Err(CryptoError::RsaSignatureOutOfRange)
+        );
+        assert_eq!(
+            verify_pkcs1v15(&n, E65537, HashAlg::Sha256, MSG, &s[1..]),
+            Err(CryptoError::BadSignatureLength)
+        );
         let mut long = vec![0u8];
         long.extend_from_slice(&s);
-        assert_eq!(verify_pkcs1v15(&n, E65537, HashAlg::Sha256, MSG, &long), Err(CryptoError::BadSignatureLength));
+        assert_eq!(
+            verify_pkcs1v15(&n, E65537, HashAlg::Sha256, MSG, &long),
+            Err(CryptoError::BadSignatureLength)
+        );
         // 1024-bit modulus, even modulus, even exponent, e = 1 are refused.
         let mut small = vec![0x80u8];
-        small.extend(std::iter::repeat(0u8).take(126));
+        small.extend(std::iter::repeat_n(0u8, 126));
         small.push(1);
-        assert_eq!(validate_public_key(&small, E65537), Err(CryptoError::RsaModulusSize));
+        assert_eq!(
+            validate_public_key(&small, E65537),
+            Err(CryptoError::RsaModulusSize)
+        );
         let mut even = n.clone();
         *even.last_mut().unwrap() &= 0xfe;
-        assert_eq!(validate_public_key(&even, E65537), Err(CryptoError::RsaModulusSize));
-        assert_eq!(validate_public_key(&n, &[2]), Err(CryptoError::RsaBadExponent));
-        assert_eq!(validate_public_key(&n, &[1]), Err(CryptoError::RsaBadExponent));
+        assert_eq!(
+            validate_public_key(&even, E65537),
+            Err(CryptoError::RsaModulusSize)
+        );
+        assert_eq!(
+            validate_public_key(&n, &[2]),
+            Err(CryptoError::RsaBadExponent)
+        );
+        assert_eq!(
+            validate_public_key(&n, &[1]),
+            Err(CryptoError::RsaBadExponent)
+        );
     }
 }

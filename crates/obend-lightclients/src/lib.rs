@@ -59,7 +59,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
         for i in 0..16 {
             w[i] = u32::from_be_bytes([
@@ -158,7 +158,7 @@ pub fn ssz_merkleize(mut chunks: Vec<[u8; 32]>) -> [u8; 32] {
     chunks.resize(n, [0u8; 32]);
     while chunks.len() > 1 {
         let mut next = Vec::with_capacity(chunks.len() / 2);
-        for pair in chunks.chunks_exact(2) {
+        for pair in chunks.as_chunks::<2>().0 {
             next.push(sha256_pair(&pair[0], &pair[1]));
         }
         chunks = next;
@@ -318,10 +318,7 @@ pub fn compute_fork_data_root(
 
 /// Ethereum Consensus-Spec `compute_fork_digest(current_version, genesis_validators_root)`:
 /// `ForkDigest` is the leading 4 bytes of `compute_fork_data_root(fork_version, genesis_validators_root)`.
-pub fn compute_fork_digest(
-    fork_version: [u8; 4],
-    genesis_validators_root: &[u8; 32],
-) -> [u8; 4] {
+pub fn compute_fork_digest(fork_version: [u8; 4], genesis_validators_root: &[u8; 32]) -> [u8; 4] {
     let fdr = compute_fork_data_root(fork_version, genesis_validators_root);
     [fdr[0], fdr[1], fdr[2], fdr[3]]
 }
@@ -493,9 +490,7 @@ pub fn verify_eth_header_s11(
         return Err(EthGateError::ChainIdMismatch);
     }
     let expected_fd = compute_fork_digest(anchor.fork_version, &anchor.genesis_validators_root);
-    if !ct_eq(&anchor.expected_fork_digest, &expected_fd)
-        || !ct_eq(&u.fork_digest, &expected_fd)
-    {
+    if !ct_eq(&anchor.expected_fork_digest, &expected_fd) || !ct_eq(&u.fork_digest, &expected_fd) {
         return Err(EthGateError::ForkDigestMismatch);
     }
     let attested_slot = u.attested_header.slot;
@@ -588,8 +583,8 @@ pub fn verify_eth_header_s11(
     let mut participating_pks = Vec::with_capacity(participant_count);
     for (i, pk_bytes) in u.sync_committee_pubkeys.iter().enumerate() {
         if (u.sync_committee_bits[i / 8] >> (i % 8)) & 1 == 1 {
-            let pk =
-                bls12_381::key_validate(pk_bytes).map_err(|_| EthGateError::BadSyncCommitteePubkey)?;
+            let pk = bls12_381::key_validate(pk_bytes)
+                .map_err(|_| EthGateError::BadSyncCommitteePubkey)?;
             participating_pks.push(pk);
         }
     }
@@ -1103,10 +1098,18 @@ pub fn verify_comet_header_s11(
     if u.header.height <= anchor.trusted_height {
         return Err(CometGateError::NonIncreasingHeight);
     }
-    if host_now >= anchor.trusted_header_time.saturating_add(anchor.trusting_period) {
+    if host_now
+        >= anchor
+            .trusted_header_time
+            .saturating_add(anchor.trusting_period)
+    {
         return Err(CometGateError::TrustedStateExpired);
     }
-    if host_now > u.header.header_time_secs.saturating_add(anchor.max_staleness) {
+    if host_now
+        > u.header
+            .header_time_secs
+            .saturating_add(anchor.max_staleness)
+    {
         return Err(CometGateError::StaleHeader);
     }
     if u.header.header_time_secs < anchor.trusted_header_time
@@ -1347,10 +1350,8 @@ fn validate_iavl_proof_spec(proof: &Ics23ExistenceProof) -> Result<(), EnvelopeE
             return Err(EnvelopeError::InvalidProofSpec);
         }
         let left_branch_ok = (3..=16).contains(&inner.prefix.len())
-            && (inner.suffix.len() == 32
-                || (inner.suffix.len() == 33 && inner.suffix[0] == 0x20));
-        let right_branch_ok =
-            (35..=49).contains(&inner.prefix.len()) && inner.suffix.is_empty();
+            && (inner.suffix.len() == 32 || (inner.suffix.len() == 33 && inner.suffix[0] == 0x20));
+        let right_branch_ok = (35..=49).contains(&inner.prefix.len()) && inner.suffix.is_empty();
         if !left_branch_ok && !right_branch_ok {
             return Err(EnvelopeError::InvalidProofSpec);
         }
@@ -1375,10 +1376,8 @@ fn validate_tendermint_proof_spec(proof: &Ics23ExistenceProof) -> Result<(), Env
             return Err(EnvelopeError::InvalidProofSpec);
         }
         let left_branch_ok = (1..=2).contains(&inner.prefix.len())
-            && (inner.suffix.len() == 32
-                || (inner.suffix.len() == 33 && inner.suffix[0] == 0x20));
-        let right_branch_ok =
-            (33..=35).contains(&inner.prefix.len()) && inner.suffix.is_empty();
+            && (inner.suffix.len() == 32 || (inner.suffix.len() == 33 && inner.suffix[0] == 0x20));
+        let right_branch_ok = (33..=35).contains(&inner.prefix.len()) && inner.suffix.is_empty();
         if !left_branch_ok && !right_branch_ok {
             return Err(EnvelopeError::InvalidProofSpec);
         }
@@ -1459,7 +1458,9 @@ pub fn decode_bank_balance_kv(
         return Err(EnvelopeError::MalformedAmount);
     }
     let s = std::str::from_utf8(value).map_err(|_| EnvelopeError::MalformedAmount)?;
-    let amount = s.parse::<u128>().map_err(|_| EnvelopeError::AmountOverflow)?;
+    let amount = s
+        .parse::<u128>()
+        .map_err(|_| EnvelopeError::AmountOverflow)?;
     Ok(DecodedBankBalance {
         address,
         denom,
