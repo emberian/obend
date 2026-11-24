@@ -6,7 +6,10 @@ import all Obend.Polis.BlumRam
 The relation a recursive capability proof has to attest, and its consequences. Nothing here is a
 proof system: there is no zero knowledge and no succinct argument in this module. `foldChain` is
 the statement such a proof would be about, `CapAccumulator` is its constant-size public output,
-and `authorize` is the constant-time check a verifier runs on that output.
+and `authorize` is the constant-time check a verifier runs on that output. Two-phase post-quantum
+epoch-decoupled capability rollups (`OfflineCapBundle` → `EpochPresentationCert`), sorted-gap
+256-bit non-membership (`RevokedGapRoot256`), and unlinkable per-turn presentation nullifiers lift
+this relation in `Obend.Polis.ZkCapFold`.
 
 1. `RevokedSet`: a strictly sorted `Array Nat` of 256-bit nullifiers with binary search.
    `RevokedSet.contains_iff` refines the search to list membership, `RevokedSet.root` commits to the
@@ -305,6 +308,61 @@ theorem credNul_binds {l₁ l₂ : ByteArray} (h : credNul l₁ = credNul l₂) 
   · exact .inl (byteArray_eq_of_toList_eq hp)
   · exact .inr ⟨1 :: l₁.data.toList, 1 :: l₂.data.toList, .inl rfl, .inr rfl,
       fun e => hp (List.cons.inj e).2, h⟩
+
+theorem chanNul_binds {c₁ c₂ : ByteArray} (h : chanNul c₁ = chanNul c₂) :
+    c₁ = c₂ ∨ CollisionAmong nulHash
+      (fun x => x = 2 :: c₁.data.toList ∨ x = 2 :: c₂.data.toList) := by
+  if hp : c₁.data.toList = c₂.data.toList then
+    exact .inl (byteArray_eq_of_toList_eq hp)
+  else
+    exact .inr ⟨2 :: c₁.data.toList, 2 :: c₂.data.toList, .inl rfl, .inr rfl,
+      fun e => hp (List.cons.inj e).2, h⟩
+
+theorem credNul_eq (lineage : ByteArray) :
+    credNul lineage = ofBE (nulHash (1 :: lineage.data.toList)) := by
+  rfl
+
+theorem chanNul_eq (channel : ByteArray) :
+    chanNul channel = ofBE (nulHash (2 :: channel.data.toList)) := by
+  rfl
+
+theorem credNul_lt (lineage : ByteArray) : credNul lineage < 2 ^ 256 := by
+  unfold credNul
+  have hlen : (nulHash (1 :: lineage.data.toList)).length = 32 :=
+    cshake256Bytes_length nulCustomization _
+  have hlt := ofBE_lt (nulHash (1 :: lineage.data.toList))
+  rw [hlen] at hlt
+  have hpow : (256 : Nat) ^ 32 = 2 ^ 256 := by decide
+  exact hpow ▸ hlt
+
+theorem chanNul_lt (channel : ByteArray) : chanNul channel < 2 ^ 256 := by
+  unfold chanNul
+  have hlen : (nulHash (2 :: channel.data.toList)).length = 32 :=
+    cshake256Bytes_length nulCustomization _
+  have hlt := ofBE_lt (nulHash (2 :: channel.data.toList))
+  rw [hlen] at hlt
+  have hpow : (256 : Nat) ^ 32 = 2 ^ 256 := by decide
+  exact hpow ▸ hlt
+
+/-- Full-width 256-bit credential nullifier corresponding losslessly to `credNul`. -/
+def credNul256 (lineage : ByteArray) : BitVec 256 :=
+  BitVec.ofNat 256 (credNul lineage)
+
+/-- Full-width 256-bit channel nullifier corresponding losslessly to `chanNul`. -/
+def chanNul256 (channel : ByteArray) : BitVec 256 :=
+  BitVec.ofNat 256 (chanNul channel)
+
+theorem credNul256_toNat (lineage : ByteArray) :
+    (credNul256 lineage).toNat = credNul lineage := by
+  unfold credNul256
+  rw [BitVec.toNat_ofNat]
+  exact Nat.mod_eq_of_lt (credNul_lt lineage)
+
+theorem chanNul256_toNat (channel : ByteArray) :
+    (chanNul256 channel).toNat = chanNul channel := by
+  unfold chanNul256
+  rw [BitVec.toNat_ofNat]
+  exact Nat.mod_eq_of_lt (chanNul_lt channel)
 
 attribute [local irreducible] credNul chanNul
 
