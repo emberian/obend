@@ -52,6 +52,8 @@ public import Obend.Codec.DetCbor
 public import Obend.Digest.Cshake256
 public import Obend.Codec.Hex
 import all Obend.Codec.DetCbor
+import all Obend.Digest.Cshake256.Seam
+import all Obend.Digest.Cshake256.Fast
 
 public section
 
@@ -71,11 +73,24 @@ structure Hasher where
   hash : String → ByteArray → ByteArray
   size_eq : ∀ (tag : String) (m : ByteArray), (hash tag m).size = 32
 
+/-- Tagged cSHAKE256 byte-array hash (spec reading). -/
+def cshakeHash (tag : String) (m : ByteArray) : ByteArray :=
+  ⟨(Obend.Digest.Cshake256.cshake256Bytes tag.toUTF8.data.toList m.data.toList).toArray⟩
+
+/-- Zero-copy `ByteArray` cSHAKE256 execution (`0` intermediate `List UInt8` allocations). -/
+def cshakeHashExec (tag : String) (m : @& ByteArray) : ByteArray :=
+  Obend.Digest.Cshake256.Native.cshake256Kernel tag.toUTF8 m
+
+@[csimp] theorem cshakeHash_eq_exec : @cshakeHash = @cshakeHashExec := by
+  funext tag m
+  apply byteArray_eq_of_toList
+  rw [cshakeHashExec, Obend.Digest.Cshake256.Native.cshake256Kernel_toList]
+  rfl
+
 /-- cSHAKE256 with the tag as customization string. -/
 def cshakeHasher : Hasher where
-  hash tag m :=
-    ⟨(Obend.Digest.Cshake256.cshake256Bytes tag.toUTF8.data.toList m.data.toList).toArray⟩
-  size_eq tag m := by simp [ByteArray.size]
+  hash := cshakeHash
+  size_eq tag m := by simp [cshakeHash, ByteArray.size]
 
 /-- An explicit collision of a hasher at a tag: two different messages, one digest. -/
 structure HashCollision (H : Hasher) (tag : String) where

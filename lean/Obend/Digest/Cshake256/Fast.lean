@@ -1223,6 +1223,277 @@ theorem squeezeByteArray_data (s : KState) :
   simp only [squeezeByteArray, pushLaneLE_data, emptyWithCapacity_data, List.nil_append]
   rfl
 
+@[simp] theorem squeezeByteArray_size (s : KState) : (squeezeByteArray s).size = 32 := by
+  rw [size_eq_length, squeezeByteArray_data, squeeze_fast_eq, squeeze32_length]
+
+/-- Unboxed `UInt64` base-256 little-endian digit extractor (`≤ 8` bytes, zero `Nat` division). -/
+@[inline] def natBytesLEU64 : Nat → UInt64 → List UInt8
+  | 0, _ => []
+  | fuel + 1, v =>
+    if v == 0 then [] else v.toUInt8 :: natBytesLEU64 fuel (v >>> 8)
+
+theorem natBytesLEU64_eq : ∀ (fuel k : Nat) (v : UInt64),
+    v.toNat < 256 ^ fuel → v.toNat ≤ k →
+    natBytesLEU64 fuel v = natBytesLEAux k v.toNat
+  | 0, k, v, hv, _ => by
+    have hv0 : v.toNat = 0 := by simp at hv; exact hv
+    cases k <;> simp [natBytesLEU64, natBytesLEAux, hv0]
+  | fuel + 1, 0, v, _, hk => by
+    have hv0 : v.toNat = 0 := by omega
+    have hbeq : (v == 0) = true := by
+      rw [beq_iff_eq]
+      exact UInt64.toNat_inj.mp hv0
+    simp [natBytesLEU64, natBytesLEAux, hbeq]
+  | fuel + 1, k + 1, v, hv, hk => by
+    by_cases hv0 : v.toNat = 0
+    · have hbeq : (v == 0) = true := by
+        rw [beq_iff_eq]
+        exact UInt64.toNat_inj.mp hv0
+      simp [natBytesLEU64, natBytesLEAux, hv0, hbeq]
+    · have hbeq : (v == 0) = false := by
+        rw [beq_eq_false_iff_ne]
+        exact fun h => hv0 (by subst h; rfl)
+      have hb : v.toUInt8 = UInt8.ofNat (v.toNat % 256) := by
+        apply UInt8.toNat_inj.mp
+        simp [UInt8.toNat_ofNat']
+      have hsh : (v >>> 8).toNat = v.toNat / 256 := by
+        simp [UInt64.toNat_shiftRight, Nat.shiftRight_eq_div_pow]
+      have hpow : 256 ^ (fuel + 1) = 256 ^ fuel * 256 := Nat.pow_succ ..
+      have hdiv_lt : (v >>> 8).toNat < 256 ^ fuel := by
+        rw [hsh]
+        exact (Nat.div_lt_iff_lt_mul (by decide)).mpr (hpow ▸ hv)
+      have hdiv_le : (v >>> 8).toNat ≤ k := by rw [hsh]; omega
+      simp only [natBytesLEU64, natBytesLEAux, hbeq, Bool.false_eq_true, ↓reduceIte, hv0, hb,
+        natBytesLEU64_eq fuel k (v >>> 8) hdiv_lt hdiv_le, hsh]
+
+/-- Peel 8 little-endian bytes of an unboxed `UInt64` word (`k` steps, emitting exact 8 bytes when non-final). -/
+@[inline] def pushU64BytesLE : Nat → UInt64 → List UInt8 → List UInt8
+  | 0, _, tail => tail
+  | k + 1, v, tail => v.toUInt8 :: pushU64BytesLE k (v >>> 8) tail
+
+theorem natBytesLEAux_fuel_irrel : ∀ (f₁ f₂ n : Nat), n ≤ f₁ → n ≤ f₂ →
+    natBytesLEAux f₁ n = natBytesLEAux f₂ n
+  | 0, f₂, n, h₁, _ => by
+    have hn0 : n = 0 := by omega
+    subst hn0; cases f₂ <;> simp [natBytesLEAux]
+  | f₁ + 1, 0, n, _, h₂ => by
+    have hn0 : n = 0 := by omega
+    subst hn0; simp [natBytesLEAux]
+  | f₁ + 1, f₂ + 1, n, h₁, h₂ => by
+    by_cases hn0 : n = 0
+    · simp [natBytesLEAux, hn0]
+    · simp only [natBytesLEAux, hn0, ↓reduceIte]
+      rw [natBytesLEAux_fuel_irrel f₁ f₂ (n / 256) (by omega) (by omega)]
+
+theorem pushU64BytesLE_eq : ∀ (k f : Nat) (n : Nat),
+    k ≤ 8 → 256 ^ k ≤ n → n ≤ f →
+    pushU64BytesLE k (UInt64.ofNat (n % 256 ^ 8)) (natBytesLEAux (f - k) (n / 256 ^ k)) =
+      natBytesLEAux f n := by
+  intro k
+  have hAux : ∀ (j m f : Nat) (w : UInt64),
+      j ≤ 8 → w.toNat % 256 ^ j = m % 256 ^ j → 256 ^ j ≤ m → m ≤ f →
+      pushU64BytesLE j w (natBytesLEAux (f - j) (m / 256 ^ j)) = natBytesLEAux f m := by
+    intro j
+    induction j with
+    | zero =>
+      intro m f _ _ _ _ _
+      simp [pushU64BytesLE]
+    | succ j ih =>
+      intro m f w hj hmod hbig hmf
+      cases f with
+      | zero => omega
+      | succ f =>
+        have hm0 : m ≠ 0 := by
+          have hp : 0 < 256 ^ (j + 1) := Nat.pow_pos (by decide)
+          omega
+        have hpow_j : 256 ^ (j + 1) = 256 * 256 ^ j := by rw [Nat.pow_succ, Nat.mul_comm]
+        have hw_mod256 : w.toNat % 256 = m % 256 := by
+          calc w.toNat % 256 = (w.toNat % 256 ^ (j + 1)) % 256 := by
+                rw [hpow_j, Nat.mod_mul_right_mod]
+            _ = (m % 256 ^ (j + 1)) % 256 := by rw [hmod]
+            _ = m % 256 := by rw [hpow_j, Nat.mod_mul_right_mod]
+        have hb : w.toUInt8 = UInt8.ofNat (m % 256) := by
+          apply UInt8.toNat_inj.mp
+          simp [UInt8.toNat_ofNat', hw_mod256]
+        have hsh : (w >>> 8).toNat = w.toNat / 256 := by
+          simp [UInt64.toNat_shiftRight, Nat.shiftRight_eq_div_pow]
+        have hw_div_mod : (w >>> 8).toNat % 256 ^ j = (m / 256) % 256 ^ j := by
+          rw [hsh]
+          let P := 256 ^ j
+          have hP : 0 < P := Nat.pow_pos (show 0 < 256 by decide)
+          have hdiv_mod : ∀ x : Nat, (x / 256) % P = (x % (256 * P)) / 256 := by
+            intro x
+            let qx := x / (256 * P)
+            let rx := x % (256 * P)
+            have hx : x = rx + 256 * (P * qx) := by
+              dsimp only [qx, rx]
+              rw [← Nat.mul_assoc, Nat.add_comm]
+              exact (Nat.div_add_mod x (256 * P)).symm
+            have hrx : rx < P * 256 := by
+              dsimp only [rx]; rw [Nat.mul_comm]
+              exact Nat.mod_lt x (Nat.mul_pos hP (show 0 < 256 by decide))
+            have hrx_div : rx / 256 < P := (Nat.div_lt_iff_lt_mul (show 0 < 256 by decide)).mpr hrx
+            change (x / 256) % P = rx / 256
+            rw [hx, Nat.add_mul_div_left rx (P * qx) (show 0 < 256 by decide),
+              Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt hrx_div]
+          rw [hdiv_mod w.toNat, hdiv_mod m]
+          dsimp only [P] at *
+          rw [← hpow_j, hmod]
+        have hm_div_big : 256 ^ j ≤ m / 256 := by
+          rw [Nat.le_div_iff_mul_le (by decide), ← Nat.pow_succ]
+          exact hbig
+        have hsub : f + 1 - (j + 1) = f - j := by omega
+        have hdiv2 : m / 256 ^ (j + 1) = (m / 256) / 256 ^ j := by
+          rw [hpow_j, ← Nat.div_div_eq_div_mul]
+        simp only [pushU64BytesLE, natBytesLEAux, hm0, ↓reduceIte, hb, hsub, hdiv2]
+        congr 1
+        exact ih (m / 256) f (w >>> 8) (by omega) hw_div_mod hm_div_big (by omega)
+  intro f n hk hbig hnf
+  have hpow8 : (2 : Nat) ^ 64 = 256 ^ 8 := by decide
+  have hw_mod : (UInt64.ofNat (n % 256 ^ 8)).toNat % 256 ^ k = n % 256 ^ k := by
+    rw [UInt64.toNat_ofNat', hpow8, Nat.mod_mod]
+    have h8 : 256 ^ 8 = 256 ^ (8 - k) * 256 ^ k := by
+      rw [← Nat.pow_add, show 8 - k + k = 8 by omega]
+    rw [h8, Nat.mod_mul_left_mod]
+  exact hAux k n f (UInt64.ofNat (n % 256 ^ 8)) hk hw_mod hbig hnf
+
+/-- Fast `natBytesLE`: unboxed `UInt64` loop below `2^64`, and 64-bit limb shifts (`value >>> 64`)
+for multi-word bignums without allocating `fuel - 1` GMP bignums per byte. -/
+def natBytesLEFast (value : Nat) : List UInt8 :=
+  if value < 18446744073709551616 then
+    natBytesLEU64 8 (UInt64.ofNat value)
+  else
+    pushU64BytesLE 8 (UInt64.ofNat value) (natBytesLEFast (value >>> 64))
+termination_by value
+decreasing_by
+  rw [Nat.shiftRight_eq_div_pow]
+  exact Nat.div_lt_self (by omega) (by decide)
+
+theorem natBytesLEFast_eq (value : Nat) : natBytesLEFast value = natBytesLE value := by
+  induction value using Nat.strongRecOn with
+  | ind value ih =>
+    unfold natBytesLEFast
+    have hpow8 : (256 : Nat) ^ 8 = 18446744073709551616 := by decide
+    have h2_64 : (2 : Nat) ^ 64 = 18446744073709551616 := by decide
+    by_cases hlt : value < 18446744073709551616
+    · simp only [hlt, ↓reduceIte]
+      have hu : (UInt64.ofNat value).toNat = value := by
+        rw [UInt64.toNat_ofNat', h2_64]
+        exact Nat.mod_eq_of_lt hlt
+      rw [natBytesLEU64_eq 8 value (UInt64.ofNat value) (by rw [hu, hpow8]; exact hlt) (by omega),
+        hu, natBytesLE]
+    · simp only [hlt, ↓reduceIte]
+      have hsh_lt : value >>> 64 < value := by
+        rw [Nat.shiftRight_eq_div_pow]
+        exact Nat.div_lt_self (by omega) (by decide)
+      have hsh_eq : value >>> 64 = value / 256 ^ 8 := by
+        rw [Nat.shiftRight_eq_div_pow, h2_64, ← hpow8]
+      have hu_eq : UInt64.ofNat value = UInt64.ofNat (value % 256 ^ 8) := by
+        apply UInt64.toNat_inj.mp
+        rw [UInt64.toNat_ofNat', UInt64.toNat_ofNat', h2_64, ← hpow8, Nat.mod_mod]
+      rw [ih (value >>> 64) hsh_lt, natBytesLE, hsh_eq, hu_eq,
+        natBytesLEAux_fuel_irrel (value / 256 ^ 8) (value - 8) (value / 256 ^ 8)
+          (Nat.le_refl _) (by rw [hpow8]; omega),
+        pushU64BytesLE_eq 8 value value (Nat.le_refl 8) (by rw [hpow8]; omega) (Nat.le_refl _),
+        natBytesLE]
+
+@[csimp] theorem natBytesLE_eq_fast : @natBytesLE = @natBytesLEFast := by
+  funext value
+  exact (natBytesLEFast_eq value).symm
+
+/-- Build `bytepad (encodeString n ‖ encodeString c) 136` directly in `ByteArray`. -/
+def namedPrefixBA (name custom : @& ByteArray) : ByteArray :=
+  let hdr1 := leftEncode rateBytes ++ leftEncode (8 * name.size)
+  let hdr2 := leftEncode (8 * custom.size)
+  let cap := hdr1.length + name.size + hdr2.length + custom.size + rateBytes
+  let b1 := copySlice name 0 name.size (pushList (ByteArray.emptyWithCapacity cap) hdr1)
+  let b2 := copySlice custom 0 custom.size (pushList b1 hdr2)
+  let zeroCount := (rateBytes - b2.size % rateBytes) % rateBytes
+  pushZeros b2 zeroCount
+
+theorem namedPrefixBA_data (name custom : ByteArray) :
+    (namedPrefixBA name custom).data.toList =
+      bytepad (encodeString name.data.toList ++ encodeString custom.data.toList) rateBytes := by
+  unfold namedPrefixBA bytepad
+  have h136 : ¬(rateBytes = 0) := by decide
+  simp only [h136, ↓reduceIte]
+  let hdr1 := leftEncode rateBytes ++ leftEncode (8 * name.size)
+  let hdr2 := leftEncode (8 * custom.size)
+  let cap := hdr1.length + name.size + hdr2.length + custom.size + rateBytes
+  let b1 := copySlice name 0 name.size (pushList (ByteArray.emptyWithCapacity cap) hdr1)
+  let b2 := copySlice custom 0 custom.size (pushList b1 hdr2)
+  have hb1 : b1.data.toList = leftEncode rateBytes ++ encodeString name.data.toList := by
+    dsimp only [b1, hdr1]
+    rw [copySlice_data name 0 name.size _ (by omega), pushList_data, emptyWithCapacity_data,
+      List.nil_append, List.drop_zero, size_eq_length, List.take_length]
+    simp [encodeString, List.append_assoc]
+  have hb2 : b2.data.toList =
+      leftEncode rateBytes ++ (encodeString name.data.toList ++ encodeString custom.data.toList) := by
+    dsimp only [b2, hdr2]
+    rw [copySlice_data custom 0 custom.size _ (by omega), pushList_data, hb1,
+      List.drop_zero, size_eq_length, List.take_length]
+    simp [encodeString, List.append_assoc]
+  change (pushZeros b2 ((rateBytes - b2.size % rateBytes) % rateBytes)).data.toList = _
+  rw [pushZeros_data, size_eq_length, hb2]
+
+/-- Zero-copy `ByteArray` general `namedBytes` cSHAKE256. -/
+def namedByteArrayFast (name custom input : @& ByteArray) : ByteArray :=
+  if name.size == 0 && custom.size == 0 then
+    squeezeByteArray (absorbByteArray input 0x1f zeroS)
+  else
+    let pfx := namedPrefixBA name custom
+    let s0 := absorbLoop pfx (pfx.size / rateBytes) 0 zeroS
+    squeezeByteArray (absorbByteArray input 0x04 s0)
+
+theorem namedByteArrayFast_eq (n c m : ByteArray) :
+    (namedByteArrayFast n c m).data.toList =
+      namedBytes n.data.toList c.data.toList m.data.toList := by
+  unfold namedByteArrayFast namedBytes paddedMessage
+  by_cases hnc : n.data.toList = [] ∧ c.data.toList = []
+  · have hb : (n.size == 0 && c.size == 0) = true := by
+      simp [size_eq_length, hnc.1, hnc.2]
+    simp only [hb, hnc.1, hnc.2, and_self, ↓reduceIte, squeezeByteArray_data, squeeze_fast_eq,
+      absorbByteArray_toState, zeroS_toState, absorbPadded]
+  · have hb : (n.size == 0 && c.size == 0) = false := by
+      rw [Bool.and_eq_false_iff, beq_eq_false_iff_ne, beq_eq_false_iff_ne,
+        size_eq_length, size_eq_length]
+      by_cases hn0 : n.data.toList.length = 0
+      · right; exact fun hc0 => hnc ⟨List.eq_nil_of_length_eq_zero hn0, List.eq_nil_of_length_eq_zero hc0⟩
+      · left; exact hn0
+    simp only [hb, hnc, Bool.false_eq_true, ↓reduceIte, squeezeByteArray_data, squeeze_fast_eq,
+      absorbByteArray_toState]
+    let pfx := namedPrefixBA n c
+    have hpfx_data : pfx.data.toList =
+        bytepad (encodeString n.data.toList ++ encodeString c.data.toList) rateBytes :=
+      namedPrefixBA_data n c
+    have hpfx_mod : (bytepad (encodeString n.data.toList ++ encodeString c.data.toList) rateBytes).length % rateBytes = 0 := by
+      unfold bytepad rateBytes
+      simp only [show ¬(136 = 0) by decide, ↓reduceIte, List.length_append, List.length_replicate]
+      omega
+    have hpfx_blocks :
+        (bytepad (encodeString n.data.toList ++ encodeString c.data.toList) rateBytes).length =
+          (pfx.size / rateBytes) * rateBytes := by
+      rw [size_eq_length, hpfx_data]
+      have h := Nat.div_add_mod (bytepad (encodeString n.data.toList ++ encodeString c.data.toList) rateBytes).length rateBytes
+      rw [hpfx_mod, Nat.add_zero, Nat.mul_comm] at h
+      exact h.symm
+    have hs0 : (absorbLoop pfx (pfx.size / rateBytes) 0 zeroS).toState =
+        absorbFrom (pfx.size / rateBytes) zeroState
+          (bytepad (encodeString n.data.toList ++ encodeString c.data.toList) rateBytes) := by
+      dsimp only [pfx]
+      rw [absorb_fast_eq, zeroS_toState, List.drop_zero, hpfx_data]
+    change squeeze32 (absorbFrom ((padForRate m.data.toList 4).length / rateBytes)
+        (absorbLoop pfx (pfx.size / rateBytes) 0 zeroS).toState (padForRate m.data.toList 4)) = _
+    rw [hs0, padForRate_append_aligned _ _ _ hpfx_mod, absorbPadded]
+    have htot_div :
+        ((bytepad (encodeString n.data.toList ++ encodeString c.data.toList) rateBytes ++
+            padForRate m.data.toList 0x04).length) / rateBytes =
+          pfx.size / rateBytes + (padForRate m.data.toList 0x04).length / rateBytes := by
+      rw [List.length_append, hpfx_blocks]
+      have hpos : 0 < rateBytes := by decide
+      rw [Nat.mul_comm _ rateBytes, Nat.mul_add_div hpos]
+    rw [htot_div, absorbFrom_append_exact (pfx.size / rateBytes) _ zeroState _ _ hpfx_blocks]
+
 /-- **Zero-copy `ByteArray` cSHAKE256**: absorbs `customization` and `input` straight from borrowed
     `ByteArray`s into `KState` and squeezes 32 bytes directly into `ByteArray` without allocating
     any intermediate `List UInt8`s or copying `input`. -/
@@ -1233,6 +1504,11 @@ theorem squeezeByteArray_data (s : KState) :
     let pfx := customizationPrefixBA customization
     let s0 := absorbLoop pfx (pfx.size / rateBytes) 0 zeroS
     squeezeByteArray (absorbByteArray input 0x04 s0)
+
+@[simp] theorem cshake256ByteArrayFast_size (c m : ByteArray) :
+    (cshake256ByteArrayFast c m).size = 32 := by
+  unfold cshake256ByteArrayFast
+  split <;> simp
 
 theorem cshake256ByteArrayFast_eq (c m : ByteArray) :
     (cshake256ByteArrayFast c m).data.toList = cshake256Bytes c.data.toList m.data.toList := by

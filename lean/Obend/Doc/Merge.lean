@@ -726,6 +726,615 @@ theorem mergeKeyedCells3_disjoint_edits_no_conflicts
   · exact hNeRB hEqRB
   · exact hNeLR hEqLR
 
+/-! ## $O(N \log N)$ Sorted-`Array` Keyed Lookup & Merge Execution (`@[csimp]`) -/
+
+private def byteLtList : List UInt8 → List UInt8 → Bool
+  | [], [] => false
+  | [], _ :: _ => true
+  | _ :: _, [] => false
+  | x :: xs, y :: ys => decide (x.toNat < y.toNat) || (x == y && byteLtList xs ys)
+
+private theorem byteLtList_irrefl : ∀ a : List UInt8, byteLtList a a = false
+  | [] => rfl
+  | x :: xs => by simp [byteLtList, byteLtList_irrefl xs]
+
+private theorem byteLtList_trans : ∀ (a b c : List UInt8),
+    byteLtList a b = true → byteLtList b c = true → byteLtList a c = true
+  | [], [], _, h, _ => by simp [byteLtList] at h
+  | [], _ :: _, [], _, h => by simp [byteLtList] at h
+  | [], _ :: _, _ :: _, _, _ => rfl
+  | _ :: _, [], _, h, _ => by simp [byteLtList] at h
+  | _ :: _, _ :: _, [], _, h => by simp [byteLtList] at h
+  | x :: xs, y :: ys, z :: zs, h1, h2 => by
+    simp only [byteLtList, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at h1 h2 ⊢
+    rcases h1 with h1 | ⟨rfl, h1⟩
+    · rcases h2 with h2 | ⟨rfl, _⟩
+      · exact .inl (by omega)
+      · exact .inl h1
+    · rcases h2 with h2 | ⟨rfl, h2⟩
+      · exact .inl h2
+      · exact .inr ⟨rfl, byteLtList_trans xs ys zs h1 h2⟩
+
+private theorem byteLtList_total : ∀ (a b : List UInt8),
+    byteLtList a b = false → byteLtList b a = false → a = b
+  | [], [], _, _ => rfl
+  | [], _ :: _, h, _ => by simp [byteLtList] at h
+  | _ :: _, [], _, h => by simp [byteLtList] at h
+  | x :: xs, y :: ys, h1, h2 => by
+    by_cases hxy : x = y
+    · subst hxy
+      simp only [byteLtList, Nat.lt_irrefl, decide_false, beq_self_eq_true, Bool.true_and,
+        Bool.false_or] at h1 h2
+      rw [byteLtList_total xs ys h1 h2]
+    · have hne : x.toNat ≠ y.toNat := fun h => hxy (UInt8.toNat_inj.mp h)
+      by_cases hlt : x.toNat < y.toNat
+      · simp [byteLtList, hlt] at h1
+      · have hgt : y.toNat < x.toNat := by omega
+        simp [byteLtList, hgt] at h2
+
+/-- Zero-allocation bytewise lexicographic comparison over `ByteArray` slices. -/
+private def byteSliceLt (a b : @& ByteArray) : Nat → Nat → Bool
+  | 0, _ => false
+  | fuel + 1, i =>
+    if ha : i < a.size then
+      if hb : i < b.size then
+        let xa := a[i]'ha
+        let xb := b[i]'hb
+        if xa.toNat < xb.toNat then true
+        else if xa == xb then byteSliceLt a b fuel (i + 1)
+        else false
+      else false
+    else decide (i < b.size)
+
+private theorem byteSliceLt_eq (a b : ByteArray) :
+    ∀ (fuel i : Nat), a.size - i < fuel →
+      byteSliceLt a b fuel i = byteLtList (a.data.toList.drop i) (b.data.toList.drop i)
+  | 0, _, hf => by omega
+  | fuel + 1, i, hf => by
+    unfold byteSliceLt
+    by_cases ha : i < a.size
+    · have hla : i < a.data.toList.length := by rwa [Array.length_toList, ByteArray.size_data]
+      rw [List.drop_eq_getElem_cons hla]
+      have hga : a.data.toList[i]'hla = a[i]'ha := rfl
+      rw [hga]
+      simp only [ha, ↓reduceDIte]
+      by_cases hb : i < b.size
+      · have hlb : i < b.data.toList.length := by rwa [Array.length_toList, ByteArray.size_data]
+        rw [List.drop_eq_getElem_cons hlb]
+        have hgb : b.data.toList[i]'hlb = b[i]'hb := rfl
+        rw [hgb]
+        simp only [hb, ↓reduceDIte]
+        by_cases hlt : (a[i]'ha).toNat < (b[i]'hb).toNat
+        · simp [byteLtList, hlt]
+        · simp only [hlt, ↓reduceIte]
+          by_cases heq : ((a[i]'ha) == (b[i]'hb)) = true
+          · simp [byteLtList, hlt, heq, byteSliceLt_eq a b fuel (i + 1) (by omega)]
+          · simp [byteLtList, hlt, heq]
+      · have hgeb : b.data.toList.length ≤ i := by
+          rw [Array.length_toList, ByteArray.size_data]; omega
+        simp [hb, List.drop_eq_nil_of_le hgeb, byteLtList]
+    · have hgea : a.data.toList.length ≤ i := by
+        rw [Array.length_toList, ByteArray.size_data]; omega
+      simp only [ha, ↓reduceDIte, List.drop_eq_nil_of_le hgea]
+      by_cases hb : i < b.size
+      · have hlb : i < b.data.toList.length := by rwa [Array.length_toList, ByteArray.size_data]
+        rw [List.drop_eq_getElem_cons hlb]
+        simp [hb, byteLtList]
+      · have hgeb : b.data.toList.length ≤ i := by
+          rw [Array.length_toList, ByteArray.size_data]; omega
+        simp [hb, List.drop_eq_nil_of_le hgeb, byteLtList]
+
+def strLt (a b : String) : Bool :=
+  byteSliceLt a.toByteArray b.toByteArray (a.toByteArray.size + 1) 0
+
+theorem strLt_irrefl (a : String) : strLt a a = false := by
+  rw [strLt, byteSliceLt_eq _ _ _ 0 (by omega), List.drop_zero, byteLtList_irrefl]
+
+theorem strLt_trans {a b c : String} (h1 : strLt a b = true) (h2 : strLt b c = true) :
+    strLt a c = true := by
+  rw [strLt, byteSliceLt_eq _ _ _ 0 (by omega), List.drop_zero] at h1 h2 ⊢
+  exact byteLtList_trans _ _ _ h1 h2
+
+theorem strLt_total {a b : String} (h1 : strLt a b = false) (h2 : strLt b a = false) : a = b := by
+  rw [strLt, byteSliceLt_eq _ _ _ 0 (by omega), List.drop_zero] at h1 h2
+  have hl := byteLtList_total _ _ h1 h2
+  have hba : a.toByteArray = b.toByteArray := ByteArray.ext (Array.ext' hl)
+  cases a; cases b
+  dsimp only at hba
+  subst hba
+  rfl
+
+/-- Merge two strictly sorted `(String × α)` lists, keeping the left value on equal keys (`List.lookup` semantics). -/
+def mergeFirstStr {α : Type} : Nat → List (String × α) → List (String × α) → List (String × α)
+  | 0, xs, ys => xs ++ ys
+  | _ + 1, [], ys => ys
+  | _ + 1, xs, [] => xs
+  | fuel + 1, (k₁, v₁) :: xs, (k₂, v₂) :: ys =>
+    if strLt k₁ k₂ then (k₁, v₁) :: mergeFirstStr fuel xs ((k₂, v₂) :: ys)
+    else if strLt k₂ k₁ then (k₂, v₂) :: mergeFirstStr fuel ((k₁, v₁) :: xs) ys
+    else (k₁, v₁) :: mergeFirstStr fuel xs ys
+
+private theorem mem_mergeFirstStr {α : Type} :
+    ∀ (fuel : Nat) (xs ys : List (String × α)) (p : String × α),
+      p ∈ mergeFirstStr fuel xs ys → p ∈ xs ∨ p ∈ ys
+  | 0, xs, ys, p, h => List.mem_append.mp h
+  | _ + 1, [], _, _, h => .inr h
+  | _ + 1, x :: xs, [], _, h => .inl h
+  | fuel + 1, (k₁, v₁) :: xs, (k₂, v₂) :: ys, p, h => by
+    unfold mergeFirstStr at h
+    by_cases h12 : strLt k₁ k₂ = true
+    · simp only [h12, ↓reduceIte, List.mem_cons] at h
+      rcases h with rfl | hr
+      · exact .inl List.mem_cons_self
+      · rcases mem_mergeFirstStr fuel xs ((k₂, v₂) :: ys) p hr with hx | hy
+        · exact .inl (List.mem_cons_of_mem _ hx)
+        · exact .inr hy
+    · simp only [h12, Bool.false_eq_true, ↓reduceIte] at h
+      by_cases h21 : strLt k₂ k₁ = true
+      · simp only [h21, ↓reduceIte, List.mem_cons] at h
+        rcases h with rfl | hr
+        · exact .inr List.mem_cons_self
+        · rcases mem_mergeFirstStr fuel ((k₁, v₁) :: xs) ys p hr with hx | hy
+          · exact .inl hx
+          · exact .inr (List.mem_cons_of_mem _ hy)
+      · simp only [h21, Bool.false_eq_true, ↓reduceIte, List.mem_cons] at h
+        rcases h with rfl | hr
+        · exact .inl List.mem_cons_self
+        · rcases mem_mergeFirstStr fuel xs ys p hr with hx | hy
+          · exact .inl (List.mem_cons_of_mem _ hx)
+          · exact .inr (List.mem_cons_of_mem _ hy)
+
+private theorem mergeFirstStr_sorted {α : Type} :
+    ∀ (fuel : Nat) (xs ys : List (String × α)),
+      xs.length + ys.length ≤ fuel →
+      xs.Pairwise (fun a b => strLt a.1 b.1 = true) →
+      ys.Pairwise (fun a b => strLt a.1 b.1 = true) →
+      (mergeFirstStr fuel xs ys).Pairwise (fun a b => strLt a.1 b.1 = true)
+  | 0, xs, ys, hf, _, _ => by
+    have hx : xs = [] := List.eq_nil_of_length_eq_zero (by omega)
+    have hy : ys = [] := List.eq_nil_of_length_eq_zero (by omega)
+    subst hx hy; simp [mergeFirstStr]
+  | _ + 1, [], _, _, _, hys => hys
+  | _ + 1, x :: xs, [], _, hxs, _ => hxs
+  | fuel + 1, (k₁, v₁) :: xs, (k₂, v₂) :: ys, hf, hxs, hys => by
+    simp only [List.length_cons] at hf
+    obtain ⟨hx_hd, hx_tl⟩ := List.pairwise_cons.mp hxs
+    obtain ⟨hy_hd, hy_tl⟩ := List.pairwise_cons.mp hys
+    unfold mergeFirstStr
+    by_cases h12 : strLt k₁ k₂ = true
+    · simp only [h12, ↓reduceIte, List.pairwise_cons]
+      refine ⟨fun p hp => ?_, mergeFirstStr_sorted fuel xs ((k₂, v₂) :: ys) (by simp; omega) hx_tl hys⟩
+      rcases mem_mergeFirstStr fuel xs ((k₂, v₂) :: ys) p hp with hx | hy
+      · exact hx_hd p hx
+      · rcases List.mem_cons.mp hy with rfl | hy'
+        · exact h12
+        · exact strLt_trans h12 (hy_hd p hy')
+    · simp only [h12, Bool.false_eq_true, ↓reduceIte]
+      by_cases h21 : strLt k₂ k₁ = true
+      · simp only [h21, ↓reduceIte, List.pairwise_cons]
+        refine ⟨fun p hp => ?_, mergeFirstStr_sorted fuel ((k₁, v₁) :: xs) ys (by simp; omega) hxs hy_tl⟩
+        rcases mem_mergeFirstStr fuel ((k₁, v₁) :: xs) ys p hp with hx | hy
+        · rcases List.mem_cons.mp hx with rfl | hx'
+          · exact h21
+          · exact strLt_trans h21 (hx_hd p hx')
+        · exact hy_hd p hy
+      · simp only [h21, Bool.false_eq_true, ↓reduceIte, List.pairwise_cons]
+        have heq : k₁ = k₂ :=
+          strLt_total (Bool.eq_false_iff.mpr h12) (Bool.eq_false_iff.mpr h21)
+        subst heq
+        refine ⟨fun p hp => ?_, mergeFirstStr_sorted fuel xs ys (by omega) hx_tl hy_tl⟩
+        rcases mem_mergeFirstStr fuel xs ys p hp with hx | hy
+        · exact hx_hd p hx
+        · exact hy_hd p hy
+
+private theorem lookup_str_append {α : Type} (l m : List (String × α)) (q : String) :
+    (l ++ m).lookup q = (l.lookup q).or (m.lookup q) := by
+  induction l with
+  | nil => rfl
+  | cons kv rest ih =>
+    obtain ⟨k, v⟩ := kv
+    by_cases h : q = k
+    · subst h; simp [List.lookup]
+    · have hb : (q == k) = false := beq_eq_false_iff_ne.mpr h
+      simp [List.lookup, hb, ih]
+
+private theorem lookup_eq_none_of_strLt_all {α : Type} {xs : List (String × α)} {q : String}
+    (h : ∀ p ∈ xs, strLt q p.1 = true) : xs.lookup q = none := by
+  induction xs with
+  | nil => rfl
+  | cons kv rest ih =>
+    have hlt := h kv List.mem_cons_self
+    have hne : q ≠ kv.1 := fun heq => by rw [heq, strLt_irrefl] at hlt; cases hlt
+    have hb : (q == kv.1) = false := beq_eq_false_iff_ne.mpr hne
+    simp [List.lookup, hb, ih (fun p hp => h p (List.mem_cons_of_mem _ hp))]
+
+private theorem lookup_mergeFirstStr {α : Type} :
+    ∀ (fuel : Nat) (xs ys : List (String × α)),
+      xs.Pairwise (fun a b => strLt a.1 b.1 = true) →
+      ys.Pairwise (fun a b => strLt a.1 b.1 = true) →
+      ∀ q : String, (mergeFirstStr fuel xs ys).lookup q = (xs.lookup q).or (ys.lookup q)
+  | 0, xs, ys, _, _, q => lookup_str_append xs ys q
+  | _ + 1, [], ys, _, _, _ => rfl
+  | _ + 1, x :: xs, [], _, _, q => by
+    simp only [mergeFirstStr, List.lookup_nil]
+    cases ((x :: xs).lookup q) <;> rfl
+  | fuel + 1, (k₁, v₁) :: xs, (k₂, v₂) :: ys, hxs, hys, q => by
+    obtain ⟨hx_hd, hx_tl⟩ := List.pairwise_cons.mp hxs
+    obtain ⟨hy_hd, hy_tl⟩ := List.pairwise_cons.mp hys
+    unfold mergeFirstStr
+    by_cases h12 : strLt k₁ k₂ = true
+    · simp only [h12, ↓reduceIte]
+      by_cases hq1 : q = k₁
+      · subst hq1; simp [List.lookup]
+      · have hb1 : (q == k₁) = false := beq_eq_false_iff_ne.mpr hq1
+        simp only [List.lookup, hb1, lookup_mergeFirstStr fuel xs ((k₂, v₂) :: ys) hx_tl hys q]
+    · simp only [h12, Bool.false_eq_true, ↓reduceIte]
+      by_cases h21 : strLt k₂ k₁ = true
+      · simp only [h21, ↓reduceIte]
+        by_cases hq2 : q = k₂
+        · subst hq2
+          have hnone : (((k₁, v₁) :: xs).lookup q) = none := by
+            apply lookup_eq_none_of_strLt_all
+            intro p hp
+            rcases List.mem_cons.mp hp with rfl | hp'
+            · exact h21
+            · exact strLt_trans h21 (hx_hd p hp')
+          rw [hnone]
+          simp [List.lookup]
+        · have hb2 : (q == k₂) = false := beq_eq_false_iff_ne.mpr hq2
+          rw [List.lookup, hb2, lookup_mergeFirstStr fuel ((k₁, v₁) :: xs) ys hxs hy_tl q]
+          cases (((k₁, v₁) :: xs).lookup q) <;> simp [List.lookup, hb2]
+      · simp only [h21, Bool.false_eq_true, ↓reduceIte]
+        have heq : k₁ = k₂ :=
+          strLt_total (Bool.eq_false_iff.mpr h12) (Bool.eq_false_iff.mpr h21)
+        subst heq
+        by_cases hq1 : q = k₁
+        · subst hq1; simp [List.lookup]
+        · have hb1 : (q == k₁) = false := beq_eq_false_iff_ne.mpr hq1
+          simp [List.lookup, hb1, lookup_mergeFirstStr fuel xs ys hx_tl hy_tl q]
+
+def mergeFirstPass {α : Type} : List (List (String × α)) → List (List (String × α))
+  | a :: b :: rest => mergeFirstStr (a.length + b.length) a b :: mergeFirstPass rest
+  | runs => runs
+
+def mergeFirstLoop {α : Type} : Nat → List (List (String × α)) → List (String × α)
+  | 0, runs => runs.foldr (fun r acc => mergeFirstStr (r.length + acc.length) r acc) []
+  | _ + 1, [] => []
+  | _ + 1, [a] => a
+  | fuel + 1, a :: b :: rest => mergeFirstLoop fuel (mergeFirstPass (a :: b :: rest))
+
+private theorem mergeFirstPass_spec {α : Type} :
+    ∀ (runs : List (List (String × α))),
+      (∀ r ∈ runs, r.Pairwise (fun a b => strLt a.1 b.1 = true)) →
+      (∀ r ∈ mergeFirstPass runs, r.Pairwise (fun a b => strLt a.1 b.1 = true)) ∧
+      (∀ q, (mergeFirstPass runs).flatten.lookup q = runs.flatten.lookup q)
+  | [], _ => ⟨fun _ h => (nomatch h), fun _ => rfl⟩
+  | [a], h => ⟨h, fun _ => rfl⟩
+  | a :: b :: rest, h => by
+    have ha := h a List.mem_cons_self
+    have hb := h b (List.mem_cons_of_mem _ List.mem_cons_self)
+    have hr := fun r hm => h r (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ hm))
+    obtain ⟨ih_s, ih_l⟩ := mergeFirstPass_spec rest hr
+    refine ⟨fun r hm => ?_, fun q => ?_⟩
+    · rcases List.mem_cons.mp hm with rfl | hm'
+      · exact mergeFirstStr_sorted _ a b (Nat.le_refl _) ha hb
+      · exact ih_s r hm'
+    · simp only [mergeFirstPass, List.flatten_cons, lookup_str_append,
+        lookup_mergeFirstStr _ a b ha hb q, ih_l q, Option.or_assoc]
+
+private theorem foldr_mergeFirst_spec {α : Type} :
+    ∀ (runs : List (List (String × α))),
+      (∀ r ∈ runs, r.Pairwise (fun a b => strLt a.1 b.1 = true)) →
+      let out := runs.foldr (fun r acc => mergeFirstStr (r.length + acc.length) r acc) []
+      out.Pairwise (fun a b => strLt a.1 b.1 = true) ∧
+      ∀ q, out.lookup q = runs.flatten.lookup q
+  | [], _ => ⟨.nil, fun _ => rfl⟩
+  | r :: rs, h => by
+    have hr := h r List.mem_cons_self
+    obtain ⟨ih_s, ih_l⟩ := foldr_mergeFirst_spec rs (fun x hx => h x (List.mem_cons_of_mem _ hx))
+    refine ⟨mergeFirstStr_sorted _ r _ (Nat.le_refl _) hr ih_s, fun q => ?_⟩
+    simp only [List.foldr_cons, List.flatten_cons, lookup_str_append,
+      lookup_mergeFirstStr _ r _ hr ih_s q, ih_l q]
+
+private theorem mergeFirstLoop_spec {α : Type} :
+    ∀ (fuel : Nat) (runs : List (List (String × α))),
+      (∀ r ∈ runs, r.Pairwise (fun a b => strLt a.1 b.1 = true)) →
+      (mergeFirstLoop fuel runs).Pairwise (fun a b => strLt a.1 b.1 = true) ∧
+      ∀ q, (mergeFirstLoop fuel runs).lookup q = runs.flatten.lookup q
+  | 0, runs, h => foldr_mergeFirst_spec runs h
+  | _ + 1, [], _ => ⟨.nil, fun _ => rfl⟩
+  | _ + 1, [a], h => ⟨h a List.mem_cons_self, fun q => by simp [mergeFirstLoop]⟩
+  | fuel + 1, a :: b :: rest, h => by
+    obtain ⟨hp_s, hp_l⟩ := mergeFirstPass_spec (a :: b :: rest) h
+    obtain ⟨ih_s, ih_l⟩ := mergeFirstLoop_spec fuel (mergeFirstPass (a :: b :: rest)) hp_s
+    exact ⟨ih_s, fun q => (ih_l q).trans (hp_l q)⟩
+
+/-- Build a strictly-sorted `Array (String × α)` dictionary in $O(N \log N)$ preserving first-entry wins. -/
+def buildStrMap {α : Type} (xs : List (String × α)) : Array (String × α) :=
+  (mergeFirstLoop (xs.length + 1) (xs.map (fun kv => [kv]))).toArray
+
+private theorem flatten_map_singleton {α : Type} :
+    ∀ xs : List α, (xs.map (fun x => [x])).flatten = xs
+  | [] => rfl
+  | _ :: xs => by simp [flatten_map_singleton xs]
+
+theorem buildStrMap_spec {α : Type} (xs : List (String × α)) :
+    (buildStrMap xs).toList.Pairwise (fun a b => strLt a.1 b.1 = true) ∧
+    ∀ q, (buildStrMap xs).toList.lookup q = xs.lookup q := by
+  have hsing : ∀ r ∈ xs.map (fun kv => [kv]), r.Pairwise (fun a b => strLt a.1 b.1 = true) := by
+    intro r hr
+    obtain ⟨kv, _, rfl⟩ := List.mem_map.mp hr
+    exact List.pairwise_singleton _ kv
+  obtain ⟨hs, hl⟩ := mergeFirstLoop_spec (xs.length + 1) (xs.map (fun kv => [kv])) hsing
+  simpa [buildStrMap, flatten_map_singleton] using And.intro hs hl
+
+/-- $O(\log N)$ binary search over a `buildStrMap` array. -/
+def bsearchStrMap {α : Type} (m : @& Array (String × α)) (k : String) :
+    Nat → Nat → Nat → Option α
+  | 0, _, _ => none
+  | fuel + 1, lo, hi =>
+    if lo < hi then
+      let mid := (lo + hi) / 2
+      if hm : mid < m.size then
+        let kv := m[mid]'hm
+        if strLt kv.1 k then bsearchStrMap m k fuel (mid + 1) hi
+        else if strLt k kv.1 then bsearchStrMap m k fuel lo mid
+        else some kv.2
+      else none
+    else none
+
+def lookupStrMap {α : Type} (m : @& Array (String × α)) (k : String) : Option α :=
+  bsearchStrMap m k (m.size + 1) 0 m.size
+
+private theorem pairwise_str_getElem? {α : Type} :
+    ∀ {l : List (String × α)}, l.Pairwise (fun a b => strLt a.1 b.1 = true) →
+      ∀ {i j : Nat} {x y : String × α},
+        l[i]? = some x → l[j]? = some y → i < j → strLt x.1 y.1 = true
+  | [], _, _, _, _, _, hi, _, _ => by simp at hi
+  | a :: l, hp, i, j, x, y, hi, hj, hij => by
+    cases j with
+    | zero => omega
+    | succ j =>
+      rw [List.getElem?_cons_succ] at hj
+      cases i with
+      | zero =>
+        rw [List.getElem?_cons_zero] at hi
+        cases hi
+        exact (List.pairwise_cons.mp hp).1 y (List.mem_of_getElem? hj)
+      | succ i =>
+        rw [List.getElem?_cons_succ] at hi
+        exact pairwise_str_getElem? (List.pairwise_cons.mp hp).2 hi hj (by omega)
+
+private theorem lookup_of_sorted_getElem? {α : Type} :
+    ∀ {l : List (String × α)}, l.Pairwise (fun a b => strLt a.1 b.1 = true) →
+      ∀ {i : Nat} {e : String × α}, l[i]? = some e → l.lookup e.1 = some e.2
+  | [], _, _, _, h => by simp at h
+  | a :: l, hp, i, e, h => by
+    cases i with
+    | zero =>
+      rw [List.getElem?_cons_zero] at h
+      cases h; simp [List.lookup]
+    | succ i =>
+      rw [List.getElem?_cons_succ] at h
+      have hlt := (List.pairwise_cons.mp hp).1 e (List.mem_of_getElem? h)
+      have hne : e.1 ≠ a.1 := fun heq => by rw [heq, strLt_irrefl] at hlt; cases hlt
+      have hb : (e.1 == a.1) = false := beq_eq_false_iff_ne.mpr hne
+      simp [List.lookup, hb, lookup_of_sorted_getElem? (List.pairwise_cons.mp hp).2 h]
+
+private theorem bsearchStrMap_eq_lookup {α : Type} (m : Array (String × α)) (k : String)
+    (hs : m.toList.Pairwise (fun a b => strLt a.1 b.1 = true)) :
+    ∀ (fuel lo hi : Nat), hi ≤ m.size → hi - lo < fuel →
+      (∀ (i : Nat) (e : String × α), m.toList[i]? = some e → (i < lo ∨ hi ≤ i) → e.1 ≠ k) →
+      bsearchStrMap m k fuel lo hi = m.toList.lookup k
+  | 0, _, _, _, hf, _ => by omega
+  | fuel + 1, lo, hi, hhi, hf, hout => by
+    unfold bsearchStrMap
+    by_cases hlt : lo < hi
+    · simp only [hlt, ↓reduceIte]
+      have hmid : (lo + hi) / 2 < m.size := by omega
+      simp only [hmid, ↓reduceDIte]
+      have hel : m.toList[(lo + hi) / 2]? = some (m[(lo + hi) / 2]'hmid) := by
+        rw [Array.getElem?_toList, Array.getElem?_eq_getElem hmid]
+      by_cases hk1 : strLt (m[(lo + hi) / 2]'hmid).1 k = true
+      · simp only [hk1, ↓reduceIte]
+        refine bsearchStrMap_eq_lookup m k hs fuel ((lo + hi) / 2 + 1) hi hhi (by omega) ?_
+        intro i x hx hcase
+        rcases hcase with hlo' | hhi'
+        · by_cases hlo : i < lo
+          · exact hout i x hx (.inl hlo)
+          · intro hxk
+            by_cases him : i = (lo + hi) / 2
+            · subst him; rw [hel] at hx; cases hx; rw [hxk, strLt_irrefl] at hk1; cases hk1
+            · have hxe := pairwise_str_getElem? hs hx hel (by omega)
+              have hkk := strLt_trans hxe hk1
+              rw [hxk, strLt_irrefl] at hkk; cases hkk
+        · exact hout i x hx (.inr hhi')
+      · simp only [hk1, Bool.false_eq_true, ↓reduceIte]
+        by_cases hk2 : strLt k (m[(lo + hi) / 2]'hmid).1 = true
+        · simp only [hk2, ↓reduceIte]
+          refine bsearchStrMap_eq_lookup m k hs fuel lo ((lo + hi) / 2) (by omega) (by omega) ?_
+          intro i x hx hcase
+          rcases hcase with hlo' | hhi'
+          · exact hout i x hx (.inl hlo')
+          · by_cases hhi0 : hi ≤ i
+            · exact hout i x hx (.inr hhi0)
+            · intro hxk
+              by_cases him : i = (lo + hi) / 2
+              · subst him; rw [hel] at hx; cases hx; rw [hxk, strLt_irrefl] at hk2; cases hk2
+              · have hex := pairwise_str_getElem? hs hel hx (by omega)
+                have hkk := strLt_trans hk2 hex
+                rw [hxk, strLt_irrefl] at hkk; cases hkk
+        · simp only [hk2, Bool.false_eq_true, ↓reduceIte]
+          have hek : (m[(lo + hi) / 2]'hmid).1 = k :=
+            strLt_total (Bool.eq_false_iff.mpr hk1) (Bool.eq_false_iff.mpr hk2)
+          rw [← hek]
+          exact (lookup_of_sorted_getElem? hs hel).symm
+    · simp only [hlt, ↓reduceIte]
+      symm
+      apply Patch.lookup_eq_none_of_not_mem_map_fst
+      intro hm
+      obtain ⟨p, hp, hpk⟩ := List.mem_map.mp hm
+      obtain ⟨i, hi', hget⟩ := List.mem_iff_getElem.mp hp
+      have hp? : m.toList[i]? = some p := by rw [List.getElem?_eq_getElem hi', hget]
+      exact hout i p hp? (by omega) hpk
+
+theorem lookupStrMap_buildStrMap {α : Type} (xs : List (String × α)) (k : String) :
+    lookupStrMap (buildStrMap xs) k = xs.lookup k := by
+  obtain ⟨hs, hl⟩ := buildStrMap_spec xs
+  rw [← hl k, lookupStrMap]
+  refine bsearchStrMap_eq_lookup (buildStrMap xs) k hs _ 0 _ (Nat.le_refl _) (by omega) ?_
+  intro i e he hcase
+  rcases hcase with h0 | hge
+  · omega
+  · have hlt : i < (buildStrMap xs).toList.length := (List.getElem?_eq_some_iff.mp he).1
+    rw [Array.length_toList] at hlt; omega
+
+/-- Deduplicate `ks : List String` in $O(N \log N)$ keeping exact first-occurrence order (`Patch.dedupStringKeys`). -/
+def dedupStringKeysExec (ks : List String) : List String :=
+  let idxMap := buildStrMap ks.zipIdx
+  ks.zipIdx.filterMap fun p =>
+    if lookupStrMap idxMap p.1 == some p.2 then some p.1 else none
+
+private theorem le_snd_of_mem_zipIdx :
+    ∀ (xs : List String) (s : Nat) (p : String × Nat), p ∈ xs.zipIdx s → s ≤ p.2
+  | [], _, _, h => nomatch h
+  | _ :: tl, s, p, h => by
+    rw [List.zipIdx_cons] at h
+    rcases List.mem_cons.mp h with rfl | htl
+    · exact Nat.le_refl s
+    · exact Nat.le_of_lt (Nat.lt_of_lt_of_le (Nat.lt_succ_self s)
+        (le_snd_of_mem_zipIdx tl (s + 1) p htl))
+
+private theorem filterMap_lookup_cons_fixed (k : String) (start : Nat)
+    (tbl : List (String × Nat)) :
+    ∀ (xs : List (String × Nat)),
+      (∀ q ∈ xs, start < q.2) →
+      xs.filterMap (fun q =>
+        if (((k, start) :: tbl).lookup q.1 == some q.2) then some q.1 else none) =
+      (xs.filterMap (fun q =>
+        if (tbl.lookup q.1 == some q.2) then some q.1 else none)).filter (· != k)
+  | [], _ => rfl
+  | p :: ps, hgt => by
+    have hp_gt : start < p.2 := hgt p List.mem_cons_self
+    have hps_gt : ∀ q ∈ ps, start < q.2 := fun q hq => hgt q (List.mem_cons_of_mem _ hq)
+    rw [List.filterMap_cons, List.filterMap_cons,
+      filterMap_lookup_cons_fixed k start tbl ps hps_gt]
+    by_cases hpk : p.1 = k
+    · have hhd1 : (((k, start) :: tbl).lookup p.1 == some p.2) = false := by
+        rw [List.lookup, beq_iff_eq.mpr hpk, beq_eq_false_iff_ne]
+        intro he; injection he; omega
+      have hbne : (p.1 != k) = false := bne_eq_false_iff_eq.mpr hpk
+      rw [hhd1]
+      cases (tbl.lookup p.1 == some p.2) <;>
+        simp only [Bool.false_eq_true, ↓reduceIte, List.filter_cons, hbne]
+    · have hhd2 : (((k, start) :: tbl).lookup p.1) = tbl.lookup p.1 := by
+        rw [List.lookup, beq_eq_false_iff_ne.mpr hpk]
+      have hbne : (p.1 != k) = true := bne_iff_ne.mpr hpk
+      rw [hhd2]
+      cases (tbl.lookup p.1 == some p.2) <;>
+        simp only [Bool.false_eq_true, ↓reduceIte, List.filter_cons, hbne]
+
+private theorem filterMap_firstIdx_eq :
+    ∀ (ks : List String) (start : Nat),
+      (ks.zipIdx start).filterMap (fun p =>
+        if (ks.zipIdx start).lookup p.1 == some p.2 then some p.1 else none) =
+        Patch.dedupStringKeys ks
+  | [], _ => rfl
+  | k :: rest, start => by
+    rw [List.zipIdx_cons, List.filterMap_cons]
+    have hhd : (((k, start) :: rest.zipIdx (start + 1)).lookup k) = some start := by
+      simp [List.lookup]
+    rw [hhd]
+    simp only [beq_self_eq_true, ↓reduceIte, Patch.dedupStringKeys,
+      List.cons.injEq, true_and]
+    have hgt : ∀ p ∈ rest.zipIdx (start + 1), start < p.2 := fun p hp =>
+      Nat.lt_of_lt_of_le (Nat.lt_succ_self start) (le_snd_of_mem_zipIdx rest (start + 1) p hp)
+    rw [filterMap_lookup_cons_fixed k start (rest.zipIdx (start + 1)) (rest.zipIdx (start + 1)) hgt,
+      filterMap_firstIdx_eq rest (start + 1)]
+
+@[csimp] theorem dedupStringKeys_eq_exec :
+    @Patch.dedupStringKeys = @dedupStringKeysExec := by
+  funext ks
+  unfold dedupStringKeysExec
+  dsimp only
+  have hfun : (fun p : String × Nat =>
+      if lookupStrMap (buildStrMap (ks.zipIdx 0)) p.1 == some p.2 then some p.1 else none) =
+    (fun p : String × Nat =>
+      if (ks.zipIdx 0).lookup p.1 == some p.2 then some p.1 else none) := by
+    funext p; rw [lookupStrMap_buildStrMap]
+  rw [hfun, filterMap_firstIdx_eq ks 0]
+
+/-- $O(N \log N)$ keyed cell diff using sorted `Array` binary search. -/
+def diffKeyedCellsExec
+    (base branch : List (String × Obend.Core.Data.Data)) :
+    List (String × Option Obend.Core.Data.Data) :=
+  let keys := dedupStringKeysExec ((base.map Prod.fst) ++ (branch.map Prod.fst))
+  let bMap := buildStrMap base
+  let brMap := buildStrMap branch
+  keys.filterMap fun k =>
+    let bVal := lookupStrMap bMap k
+    let brVal := lookupStrMap brMap k
+    if brVal = bVal then none else some (k, brVal)
+
+@[csimp] theorem diffKeyedCells_eq_exec :
+    @Patch.diffKeyedCells = @diffKeyedCellsExec := by
+  funext base branch
+  unfold Patch.diffKeyedCells diffKeyedCellsExec
+  rw [← dedupStringKeys_eq_exec]
+  dsimp only
+  congr 1
+  funext k
+  simp [lookupStrMap_buildStrMap]
+
+/-- $O(N \log N)$ 3-way keyed cell merge using sorted `Array` binary search (evaluates each key once). -/
+def mergeKeyedCells3Exec
+    (base left right : List (String × Obend.Core.Data.Data)) : KeyedMergeOutcome :=
+  let keys := dedupStringKeysExec ((base.map Prod.fst) ++ (left.map Prod.fst) ++ (right.map Prod.fst))
+  let bMap := buildStrMap base
+  let lMap := buildStrMap left
+  let rMap := buildStrMap right
+  let mergedCells := keys.filterMap fun k =>
+    match mergeCell3 (lookupStrMap bMap k) (lookupStrMap lMap k) (lookupStrMap rMap k) with
+    | .merged (some v) => some (k, v)
+    | .merged none => none
+    | .conflict _ _ _ => none
+  let conflicts := keys.filterMap fun k =>
+    match mergeCell3 (lookupStrMap bMap k) (lookupStrMap lMap k) (lookupStrMap rMap k) with
+    | .merged _ => none
+    | .conflict b l r => some ⟨k, b, l, r⟩
+  { mergedCells := mergedCells, conflicts := conflicts }
+
+@[csimp] theorem mergeKeyedCells3_eq_exec :
+    @mergeKeyedCells3 = @mergeKeyedCells3Exec := by
+  funext base left right
+  unfold mergeKeyedCells3 mergeKeyedCells3Exec collectCellKeys
+  rw [← dedupStringKeys_eq_exec]
+  dsimp only
+  have hm : (fun k =>
+      match mergeCell3 (lookupStrMap (buildStrMap base) k)
+          (lookupStrMap (buildStrMap left) k) (lookupStrMap (buildStrMap right) k) with
+      | .merged (some v) => some (k, v)
+      | .merged none => none
+      | .conflict _ _ _ => none) =
+    (fun k => (mergedCellValueAt base left right k).map fun v => (k, v)) := by
+    funext k
+    simp only [lookupStrMap_buildStrMap, mergedCellValueAt, mergeKeyedCellAt]
+    cases mergeCell3 (base.lookup k) (left.lookup k) (right.lookup k) with
+    | merged opt => cases opt <;> rfl
+    | conflict _ _ _ => rfl
+  have hc : (fun k =>
+      match mergeCell3 (lookupStrMap (buildStrMap base) k)
+          (lookupStrMap (buildStrMap left) k) (lookupStrMap (buildStrMap right) k) with
+      | .merged _ => none
+      | .conflict b l r => some (⟨k, b, l, r⟩ : MergeConflict)) =
+    (fun k =>
+      match mergeKeyedCellAt base left right k with
+      | .merged _ => none
+      | .conflict b l r => some (⟨k, b, l, r⟩ : MergeConflict)) := by
+    funext k
+    simp [lookupStrMap_buildStrMap, mergeKeyedCellAt]
+  simp [hm, hc]
+
 end Obend.Doc
 
 end

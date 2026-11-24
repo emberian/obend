@@ -131,6 +131,49 @@ def slotsConfined : VpaJson.JState → List Seg → Bool
   | st, .lit ts :: rest => slotsConfined (VpaJson.specRunJson (litBytes ts) st) rest
   | st, .slot _ :: rest => decide (st.mode = .str false .normal) && slotsConfined st rest
 
+/-- Step `JState` across a list of `String` literals directly over their UTF-8 `ByteArray`s (`0` `List UInt8`s). -/
+def runLitStringsExec : VpaJson.JState → List String → VpaJson.JState
+  | st, [] => st
+  | st, t :: ts =>
+    let b := t.toByteArray
+    runLitStringsExec (VpaJson.foldBytes VpaJson.stepJson b b.size 0 b.size st) ts
+
+theorem runLitStringsExec_eq : ∀ (ts : List String) (st : VpaJson.JState),
+    runLitStringsExec st ts = VpaJson.specRunJson (litBytes ts) st
+  | [], _ => rfl
+  | t :: ts, st => by
+    have hlen : t.toByteArray.data.toList.length = t.toByteArray.size := Array.length_toList
+    have hb : VpaJson.foldBytes VpaJson.stepJson t.toByteArray t.toByteArray.size 0 t.toByteArray.size st =
+        VpaJson.specRunJson t.toByteArray.data.toList st := by
+      rw [VpaJson.foldBytes_eq _ _ _ 0 _ _ (Nat.le_refl _) (by omega), List.drop_zero,
+        Nat.sub_zero, List.take_of_length_le (Nat.le_of_eq hlen), VpaJson.specRunJson]
+    simp only [runLitStringsExec, hb, runLitStringsExec_eq ts, litBytes, List.flatMap_cons,
+      VpaJson.specRunJson_append]
+
+def skeletonRunExec : VpaJson.JState → List Seg → VpaJson.JState
+  | st, [] => st
+  | st, .lit ts :: rest => skeletonRunExec (runLitStringsExec st ts) rest
+  | st, .slot _ :: rest => skeletonRunExec st rest
+
+@[csimp] theorem skeletonRun_eq_exec : @skeletonRun = @skeletonRunExec := by
+  funext st segs
+  induction segs generalizing st with
+  | nil => rfl
+  | cons s rest ih =>
+    cases s <;> simp [skeletonRun, skeletonRunExec, runLitStringsExec_eq, ih]
+
+def slotsConfinedExec : VpaJson.JState → List Seg → Bool
+  | _, [] => true
+  | st, .lit ts :: rest => slotsConfinedExec (runLitStringsExec st ts) rest
+  | st, .slot _ :: rest => decide (st.mode = .str false .normal) && slotsConfinedExec st rest
+
+@[csimp] theorem slotsConfined_eq_exec : @slotsConfined = @slotsConfinedExec := by
+  funext st segs
+  induction segs generalizing st with
+  | nil => rfl
+  | cons s rest ih =>
+    cases s <;> simp [slotsConfined, slotsConfinedExec, runLitStringsExec_eq, ih]
+
 /-- Semantic template confinement: every slot appears at a machine state inside a plain value string. -/
 inductive SlotsInValueString : VpaJson.JState → List Seg → Prop
   | nil (st) : SlotsInValueString st []
@@ -194,6 +237,35 @@ def spansAligned : Nat → List Seg → List RedactedSpan → Bool
   | _, .slot _ :: _, [] => false
   | off, .slot _ :: rest, sp :: spans =>
     decide (sp.offset = off) && spansAligned (off + sp.length) rest spans
+
+def litBytesLenExec : List String → Nat → Nat
+  | [], acc => acc
+  | t :: ts, acc => litBytesLenExec ts (acc + t.toByteArray.size)
+
+theorem litBytesLenExec_eq : ∀ (ts : List String) (acc : Nat),
+    litBytesLenExec ts acc = acc + (litBytes ts).length
+  | [], acc => by simp [litBytesLenExec, litBytes]
+  | t :: ts, acc => by
+    have hsz : t.toByteArray.data.toList.length = t.toByteArray.size := Array.length_toList
+    simp only [litBytesLenExec, litBytesLenExec_eq ts, litBytes, List.flatMap_cons,
+      List.length_append, hsz, Nat.add_assoc]
+
+def spansAlignedExec : Nat → List Seg → List RedactedSpan → Bool
+  | _, [], spans => spans.isEmpty
+  | off, .lit ts :: rest, spans => spansAlignedExec (litBytesLenExec ts off) rest spans
+  | _, .slot _ :: _, [] => false
+  | off, .slot _ :: rest, sp :: spans =>
+    decide (sp.offset = off) && spansAlignedExec (off + sp.length) rest spans
+
+@[csimp] theorem spansAligned_eq_exec : @spansAligned = @spansAlignedExec := by
+  funext off segs spans
+  induction segs generalizing off spans with
+  | nil => rfl
+  | cons s rest ih =>
+    cases s with
+    | lit ts => simp [spansAligned, spansAlignedExec, litBytesLenExec_eq, ih]
+    | slot _ =>
+      cases spans <;> simp [spansAligned, spansAlignedExec, ih]
 
 /-! ## 3. The judge and the format `tlsn-transcript-policy@1` -/
 
