@@ -119,6 +119,25 @@ theorem appendByteArray_data (a b : ByteArray) :
     (appendByteArray a b).data.toList = a.data.toList ++ b.data.toList := by
   simpa [appendByteArray] using appendByteArray_go_eq b 0 a
 
+def appendByteArrayFast (a b : ByteArray) : ByteArray := a ++ b
+
+@[csimp]
+theorem appendByteArray_eq_fast : @appendByteArray = @appendByteArrayFast := by
+  funext a b
+  cases h1 : appendByteArray a b with
+  | mk d1 =>
+    cases h2 : appendByteArrayFast a b with
+    | mk d2 =>
+      have hl1 : d1.toList = a.data.toList ++ b.data.toList := by
+        rw [← appendByteArray_data a b, h1]
+      have hl2 : d2.toList = a.data.toList ++ b.data.toList := by
+        have : (appendByteArrayFast a b).data.toList = a.data.toList ++ b.data.toList := by
+          unfold appendByteArrayFast
+          rw [ByteArray.data_append, Array.toList_append]
+        rwa [h2] at this
+      congr 1
+      exact Array.toList_inj.1 (hl1.trans hl2.symm)
+
 /-- Precomputed cSHAKE256 customization block for `"obend-log"`. -/
 def logPrefix : ByteArray :=
   pushList ByteArray.empty (customizationPrefix "obend-log".toUTF8.toList)
@@ -1912,6 +1931,29 @@ theorem frameShardArray_eq (raw : ByteArray) :
   simp [frameShardArray, frameShardBytes, appendByteArray_data, pushHexArray_eq,
     shardPrefixBytes, shardSuffixBytes, List.append_assoc]
 
+def frameShardArrayFast (raw : ByteArray) : ByteArray :=
+  let cap := shardPrefixArray.size + 2 * raw.size + shardSuffixArray.size
+  let init := appendByteArray (ByteArray.emptyWithCapacity cap) shardPrefixArray
+  appendByteArray (pushHexArray init raw) shardSuffixArray
+
+@[csimp]
+theorem frameShardArray_eq_fast : @frameShardArray = @frameShardArrayFast := by
+  funext raw
+  cases h1 : frameShardArray raw with
+  | mk d1 =>
+    cases h2 : frameShardArrayFast raw with
+    | mk d2 =>
+      have hemp : (ByteArray.emptyWithCapacity (shardPrefixArray.size + 2 * raw.size + shardSuffixArray.size)).data.toList = [] := rfl
+      have hl1 : d1.toList = frameShardBytes raw.data.toList := by
+        rw [← frameShardArray_eq raw, h1]
+      have hl2 : d2.toList = frameShardBytes raw.data.toList := by
+        have : (frameShardArrayFast raw).data.toList = frameShardBytes raw.data.toList := by
+          simp [frameShardArrayFast, frameShardBytes, appendByteArray_data, pushHexArray_eq,
+            hemp, shardPrefixBytes, shardSuffixBytes, List.append_assoc]
+        rwa [h2] at this
+      congr 1
+      exact Array.toList_inj.1 (hl1.trans hl2.symm)
+
 def encodeShardPayload (p : ShardPayload) : Bytes :=
   frameShardBytes (cShardPayload.enc p)
 
@@ -2684,6 +2726,1097 @@ def pruneObsoleteShards (dir : System.FilePath) (active : List String) : IO Unit
     if e.fileName.endsWith ".json" && !keep.contains e.fileName then
       try IO.FS.removeFile e.path catch _ => pure ()
 
+/-! ### Canonical Single-Pass Shard Reader (Zero Cold-Load Re-Serialization) & Bucketed Store Lookup -/
+
+/-- Canonical reader for `raw : RawCodec α`: decodes directly from `ByteArray` in one pass while
+certifying `bs = raw.enc a ++ rest`. -/
+structure RawCanonReader {α : Type} (c : RawCodec α) where
+  decC : Bytes → Option (α × Bytes)
+  readC : ByteArray → Nat → Option (α × Nat)
+  readC_eq : ∀ (b : ByteArray) (off : Nat),
+    decC (b.data.toList.drop off) = (readC b off).map (fun p => (p.1, b.data.toList.drop p.2))
+  sound : ∀ (bs : Bytes) (a : α) (rest : Bytes),
+    decC bs = some (a, rest) → bs = c.enc a ++ rest
+
+abbrev CanonReader {α : Type} (c : FastCodec α) := RawCanonReader c.toRawCodec
+
+def RawCanonReader.decodeExact {α : Type} {c : RawCodec α} (cr : RawCanonReader c) (bs : Bytes) : Option α :=
+  match cr.decC bs with
+  | some (a, []) => some a
+  | _ => none
+
+def decodeExactCanonArray {α : Type} {c : RawCodec α} (cr : RawCanonReader c) (b : ByteArray) : Option α :=
+  match cr.readC b 0 with
+  | some (a, off) => if b.size ≤ off then some a else none
+  | none => none
+
+theorem RawCanonReader.decodeExact_sound {α : Type} {c : RawCodec α} (cr : RawCanonReader c)
+    {bs : Bytes} {a : α} (h : cr.decodeExact bs = some a) : c.enc a = bs := by
+  unfold RawCanonReader.decodeExact at h
+  cases hd : cr.decC bs with
+  | none => rw [hd] at h; cases h
+  | some p =>
+    obtain ⟨x, rest⟩ := p
+    rw [hd] at h
+    cases rest with
+    | nil =>
+      injection h with hx
+      subst hx
+      simpa using (cr.sound bs x [] hd).symm
+    | cons _ _ => cases h
+
+theorem decodeExactCanonArray_eq {α : Type} {c : RawCodec α} (cr : RawCanonReader c) (b : ByteArray) :
+    decodeExactCanonArray cr b = cr.decodeExact b.data.toList := by
+  have hr := cr.readC_eq b 0
+  simp only [List.drop_zero] at hr
+  unfold decodeExactCanonArray RawCanonReader.decodeExact
+  rw [hr]
+  cases h : cr.readC b 0 with
+  | none => rfl
+  | some p =>
+    obtain ⟨a, off⟩ := p
+    dsimp only [Option.map]
+    have hs : b.data.toList.length = b.size := Array.length_toList
+    by_cases ho : b.size ≤ off
+    · have hnil : b.data.toList.drop off = [] := List.drop_eq_nil_of_le (by omega)
+      simp [ho, hnil]
+    · have hne : b.data.toList.drop off ≠ [] := by
+        intro hn; rw [List.drop_eq_nil_iff] at hn; omega
+      simp only [ho, ↓reduceIte]
+      cases hd : b.data.toList.drop off with
+      | nil => exact absurd hd hne
+      | cons _ _ => rfl
+
+def crFail {α : Type} : RawCanonReader (rawFail (α := α)) where
+  decC _ := none
+  readC _ _ := none
+  readC_eq _ _ := rfl
+  sound _ _ _ h := by cases h
+
+def crUInt8 : CanonReader cUInt8 where
+  decC := cUInt8.dec
+  readC := cUInt8.readAt
+  readC_eq := cUInt8.readAt_eq
+  sound bs a rest h := by
+    cases bs with
+    | nil => cases h
+    | cons x r =>
+      dsimp only [cUInt8] at h ⊢
+      injection h with hp
+      injection hp with hx hr
+      subst hx hr
+      rfl
+
+def crRawMapOf {α β : Type} (to : α → β) (of : β → Option α)
+    (ofC : β → Option α) (hof : ∀ v a, ofC v = some a → to a = v)
+    {c : RawCodec β} (cr : RawCanonReader c) : RawCanonReader (rawMap to of c) where
+  decC bs := match cr.decC bs with
+    | none => none
+    | some (v, r) => (ofC v).map (·, r)
+  readC b off := match cr.readC b off with
+    | none => none
+    | some (v, o) => (ofC v).map (·, o)
+  readC_eq b off := by
+    rw [cr.readC_eq b off]
+    cases cr.readC b off with
+    | none => rfl
+    | some p => dsimp only [Option.map]; cases ofC p.1 <;> rfl
+  sound bs a rest h := by
+    cases hd : cr.decC bs with
+    | none => simp [hd] at h
+    | some p =>
+      obtain ⟨v, r⟩ := p
+      simp only [hd, Option.map] at h
+      cases ho : ofC v with
+      | none => simp [ho] at h
+      | some a' =>
+        simp only [ho, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        have hv := hof v a' ho
+        have hs := cr.sound bs v r hd
+        simpa [rawMap, hv] using hs
+
+def crMapInj {α β : Type} (to : α → β) (of : β → Option α) (of_to : ∀ a, of (to a) = some a)
+    (h_inj : ∀ v a, of v = some a → to a = v) {c : FastCodec β} (cr : CanonReader c) :
+    CanonReader (cMap to of of_to c) :=
+  crRawMapOf to of of h_inj cr
+
+def crMapCheck {α β : Type} [DecidableEq β] (to : α → β) (of : β → Option α)
+    (of_to : ∀ a, of (to a) = some a) {c : FastCodec β} (cr : CanonReader c) :
+    CanonReader (cMap to of of_to c) :=
+  crRawMapOf to of
+    (fun v => match of v with | some a => if to a = v then some a else none | none => none)
+    (fun v a h => by
+      cases ho : of v with
+      | none => simp [ho] at h
+      | some a' =>
+        simp only [ho] at h
+        by_cases heq : to a' = v
+        · simp only [heq, ↓reduceIte, Option.some.injEq] at h
+          subst h; exact heq
+        · simp [heq] at h)
+    cr
+
+def crRawPair {α β : Type} {c1 : RawCodec α} {c2 : RawCodec β}
+    (cr1 : RawCanonReader c1) (cr2 : RawCanonReader c2) : RawCanonReader (rawPair c1 c2) where
+  decC bs := match cr1.decC bs with
+    | none => none
+    | some (x, r1) => match cr2.decC r1 with
+      | none => none
+      | some (y, r2) => some ((x, y), r2)
+  readC b off := match cr1.readC b off with
+    | none => none
+    | some (x, o1) => match cr2.readC b o1 with
+      | none => none
+      | some (y, o2) => some ((x, y), o2)
+  readC_eq b off := by
+    rw [cr1.readC_eq b off]
+    cases cr1.readC b off with
+    | none => rfl
+    | some p1 =>
+      dsimp only [Option.map]
+      rw [cr2.readC_eq b p1.2]
+      cases cr2.readC b p1.2 <;> rfl
+  sound bs p rest h := by
+    cases h1 : cr1.decC bs with
+    | none => simp [h1] at h
+    | some p1 =>
+      obtain ⟨x, r1⟩ := p1
+      simp only [h1] at h
+      cases h2 : cr2.decC r1 with
+      | none => simp [h2] at h
+      | some p2 =>
+        obtain ⟨y, r2⟩ := p2
+        simp only [h2, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        rw [cr1.sound bs x r1 h1, cr2.sound r1 y r2 h2]
+        simp [rawPair, List.append_assoc]
+
+def crPair {α β : Type} {c1 : FastCodec α} {c2 : FastCodec β}
+    (cr1 : CanonReader c1) (cr2 : CanonReader c2) : CanonReader (cPair c1 c2) :=
+  crRawPair cr1 cr2
+
+def crRawOption {α : Type} {c : RawCodec α} (cr : RawCanonReader c) : RawCanonReader (rawOption c) where
+  decC
+    | 0 :: rest => some (none, rest)
+    | 1 :: rest => match cr.decC rest with
+      | none => none
+      | some (x, r) => some (some x, r)
+    | _ => none
+  readC b off :=
+    if h : off < b.size then
+      if b[off]'h == 0 then some (none, off + 1)
+      else if b[off]'h == 1 then
+        match cr.readC b (off + 1) with
+        | none => none
+        | some (x, o) => some (some x, o)
+      else none
+    else none
+  readC_eq b off := by
+    have hs : b.data.toList.length = b.size := Array.length_toList
+    by_cases h : off < b.size
+    · have hl : off < b.data.toList.length := by omega
+      rw [dite_eq_left_of_eq_true (eq_true h), List.drop_eq_getElem_cons hl]
+      have hg : b.data.toList[off]'hl = b[off]'h := rfl
+      rw [hg]
+      generalize b[off]'h = tag
+      by_cases h0 : tag = 0
+      · subst h0; rfl
+      · have hb0 : (tag == 0) = false := beq_false_of_ne h0
+        by_cases h1 : tag = 1
+        · subst h1
+          have h10 : ((1 : UInt8) == 0) = false := rfl
+          have h11 : ((1 : UInt8) == 1) = true := rfl
+          simp only [h10, h11, Bool.false_eq_true, ite_false, ite_true, cr.readC_eq b (off + 1)]
+          cases cr.readC b (off + 1) <;> rfl
+        · have hb1 : (tag == 1) = false := beq_false_of_ne h1
+          simp only [hb0, hb1, Bool.false_eq_true, ite_false, Option.map]
+          cases tag with
+          | ofBitVec bv =>
+            rcases bv with ⟨v, _⟩
+            have hv0 : v ≠ 0 := fun e => h0 (by subst e; rfl)
+            have hv1 : v ≠ 1 := fun e => h1 (by subst e; rfl)
+            match v, hv0, hv1 with
+            | _ + 2, _, _ => rfl
+    · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]
+      rfl
+  sound bs opt rest h := by
+    cases bs with
+    | nil => cases h
+    | cons tag tail =>
+      by_cases h0 : tag = 0
+      · subst h0
+        injection h with hp
+        injection hp with ha hr
+        subst ha hr; rfl
+      · by_cases h1 : tag = 1
+        · subst h1
+          change (match cr.decC tail with | none => none | some (x, r) => some (some x, r)) = some (opt, rest) at h
+          cases hx : cr.decC tail with
+          | none => rw [hx] at h; cases h
+          | some p =>
+            obtain ⟨x, r⟩ := p
+            rw [hx] at h
+            injection h with hp
+            injection hp with ha hr
+            subst ha hr
+            rw [cr.sound tail x r hx]
+            rfl
+        · exfalso
+          cases tag with
+          | ofBitVec bv =>
+            rcases bv with ⟨v, _⟩
+            have hv0 : v ≠ 0 := fun e => h0 (by subst e; rfl)
+            have hv1 : v ≠ 1 := fun e => h1 (by subst e; rfl)
+            match v, hv0, hv1 with
+            | _ + 2, _, _ => cases h
+
+def crOption {α : Type} {c : FastCodec α} (cr : CanonReader c) : CanonReader (cOption c) :=
+  crRawOption cr
+
+def crRawSum {α β : Type} {c1 : RawCodec α} {c2 : RawCodec β}
+    (cr1 : RawCanonReader c1) (cr2 : RawCanonReader c2) : RawCanonReader (rawSum c1 c2) where
+  decC
+    | 0 :: rest => match cr1.decC rest with
+      | none => none
+      | some (x, r) => some (.inl x, r)
+    | 1 :: rest => match cr2.decC rest with
+      | none => none
+      | some (y, r) => some (.inr y, r)
+    | _ => none
+  readC b off :=
+    if h : off < b.size then
+      if b[off]'h == 0 then
+        match cr1.readC b (off + 1) with
+        | none => none
+        | some (x, o) => some (.inl x, o)
+      else if b[off]'h == 1 then
+        match cr2.readC b (off + 1) with
+        | none => none
+        | some (y, o) => some (.inr y, o)
+      else none
+    else none
+  readC_eq b off := by
+    have hs : b.data.toList.length = b.size := Array.length_toList
+    by_cases h : off < b.size
+    · have hl : off < b.data.toList.length := by omega
+      rw [dite_eq_left_of_eq_true (eq_true h), List.drop_eq_getElem_cons hl]
+      have hg : b.data.toList[off]'hl = b[off]'h := rfl
+      rw [hg]
+      generalize b[off]'h = tag
+      by_cases h0 : tag = 0
+      · subst h0
+        have h00 : ((0 : UInt8) == 0) = true := rfl
+        simp only [h00, ite_true, cr1.readC_eq b (off + 1)]
+        cases cr1.readC b (off + 1) <;> rfl
+      · have hb0 : (tag == 0) = false := beq_false_of_ne h0
+        by_cases h1 : tag = 1
+        · subst h1
+          have h10 : ((1 : UInt8) == 0) = false := rfl
+          have h11 : ((1 : UInt8) == 1) = true := rfl
+          simp only [h10, h11, Bool.false_eq_true, ite_false, ite_true, cr2.readC_eq b (off + 1)]
+          cases cr2.readC b (off + 1) <;> rfl
+        · have hb1 : (tag == 1) = false := beq_false_of_ne h1
+          simp only [hb0, hb1, Bool.false_eq_true, ite_false, Option.map]
+          cases tag with
+          | ofBitVec bv =>
+            rcases bv with ⟨v, _⟩
+            have hv0 : v ≠ 0 := fun e => h0 (by subst e; rfl)
+            have hv1 : v ≠ 1 := fun e => h1 (by subst e; rfl)
+            match v, hv0, hv1 with
+            | _ + 2, _, _ => rfl
+    · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]
+      rfl
+  sound bs s rest h := by
+    cases bs with
+    | nil => cases h
+    | cons tag tail =>
+      by_cases h0 : tag = 0
+      · subst h0
+        change (match cr1.decC tail with | none => none | some (x, r) => some (Sum.inl x, r)) = some (s, rest) at h
+        cases hx : cr1.decC tail with
+        | none => rw [hx] at h; cases h
+        | some p =>
+          obtain ⟨x, r⟩ := p
+          rw [hx] at h
+          injection h with hp
+          injection hp with ha hr
+          subst ha hr
+          rw [cr1.sound tail x r hx]; rfl
+      · by_cases h1 : tag = 1
+        · subst h1
+          change (match cr2.decC tail with | none => none | some (y, r) => some (Sum.inr y, r)) = some (s, rest) at h
+          cases hy : cr2.decC tail with
+          | none => rw [hy] at h; cases h
+          | some p =>
+            obtain ⟨y, r⟩ := p
+            rw [hy] at h
+            injection h with hp
+            injection hp with ha hr
+            subst ha hr
+            rw [cr2.sound tail y r hy]; rfl
+        · exfalso
+          cases tag with
+          | ofBitVec bv =>
+            rcases bv with ⟨v, _⟩
+            have hv0 : v ≠ 0 := fun e => h0 (by subst e; rfl)
+            have hv1 : v ≠ 1 := fun e => h1 (by subst e; rfl)
+            match v, hv0, hv1 with
+            | _ + 2, _, _ => cases h
+
+def crSum {α β : Type} {c1 : FastCodec α} {c2 : FastCodec β}
+    (cr1 : CanonReader c1) (cr2 : CanonReader c2) : CanonReader (cSum c1 c2) :=
+  crRawSum cr1 cr2
+
+def crBool : CanonReader cBool := crMapCheck _ _ _ crUInt8
+
+def decNatCanon : Bytes → Option (Nat × Bytes)
+  | [] => none
+  | b :: rest =>
+    if b.toNat < 128 then some (b.toNat, rest)
+    else match decNatCanon rest with
+      | none => none
+      | some (hi, r) => if hi == 0 then none else some ((b.toNat - 128) + 128 * hi, r)
+
+def readNatCanonAt (b : ByteArray) (off : Nat) : Option (Nat × Nat) :=
+  if h : off < b.size then
+    let x := b[off]'h
+    if x.toNat < 128 then some (x.toNat, off + 1)
+    else match readNatCanonAt b (off + 1) with
+      | none => none
+      | some (hi, o) => if hi == 0 then none else some ((x.toNat - 128) + 128 * hi, o)
+  else none
+termination_by b.size - off
+
+theorem readNatCanonAt_eq (b : ByteArray) (off : Nat) :
+    decNatCanon (b.data.toList.drop off) =
+      (readNatCanonAt b off).map (fun p => (p.1, b.data.toList.drop p.2)) := by
+  have hs : b.data.toList.length = b.size := Array.length_toList
+  rw [readNatCanonAt]
+  by_cases h : off < b.size
+  · have hl : off < b.data.toList.length := by omega
+    rw [dite_eq_left_of_eq_true (eq_true h), List.drop_eq_getElem_cons hl]
+    have hg : b.data.toList[off]'hl = b[off]'h := rfl
+    rw [hg]
+    dsimp only [decNatCanon]
+    by_cases hx : (b[off]'h).toNat < 128
+    · simp only [hx, ↓reduceIte, Option.map]
+    · simp only [hx, ↓reduceIte, readNatCanonAt_eq b (off + 1)]
+      cases readNatCanonAt b (off + 1) with
+      | none => rfl
+      | some p =>
+        dsimp only [Option.map]
+        cases p.1 == 0 <;> rfl
+  · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]; rfl
+termination_by b.size - off
+
+theorem readNatCanonAt_le (b : ByteArray) (off n o : Nat) (h : readNatCanonAt b off = some (n, o)) :
+    o ≤ b.size := by
+  rw [readNatCanonAt] at h
+  by_cases hb : off < b.size
+  · rw [dite_eq_left_of_eq_true (eq_true hb)] at h
+    dsimp only at h
+    by_cases hx : (b[off]'hb).toNat < 128
+    · simp only [hx, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at h
+      omega
+    · simp only [hx, ↓reduceIte] at h
+      cases hr : readNatCanonAt b (off + 1) with
+      | none => simp [hr] at h
+      | some p =>
+        rw [hr] at h
+        have ih := readNatCanonAt_le b (off + 1) p.1 p.2 hr
+        by_cases hp0 : (p.1 == 0) = true
+        · simp [hp0] at h
+        · simp only [hp0, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at h
+          omega
+  · rw [dite_eq_right_of_eq_false (eq_false hb)] at h
+    cases h
+termination_by b.size - off
+
+theorem decNatCanon_sound : ∀ (bs : Bytes) (n : Nat) (rest : Bytes),
+    decNatCanon bs = some (n, rest) → bs = encNat n ++ rest
+  | [], _, _, h => by cases h
+  | x :: tail, n, rest, h => by
+    unfold decNatCanon at h
+    have hxlt : x.toNat < 256 := x.toNat_lt
+    by_cases hx : x.toNat < 128
+    · simp only [hx, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨hn, hr⟩ := h
+      subst hn hr
+      rw [encNat]
+      simp only [hx, ↓reduceIte, List.singleton_append]
+      have hu : x.toNat.toUInt8 = x := UInt8.toNat_inj.1 (u8_toNat_lt x.toNat hxlt)
+      rw [hu]
+    · simp only [hx, ↓reduceIte] at h
+      cases ht : decNatCanon tail with
+      | none => simp [ht] at h
+      | some p =>
+        obtain ⟨hi, r⟩ := p
+        rw [ht] at h
+        by_cases h0 : (hi == 0) = true
+        · simp [h0] at h
+        · simp only [h0, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨hn, hr⟩ := h
+          subst hn hr
+          have hhi : hi ≠ 0 := fun e => h0 (beq_iff_eq.mpr e)
+          have hge : ¬ ((x.toNat - 128) + 128 * hi < 128) := by omega
+          have hmod : 128 + ((x.toNat - 128) + 128 * hi) % 128 = x.toNat := by omega
+          have hdiv : ((x.toNat - 128) + 128 * hi) / 128 = hi := by omega
+          have hu : x.toNat.toUInt8 = x := UInt8.toNat_inj.1 (u8_toNat_lt x.toNat hxlt)
+          rw [encNat]
+          simp only [hge, ↓reduceIte, hmod, hu, hdiv, List.cons_append]
+          rw [decNatCanon_sound tail hi r ht]
+
+def crNat : CanonReader cNat where
+  decC := decNatCanon
+  readC := readNatCanonAt
+  readC_eq := readNatCanonAt_eq
+  sound := decNatCanon_sound
+
+theorem readListN_canon_eq {α : Type} {c : RawCodec α} (cr : RawCanonReader c) :
+    ∀ (n : Nat) (b : ByteArray) (off : Nat) (acc : Array α),
+      (decListN cr.decC n (b.data.toList.drop off)).map (fun p => (acc.toList ++ p.1, p.2)) =
+        (readListN cr.readC n b off acc).map (fun p => (p.1, b.data.toList.drop p.2))
+  | 0, b, off, acc => by simp [decListN, readListN]
+  | n + 1, b, off, acc => by
+    simp only [decListN, readListN, cr.readC_eq b off]
+    cases cr.readC b off with
+    | none => rfl
+    | some p1 =>
+      have ih := readListN_canon_eq cr n b p1.2 (acc.push p1.1)
+      cases hd : decListN cr.decC n (b.data.toList.drop p1.2) <;>
+        cases hr : readListN cr.readC n b p1.2 (acc.push p1.1) <;>
+        simp [hd, hr, Option.map, Array.toList_push, List.append_assoc] at ih ⊢ <;>
+        exact ih
+
+theorem decListN_canon_sound {α : Type} {c : RawCodec α} (cr : RawCanonReader c) :
+    ∀ (n : Nat) (bs : Bytes) (xs : List α) (rest : Bytes),
+      decListN cr.decC n bs = some (xs, rest) → xs.length = n ∧ bs = xs.flatMap c.enc ++ rest
+  | 0, bs, xs, rest, h => by
+    simp only [decListN, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨rfl, rfl⟩
+  | n + 1, bs, xs, rest, h => by
+    unfold decListN at h
+    cases h1 : cr.decC bs with
+    | none => simp [h1] at h
+    | some p1 =>
+      obtain ⟨x, r1⟩ := p1
+      rw [h1] at h
+      dsimp only at h
+      cases h2 : decListN cr.decC n r1 with
+      | none => rw [h2] at h; cases h
+      | some p2 =>
+        obtain ⟨ys, r2⟩ := p2
+        rw [h2] at h
+        injection h with hp
+        injection hp with hxs hrest
+        subst hxs hrest
+        obtain ⟨hlen, hr1⟩ := decListN_canon_sound cr n r1 ys r2 h2
+        exact ⟨by simp [hlen], by rw [cr.sound bs x r1 h1, hr1]; simp [List.append_assoc]⟩
+
+def crRawList {α : Type} {c : RawCodec α} (cr : RawCanonReader c) : RawCanonReader (rawList c) where
+  decC bs := match decNatCanon bs with
+    | none => none
+    | some (n, r) => decListN cr.decC n r
+  readC b off := match readNatCanonAt b off with
+    | none => none
+    | some (n, o) => readListN cr.readC n b o #[]
+  readC_eq b off := by
+    rw [readNatCanonAt_eq b off]
+    cases readNatCanonAt b off with
+    | none => rfl
+    | some p =>
+      have hl := readListN_canon_eq cr p.1 b p.2 #[]
+      cases hd : decListN cr.decC p.1 (b.data.toList.drop p.2) with
+      | none =>
+        cases hr : readListN cr.readC p.1 b p.2 #[] with
+        | none => simp [hd, hr, Option.map]
+        | some q => simp [hd, hr, Option.map] at hl
+      | some p2 =>
+        obtain ⟨xs, r⟩ := p2
+        cases hr : readListN cr.readC p.1 b p.2 #[] with
+        | none => simp [hd, hr, Option.map] at hl
+        | some q =>
+          obtain ⟨ys, o2⟩ := q
+          simp [hd, hr, Option.map] at hl ⊢
+          exact hl
+  sound bs xs rest h := by
+    cases hn : decNatCanon bs with
+    | none => simp [hn] at h
+    | some p =>
+      obtain ⟨n, r⟩ := p
+      simp only [hn] at h
+      obtain ⟨hlen, hr⟩ := decListN_canon_sound cr n r xs rest h
+      rw [decNatCanon_sound bs n r hn, hr, ← hlen]
+      simp [rawList, List.append_assoc]
+
+def crList {α : Type} {c : FastCodec α} (cr : CanonReader c) : CanonReader (cList c) :=
+  crRawList cr
+
+def crBytes : CanonReader cBytes where
+  decC bs := match decNatCanon bs with
+    | none => none
+    | some (n, r) => if n ≤ r.length then some (r.take n, r.drop n) else none
+  readC b off := match readNatCanonAt b off with
+    | none => none
+    | some (n, o) => if o + n ≤ b.size then some (readBytesLoop b o (o + n) #[], o + n) else none
+  readC_eq b off := by
+    have hs : b.data.toList.length = b.size := Array.length_toList
+    rw [readNatCanonAt_eq b off]
+    cases hr : readNatCanonAt b off with
+    | none => rfl
+    | some p =>
+      obtain ⟨n, o⟩ := p
+      dsimp only [Option.map]
+      have ho : o ≤ b.size := readNatCanonAt_le b off n o hr
+      by_cases h : o + n ≤ b.size
+      · have hle : n ≤ (b.data.toList.drop o).length := by simp [hs]; omega
+        simp only [hle, h, ↓reduceIte]
+        rw [readBytesLoop_eq b o (o + n) #[] h]
+        have hn : o + n - o = n := by omega
+        rw [hn, List.drop_drop]
+        simp
+      · have hgt : ¬ (n ≤ (b.data.toList.drop o).length) := by simp [hs]; omega
+        simp only [hgt, h, ↓reduceIte]
+  sound bs xs rest h := by
+    cases hn : decNatCanon bs with
+    | none => simp [hn] at h
+    | some p =>
+      obtain ⟨n, r⟩ := p
+      simp only [hn] at h
+      by_cases hle : n ≤ r.length
+      · simp only [hle, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        have hlen : (r.take n).length = n := List.length_take_of_le hle
+        rw [decNatCanon_sound bs n r hn]
+        simp [cBytes, hlen, List.append_assoc, List.take_append_drop]
+      · simp [hle] at h
+
+def crByteArray : CanonReader cByteArray :=
+  crMapInj (fun (b : ByteArray) => b.data.toList) (fun (xs : Bytes) => some (⟨xs.toArray⟩ : ByteArray))
+    (by intro b; cases b; simp)
+    (by intro xs b h; injection h with hb; subst hb; simp)
+    crBytes
+
+def crChar : CanonReader cChar := crMapCheck _ _ _ crNat
+
+def crString : CanonReader cString :=
+  crMapInj String.toList (fun cs => some (String.ofList cs))
+    (fun _ => congrArg some String.ofList_toList)
+    (by intro cs s h; injection h with hs; subst hs; exact String.toList_ofList)
+    (crList crChar)
+
+abbrev DataSumTy := (Nat ⊕ (Bool ⊕ String)) ⊕ (List (String × Data) ⊕ (String × Data))
+
+def dataCanonStep {k : Nat} (r : RawCanonReader (iterRaw dataStep k)) :
+    RawCanonReader (dataStep (iterRaw dataStep k)) :=
+  crRawMapOf (α := Data) (β := DataSumTy)
+    (fun
+      | .natural n => .inl (.inl n)
+      | .boolean b => .inl (.inr (.inl b))
+      | .label s => .inl (.inr (.inr s))
+      | .record fs => .inr (.inl fs)
+      | .variant l p => .inr (.inr (l, p)))
+    (fun
+      | .inl (.inl n) => some (.natural n)
+      | .inl (.inr (.inl b)) => some (.boolean b)
+      | .inl (.inr (.inr s)) => some (.label s)
+      | .inr (.inl fs) => some (.record fs)
+      | .inr (.inr (l, p)) => some (.variant l p))
+    (fun
+      | .inl (.inl n) => some (.natural n)
+      | .inl (.inr (.inl b)) => some (.boolean b)
+      | .inl (.inr (.inr s)) => some (.label s)
+      | .inr (.inl fs) => some (.record fs)
+      | .inr (.inr (l, p)) => some (.variant l p))
+    (by
+      intro v a h
+      rcases v with (n | (b | s)) | (fs | ⟨l, p⟩) <;>
+        (dsimp only at h; injection h with ha; subst ha; rfl))
+    (crRawSum (crRawSum crNat (crRawSum crBool crString))
+      (crRawSum (crRawList (crRawPair crString r)) (crRawPair crString r)))
+
+def iterDataCanon : (k : Nat) → RawCanonReader (iterRaw dataStep k)
+  | 0 => crFail
+  | k + 1 => dataCanonStep (iterDataCanon k)
+
+def crData : CanonReader cData where
+  decC bs := match crNat.decC bs with
+    | none => none
+    | some (k, r) => match (iterDataCanon k).decC r with
+      | none => none
+      | some (d, rest) => if dataDepth d == k then some (d, rest) else none
+  readC b off := match crNat.readC b off with
+    | none => none
+    | some (k, o) => match (iterDataCanon k).readC b o with
+      | none => none
+      | some (d, o2) => if dataDepth d == k then some (d, o2) else none
+  readC_eq b off := by
+    rw [crNat.readC_eq b off]
+    cases crNat.readC b off with
+    | none => rfl
+    | some p =>
+      dsimp only [Option.map]
+      rw [(iterDataCanon p.1).readC_eq b p.2]
+      cases (iterDataCanon p.1).readC b p.2 with
+      | none => rfl
+      | some p2 =>
+        dsimp only [Option.map]
+        cases dataDepth p2.1 == p.1 <;> rfl
+  sound bs d rest h := by
+    cases hk : crNat.decC bs with
+    | none => simp [hk] at h
+    | some p =>
+      obtain ⟨k, r⟩ := p
+      simp only [hk] at h
+      cases hd : (iterDataCanon k).decC r with
+      | none => simp [hd] at h
+      | some p2 =>
+        obtain ⟨d', rest'⟩ := p2
+        simp only [hd] at h
+        by_cases heq : (dataDepth d' == k) = true
+        · simp only [heq, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hdk : dataDepth d' = k := beq_iff_eq.mp heq
+          rw [crNat.sound bs k r hk, (iterDataCanon k).sound r d' rest' hd, ← hdk]
+          simp [cData, cRec, List.append_assoc]
+        · simp [heq] at h
+
+def crMode : CanonReader cMode :=
+  crMapInj _ _ (by intro m; cases m <;> rfl)
+    (by intro b m h; cases b <;> (injection h with hm; subst hm; rfl)) crBool
+def crRange : CanonReader cRange :=
+  crMapInj _ _ (by intro r; cases r; rfl)
+    (by intro p r h; obtain ⟨s, l⟩ := p; injection h with hr; subst hr; rfl) (crPair crNat crNat)
+def crSpan : CanonReader cSpan :=
+  crMapInj _ _ (by intro s; cases s <;> rfl)
+    (by intro v s h; rcases v with (b | (id | r))
+        · cases b <;> (injection h with hs; subst hs; rfl)
+        · injection h with hs; subst hs; rfl
+        · injection h with hs; subst hs; rfl)
+    (crSum crBool (crSum crString crRange))
+def crCite : CanonReader cCite :=
+  crMapInj _ _ (by intro c; cases c; rfl)
+    (by intro v c h; obtain ⟨p, sp, ver, cm, m⟩ := v; injection h with hc; subst hc; rfl)
+    (crPair crNat (crPair crSpan (crPair crNat (crPair crBytes crMode))))
+def crProjectionKind : CanonReader cProjectionKind := crMapCheck _ _ _ crString
+def crContent : CanonReader cContent :=
+  crMapInj _ _ (by intro c; cases c <;> rfl)
+    (by intro v c h; rcases v with (s | ⟨n, ct⟩) | (⟨n, val⟩ | ⟨id, k, ast, pins, rc⟩) <;>
+        (injection h with hc; subst hc; rfl))
+    (crSum (crSum crString (crPair crString crCite))
+      (crSum (crPair crString crString)
+        (crPair crString (crPair crProjectionKind (crPair crData
+          (crPair (crList (crPair crString crByteArray)) (crOption crByteArray)))))))
+def crGraph : CanonReader cGraph :=
+  crMapInj _ _ (by intro G; cases G; rfl)
+    (by intro v G h; obtain ⟨a, d, e⟩ := v; injection h with hG; subst hG; rfl)
+    (crPair (crList (crPair crNat crContent)) (crPair (crList crNat) (crList (crPair crNat crNat))))
+
+theorem isPrefixDec_append_self {α : Type} [DecidableEq α] :
+    ∀ (xs ys : List α), isPrefixDec xs (xs ++ ys) = true
+  | [], _ => rfl
+  | _ :: xs, ys => by simp [isPrefixDec, isPrefixDec_append_self xs ys]
+
+def decodeHistoryStepsCanon.go (prev : Graph) : List (Bool × Graph) → Option (List Graph)
+  | [] => some []
+  | (false, G) :: rest =>
+    if isPrefixDec prev.atoms G.atoms && isPrefixDec prev.dead G.dead && isPrefixDec prev.edges G.edges then
+      none
+    else
+      (decodeHistoryStepsCanon.go G rest).map (G :: ·)
+  | (true, d) :: rest =>
+    let G : Graph := ⟨prev.atoms ++ d.atoms, prev.dead ++ d.dead, prev.edges ++ d.edges⟩
+    (decodeHistoryStepsCanon.go G rest).map (G :: ·)
+
+def decodeHistoryStepsCanon : List (Bool × Graph) → Option (List Graph)
+  | [] => some []
+  | (true, _) :: _ => none
+  | (false, G) :: rest => (decodeHistoryStepsCanon.go G rest).map (G :: ·)
+
+theorem decodeHistoryStepsCanon_go_sound :
+    ∀ (prev : Graph) (steps : List (Bool × Graph)) (gs : List Graph),
+      decodeHistoryStepsCanon.go prev steps = some gs → encodeHistorySteps.go prev gs = steps
+  | _, [], gs, h => by
+    injection h with hgs; subst hgs; rfl
+  | prev, (false, G) :: rest, gs, h => by
+    unfold decodeHistoryStepsCanon.go at h
+    by_cases hp : (isPrefixDec prev.atoms G.atoms && isPrefixDec prev.dead G.dead && isPrefixDec prev.edges G.edges) = true
+    · simp [hp] at h
+    · simp only [hp, Bool.false_eq_true, ↓reduceIte] at h
+      cases hr : decodeHistoryStepsCanon.go G rest with
+      | none => simp [hr] at h
+      | some gs' =>
+        simp only [hr, Option.map, Option.some.injEq] at h
+        subst h
+        simp [encodeHistorySteps.go, hp, decodeHistoryStepsCanon_go_sound G rest gs' hr]
+  | prev, (true, d) :: rest, gs, h => by
+    unfold decodeHistoryStepsCanon.go at h
+    dsimp only at h
+    cases hr : decodeHistoryStepsCanon.go ⟨prev.atoms ++ d.atoms, prev.dead ++ d.dead, prev.edges ++ d.edges⟩ rest with
+    | none => rw [hr] at h; cases h
+    | some gs' =>
+      rw [hr] at h
+      dsimp only [Option.map] at h
+      injection h with hgs
+      subst hgs
+      let G : Graph := ⟨prev.atoms ++ d.atoms, prev.dead ++ d.dead, prev.edges ++ d.edges⟩
+      have hp : (isPrefixDec prev.atoms G.atoms && isPrefixDec prev.dead G.dead && isPrefixDec prev.edges G.edges) = true := by
+        simp [G, isPrefixDec_append_self]
+      cases d
+      simp [encodeHistorySteps.go, G, hp, decodeHistoryStepsCanon_go_sound G rest gs' hr]
+
+theorem decodeHistoryStepsCanon_sound (steps : List (Bool × Graph)) (gs : List Graph)
+    (h : decodeHistoryStepsCanon steps = some gs) : encodeHistorySteps gs = steps := by
+  cases steps with
+  | nil => injection h with hgs; subst hgs; rfl
+  | cons hd rest =>
+    obtain ⟨b, G⟩ := hd
+    cases b with
+    | true => cases h
+    | false =>
+      unfold decodeHistoryStepsCanon at h
+      cases hr : decodeHistoryStepsCanon.go G rest with
+      | none => simp [hr] at h
+      | some gs' =>
+        simp only [hr, Option.map, Option.some.injEq] at h
+        subst h
+        simp [encodeHistorySteps, decodeHistoryStepsCanon_go_sound G rest gs' hr]
+
+example : decodeHistoryStepsCanon [(false, ⟨[(0, .text "ok")], [], []⟩)] =
+    some [⟨[(0, .text "ok")], [], []⟩] := rfl
+def crHistory : CanonReader cHistory :=
+  crRawMapOf encodeHistorySteps decodeHistorySteps decodeHistoryStepsCanon
+    decodeHistoryStepsCanon_sound (crList (crPair crBool crGraph))
+def crKindVersion : CanonReader cKindVersion :=
+  crMapInj _ _ (by intro v; cases v; rfl)
+    (by intro p v h; obtain ⟨n, ver⟩ := p; injection h with hv; subst hv; rfl) (crPair crString crNat)
+def crKindPin : CanonReader cKindPin :=
+  crMapInj _ _ (by intro p; cases p; rfl)
+    (by intro t p h; obtain ⟨n, v, a⟩ := t; injection h with hp; subst hp; rfl)
+    (crPair crString (crPair crNat (crList crKindVersion)))
+def crPage : CanonReader cPage :=
+  crMapInj _ _ (by intro p; cases p; rfl)
+    (by intro t p h; obtain ⟨n, id, hs, s, au, no, k⟩ := t; injection h with hp; subst hp; rfl)
+    (crPair crString (crPair crNat (crPair crHistory (crPair (crOption crString)
+      (crPair (crList (crPair crNat crString)) (crPair (crOption crString) (crOption crKindPin)))))))
+def crShardPayload : CanonReader cShardPayload :=
+  crPair (crList (crPair crNat crPage)) (crList (crPair crNat crPage))
+
+def hexAsciiCanon? : Bytes → Option Bytes
+  | [] => some []
+  | b0 :: b1 :: rest =>
+    match decodeHexNibbleByte? b0, decodeHexNibbleByte? b1 with
+    | some hi, some lo =>
+      if hi < 16 && lo < 16 && hexNibbleByte hi == b0 && hexNibbleByte lo == b1 then
+        (hexAsciiCanon? rest).map ((hi * 16 + lo).toUInt8 :: ·)
+      else none
+    | _, _ => none
+  | [_] => none
+
+theorem hexAsciiCanon?_sound : ∀ (hex raw : Bytes),
+    hexAsciiCanon? hex = some raw → bytesToHexAscii raw = hex
+  | [], raw, h => by injection h with hr; subst hr; rfl
+  | [_], _, h => by cases h
+  | b0 :: b1 :: rest, raw, h => by
+    unfold hexAsciiCanon? at h
+    cases d0 : decodeHexNibbleByte? b0 with
+    | none => simp [d0] at h
+    | some hi =>
+      cases d1 : decodeHexNibbleByte? b1 with
+      | none => simp [d0, d1] at h
+      | some lo =>
+        simp only [d0, d1] at h
+        by_cases hc : (decide (hi < 16) && decide (lo < 16) && (hexNibbleByte hi == b0) && (hexNibbleByte lo == b1)) = true
+        · simp only [hc, ↓reduceIte] at h
+          cases hr : hexAsciiCanon? rest with
+          | none => simp [hr] at h
+          | some tail =>
+            simp only [hr, Option.map, Option.some.injEq] at h
+            subst h
+            simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hc
+            obtain ⟨⟨⟨hhi, hlo⟩, hb0⟩, hb1⟩ := hc
+            have hlt : hi * 16 + lo < 256 := by omega
+            have hu : (hi * 16 + lo).toUInt8.toNat = hi * 16 + lo := u8_toNat_lt _ hlt
+            have hdiv : (hi * 16 + lo) / 16 = hi := by omega
+            have hmod : (hi * 16 + lo) % 16 = lo := by omega
+            rw [bytesToHexAscii_cons, hu, hdiv, hmod, hb0, hb1, hexAsciiCanon?_sound rest tail hr]
+        · simp [hc] at h
+
+def unhexCanonSliceGo (b : ByteArray) (stop : Nat) (hstop : stop ≤ b.size) (i : Nat) (out : ByteArray) :
+    Option ByteArray :=
+  if h : i + 1 < stop then
+    have h0 : i < b.size := by omega
+    have h1 : i + 1 < b.size := by omega
+    let x0 := b[i]'h0
+    let x1 := b[i + 1]'h1
+    match decodeHexNibbleByte? x0, decodeHexNibbleByte? x1 with
+    | some hi, some lo =>
+      if hi < 16 && lo < 16 && hexNibbleByte hi == x0 && hexNibbleByte lo == x1 then
+        unhexCanonSliceGo b stop hstop (i + 2) (out.push (hi * 16 + lo).toUInt8)
+      else none
+    | _, _ => none
+  else some out
+termination_by stop - i
+
+def unhexCanonSlice (b : ByteArray) (start stop : Nat) : Option ByteArray :=
+  if hstop : stop ≤ b.size then
+    if start ≤ stop && (stop - start) % 2 == 0 then
+      unhexCanonSliceGo b stop hstop start (ByteArray.emptyWithCapacity ((stop - start) / 2))
+    else none
+  else none
+
+theorem unhexCanonSliceGo_eq (b : ByteArray) (stop : Nat) (hstop : stop ≤ b.size)
+    (i : Nat) (hle : i ≤ stop) (heven : (stop - i) % 2 = 0) (out : ByteArray) :
+    (unhexCanonSliceGo b stop hstop i out).map (fun a => a.data.toList) =
+      (hexAsciiCanon? ((b.data.toList.drop i).take (stop - i))).map (out.data.toList ++ ·) := by
+  have hs : b.data.toList.length = b.size := Array.length_toList
+  rw [unhexCanonSliceGo]
+  by_cases h : i + 1 < stop
+  · rw [dite_eq_left_of_eq_true (eq_true h)]
+    have hl0 : i < b.data.toList.length := by omega
+    have hl1 : i + 1 < b.data.toList.length := by omega
+    have hsub : (b.data.toList.drop i).take (stop - i) =
+        (b[i]'(by omega)) :: (b[i + 1]'(by omega)) :: (b.data.toList.drop (i + 2)).take (stop - (i + 2)) := by
+      have hk : stop - i = (stop - (i + 2)) + 2 := by omega
+      rw [List.drop_eq_getElem_cons hl0, List.drop_eq_getElem_cons hl1]
+      have g0 : b.data.toList[i]'hl0 = b[i]'(by omega) := rfl
+      have g1 : b.data.toList[i + 1]'hl1 = b[i + 1]'(by omega) := rfl
+      rw [g0, g1, hk]; rfl
+    rw [hsub]
+    dsimp only [hexAsciiCanon?]
+    cases decodeHexNibbleByte? (b[i]'(by omega)) with
+    | none => rfl
+    | some hi =>
+      cases decodeHexNibbleByte? (b[i + 1]'(by omega)) with
+      | none => rfl
+      | some lo =>
+        dsimp only
+        by_cases hc : (decide (hi < 16) && decide (lo < 16) &&
+            (hexNibbleByte hi == b[i]'(by omega)) && (hexNibbleByte lo == b[i + 1]'(by omega))) = true
+        · simp only [hc, ↓reduceIte]
+          rw [unhexCanonSliceGo_eq b stop hstop (i + 2) (by omega) (by omega), push_u8_data]
+          cases hexAsciiCanon? ((b.data.toList.drop (i + 2)).take (stop - (i + 2))) <;>
+            simp [List.append_assoc]
+        · simp [hc]
+  · rw [dite_eq_right_of_eq_false (eq_false h)]
+    have h0 : stop - i = 0 := by omega
+    simp [h0, hexAsciiCanon?]
+termination_by stop - i
+
+def decodeShardPayloadCanon (bs : Bytes) : Option ShardPayload :=
+  let plen := shardPrefixBytes.length
+  let slen := shardSuffixBytes.length
+  if plen + slen ≤ bs.length && bs.take plen == shardPrefixBytes &&
+      bs.drop (bs.length - slen) == shardSuffixBytes then
+    (hexAsciiCanon? ((bs.drop plen).take (bs.length - plen - slen))).bind crShardPayload.decodeExact
+  else none
+
+theorem decodeShardPayloadCanon_enc {bs : Bytes} {p : ShardPayload}
+    (h : decodeShardPayloadCanon bs = some p) : encodeShardPayload p = bs := by
+  unfold decodeShardPayloadCanon at h
+  dsimp only at h
+  by_cases hc : (decide (shardPrefixBytes.length + shardSuffixBytes.length ≤ bs.length) &&
+      (bs.take shardPrefixBytes.length == shardPrefixBytes) &&
+      (bs.drop (bs.length - shardSuffixBytes.length) == shardSuffixBytes)) = true
+  · rw [ite_eq_left_iff.mpr (fun hne => absurd hc hne)] at h
+    cases hh : hexAsciiCanon? ((bs.drop shardPrefixBytes.length).take
+        (bs.length - shardPrefixBytes.length - shardSuffixBytes.length)) with
+    | none => rw [hh] at h; cases h
+    | some raw =>
+      rw [hh] at h
+      dsimp only [bind, Option.bind] at h
+      have henc := crShardPayload.decodeExact_sound h
+      have hhex := hexAsciiCanon?_sound _ raw hh
+      simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hc
+      obtain ⟨⟨hle, hpre⟩, hsuf⟩ := hc
+      unfold encodeShardPayload frameShardBytes
+      have hsplit1 : bs = bs.take shardPrefixBytes.length ++ bs.drop shardPrefixBytes.length :=
+        (List.take_append_drop _ bs).symm
+      have hsplit2 : bs.drop shardPrefixBytes.length =
+          (bs.drop shardPrefixBytes.length).take (bs.length - shardPrefixBytes.length - shardSuffixBytes.length) ++
+          (bs.drop shardPrefixBytes.length).drop (bs.length - shardPrefixBytes.length - shardSuffixBytes.length) :=
+        (List.take_append_drop _ _).symm
+      have hdrop2 : (bs.drop shardPrefixBytes.length).drop
+          (bs.length - shardPrefixBytes.length - shardSuffixBytes.length) =
+          bs.drop (bs.length - shardSuffixBytes.length) := by
+        rw [List.drop_drop]
+        have : shardPrefixBytes.length + (bs.length - shardPrefixBytes.length - shardSuffixBytes.length) =
+            bs.length - shardSuffixBytes.length := by omega
+        rw [this]
+      rw [hdrop2] at hsplit2
+      calc shardPrefixBytes ++ bytesToHexAscii (cShardPayload.enc p) ++ shardSuffixBytes
+        _ = bs.take shardPrefixBytes.length ++
+              ((bs.drop shardPrefixBytes.length).take
+                (bs.length - shardPrefixBytes.length - shardSuffixBytes.length)) ++
+              bs.drop (bs.length - shardSuffixBytes.length) := by
+          rw [henc, hhex, hpre, hsuf]
+        _ = bs.take shardPrefixBytes.length ++ bs.drop shardPrefixBytes.length := by
+          rw [List.append_assoc, ← hsplit2]
+        _ = bs := hsplit1.symm
+  · rw [ite_eq_right_iff.mpr (fun heq => absurd heq hc)] at h
+    cases h
+
+def decodeShardPayloadCanonArray (b : ByteArray) : Option ShardPayload :=
+  let plen := shardPrefixArray.size
+  let slen := shardSuffixArray.size
+  if plen + slen ≤ b.size && sliceEq b 0 shardPrefixArray &&
+      sliceEq b (b.size - slen) shardSuffixArray then
+    (unhexCanonSlice b plen (b.size - slen)).bind (decodeExactCanonArray crShardPayload)
+  else none
+
+theorem hexAsciiCanon?_of_odd : ∀ (xs : Bytes), xs.length % 2 ≠ 0 → hexAsciiCanon? xs = none
+  | [], h => absurd rfl h
+  | [_], _ => rfl
+  | _ :: _ :: rest, h => by
+    unfold hexAsciiCanon?
+    cases decodeHexNibbleByte? _ with
+    | none => rfl
+    | some _ =>
+      cases decodeHexNibbleByte? _ with
+      | none => rfl
+      | some _ =>
+        have hrest : rest.length % 2 ≠ 0 := by simp at h; omega
+        rw [hexAsciiCanon?_of_odd rest hrest]
+        split <;> simp
+
+theorem decodeShardPayloadCanonArray_eq (b : ByteArray) :
+    decodeShardPayloadCanonArray b = decodeShardPayloadCanon b.data.toList := by
+  have hs : b.data.toList.length = b.size := Array.length_toList
+  have hp : shardPrefixArray.data.toList = shardPrefixBytes := rfl
+  have hsf : shardSuffixArray.data.toList = shardSuffixBytes := rfl
+  have hps : shardPrefixArray.size = shardPrefixBytes.length := by rw [← hp, Array.length_toList]; rfl
+  have hsfs : shardSuffixArray.size = shardSuffixBytes.length := by rw [← hsf, Array.length_toList]; rfl
+  unfold decodeShardPayloadCanonArray decodeShardPayloadCanon
+  dsimp only
+  by_cases hbnd : shardPrefixArray.size + shardSuffixArray.size ≤ b.size
+  · have hbndL : shardPrefixBytes.length + shardSuffixBytes.length ≤ b.data.toList.length := by omega
+    have hex0 : sliceEq b 0 shardPrefixArray =
+        (b.data.toList.take shardPrefixBytes.length == shardPrefixBytes) := by
+      have hp0 : 0 + shardPrefixArray.size ≤ b.size := by omega
+      have hpL : 0 + shardPrefixBytes.length ≤ b.size := by omega
+      simp only [sliceEq, sliceEqGo_eq b 0 shardPrefixArray hp0 0,
+        Nat.add_zero, Nat.sub_zero, List.drop_zero, hps, hp, hpL, decide_true, Bool.true_and]
+    have hex1 : sliceEq b (b.size - shardSuffixArray.size) shardSuffixArray =
+        (b.data.toList.drop (b.data.toList.length - shardSuffixBytes.length) == shardSuffixBytes) := by
+      have hs0 : (b.size - shardSuffixArray.size) + shardSuffixArray.size ≤ b.size := by omega
+      simp only [sliceEq, hs0, decide_true, Bool.true_and,
+        sliceEqGo_eq b (b.size - shardSuffixArray.size) shardSuffixArray hs0 0,
+        Nat.add_zero, Nat.sub_zero, List.drop_zero, hsf]
+      have hd : b.size - shardSuffixArray.size = b.data.toList.length - shardSuffixBytes.length := by omega
+      have htake : (b.data.toList.drop (b.data.toList.length - shardSuffixBytes.length)).take shardSuffixArray.size =
+          b.data.toList.drop (b.data.toList.length - shardSuffixBytes.length) := by
+        apply List.take_of_length_le; simp [hs, hsfs]; omega
+      rw [hd, htake]
+    simp only [hbnd, hbndL, decide_true, Bool.true_and, hex0, hex1]
+    by_cases hc : ((b.data.toList.take shardPrefixBytes.length == shardPrefixBytes) &&
+        (b.data.toList.drop (b.data.toList.length - shardSuffixBytes.length) == shardSuffixBytes)) = true
+    · simp only [hc, ↓reduceIte]
+      unfold unhexCanonSlice
+      have hstop : b.size - shardSuffixArray.size ≤ b.size := Nat.sub_le _ _
+      have hle2 : shardPrefixArray.size ≤ b.size - shardSuffixArray.size := by omega
+      rw [dite_eq_left_of_eq_true (eq_true hstop)]
+      by_cases hev : ((b.size - shardSuffixArray.size - shardPrefixArray.size) % 2 == 0) = true
+      · simp only [hle2, hev, decide_true, Bool.true_and, ↓reduceIte]
+        have hev' : (b.size - shardSuffixArray.size - shardPrefixArray.size) % 2 = 0 := by simpa using hev
+        have hgo := unhexCanonSliceGo_eq b (b.size - shardSuffixArray.size) hstop shardPrefixArray.size hle2 hev'
+          (ByteArray.emptyWithCapacity ((b.size - shardSuffixArray.size - shardPrefixArray.size) / 2))
+        have hemp : (ByteArray.emptyWithCapacity ((b.size - shardSuffixArray.size - shardPrefixArray.size) / 2)).data.toList = [] := rfl
+        have hspan : b.size - shardSuffixArray.size - shardPrefixArray.size =
+            b.data.toList.length - shardPrefixBytes.length - shardSuffixBytes.length := by omega
+        cases hu : unhexCanonSliceGo b (b.size - shardSuffixArray.size) hstop shardPrefixArray.size
+            (ByteArray.emptyWithCapacity ((b.size - shardSuffixArray.size - shardPrefixArray.size) / 2)) with
+        | none =>
+          rw [hu, hemp, hspan, hps] at hgo
+          cases hu2 : hexAsciiCanon? ((b.data.toList.drop shardPrefixBytes.length).take
+              (b.data.toList.length - shardPrefixBytes.length - shardSuffixBytes.length)) with
+          | none => rfl
+          | some _ => rw [hu2] at hgo; simp at hgo
+        | some arr =>
+          rw [hu, hemp, hspan, hps] at hgo
+          cases hu2 : hexAsciiCanon? ((b.data.toList.drop shardPrefixBytes.length).take
+              (b.data.toList.length - shardPrefixBytes.length - shardSuffixBytes.length)) with
+          | none => rw [hu2] at hgo; simp at hgo
+          | some raw =>
+            rw [hu2] at hgo
+            simp only [Option.map, List.nil_append, Option.some.injEq] at hgo
+            simp [Option.bind, decodeExactCanonArray_eq, hgo]
+      · simp only [hle2, hev, Bool.and_false, Bool.false_eq_true, ↓reduceIte]
+        have hodd : ((b.data.toList.drop shardPrefixBytes.length).take
+            (b.data.toList.length - shardPrefixBytes.length - shardSuffixBytes.length)).length % 2 ≠ 0 := by
+          have hlen : ((b.data.toList.drop shardPrefixBytes.length).take
+              (b.data.toList.length - shardPrefixBytes.length - shardSuffixBytes.length)).length =
+              b.data.toList.length - shardPrefixBytes.length - shardSuffixBytes.length := by
+            rw [List.length_take, List.length_drop]; omega
+          rw [hlen]
+          intro h0
+          have : ((b.size - shardSuffixArray.size - shardPrefixArray.size) % 2 == 0) = true := by
+            rw [beq_iff_eq]; omega
+          exact absurd this (by simpa using hev)
+        rw [hexAsciiCanon?_of_odd _ hodd]
+        rfl
+    · simp only [hc, Bool.false_eq_true, ↓reduceIte]
+  · have hbndS : ¬ (shardPrefixBytes.length + shardSuffixBytes.length ≤ b.size) := by omega
+    simp [hbnd, hs, hbndS]
+
+theorem decodeShardPayloadCanonArray_sound {b : ByteArray} {p : ShardPayload}
+    (h : decodeShardPayloadCanonArray b = some p) :
+    encodeShardPayload p = b.data.toList ∧ decodeShardPayload b.data.toList = some p := by
+  rw [decodeShardPayloadCanonArray_eq] at h
+  have henc := decodeShardPayloadCanon_enc h
+  refine ⟨henc, ?_⟩
+  rw [← henc, decodeShardPayload_encodeShardPayload]
+
+/-- Verified 128-bucket `Store` index: hashes `bucketOf name` in `O(1)` and scans only the target
+bucket (`~N / 128` pages), proved extensionally equal to `Store.page?` and `tombs.find?`. -/
+structure BucketedStore where
+  pagesByBucket : Array (List (Nat × Page))
+  tombsByBucket : Array (List (Nat × Page))
+
+def buildBucketedStore (s : Store) : BucketedStore where
+  pagesByBucket := partitionAll (enumList s.pages)
+  tombsByBucket := partitionAll (enumList s.tombs)
+
+def BucketedStore.page? (bs : BucketedStore) (name : String) : Option Page :=
+  ((bs.pagesByBucket[bucketOf name]?.getD []).find? fun (_, p) => p.name == name).map (·.2)
+
+def BucketedStore.tomb? (bs : BucketedStore) (name : String) : Option Page :=
+  ((bs.tombsByBucket[bucketOf name]?.getD []).find? fun (_, p) => p.name == name).map (·.2)
+
+theorem find_bucketItems_enumGo (name : String) :
+    ∀ (k : Nat) (ps : List Page),
+      ((bucketItems (bucketOf name) (enumGo k ps)).find? fun (_, p) => p.name == name).map (·.2) =
+        ps.find? (·.name == name)
+  | _, [] => rfl
+  | k, p :: rest => by
+    simp only [enumGo, bucketItems, List.filter_cons]
+    by_cases hpn : (p.name == name) = true
+    · have hpEq : p.name = name := beq_iff_eq.mp hpn
+      have hb : (bucketOf p.name == bucketOf name) = true := by simp [hpEq]
+      simp [hb, hpn]
+    · have hpnF : (p.name == name) = false := Bool.eq_false_iff.mpr hpn
+      by_cases hb : (bucketOf p.name == bucketOf name) = true
+      · simp only [hb, ↓reduceIte, List.find?_cons, hpnF]
+        exact find_bucketItems_enumGo name (k + 1) rest
+      · have hbF : (bucketOf p.name == bucketOf name) = false := Bool.eq_false_iff.mpr hb
+        simp only [hbF, Bool.false_eq_true, ↓reduceIte, List.find?_cons, hpnF]
+        exact find_bucketItems_enumGo name (k + 1) rest
+
+theorem BucketedStore.page?_eq (s : Store) (name : String) :
+    (buildBucketedStore s).page? name = s.page? name := by
+  unfold BucketedStore.page? buildBucketedStore Store.page?
+  rw [partitionAll_getElem _ (bucketOf name) (bucketOf_lt name)]
+  dsimp only [Option.getD]
+  exact find_bucketItems_enumGo name 0 s.pages
+
+theorem BucketedStore.tomb?_eq (s : Store) (name : String) :
+    (buildBucketedStore s).tomb? name = s.tombs.find? (·.name == name) := by
+  unfold BucketedStore.tomb? buildBucketedStore
+  rw [partitionAll_getElem _ (bucketOf name) (bucketOf_lt name)]
+  dsimp only [Option.getD]
+  exact find_bucketItems_enumGo name 0 s.tombs
+
 def mkCanonicalCachedBucket (payload : ShardPayload) (d : String) (sb : ByteArray)
     (hd : bytesToHex (logHashArray sb) = d) : CachedBucket :=
   if he : isEmptyShard payload = true then
@@ -2697,6 +3830,55 @@ def mkCanonicalCachedBucket (payload : ShardPayload) (d : String) (sb : ByteArra
     else
       ⟨payload, some (bytesToHex (logHashArray cbs), cbs), by
         simp [cbs, shardSpecOf, he, encodeShardPayloadArray_eq, logHashArray_eq]⟩
+
+/-- Read & authenticate a shard bucket in one pass without re-serializing canonical shards:
+1. Hit in-process `DecodeCache` when `e.bytes = sb` in `O(|sb|)` `memcmp`;
+2. Otherwise run 1-pass `decodeShardPayloadCanonArray sb`, yielding BOTH `DecodeCache.Entry` and
+   `CachedBucket` in `O(1)` extra work (`0` re-serializations on canonical shards);
+3. Fall back to `decodeShardPayloadArray` + `mkCanonicalCachedBucket` only on non-canonical shards. -/
+def loadBucketZeroReserialize (cached : Option (DecodeCache.Entry decodeShardPayload))
+    (d : String) (sb : ByteArray) (hd : bytesToHex (logHashArray sb) = d) :
+    Option (ShardPayload × DecodeCache.Entry decodeShardPayload × CachedBucket) :=
+  letI : DecidableEq ByteArray := ByteArray.decEq
+  match cached with
+  | some e =>
+    if heq : e.bytes = sb then
+      match e.result with
+      | none => none
+      | some payload =>
+        some (payload, e, mkCanonicalCachedBucket payload d sb hd)
+    else
+      match hdec : decodeShardPayloadCanonArray sb with
+      | some payload =>
+        have ⟨henc, hpay⟩ := decodeShardPayloadCanonArray_sound hdec
+        let ent : DecodeCache.Entry decodeShardPayload := ⟨sb, some payload, hpay.symm⟩
+        let cb : CachedBucket :=
+          if he : isEmptyShard payload = true then
+            ⟨payload, none, by simp [shardSpecOf, he]⟩
+          else
+            ⟨payload, some (d, sb), by simp [shardSpecOf, he, henc, ← hd, logHashArray_eq]⟩
+        some (payload, ent, cb)
+      | none =>
+        let ent : DecodeCache.Entry decodeShardPayload := ⟨sb, decodeShardPayloadArray sb, decodeShardPayloadArray_eq sb⟩
+        match ent.result with
+        | none => none
+        | some payload => some (payload, ent, mkCanonicalCachedBucket payload d sb hd)
+  | none =>
+    match hdec : decodeShardPayloadCanonArray sb with
+    | some payload =>
+      have ⟨henc, hpay⟩ := decodeShardPayloadCanonArray_sound hdec
+      let ent : DecodeCache.Entry decodeShardPayload := ⟨sb, some payload, hpay.symm⟩
+      let cb : CachedBucket :=
+        if he : isEmptyShard payload = true then
+          ⟨payload, none, by simp [shardSpecOf, he]⟩
+        else
+          ⟨payload, some (d, sb), by simp [shardSpecOf, he, henc, ← hd, logHashArray_eq]⟩
+      some (payload, ent, cb)
+    | none =>
+      let ent : DecodeCache.Entry decodeShardPayload := ⟨sb, decodeShardPayloadArray sb, decodeShardPayloadArray_eq sb⟩
+      match ent.result with
+      | none => none
+      | some payload => some (payload, ent, mkCanonicalCachedBucket payload d sb hd)
 
 /-- `O(N)` single-pass array reassembler for `loadShardedWorld`. -/
 def reassembleLinear (total : Nat) (arr : Array (List (Nat × Page))) : Option (List Page) := Id.run do
@@ -2754,14 +3936,13 @@ def loadShardedWorld (dir : System.FilePath) (manifest : ByteArray) : IO (Option
         builtBuckets := builtBuckets.push emptyBucket
       | some (d, sb) =>
         if hd : bytesToHex (logHashArray sb) = d then
-          let ent := readBucketCached (decCache[b]?.join) sb
-          nextDec := nextDec.setIfInBounds b (some ent)
-          match ent.result with
+          match loadBucketZeroReserialize (decCache[b]?.join) d sb hd with
           | none => return none
-          | some payload =>
+          | some (payload, ent, cb) =>
+            nextDec := nextDec.setIfInBounds b (some ent)
             pArr := pArr.push payload.1
             tArr := tArr.push payload.2
-            builtBuckets := builtBuckets.push (mkCanonicalCachedBucket payload d sb hd)
+            builtBuckets := builtBuckets.push cb
         else
           return none
     match reassembleLinear totalPages pArr, reassembleLinear totalTombs tArr with

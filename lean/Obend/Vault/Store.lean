@@ -193,6 +193,31 @@ def resolveIn (H : Hash) (es : List Entry) : Resolve := fun name sp =>
     | .identity => some ⟨e.id, .identity, 0, [], .following⟩
     | _ => (quoteOf e.graph sp).map fun b => ⟨e.id, sp, e.version, H b, .following⟩
 
+def findEntryIndexed (byName byBase : Index.Buckets String Entry) (name : String) : Option Entry :=
+  match Index.first byName name with
+  | some e => some e
+  | none => match Index.bucket byBase name with
+    | [e] => some e
+    | _ => none
+
+theorem findEntryIndexed_eq (es : List Entry) (name : String) :
+    findEntryIndexed (Index.ofList Entry.name es) (Index.ofList (fun e => baseName e.name) es) name =
+      findEntry es name := by
+  simp only [findEntryIndexed, findEntry, Index.first_ofList, Index.bucket_ofList]
+
+def resolveInIndexed (H : Hash) (es : List Entry) : Resolve :=
+  let byName := Index.ofList Entry.name es
+  let byBase := Index.ofList (fun e => baseName e.name) es
+  fun name sp =>
+    (findEntryIndexed byName byBase name).bind fun e =>
+      match sp with
+      | .identity => some ⟨e.id, .identity, 0, [], .following⟩
+      | _ => (quoteOf e.graph sp).map fun b => ⟨e.id, sp, e.version, H b, .following⟩
+
+theorem resolveIn_eq_indexed : @resolveIn = @resolveInIndexed := by
+  funext H es name sp
+  simp only [resolveIn, resolveInIndexed, findEntryIndexed_eq]
+
 /-- The page a markdown text reads as, before its cites are committed (its bytes are its text's). -/
 def draft (md : String) : Graph :=
   Graph.empty.apply (chain root (contents (fun _ sp => some ⟨0, sp, 0, [], .following⟩) (stripToks (tokens md))))
@@ -1411,6 +1436,19 @@ abbrev Store.landAll (s : Store) (prs : List Prepared) : Store :=
       | none => q
     turn := s.turn + 1 }
 
+def Store.landAllIndexed (s : Store) (prs : List Prepared) : Store :=
+  let idx := Index.ofList (fun pr : Prepared => pr.p.name) prs
+  { s with
+    pages := s.pages.map fun q => match Index.first idx q.name with
+      | some pr => q.withChange pr.change
+      | none => q
+    turn := s.turn + 1 }
+
+@[csimp]
+theorem landAll_eq_indexed : @Store.landAll = @Store.landAllIndexed := by
+  funext s prs
+  simp only [Store.landAll, Store.landAllIndexed, Index.first_ofList]
+
 theorem prepareAll_ok {es : List Entry} {who : Actor} {turn : Nat} {poster : String} {env : Environment} :
     ∀ {ws : List (Page × Graph × List (AtomId × String))} {prs : List Prepared},
       prepareAll es who turn poster env ws = .ok prs → prs.map (·.p) = ws.map (·.1)
@@ -1750,38 +1788,66 @@ theorem admitWrites_ind (H : Hash) (res : List Entry)
   intro s pending refused
   exact key _ _ s pending refused (Nat.le_refl _) (Nat.le_refl _)
 
-/-- An admission carries its page-name index across every accepted or refused turn. The proof
-parameter relates the maintained tree to the current store; no index is rebuilt at each write. -/
-def admitWritesWithIndex (H : Hash) (res : List Entry) (s : Store)
+def resolveAtBuckets (H : Hash) (byName byBase : Index.Buckets String Entry) : Resolve :=
+  fun name sp =>
+    (findEntryIndexed byName byBase name).bind fun e =>
+      match sp with
+      | .identity => some ⟨e.id, .identity, 0, [], .following⟩
+      | _ => (quoteOf e.graph sp).map fun b => ⟨e.id, sp, e.version, H b, .following⟩
+
+theorem resolveAtBuckets_eq (H : Hash) (es : List Entry) :
+    resolveAtBuckets H (Index.ofList Entry.name es) (Index.ofList (fun e => baseName e.name) es) =
+      resolveIn H es := by
+  funext name sp
+  simp only [resolveAtBuckets, resolveIn, findEntryIndexed_eq]
+
+def readAsWith (resolver : Resolve) (md : String) : Graph :=
+  Graph.empty.apply (chain root (contents resolver (stripToks (tokens md))))
+
+def judgeAtWith (H : Hash) (resolver : Resolve)
+    (res : List Entry) (s : Store) (p : Page) (md : String) : Change :=
+  match p.current with
+  | none => writtenAs s.entries s.turn p md (readAsWith resolver md) [] res s.environment
+  | some G =>
+    editedAs s.entries s.turn p md G
+      (editPatch H G (align (pieces G p.name p.who) (contents resolver (stripToks (tokens md)))) "owner")
+      res s.environment
+
+/-- An admission carries its page-name index and pre-built cite resolver across every
+accepted or refused turn; no index is rebuilt at each write or link. -/
+def admitWritesWithIndex (H : Hash) (resolver : Resolve)
+    (res : List Entry) (s : Store)
     (index : Index.First Page.name s.pages) (pending : List Write)
     (refused : List RefusedWrite) : Store × List RefusedWrite :=
   match pending with
   | [] => (s, refused)
   | (n, md) :: rest =>
     match index.find n with
-    | none => admitWritesWithIndex H res s index rest refused
+    | none => admitWritesWithIndex H resolver res s index rest refused
     | some p =>
-      let c := judgeAt H res s p md
+      let c := judgeAtWith H resolver res s p md
       let s' := s.setPage (p.withChange c)
       let index' : Index.First Page.name s'.pages := index.replace (p.withChange c)
       match c.note with
-      | none => admitWritesWithIndex H res s' index' (rest ++ woken p.name s' refused) (held p.name s' refused)
-      | some _ => admitWritesWithIndex H res s' index' rest
-          (refused ++ [⟨n, md, pinsOf s'.entries res n p.id (readAs H res md)⟩])
+      | none => admitWritesWithIndex H resolver res s' index' (rest ++ woken p.name s' refused) (held p.name s' refused)
+      | some _ => admitWritesWithIndex H resolver res s' index' rest
+          (refused ++ [⟨n, md, pinsOf s'.entries res n p.id (readAsWith resolver md)⟩])
 termination_by (pending.length + refused.length, pending.length)
 decreasing_by
   all_goals simp only [Prod.lex_def, List.length_cons, List.length_append, List.length_nil]
   · omega
-  · have := woken_held_length p.name (s.setPage (p.withChange (judgeAt H res s p md))) refused
+  · have := woken_held_length p.name (s.setPage (p.withChange (judgeAtWith H resolver res s p md))) refused
     omega
   · omega
 
 /-- Every maintained index, not only a freshly built one, executes the original admission. -/
 theorem admitWritesWithIndex_eq (H : Hash) (res : List Entry) (s : Store)
     (pending : List Write) (refused : List RefusedWrite) (index : Index.First Page.name s.pages) :
-    admitWritesWithIndex H res s index pending refused = admitWrites H res s pending refused := by
+    admitWritesWithIndex H (resolveIn H res) res s index pending refused =
+      admitWrites H res s pending refused := by
   refine admitWrites_ind H res (fun s pending refused out =>
-      ∀ index : Index.First Page.name s.pages, admitWritesWithIndex H res s index pending refused = out)
+      ∀ index : Index.First Page.name s.pages,
+        admitWritesWithIndex H (resolveIn H res) res s index pending refused = out)
     ?_ ?_ ?_ ?_ s pending refused index
   · intro s refused index
     rw [admitWritesWithIndex]
@@ -1794,12 +1860,14 @@ theorem admitWritesWithIndex_eq (H : Hash) (res : List Entry) (s : Store)
     rw [admitWritesWithIndex, index.find_eq]
     change (match s.page? n with | none => _ | some _ => _) = _
     rw [hp]
+    change (match (judgeAt H res s p md).note with | none => _ | some _ => _) = _
     simp only [hnote]
     exact ih (index.replace (p.withChange (judgeAt H res s p md)))
   · intro s n md rest refused p m hp hnote ih index
     rw [admitWritesWithIndex, index.find_eq]
     change (match s.page? n with | none => _ | some _ => _) = _
     rw [hp]
+    change (match (judgeAt H res s p md).note with | none => _ | some _ => _) = _
     simp only [hnote]
     exact ih (index.replace (p.withChange (judgeAt H res s p md)))
 
@@ -1831,7 +1899,11 @@ def admitWritesIndexed (H : Hash) (res : List Entry) (s : Store) (pending : List
   match pending, refused with
   | [], _ => (s, refused)
   | [(n, md)], [] => admitOne H res s n md
-  | _, _ => admitWritesWithIndex H res s (Index.First.build Page.name s.pages) pending refused
+  | _, _ =>
+    let byName := Index.ofList Entry.name res
+    let byBase := Index.ofList (fun e => baseName e.name) res
+    admitWritesWithIndex H (resolveAtBuckets H byName byBase) res s
+      (Index.First.build Page.name s.pages) pending refused
 
 @[csimp] theorem admitWrites_eq_indexed : @admitWrites = @admitWritesIndexed := by
   funext H res s pending refused
@@ -1842,8 +1914,14 @@ def admitWritesIndexed (H : Hash) (res : List Entry) (s : Store) (pending : List
     | nil =>
       cases refused with
       | nil => exact (admitOne_eq H res s w.1 w.2).symm
-      | cons r refused => exact (admitWritesWithIndex_eq H res s [w] (r :: refused) _).symm
-    | cons w' rest => exact (admitWritesWithIndex_eq H res s (w :: w' :: rest) refused _).symm
+      | cons r refused =>
+        dsimp only [admitWritesIndexed]
+        rw [resolveAtBuckets_eq H res]
+        exact (admitWritesWithIndex_eq H res s [w] (r :: refused) _).symm
+    | cons w' rest =>
+      dsimp only [admitWritesIndexed]
+      rw [resolveAtBuckets_eq H res]
+      exact (admitWritesWithIndex_eq H res s (w :: w' :: rest) refused _).symm
 
 /-- The folders enclosing a page name, counted. -/
 def depthOf (name : String) : Nat := (name.splitOn "/").length
@@ -1949,6 +2027,81 @@ def freshPages (H : Hash) (s : Store) (names : List String) : List Page :=
   (names.foldl (fun (acc : List Page) n =>
     let taken := fun q => s.pages.any (·.id == q) || acc.any (·.id == q)
     acc ++ [⟨n, pageIdFor H taken n, [], none, [], none, none⟩]) [])
+
+def freshPagesGo (H : Hash) :
+    List String → Std.TreeMap PageId Unit → Array Page → List Page
+  | [], _, acc => acc.toList
+  | n :: ns, takenMap, acc =>
+    let pid := pageIdFor H (fun q => (takenMap[q]?).isSome) n
+    let p : Page := ⟨n, pid, [], none, [], none, none⟩
+    freshPagesGo H ns (takenMap.insert pid ()) (acc.push p)
+
+def freshPagesFast (H : Hash) (s : Store) (names : List String) : List Page :=
+  if names.isEmpty then []
+  else
+    let initMap := s.pages.foldl (fun m p => m.insert p.id ()) (∅ : Std.TreeMap PageId Unit)
+    freshPagesGo H names initMap #[]
+
+theorem treeMap_insert_isSome (m : Std.TreeMap PageId Unit) (x q : PageId) :
+    ((m.insert x ())[q]?).isSome = ((x == q) || (m[q]?).isSome) := by
+  open Std in
+  rw [Std.TreeMap.getElem?_insert]
+  by_cases h : compare x q = .eq
+  · have hxq : x = q := Std.compare_eq_iff_eq.mp h
+    subst hxq
+    simp
+  · have hne : (x == q) = false := beq_false_of_ne (fun e => h (Std.compare_eq_iff_eq.mpr e))
+    simp [h, hne]
+
+theorem foldl_insert_pages_isSome :
+    ∀ (ps : List Page) (m : Std.TreeMap PageId Unit) (q : PageId),
+      ((ps.foldl (fun m p => m.insert p.id ()) m)[q]?).isSome =
+        ((m[q]?).isSome || ps.any (·.id == q))
+  | [], m, q => by simp
+  | p :: ps, m, q => by
+    simp only [List.foldl_cons, List.any_cons, foldl_insert_pages_isSome ps (m.insert p.id ()) q,
+      treeMap_insert_isSome]
+    cases (m[q]?).isSome <;> cases (p.id == q) <;> cases ps.any (·.id == q) <;> rfl
+
+theorem freshPagesGo_eq (H : Hash) (s : Store) :
+    ∀ (ns : List String) (m : Std.TreeMap PageId Unit) (acc : Array Page),
+      (∀ q, (m[q]?).isSome = (s.pages.any (·.id == q) || acc.toList.any (·.id == q))) →
+      freshPagesGo H ns m acc =
+        ns.foldl (fun (a : List Page) n =>
+          let taken := fun q => s.pages.any (·.id == q) || a.any (·.id == q)
+          a ++ [({ name := n, id := pageIdFor H taken n, history := [], seen := none, authors := [], note := none, kind := none } : Page)]) acc.toList
+  | [], _, acc, _ => rfl
+  | n :: ns, m, acc, hm => by
+    unfold freshPagesGo
+    have hfun : (fun q => (m[q]?).isSome) = (fun q => s.pages.any (·.id == q) || acc.toList.any (·.id == q)) := by
+      funext q; exact hm q
+    let pid := pageIdFor H (fun q => (m[q]?).isSome) n
+    let p : Page := ⟨n, pid, [], none, [], none, none⟩
+    have hm' : ∀ q, ((m.insert pid ())[q]?).isSome =
+        (s.pages.any (·.id == q) || (acc.push p).toList.any (·.id == q)) := by
+      intro q
+      rw [treeMap_insert_isSome, hm q, Array.toList_push, List.any_append]
+      simp only [List.any_cons, List.any_nil, Bool.or_false]
+      have hpq : (pid == q) = (p.id == q) := rfl
+      rw [hpq]
+      cases s.pages.any (·.id == q) <;> cases acc.toList.any (·.id == q) <;> cases (p.id == q) <;> rfl
+    rw [freshPagesGo_eq H s ns (m.insert pid ()) (acc.push p) hm', Array.toList_push]
+    simp only [List.foldl_cons, p, pid, hfun]
+
+@[csimp]
+theorem freshPages_eq_fast : @freshPages = @freshPagesFast := by
+  funext H s names
+  unfold freshPagesFast freshPages
+  by_cases he : names.isEmpty = true
+  · have hnil : names = [] := List.isEmpty_iff.mp he
+    subst hnil
+    rfl
+  · simp only [he, Bool.false_eq_true, ↓reduceIte]
+    symm
+    apply freshPagesGo_eq H s names _ #[]
+    intro q
+    rw [foldl_insert_pages_isSome]
+    simp
 
 /-- The entries new cites resolve against at an open: a page whose file changed quotes the file
 (the version it is about to become), the others their current version. -/
@@ -2270,6 +2423,15 @@ def openAdmission (H : Hash) (s : Store) (V : List (String × String)) : Store �
   bornWith H (openEntries (withFresh H s V).pages V)
     (admitWrites H (openEntries (withFresh H s V).pages V) (withFresh H s V) (pendingAt (withFresh H s V) V)
       (refusedAt H (openEntries (withFresh H s V).pages V) (withFresh H s V) V))
+
+def openAdmissionFast (H : Hash) (s : Store) (V : List (String × String)) : Store × List RefusedWrite :=
+  let sf := withFresh H s V
+  let res := openEntries sf.pages V
+  bornWith H res (admitWrites H res sf (pendingAt sf V) (refusedAt H res sf V))
+
+@[csimp]
+theorem openAdmission_eq_fast : @openAdmission = @openAdmissionFast := by
+  funext H s V; rfl
 
 /-- **Open a vault.** -/
 def openVault (H : Hash) (s : Store) (V : List (String × String)) : Opened :=
@@ -3062,6 +3224,19 @@ def Store.landTexts (s : Store) (prs : List Prepared) : Store :=
       | none => q
     turn := s.turn + 1 }
 
+def Store.landTextsIndexed (s : Store) (prs : List Prepared) : Store :=
+  let idx := Index.ofList (fun pr : Prepared => pr.p.name) prs
+  { s with
+    pages := s.pages.map fun q => match Index.first idx q.name with
+      | some pr => pr.p.withChange pr.change
+      | none => q
+    turn := s.turn + 1 }
+
+@[csimp]
+theorem landTexts_eq_indexed : @Store.landTexts = @Store.landTextsIndexed := by
+  funext s prs
+  simp only [Store.landTexts, Store.landTextsIndexed, Index.first_ofList]
+
 theorem landTexts_frame (s : Store) (prs : List Prepared) (n : String) (hn : ∀ pr ∈ prs, pr.p.name ≠ n) :
     (s.landTexts prs).page? n = s.page? n := by
   unfold Store.page? Store.landTexts
@@ -3408,6 +3583,74 @@ theorem citeReportIndexed_eq (H : Hash) (s : Store) (p : Page) :
     funext name f
     cases f <;> rfl
   rw [hf] <;> rfl
+
+theorem lookup_atoms_mem {a : AtomId} {c : Content} :
+    ∀ {xs : List (AtomId × Content)}, xs.lookup a = some c → (a, c) ∈ xs
+  | [], h => by cases h
+  | (k, v) :: rest, h => by
+    simp only [List.lookup] at h
+    by_cases hka : (a == k) = true
+    · rw [hka] at h
+      injection h with hv
+      subst hv
+      have hak : a = k := by simpa using hka
+      subst hak
+      exact List.mem_cons_self
+    · rw [Bool.eq_false_iff.mpr hka] at h
+      exact List.mem_cons_of_mem _ (lookup_atoms_mem h)
+
+def allCitesOkQuick (H : Hash) (world : World) (G : Graph) : Bool :=
+  G.atoms.all fun (_, content) =>
+    match content with
+    | .cite _ c => (citeFacts c).all (holds H world)
+    | .text t => !((t.startsWith "[[" || t.startsWith "![[") && t.endsWith "]]")
+    | _ => true
+
+theorem citeReportIndexed_none (H : Hash) (pages : Index.Buckets PageId Page) (p : Page)
+    (hcur : p.current = none) :
+    citeReportIndexed H pages p = [] := by
+  simp [citeReportIndexed, hcur]
+
+theorem citeReportIndexed_no_failures_of_quick (H : Hash) (pages : Index.Buckets PageId Page)
+    (p : Page) (G : Graph) (hcur : p.current = some G)
+    (hq : allCitesOkQuick H (indexedWorld pages) G = true) :
+    ((citeReportIndexed H pages p).filterMap fun (c, ok, why) =>
+      if ok then none else some (p.name ++ ": " ++ c ++ " is " ++ why)) = [] := by
+  rw [List.filterMap_eq_nil_iff]
+  rintro ⟨cStr, ok, why⟩ hmem
+  unfold citeReportIndexed at hmem
+  rw [hcur] at hmem
+  dsimp only at hmem
+  obtain ⟨pc, _, hpc⟩ := List.mem_filterMap.mp hmem
+  exact match pc, hpc with
+  | .atom a _txt, hpc => by
+    dsimp only at hpc
+    cases hl : G.label a with
+    | none => rw [hl] at hpc; cases hpc
+    | some content =>
+      rw [hl] at hpc
+      have hm : (a, content) ∈ G.atoms := lookup_atoms_mem hl
+      have hatom := List.all_eq_true.mp hq (a, content) hm
+      cases content with
+      | field _ _ => cases hpc
+      | cell _ _ _ _ _ => cases hpc
+      | text t =>
+        dsimp only at hatom hpc
+        simp only [Bool.not_eq_true'] at hatom
+        rw [hatom] at hpc
+        cases hpc
+      | cite _n c =>
+        dsimp only at hatom hpc
+        have hnil : ((citeFacts c).filter fun f => !holds H (indexedWorld pages) f) = [] := by
+          rw [List.filter_eq_nil_iff]
+          intro f hf
+          have hh := List.all_eq_true.mp hatom f hf
+          simp [hh]
+        simp only [hnil, List.isEmpty_nil, Option.some.injEq, Prod.mk.injEq] at hpc
+        rcases hpc with ⟨_, hok, _⟩
+        subst hok
+        rfl
+  | .mark _ _, hpc => by cases hpc
 
 /-- The open sections of a page, with their candidates' authors. -/
 def sectionReport (p : Page) : List String :=

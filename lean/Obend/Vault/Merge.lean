@@ -355,6 +355,14 @@ def actsOf (s : Store) (label : String) (names : List String) (baseOf : String �
 /-- The pages a merge reads: here's, then the other's, each once. -/
 def namesOf (here other : Store) : List String := ((here.pages.map (·.name)) ++ (other.pages.map (·.name))).eraseDups
 
+def namesOfFast (here other : Store) : List String :=
+  Index.eraseDupsFast ((here.pages.map (·.name)) ++ (other.pages.map (·.name)))
+
+@[csimp]
+theorem namesOf_eq_fast : @namesOf = @namesOfFast := by
+  funext here other
+  simp only [namesOf, namesOfFast, Index.eraseDupsFast_eq]
+
 /-- Each page's base history (a page `skip` names: here's). -/
 def baseOfPlan (here other : Store) (skip : String → Bool) : String → List Graph := fun n =>
   if skip n then liveHistory here n else sharedPrefix (historyIn here n) (historyIn other n)
@@ -517,46 +525,68 @@ def frontFix (H : Obend.Digest.HashBytes.Hash) (es : List Entry) (name : String)
     | none => M0
   | _, _, _ => M0
 
-/-- **Read two stores as two branches of their base.** Pages `skip` names (another merge's: the
-ledger's register) are left out: at the base as here holds them, acted on by neither side.
-Coupled non-clashing writes on a branch (whose link/backlink laws require them to land together)
-are grouped into atomic multi-page `BTurn`s, and forks attributed to a member (`auth`) carry that
-member's authority to the tip. -/
-def plan (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
-    (skip : String → Bool := fun _ => false) (auth : ForkAuth := {}) : Plan :=
-  let names := namesOf here other
-  -- the book names each page's owner; its laws are the store's, judged by the store's own write
+def pairCell {α β γ : Type} (g1 : String → Option α) (g2 : String → Option β)
+    (k : String → α → β → Option γ) (x : String) : Option (String × Option γ) :=
+  match g1 x, g2 x with
+  | some A, some B => some (x, k x A B)
+  | _, _ => none
+
+def mergedSpec (H : Obend.Digest.HashBytes.Hash) (here other : Store) (names : List String)
+    (baseOf : String → List Graph) : String → Option Graph :=
+  let who : String → AtomId → String := fun c => ((here.page? c).map Page.who).getD fun _ => "owner"
+  let mergedAll : List (String × Option Graph) := names.filterMap (pairCell
+    (fun c => (liveHistory here c).getLast?)
+    (fun c => (liveHistory other c).getLast?)
+    (fun c A B => (mergePage A B).map fun M0 =>
+      frontFix H here.entries c (who c) (((baseOf c).getLast?.map settled).getD "") (settled A) (settled B)
+        ((liveHistory here c).drop (baseOf c).length) ((liveHistory other c).drop (baseOf c).length) M0))
+  fun c => (mergedAll.lookup c).join
+
+def planWithOps
+    (label : String)
+    (skip : String → Bool) (auth : ForkAuth)
+    (names : List String)
+    (histHere histOther liveHere liveOther : String → List Graph)
+    (mkBaseOf : (String → Bool) → String → List Graph)
+    (mkBaseStates : (String → List Graph) → VaultStore)
+    (mkBaseSto : (String → List Graph) → Store)
+    (filtIn filtOut : List String → List String → List String)
+    (mkWriteHere : String → List Graph → Graph → BTurn)
+    (mkWriteOther : String → List Graph → Graph → BTurn)
+    (mkMerged : (String → List Graph) → String → Option Graph)
+    (mkVers : String → List Graph → List (Graph × List (AtomId × String)))
+    (otherPage : String → Option Page) : Plan :=
   let book : LawBook := names.map fun n => (n, ⟨"owner", [], [], []⟩)
   let unauthClash : String → Bool := fun n =>
     if skip n || auth.actor == "owner" then false
     else
-      let sp := sharedPrefix (historyIn here n) (historyIn other n)
-      let hh := liveHistory here n
-      let ho := liveHistory other n
+      let sp := sharedPrefix (histHere n) (histOther n)
+      let hh := liveHere n
+      let ho := liveOther n
       !hh.isEmpty && hh != sp && !ho.isEmpty && ho != sp &&
         match ho.getLast? with
-        | some G => (authRefusal auth.tipAuth book (writeOfAuth other label n sp G auth)).isSome
+        | some G => (authRefusal auth.tipAuth book (mkWriteOther n sp G)).isSome
         | none => false
-  let baseOf := baseOfPlan here other (fun n => skip n || unauthClash n)
-  let store : VaultStore := baseStates names baseOf
+  let baseOf := mkBaseOf (fun n => skip n || unauthClash n)
+  let store : VaultStore := mkBaseStates baseOf
   let receipts := baseReceipts names baseOf
   let live := names.filter (!skip ·)
-  let baseSto := baseStore here other names baseOf
+  let baseSto := mkBaseSto baseOf
   let movedL := live.filter fun n =>
-    let h := liveHistory here n
+    let h := liveHere n
     !h.isEmpty && h != baseOf n
   let rightBaseOf : String → List Graph := fun n =>
-    if unauthClash n then sharedPrefix (historyIn here n) (historyIn other n) else baseOf n
+    if unauthClash n then sharedPrefix (histHere n) (histOther n) else baseOf n
   let movedR := live.filter fun n =>
-    let h := liveHistory other n
+    let h := liveOther n
     !h.isEmpty && h != rightBaseOf n
-  let clashSet := movedL.filter (movedR.contains ·)
-  let freeNamesL := movedL.filter (!clashSet.contains ·)
-  let freeNamesR := movedR.filter (!clashSet.contains ·)
-  let clashL := clashSet.filterMap fun n => (liveHistory here n).getLast?.map (writeOf here "" n (baseOf n))
-  let clashR := clashSet.filterMap fun n => (liveHistory other n).getLast?.map (fun G => writeOfAuth other label n (baseOf n) G auth)
-  let rawFreeL := freeNamesL.filterMap fun n => (liveHistory here n).getLast?.map (writeOf here "" n (baseOf n))
-  let rawFreeR := freeNamesR.filterMap fun n => (liveHistory other n).getLast?.map (fun G => writeOfAuth other label n (rightBaseOf n) G auth)
+  let clashSet := filtIn movedL movedR
+  let freeNamesL := filtOut movedL clashSet
+  let freeNamesR := filtOut movedR clashSet
+  let clashL := clashSet.filterMap fun n => (liveHere n).getLast?.map (mkWriteHere n (baseOf n))
+  let clashR := clashSet.filterMap fun n => (liveOther n).getLast?.map (mkWriteOther n (baseOf n))
+  let rawFreeL := freeNamesL.filterMap fun n => (liveHere n).getLast?.map (mkWriteHere n (baseOf n))
+  let rawFreeR := freeNamesR.filterMap fun n => (liveOther n).getLast?.map (mkWriteOther n (rightBaseOf n))
   let ordFreeL := orderWrites rawFreeL.length rawFreeL
   let ordFreeR := orderWrites rawFreeR.length rawFreeR
   let hasBacklinks := (ordFreeL.length ≥ 2 || ordFreeR.length ≥ 2) && storeHasBacklinkLaw baseSto
@@ -579,27 +609,307 @@ def plan (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
       (sAfterLeft, ordFreeR)
   let leftTurns := orderWrites (schedFreeL ++ clashL).length (schedFreeL ++ clashL)
   let rightTurns := orderWrites (schedFreeR ++ clashR).length (schedFreeR ++ clashR)
-  let who : String → AtomId → String := fun c => ((here.page? c).map Page.who).getD fun _ => "owner"
-  -- each page both sides hold, merged once (its state and its write both read it)
-  let mergedAll : List (String × Option Graph) := names.filterMap fun c =>
-    match (liveHistory here c).getLast?, (liveHistory other c).getLast? with
-    | some A, some B => some (c, (mergePage A B).map fun M0 =>
-        frontFix H here.entries c (who c) (((baseOf c).getLast?.map settled).getD "") (settled A) (settled B)
-          ((liveHistory here c).drop (baseOf c).length) ((liveHistory other c).drop (baseOf c).length) M0)
-    | _, _ => none
-  let merged : String → Option Graph := fun c => (mergedAll.lookup c).join
+  let merged := mkMerged baseOf
   let text : TextMerge :=
     { state := fun c =>
-        match (liveHistory here c).getLast?, (liveHistory other c).getLast? with
-        | some _, some _ => some ((merged c).map fun M => pageState M (liveHistory here c).length)
+        match (liveHere c).getLast?, (liveOther c).getLast? with
+        | some _, some _ => some ((merged c).map fun M => pageState M (liveHere c).length)
         | _, _ => none
       write := fun c => (merged c).map fun M =>
-        { versions := versionsSince here "" c (baseOf c) ++
-            [(M, addedFrom label (other.page? c) (liveHistory here c).getLast? M)] } }
+        { versions := mkVers c (baseOf c) ++
+            [(M, addedFrom label (otherPage c) (liveHere c).getLast? M)] } }
   { names, baseOf, text,
     base := { store, book, auth := auth.tipAuth, history := receipts, vault := some baseSto },
     left := ⟨"here", receipts, leftTurns.map Act.write⟩,
     right := ⟨label, receipts, rightTurns.map Act.write⟩ }
+
+/-- **Read two stores as two branches of their base.** Pages `skip` names (another merge's: the
+ledger's register) are left out: at the base as here holds them, acted on by neither side.
+Coupled non-clashing writes on a branch (whose link/backlink laws require them to land together)
+are grouped into atomic multi-page `BTurn`s, and forks attributed to a member (`auth`) carry that
+member's authority to the tip. -/
+def plan (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
+    (skip : String → Bool := fun _ => false) (auth : ForkAuth := {}) : Plan :=
+  let names := namesOf here other
+  planWithOps label skip auth names
+    (historyIn here) (historyIn other) (liveHistory here) (liveHistory other)
+    (baseOfPlan here other)
+    (baseStates names)
+    (baseStore here other names)
+    (fun xs ys => xs.filter (ys.contains ·))
+    (fun xs ys => xs.filter (!ys.contains ·))
+    (writeOf here "")
+    (fun n bp G => writeOfAuth other label n bp G auth)
+    (mergedSpec H here other names)
+    (versionsSince here "")
+    other.page?
+
+theorem lookup_pairCell_nodup {α β γ : Type} (g1 : String → Option α) (g2 : String → Option β)
+    (k : String → α → β → Option γ) :
+    ∀ (xs : List String), xs.Nodup → ∀ (c : String),
+      ((xs.filterMap (pairCell g1 g2 k)).lookup c).join =
+        if c ∈ xs then
+          match g1 c, g2 c with
+          | some A, some B => k c A B
+          | _, _ => none
+        else none
+  | [], _, _ => by simp
+  | x :: xs, hnd, c => by
+    obtain ⟨hx, hxs⟩ := List.nodup_cons.mp hnd
+    have ih := lookup_pairCell_nodup g1 g2 k xs hxs c
+    by_cases hcx : c = x
+    · subst hcx
+      cases hg1 : g1 c with
+      | none =>
+        have hpc : pairCell g1 g2 k c = none := by simp [pairCell, hg1]
+        rw [List.filterMap_cons, hpc, ih]
+        simp [hx]
+      | some A =>
+        cases hg2 : g2 c with
+        | none =>
+          have hpc : pairCell g1 g2 k c = none := by simp [pairCell, hg1, hg2]
+          rw [List.filterMap_cons, hpc, ih]
+          simp [hx]
+        | some B =>
+          have hpc : pairCell g1 g2 k c = some (c, k c A B) := by simp [pairCell, hg1, hg2]
+          rw [List.filterMap_cons, hpc]
+          simp
+    · have hbeq : (c == x) = false := beq_false_of_ne hcx
+      cases hg1 : g1 x with
+      | none =>
+        have hpc : pairCell g1 g2 k x = none := by simp [pairCell, hg1]
+        rw [List.filterMap_cons, hpc, ih]
+        simp [hcx]
+      | some A =>
+        cases hg2 : g2 x with
+        | none =>
+          have hpc : pairCell g1 g2 k x = none := by simp [pairCell, hg1, hg2]
+          rw [List.filterMap_cons, hpc, ih]
+          simp [hcx]
+        | some B =>
+          have hpc : pairCell g1 g2 k x = some (x, k x A B) := by simp [pairCell, hg1, hg2]
+          rw [List.filterMap_cons, hpc]
+          simp [List.lookup, hbeq, ih, hcx]
+
+def writeOfWithEntries (es : List Entry) (byName : Index.Buckets String Page)
+    (label name : String) (bp : List Graph) (G : Graph) : BTurn :=
+  let pins := if hasLinkLaws es name G then pinsAt es (linksAt es name G) else []
+  let h := ((Index.first byName name).map (·.history)).getD []
+  let vs := h.drop bp.length
+  let prevs := (bp.getLast?) :: vs.dropLast.map some
+  let vers := (vs.zip prevs).map fun (G1, A) => (G1, addedFrom label (Index.first byName name) A G1)
+  { label := name, actor := "owner",
+    turn := writeTurn name (stateAt bp) (pageState G (h.length - 1)) pins (requestAt "owner" 0),
+    text := some { versions := vers },
+    lawKey := lawKeyOf bp G }
+
+theorem writeOfWithEntries_fn_eq (s : Store) (label : String) :
+    writeOfWithEntries s.entries (Index.ofList Page.name s.pages) label =
+      writeOf s label := by
+  funext name bp G
+  simp only [writeOfWithEntries, writeOf, versionsSince, liveHistory, Index.first_ofList, Store.page?]
+
+def writeOfAuthWithEntries (es : List Entry) (byName : Index.Buckets String Page)
+    (label name : String) (bp : List Graph) (G : Graph) (auth : ForkAuth := {}) : BTurn :=
+  if auth.actor == "owner" then
+    writeOfWithEntries es byName label name bp G
+  else
+    let pins := if hasLinkLaws es name G then pinsAt es (linksAt es name G) else []
+    let lk := lawKeyOf bp G
+    let h := ((Index.first byName name).map (·.history)).getD []
+    let vs := h.drop bp.length
+    let prevs := (bp.getLast?) :: vs.dropLast.map some
+    let vers := (vs.zip prevs).map fun (G1, A) => (G1, addedFrom label (Index.first byName name) A G1)
+    let pw : PageWrite := { versions := vers }
+    { label := name, actor := auth.actor,
+      turn := writeTurn name (stateAt bp) (pageState G (h.length - 1)) pins (requestAt auth.actor 0),
+      relies := auth.reliesOf name lk.isSome,
+      text := none,
+      lawKey := lk,
+      texts := [(name, pw)],
+      actorRef := auth.actorRef }
+
+theorem writeOfAuthWithEntries_eq (s : Store) (label name : String) (bp : List Graph) (G : Graph)
+    (auth : ForkAuth) :
+    writeOfAuthWithEntries s.entries (Index.ofList Page.name s.pages) label name bp G auth =
+      writeOfAuth s label name bp G auth := by
+  unfold writeOfAuthWithEntries writeOfAuth
+  by_cases ha : auth.actor == "owner"
+  · simp only [ha, ↓reduceIte, writeOfWithEntries_fn_eq]
+  · simp only [ha, Bool.false_eq_true, ↓reduceIte, versionsSince, liveHistory, Index.first_ofList, Store.page?]
+
+def histInIndexed (byName byTombs : Index.Buckets String Page) (n : String) : List Graph :=
+  match Index.first byName n with
+  | some p => p.history
+  | none => ((Index.first byTombs n).map (·.history)).getD []
+
+theorem histInIndexed_eq (s : Store) :
+    histInIndexed (Index.ofList Page.name s.pages) (Index.ofList Page.name s.tombs) = historyIn s := by
+  funext n
+  simp only [histInIndexed, historyIn, Store.page?, Index.first_ofList]
+
+def liveHistIndexed (byName : Index.Buckets String Page) (n : String) : List Graph :=
+  ((Index.first byName n).map (·.history)).getD []
+
+theorem liveHistIndexed_eq (s : Store) :
+    liveHistIndexed (Index.ofList Page.name s.pages) = liveHistory s := by
+  funext n
+  simp only [liveHistIndexed, liveHistory, Store.page?, Index.first_ofList]
+
+theorem isSome_find_id_eq_contains (xs : List String) (x : String) :
+    (xs.find? (fun y => id y == x)).isSome = xs.contains x := by
+  rw [List.isSome_find?]
+  apply Bool.eq_iff_iff.mpr
+  simp
+
+def baseStatesIndexed (namesIdx : Index.Buckets String String) (baseOf : String → List Graph) : VaultStore :=
+  fun c => if (Index.first namesIdx c).isSome then some (stateAt (baseOf c)) else none
+
+theorem baseStatesIndexed_fn_eq (names : List String) :
+    baseStatesIndexed (Index.ofList id names) = baseStates names := by
+  funext baseOf c
+  simp only [baseStatesIndexed, baseStates, Index.first_ofList, isSome_find_id_eq_contains]
+
+def baseStoreIndexed (here : Store) (names : List String) (namesIdx : Index.Buckets String String)
+    (herePages otherPages : Index.Buckets String Page) (baseOf : String → List Graph) : Store :=
+  let bMine := here.pages.map fun p =>
+    if (Index.first namesIdx p.name).isSome then { p with history := baseOf p.name } else p
+  let bTheirs := (names.filter fun n => (Index.first herePages n).isNone).filterMap fun n =>
+    (Index.first otherPages n).map fun q =>
+      ({ name := n, id := q.id, history := baseOf n, seen := none, authors := q.authors, note := none, kind := q.kind } : Page)
+  { here with pages := bMine ++ bTheirs }
+
+theorem baseStoreIndexed_fn_eq (here other : Store) (names : List String) :
+    baseStoreIndexed here names (Index.ofList id names)
+        (Index.ofList Page.name here.pages) (Index.ofList Page.name other.pages) =
+      baseStore here other names := by
+  funext baseOf
+  simp only [baseStoreIndexed, baseStore, baseMine, baseTheirs, Store.page?,
+    Index.first_ofList, isSome_find_id_eq_contains]
+
+def versionsSinceIndexed (byName : Index.Buckets String Page) (live : String → List Graph)
+    (label c : String) (bp : List Graph) : List (Graph × List (AtomId × String)) :=
+  let h := live c
+  let vs := h.drop bp.length
+  let prevs := (bp.getLast?) :: vs.dropLast.map some
+  (vs.zip prevs).map fun (G1, A) => (G1, addedFrom label (Index.first byName c) A G1)
+
+theorem versionsSinceIndexed_eq (s : Store) (label : String) :
+    versionsSinceIndexed (Index.ofList Page.name s.pages) (liveHistory s) label =
+      versionsSince s label := by
+  funext c bp
+  simp only [versionsSinceIndexed, versionsSince, Index.first_ofList, Store.page?]
+
+def baseOfPlanWith (histHere histOther liveHere : String → List Graph) (skip : String → Bool) :
+    String → List Graph :=
+  fun n => if skip n then liveHere n else sharedPrefix (histHere n) (histOther n)
+
+theorem baseOfPlanWith_eq (here other : Store) :
+    baseOfPlanWith (historyIn here) (historyIn other) (liveHistory here) = baseOfPlan here other := by
+  funext skip n
+  rfl
+
+def filterInIdx (xs ys : List String) : List String :=
+  let idx := Index.ofList id ys
+  xs.filter fun n => (Index.first idx n).isSome
+
+theorem filterInIdx_fn_eq :
+    filterInIdx = (fun (xs ys : List String) => xs.filter (ys.contains ·)) := by
+  funext xs ys
+  unfold filterInIdx
+  simp only [Index.first_ofList, isSome_find_id_eq_contains]
+
+def filterNotInIdx (xs ys : List String) : List String :=
+  let idx := Index.ofList id ys
+  xs.filter fun n => !(Index.first idx n).isSome
+
+theorem filterNotInIdx_fn_eq :
+    filterNotInIdx = (fun (xs ys : List String) => xs.filter (!ys.contains ·)) := by
+  funext xs ys
+  unfold filterNotInIdx
+  simp only [Index.first_ofList, isSome_find_id_eq_contains]
+
+def pageByIdx (idx : Index.Buckets String Page) (c : String) : Option Page :=
+  Index.first idx c
+
+theorem pageByIdx_eq (s : Store) :
+    pageByIdx (Index.ofList Page.name s.pages) = s.page? := by
+  funext c
+  exact Index.first_ofList Page.name s.pages c
+
+def mergedFastAt (H : Obend.Digest.HashBytes.Hash) (hereEntries : List Entry)
+    (herePages : Index.Buckets String Page) (liveHere liveOther baseOf : String → List Graph)
+    (c : String) : Option Graph :=
+  match (liveHere c).getLast?, (liveOther c).getLast? with
+  | some A, some B => (mergePage A B).map fun M0 =>
+      frontFix H hereEntries c (((Index.first herePages c).map Page.who).getD fun _ => "owner")
+        (((baseOf c).getLast?.map settled).getD "") (settled A) (settled B)
+        ((liveHere c).drop (baseOf c).length) ((liveOther c).drop (baseOf c).length) M0
+  | _, _ => none
+
+theorem mergedFastAt_eq (H : Obend.Digest.HashBytes.Hash) (here other : Store) :
+    mergedFastAt H here.entries (Index.ofList Page.name here.pages)
+        (liveHistory here) (liveHistory other) =
+      mergedSpec H here other (namesOf here other) := by
+  funext baseOf c
+  unfold mergedSpec mergedFastAt
+  dsimp only
+  rw [lookup_pairCell_nodup _ _ _ (namesOf here other) (Index.eraseDups_nodup _) c]
+  simp only [Index.first_ofList, Store.page?]
+  by_cases hc : c ∈ namesOf here other
+  · simp only [hc, ↓reduceIte]
+    cases (liveHistory here c).getLast? <;> cases (liveHistory other c).getLast? <;> rfl
+  · simp only [hc, ↓reduceIte]
+    have hnone : here.page? c = none := by
+      cases hp : here.page? c with
+      | none => rfl
+      | some p =>
+        exfalso
+        apply hc
+        simp only [namesOf, List.mem_eraseDups, List.mem_append, List.mem_map]
+        exact Or.inl ⟨p, List.mem_of_find?_eq_some hp, by simpa using List.find?_some hp⟩
+    have hlive : liveHistory here c = [] := by simp [liveHistory, hnone]
+    simp [hlive]
+
+/-- Indexed & demand-driven `Merge.plan`: builds `Page` and `Entry` lookup tables once in
+`O(N log N)` and computes 3-way `mergePage` + `frontFix` ONLY for clashing pages queried by
+`Branch.merge` instead of eagerly merging all `N` untouched pages in the vault. -/
+def planIndexed (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
+    (skip : String → Bool := fun _ => false) (auth : ForkAuth := {}) : Plan :=
+  let names := namesOf here other
+  let namesIdx := Index.ofList id names
+  let herePages := Index.ofList Page.name here.pages
+  let otherPages := Index.ofList Page.name other.pages
+  let hereTombs := Index.ofList Page.name here.tombs
+  let otherTombs := Index.ofList Page.name other.tombs
+  let hereEntries := here.entries
+  let otherEntries := other.entries
+  let histHere := histInIndexed herePages hereTombs
+  let histOther := histInIndexed otherPages otherTombs
+  let liveHere := liveHistIndexed herePages
+  let liveOther := liveHistIndexed otherPages
+  planWithOps label skip auth names
+    histHere histOther liveHere liveOther
+    (baseOfPlanWith histHere histOther liveHere)
+    (baseStatesIndexed namesIdx)
+    (baseStoreIndexed here names namesIdx herePages otherPages)
+    filterInIdx
+    filterNotInIdx
+    (writeOfWithEntries hereEntries herePages "")
+    (fun n bp G => writeOfAuthWithEntries otherEntries otherPages label n bp G auth)
+    (mergedFastAt H hereEntries herePages liveHere liveOther)
+    (versionsSinceIndexed herePages liveHere "")
+    (pageByIdx otherPages)
+
+@[csimp]
+theorem plan_eq_indexed : @plan = @planIndexed := by
+  funext H here other label skip auth
+  unfold planIndexed plan
+  dsimp only
+  simp only [histInIndexed_eq, liveHistIndexed_eq, baseOfPlanWith_eq,
+    baseStatesIndexed_fn_eq, baseStoreIndexed_fn_eq, filterInIdx_fn_eq, filterNotInIdx_fn_eq,
+    writeOfWithEntries_fn_eq, writeOfAuthWithEntries_eq,
+    mergedFastAt_eq, versionsSinceIndexed_eq, pageByIdx_eq]
 
 /-! ## The store the tip leaves -/
 
@@ -860,7 +1170,7 @@ theorem plan_agrees (H : Obend.Digest.HashBytes.Hash) (here other : Store) (labe
     (skip : String → Bool) (auth : ForkAuth := {}) :
     Agrees (plan H here other label skip auth).base := by
   intro v hv x
-  simp only [plan, Option.some.injEq] at hv ⊢
+  simp only [plan, planWithOps, Option.some.injEq] at hv ⊢
   subst hv
   rw [baseStore_states]
 

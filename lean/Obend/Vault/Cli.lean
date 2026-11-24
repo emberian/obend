@@ -188,14 +188,15 @@ a rule), read from PATH relative to the vault: the census's file, its `#` lines 
 def loadEnvironment (dir : System.FilePath) (V : List (String × String)) : IO Environment := do
   let mut names : List String := []
   for (n, md) in V do
-    for (k, path) in frontFields md do
-      if k == "environment" then
-        let f := dir / path
-        unless ← f.pathExists do
-          throw (IO.userError (n ++ ": its environment " ++ path ++ " is not there; write it with " ++
-            "`lake build Obend.Census` (tier 2) or `cd lean && lake env lean tests/decisions/Environment.lean`"))
-        let txt ← Obend.Vault.Cost.readFile f
-        names := names ++ (txt.splitOn "\n").filter fun l => !l.isEmpty && !l.startsWith "#"
+    if (md.splitOn "environment").length > 1 then
+      for (k, path) in frontFields md do
+        if k == "environment" then
+          let f := dir / path
+          unless ← f.pathExists do
+            throw (IO.userError (n ++ ": its environment " ++ path ++ " is not there; write it with " ++
+              "`lake build Obend.Census` (tier 2) or `cd lean && lake env lean tests/decisions/Environment.lean`"))
+          let txt ← Obend.Vault.Cost.readFile f
+          names := names ++ (txt.splitOn "\n").filter fun l => !l.isEmpty && !l.startsWith "#"
   return environmentOf names
 
 /-- The `.json` files directly in a directory, by name without `.json`, sorted. -/
@@ -902,15 +903,39 @@ def problems (s : Store) : List String :=
     ((citeReport H s p).filterMap fun (c, ok, why) => if ok then none else some (p.name ++ ": " ++ c ++ " is " ++ why)) ++
       (sectionReport p).map (p.name ++ ": " ++ ·)
 
+theorem flatMap_congr_mem {α β : Type} {f g : α → List β} :
+    ∀ (xs : List α), (∀ x ∈ xs, f x = g x) → xs.flatMap f = xs.flatMap g
+  | [], _ => rfl
+  | x :: xs, h => by
+    simp only [List.flatMap_cons, h x List.mem_cons_self,
+      flatMap_congr_mem xs (fun y hy => h y (List.mem_cons_of_mem _ hy))]
+
 def problemsIndexed (s : Store) : List String :=
   let pages := Index.ofList Page.id s.pages
+  let world := indexedWorld pages
   s.pages.flatMap fun p =>
-    ((citeReportIndexed H pages p).filterMap fun (c, ok, why) => if ok then none else some (p.name ++ ": " ++ c ++ " is " ++ why)) ++
-      (sectionReport p).map (p.name ++ ": " ++ ·)
+    let citeErrs := match p.current with
+      | none => []
+      | some G =>
+        if allCitesOkQuick H world G then []
+        else (citeReportIndexed H pages p).filterMap fun (c, ok, why) =>
+          if ok then none else some (p.name ++ ": " ++ c ++ " is " ++ why)
+    citeErrs ++ (sectionReport p).map (p.name ++ ": " ++ ·)
 
 @[csimp] theorem problems_eq_indexed : @problems = @problemsIndexed := by
   funext s
-  simp only [problems, problemsIndexed, citeReportIndexed_eq]
+  unfold problems problemsIndexed
+  dsimp only
+  apply flatMap_congr_mem
+  intro p _
+  rw [← citeReportIndexed_eq H s p]
+  cases hcur : p.current with
+  | none =>
+    simp [citeReportIndexed_none H _ p hcur]
+  | some G =>
+    by_cases hq : allCitesOkQuick H (indexedWorld (Index.ofList Page.id s.pages)) G = true
+    · simp only [hq, ↓reduceIte, citeReportIndexed_no_failures_of_quick H _ p G hcur hq]
+    · simp only [hq, Bool.false_eq_true, ↓reduceIte]
 
 /-- What `forgetMissing` did, as lines: a page renamed is not also reported deleted. -/
 def forgottenLines (f : Forgotten) : List String :=
