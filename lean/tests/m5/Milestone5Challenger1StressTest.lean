@@ -171,6 +171,18 @@ def test_hex_codecs_boundary : Bool :=
 
 #guard test_hex_codecs_boundary == true
 
+-- Citation commitments on the same JSON interface require canonical lowercase.
+private def citeWithHash (h : String) : Json :=
+  Json.mkObj [("c", "ref"), ("page", toJson 1), ("span", "page"), ("v", toJson 0),
+    ("h", toJson h), ("mode", "pinned")]
+
+#guard match contentOf (citeWithHash "af") with
+  | .ok (.cite _ c) => c.commitment == [0xaf]
+  | _ => false
+#guard match contentOf (citeWithHash "aF") with
+  | .error e => e == "bad commitment"
+  | .ok _ => false
+
 -- Test 2.2: Deeply nested AST roundtrip through StructuredCell and cellToCoreData
 def mkDeepNestedVariant : Nat → Data
   | 0 => .natural 42

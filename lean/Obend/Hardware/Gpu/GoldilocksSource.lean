@@ -12,6 +12,9 @@ open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.ArrayBuild
 open Obend.Apps.ZkNtt (goldilocksPrime)
 
+/-- The GPU field modulus. -/
+abbrev goldilocksP := goldilocksPrime
+
 /-- The field constants a vector of length `n` needs: `p`, the low mask and the shift. -/
 structure GlConsts where
   p    : Nat

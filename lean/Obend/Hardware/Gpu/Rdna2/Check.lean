@@ -82,8 +82,13 @@ def parseExpected (s : String) : Except String (Array Vector) :=
       | none => throw s!"expected.tsv: bad index {i}"
     | _ => throw s!"expected.tsv: bad line {ln}"
 
-/-- A hex word of a dump, either case (`0` for anything else). -/
-def hexToNat (h : String) : Nat := (Obend.Codec.Hex.hexCharsToNat? h.toList).getD 0
+/-- Instruction dumps historically assign a value even to non-hex characters. -/
+def hexToNat (h : String) : Nat :=
+  h.foldl (fun acc c =>
+    let digit := match Obend.Codec.Hex.decodeHexNibbleAnyCase? c with
+      | some d => d
+      | none => c.toLower.toNat - 'a'.toNat + 10
+    acc * 16 + digit) 0
 
 /-- Each stage's LDS allocation in bytes, from the resource line RADV prints (`LDS: N`). -/
 def parseDumpLds (s : String) : Array Nat := Id.run do

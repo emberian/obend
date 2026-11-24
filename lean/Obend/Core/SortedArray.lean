@@ -68,7 +68,7 @@ theorem search_complete {α : Type} (key : α → Nat) (a : Array α)
     simp only [search, show lo < hi by omega, hmA, ite_true, dite_true]
     split
     · have hmi : (lo + hi) / 2 < i := by
-        apply Classical.byContradiction
+        apply Decidable.byContradiction
         intro hn
         have he : i ≤ (lo + hi) / 2 := by omega
         rcases Nat.lt_or_eq_of_le he with he | he
@@ -78,7 +78,7 @@ theorem search_complete {α : Type} (key : α → Nat) (a : Array α)
       exact ih ((lo + hi) / 2 + 1) hi hiA (by omega) (by omega) hih hk
     · split
       · have him : i < (lo + hi) / 2 := by
-          apply Classical.byContradiction
+          apply Decidable.byContradiction
           intro hn
           have he : (lo + hi) / 2 ≤ i := by omega
           rcases Nat.lt_or_eq_of_le he with he | he

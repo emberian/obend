@@ -60,6 +60,7 @@ import all Obend.Digest.HashBytes
 import all Obend.Digest.Cshake256
 import all Obend.Digest.Cshake256.Spec
 import all Obend.Digest.Cshake256.Fast
+import all Obend.Digest.Cshake256.Seam
 import all Obend.Core.Digest
 meta import Lean
 meta import Obend.Elab.Workbook
@@ -533,6 +534,9 @@ example :
        | .error _ => true
        | .ok _ => false
      dampOk && diffOk && receiptOk && cflBad) = true := by
+  -- Evaluate the receipt through the proved byte-array implementation of cSHAKE.
+  simp only [pdeReceiptHex, pdeTrajectoryDigest, Obend.Core.Digest.deployed,
+    Obend.Digest.Cshake256.cshake256Bytes_eq_native]
   decide +kernel
 
 /-- End-to-end executable `pdeNonlinear` CLI checks on `BonaMassoZ4c1D` (accepted `"rat"` and `"q32"`

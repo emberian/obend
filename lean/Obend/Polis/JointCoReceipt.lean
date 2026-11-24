@@ -4,7 +4,7 @@ module
 A turn that touches several vats leaves one local receipt in each. This module says when those
 receipts are one turn, how a turn moves a `FloorBook`, and how receipts with open promise ports
 compose into one.
-1. Sorted tables: `tableOk (sortByKey …)` is key distinctness; lookup is CapTP's binary search.
+1. Sorted tables: `tableOk (sortByKey …)` is key distinctness; lookup is the shared binary search.
 2. `LocalTurn`, `JointTurn`: a local receipt checks its own arithmetic (`post = pre + half`, neither
    balance negative) and commits to a turn digest. A joint turn is the pullback of the receipts over
    that digest (`SharedTurnId`: every leg names one 32-byte cSHAKE256 digest, and it is the digest of
@@ -79,7 +79,7 @@ def sortByKey (l : List α) : Array α :=
   (l.mergeSort (fun a b => decide (key a ≤ key b))).toArray
 /-- The table's keys strictly ascend: no key occurs twice. One pass. -/
 def tableOk (A : Array α) : Bool := ascending (A.toList.map key)
-/-- Find the entry with key `k` by CapTP's binary search. -/
+/-- Find the entry with key `k` by the shared binary search. -/
 def lookup (A : Array α) (k : Nat) : Option α := Obend.Core.SortedArray.search key A k (A.size + 1) 0 A.size
 theorem sortByKey_perm (l : List α) : (sortByKey key l).toList.Perm l := by
   simpa only [sortByKey, List.toList_toArray] using

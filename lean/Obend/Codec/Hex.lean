@@ -141,17 +141,26 @@ theorem hexNibbleByte_of_decodeHexNibbleByte? {b : UInt8} {d : Nat}
 /-! ## Byte strings -/
 
 /-- Two lowercase digits a byte, high nibble first. -/
-@[expose] def bytesToHexChars : List UInt8 → List Char
-  | [] => []
-  | b :: bs => hexNibbleChar (b.toNat / 16) :: hexNibbleChar (b.toNat % 16) :: bytesToHexChars bs
+@[expose] def bytesToHexChars (bs : List UInt8) : List Char :=
+  bs.flatMap fun b => [hexNibbleChar (b.toNat / 16), hexNibbleChar (b.toNat % 16)]
+
+theorem bytesToHexChars_cons (b : UInt8) (bs : List UInt8) :
+    bytesToHexChars (b :: bs) =
+      hexNibbleChar (b.toNat / 16) :: hexNibbleChar (b.toNat % 16) :: bytesToHexChars bs := rfl
 
 /-- The same spelling in ASCII bytes. -/
-@[expose] def bytesToHexAscii : List UInt8 → List UInt8
-  | [] => []
-  | b :: bs => hexNibbleByte (b.toNat / 16) :: hexNibbleByte (b.toNat % 16) :: bytesToHexAscii bs
+@[expose] def bytesToHexAscii (bs : List UInt8) : List UInt8 :=
+  bs.flatMap fun b => [hexNibbleByte (b.toNat / 16), hexNibbleByte (b.toNat % 16)]
+
+theorem bytesToHexAscii_cons (b : UInt8) (bs : List UInt8) :
+    bytesToHexAscii (b :: bs) =
+      hexNibbleByte (b.toNat / 16) :: hexNibbleByte (b.toNat % 16) :: bytesToHexAscii bs := rfl
 
 /-- Lowercase hex of a byte list. -/
 abbrev bytesToHex (bs : List UInt8) : String := String.ofList (bytesToHexChars bs)
+
+/-- One byte in exactly two lowercase digits. -/
+abbrev byteToHex (b : UInt8) : String := bytesToHex [b]
 
 /-- Lowercase hex of a `ByteArray`. -/
 abbrev byteArrayToHex (b : ByteArray) : String := bytesToHex b.data.toList
@@ -189,12 +198,12 @@ abbrev byteArrayToHex (b : ByteArray) : String := bytesToHex b.data.toList
 theorem bytesToHexChars_length (bs : List UInt8) : (bytesToHexChars bs).length = 2 * bs.length := by
   induction bs with
   | nil => rfl
-  | cons b bs ih => simp only [bytesToHexChars, List.length_cons, ih]; omega
+  | cons b bs ih => simp only [bytesToHexChars_cons, List.length_cons, ih]; omega
 
 theorem bytesToHexAscii_length (bs : List UInt8) : (bytesToHexAscii bs).length = 2 * bs.length := by
   induction bs with
   | nil => rfl
-  | cons b bs ih => simp only [bytesToHexAscii, List.length_cons, ih]; omega
+  | cons b bs ih => simp only [bytesToHexAscii_cons, List.length_cons, ih]; omega
 
 theorem bytesToHex_length (bs : List UInt8) : (bytesToHex bs).length = 2 * bs.length := by
   rw [String.length_ofList, bytesToHexChars_length]
@@ -212,7 +221,7 @@ private theorem byte_of_nibbles (b : UInt8) : ((b.toNat / 16 % 16) * 16 + b.toNa
   induction bs with
   | nil => rfl
   | cons b bs ih =>
-    simp only [bytesToHexChars, hexCharsToBytes?, decodeHexNibble?_hexNibbleChar, ih, bind,
+    simp only [bytesToHexChars_cons, hexCharsToBytes?, decodeHexNibble?_hexNibbleChar, ih, bind,
       Option.bind, byte_of_nibbles]
 
 @[simp] theorem hexCharsToBytesAnyCase?_bytesToHexChars (bs : List UInt8) :
@@ -220,7 +229,7 @@ private theorem byte_of_nibbles (b : UInt8) : ((b.toNat / 16 % 16) * 16 + b.toNa
   induction bs with
   | nil => rfl
   | cons b bs ih =>
-    simp only [bytesToHexChars, hexCharsToBytesAnyCase?, decodeHexNibbleAnyCase?_hexNibbleChar, ih,
+    simp only [bytesToHexChars_cons, hexCharsToBytesAnyCase?, decodeHexNibbleAnyCase?_hexNibbleChar, ih,
       bind, Option.bind, byte_of_nibbles]
 
 @[simp] theorem hexAsciiToBytes?_bytesToHexAscii (bs : List UInt8) :
@@ -228,7 +237,7 @@ private theorem byte_of_nibbles (b : UInt8) : ((b.toNat / 16 % 16) * 16 + b.toNa
   induction bs with
   | nil => rfl
   | cons b bs ih =>
-    simp only [bytesToHexAscii, hexAsciiToBytes?, decodeHexNibbleByte?_hexNibbleByte, ih, bind,
+    simp only [bytesToHexAscii_cons, hexAsciiToBytes?, decodeHexNibbleByte?_hexNibbleByte, ih, bind,
       Option.bind, byte_of_nibbles]
 
 @[simp] theorem hexCharsToBytes?_bytesToHex (bs : List UInt8) :
@@ -267,7 +276,7 @@ theorem bytesToHexChars_of_hexCharsToBytes? :
           obtain ⟨hhi, rfl⟩ := hexNibbleChar_of_decodeHexNibble? ha
           obtain ⟨hlo, rfl⟩ := hexNibbleChar_of_decodeHexNibble? hb
           obtain ⟨e1, e2⟩ := nibbles_of_byte hhi hlo
-          simp only [bytesToHexChars, e1, e2, bytesToHexChars_of_hexCharsToBytes? ht]
+          simp only [bytesToHexChars_cons, e1, e2, bytesToHexChars_of_hexCharsToBytes? ht]
   | [_], _, h => by simp only [hexCharsToBytes?] at h; cases h
 
 /-- The same on ASCII bytes. -/
@@ -291,7 +300,7 @@ theorem bytesToHexAscii_of_hexAsciiToBytes? :
           obtain ⟨hhi, rfl⟩ := hexNibbleByte_of_decodeHexNibbleByte? ha
           obtain ⟨hlo, rfl⟩ := hexNibbleByte_of_decodeHexNibbleByte? hb
           obtain ⟨e1, e2⟩ := nibbles_of_byte hhi hlo
-          simp only [bytesToHexAscii, e1, e2, bytesToHexAscii_of_hexAsciiToBytes? ht]
+          simp only [bytesToHexAscii_cons, e1, e2, bytesToHexAscii_of_hexAsciiToBytes? ht]
   | [_], _, h => by simp only [hexAsciiToBytes?] at h; cases h
 
 theorem bytesToHexChars_injective {a b : List UInt8} (h : bytesToHexChars a = bytesToHexChars b) :

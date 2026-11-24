@@ -53,7 +53,7 @@ open Obend.Vault.Rehydration (WitnessReceipt)
 open Obend.Vault.Transport (Issue Grants Standing Landing Obligation Contract)
 open Obend.Digest.Cshake256 (customizationPrefix)
 open Obend.Digest.Cshake256.Fast (pushList push_data pushList_data empty_data spongeBytes sponge_fast_eq)
-open Obend.Codec.Hex (hexNibbleByte decodeHexNibbleByte? bytesToHex bytesToHexChars bytesToHexAscii
+open Obend.Codec.Hex (hexNibbleByte decodeHexNibbleByte? byteToHex bytesToHex bytesToHexAscii bytesToHexAscii_cons
   hexAsciiToBytes? hexCharsToBytes? hexCharsToBytes?_bytesToHex hexAsciiToBytes?_bytesToHexAscii
   hexAsciiToBytes?_of_odd)
 
@@ -1782,7 +1782,7 @@ theorem pushHexArray_go_eq (raw : ByteArray) (i : Nat) (out : ByteArray) :
     rw [dite_eq_left_of_eq_true (eq_true h), pushHexArray_go_eq raw (i + 1), List.drop_eq_getElem_cons hl]
     have hg : raw.data.toList[i]'hl = raw[i]'h := rfl
     rw [hg, push_u8_data, push_u8_data]
-    simp [bytesToHexAscii, List.append_assoc]
+    simp [bytesToHexAscii_cons, List.append_assoc]
   · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]
     simp [bytesToHexAscii]
 termination_by raw.size - i
@@ -2135,16 +2135,16 @@ theorem unframeManifest_frameManifest (core : ManifestCore) :
 Prefixing the bucket byte makes shard keys provably distinct across buckets without assuming
 cryptographic collision-freedom, while remaining 100% content-addressed within each bucket. -/
 def shardKey (b : Nat) (digest : String) : String :=
-  bytesToHex [b.toUInt8] ++ "-" ++ digest
+  byteToHex b.toUInt8 ++ "-" ++ digest
 
-theorem hex_single_len (x : UInt8) : (bytesToHex [x]).toList.length = 2 := by
-  simp [bytesToHexChars]
+theorem hex_single_len (x : UInt8) : (byteToHex x).toList.length = 2 := by
+  simpa using Obend.Codec.Hex.bytesToHexChars_length [x]
 
 theorem shardKey_take2 (b : Nat) (d : String) :
-    (shardKey b d).toList.take 2 = (bytesToHex [b.toUInt8]).toList := by
+    (shardKey b d).toList.take 2 = (byteToHex b.toUInt8).toList := by
   unfold shardKey
-  have happ : (bytesToHex [b.toUInt8] ++ "-" ++ d).toList =
-      (bytesToHex [b.toUInt8]).toList ++ ("-" ++ d).toList := by
+  have happ : (byteToHex b.toUInt8 ++ "-" ++ d).toList =
+      (byteToHex b.toUInt8).toList ++ ("-" ++ d).toList := by
     rw [String.append_assoc, String.toList_append]
   rw [happ, ← hex_single_len b.toUInt8]
   exact take_append_exact _ _

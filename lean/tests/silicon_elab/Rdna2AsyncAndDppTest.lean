@@ -214,6 +214,13 @@ open Obend.Apps.ZkNtt
 set_option autoImplicit false
 set_option maxRecDepth 8192
 
+-- Instruction words keep the dump reader's historical non-digit values.
+#guard parseDump "## stage 0\n\tword\t; 0aF 1g 2?" == #[#[#[175, 32, 42]]]
+-- Constant data requires eight hex digits per word.
+#guard (parseDumpData "## stage 0\n.data 0 DEadBEEF").toOption == some #[#[(0, #[0xdeadbeef])]]
+#guard (parseDumpData "## stage 0\n.data 0 0000000g").toOption == none
+#guard (parseDumpData "## stage 0\n.data 0 0000000").toOption == none
+
 /-! Real machine words, decoded through the generated AMD ISA tables. -/
 def loadOlder : List UInt32 := [0xf4000200, 0xfa000000] -- s_load_dword s8, s[0:1], 0
 def loadYounger : List UInt32 := [0xf4000240, 0xfa000004] -- s9, byte offset 4
