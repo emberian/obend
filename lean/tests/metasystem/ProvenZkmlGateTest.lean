@@ -3,9 +3,9 @@ module
 # ProvenZkmlGateTest — `EinSumcheck` + Native `MXFP4` (`E2M1`) Golden Vectors, `UD-100` Matrix & `#tooth` Kills
 
 Tests and mutation-sensitivity guards for `Obend.SymbolicZk.EinSumcheckMxfp4` & `ProvenZkmlGate`:
-1. Byte-for-byte cross-language golden wire vectors (`OBEND.SHE.ZKML_SUITE/v1`, `OBEND.SHE.ZKML_WEIGHTS/v1`,
+1. Golden wire vectors (`OBEND.SHE.ZKML_SUITE/v1`, `OBEND.SHE.ZKML_WEIGHTS/v1`,
    `OBEND.SHE.ZKML_MERKLE/v1`, `SuccinctMxfp4IopProof` with round degrees `(2^logB, 3^logK, 3^logJ)`,
-   and `OBEND.SHE.ZKML_CHUNK/v1`) locked with `crates/obend-prove-worker/tests/zkml_she_gate_test.rs`.
+   and `OBEND.SHE.ZKML_CHUNK/v1`).
 2. Real 2-layer 8-bit post-commit PoW `MXFP4` contraction stream (`nonces = [145, 289]`, with `w - 1`
    provably invalid: `144` and `288` rejected!), `UD-100` small-leaf `(6, 86, 16)` vs `q=85` and
    wide-leaf `(2, 148, 0, logArity=4)` vs `q=147`, plus concrete refusal witnesses across all
@@ -58,7 +58,7 @@ set_option autoImplicit false
 def bytes32 (b : UInt8) : ByteArray := ⟨(List.replicate 32 b).toArray⟩
 
 
-/-! ## 1. Cross-Language Golden `MXFP4` `EinSumcheck` Vectors (`zkml_she_gate_test.rs` Parity) -/
+/-! ## 1. Golden `MXFP4` `EinSumcheck` Vectors -/
 
 -- Exact `MXFP4` contraction table `[71, 13, p - 80, 88]` on `(logI=1, logJ=1, logK=1, logB=1)`:
 #guard sampleMxfp4Witness0.dTbl ==
@@ -86,10 +86,10 @@ def assertKat (label : String) (ok : Bool) : IO Unit := do
 #guard checkZkmlSuiteProvenFloor .provenUdr zeroLogArityGoldilocksExt2 == false
 #guard checkZkmlSuiteProvenFloor .withdrawnCbr deployedIr2BabyBearExt4 == false
 
-/-! ## 2. Cross-Language Golden KATs, 8-Bit PoW (`[145, 289]`), Refusals & Session Continuity -/
+/-! ## 2. Golden KATs, 8-Bit PoW (`[145, 289]`), Refusals & Session Continuity -/
 
 #eval show IO Unit from do
-  -- 1. Byte-for-byte parity with `crates/obend-prove-worker/tests/zkml_she_gate_test.rs`:
+  -- 1. Golden `MXFP4` `EinSumcheck` and `OBEND.SHE.ZKML_CHUNK/v1` wire vectors:
   let goldenIopSuite : ZkmlSuiteProfile := ⟨64, 2, 2, 2, 0, 20, 256, 4⟩
   let goldenChunk0 := proveMxfp4ChunkIop goldenIopSuite (bytes32 0x22) goldenIopSuite.digest 0 sampleChainWitness0 0
   let goldenChunk1 := proveMxfp4ChunkIop goldenIopSuite (bytes32 0x22) goldenIopSuite.digest 1 sampleChainWitness1 0

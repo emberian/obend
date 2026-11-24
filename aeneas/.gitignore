@@ -1,0 +1,5 @@
+*.llbc
+lean/.lake/
+**/*.olean
+**/*.ilean
+**/*.c.o

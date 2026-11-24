@@ -8,7 +8,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use obend_keccak::{Cshake256, bytepad_encoded_strings};
+use obend_keccak::Cshake256;
 
 pub use obend_keccak::{
     KECCAK_ROUND_CONSTANTS, SHAKE256_RATE_BYTES, cshake256_32, keccak_f1600, shake256_32,
@@ -91,11 +91,9 @@ pub fn sp800_185_bytepad(bytes: &[u8], width: usize) -> Vec<u8> {
 
 /// SP 800-185 `cSHAKE256` customization prefix for an empty function name and caller `S`.
 pub fn cshake256_customization_prefix(customization: &[u8]) -> Vec<u8> {
-    let mut prefix = Vec::with_capacity(SHAKE256_RATE_BYTES);
-    bytepad_encoded_strings::<SHAKE256_RATE_BYTES>(&[&[], customization], |bytes| {
-        prefix.extend_from_slice(bytes);
-    });
-    prefix
+    let mut framed = sp800_185_encode_string(&[]);
+    framed.extend_from_slice(&sp800_185_encode_string(customization));
+    sp800_185_bytepad(&framed, SHAKE256_RATE_BYTES)
 }
 
 // ============================================================================

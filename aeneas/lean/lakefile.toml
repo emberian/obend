@@ -1,0 +1,30 @@
+name = "obend_aeneas"
+version = "0.1.0"
+defaultTargets = ["Aeneas", "ObendKeccak", "ObendKeccakMirProofs", "ObendKeccakSpecWeld", "AuditMirAxioms"]
+
+[leanOptions]
+autoImplicit = false
+
+[[lean_lib]]
+name = "Aeneas"
+
+[[lean_lib]]
+name = "ObendKeccak"
+
+[[lean_lib]]
+name = "ObendKeccakMirProofs"
+
+[[lean_lib]]
+name = "ObendKeccakSpecWeld"
+
+[[lean_lib]]
+name = "AuditMirAxioms"
+
+[[require]]
+name = "obend"
+path = "../../lean"
+
+[[lean_exe]]
+name = "audit-mir-axioms"
+root = "AuditMirAxiomsMain"
+needs = ["AuditMirAxioms"]

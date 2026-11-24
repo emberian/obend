@@ -35,7 +35,7 @@ def toHex (b : ByteArray) : String :=
     let digits := "0123456789abcdef".toList.toArray
     [digits[x.toNat / 16]!, digits[x.toNat % 16]!])
 
--- Exact 216-byte preimage length and 32-byte cSHAKE256 digest shared with `crates/obend-sel4-verifier`.
+-- Exact 216-byte preimage length and 32-byte cSHAKE256 digest for `OBEND.SHE.SMMU_MANIFEST/v1`.
 #guard canonicalSmmuManifest.preimage.length == 216
 
 #guard (smmuManifestDigest canonicalSmmuManifest).data.toList ==
@@ -55,7 +55,7 @@ example : canonicalSmmuManifest.Fit := by
 
 /-! ## 2. Locked Hardware STE, RISC-V DDTE, 64-Bit Stage-2 Descriptor & 128-Bit Command Vectors -/
 
--- Exact 512-bit (`8 × UInt64`) Armv8 SMMUv3 STE golden layout locked with Rust `iommu_microkit_confinement.rs`:
+-- Exact 512-bit (`8 × UInt64`) Armv8 SMMUv3 STE golden layout:
 #guard SmmuV3Ste.packStage2 1 0x60152000 ==
   ⟨0x000000000000000d, 0x0000000000000000, 0x040d009000000001, 0x0000000060152000, 0, 0, 0, 0⟩
 #guard decodeSmmuV3Ste (SmmuV3Ste.packStage2 1 0x60152000) == some (.stage2 1 0x60152000)

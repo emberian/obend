@@ -7,7 +7,7 @@ Verifies `ThresholdMpcUcGames`, `PqHashSignatures`, and `ThresholdHashMpc`:
 2. Inhabitedness & query-regime characterization (`lazyRo_query_regime_characterization`, `not_universal_romFaithful`,
    `shamir_tower_rebalance_involutive`, `full_collusion_breaks_hiding`, `unpadded_open_refutes_hiding`,
    `ValidPqCustodyMpcTrace` multi-turn sign + crash-retry + double-sign refusal + membrane revocation);
-3. Byte-exact cross-language golden vectors shared with `crates/obend-pq-mpc`;
+3. Byte-exact golden wire vectors for `PqHashSignatures` and `ThresholdHashMpc`;
 4. `#print axioms` kernel audit (`0 Classical.choice` in `extractPqHashForgery` & `bdoz_cheater_identified_or_mac_forged`).
 -/
 public import Obend.Crypto.ThresholdMpcUcGames
@@ -402,7 +402,7 @@ example :
         RevokedSet.contains_insert_self s2.powerbox.revokedMembranes 42
       exact ⟨s3, hLen, hRev, ⟨s1, hs1, ⟨s2, hs2, ⟨s3, hs3, rfl⟩⟩⟩⟩
 
-/-! ## 4. Cross-Language Golden Vectors (`crates/obend-pq-mpc` Byte-for-Byte Parity) -/
+/-! ## 4. Golden Wire Vectors -/
 
 def goldenCshakePrfVec : List UInt8 :=
   thSecretPrf cshake256Suite goldenSk.pkSeed goldenSk.skSeed goldenAdrsSample

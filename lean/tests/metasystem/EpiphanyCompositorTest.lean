@@ -3,8 +3,7 @@ module
 # EpiphanyCompositorTest — Cross-Language Golden Vector, Multi-Turn Smoke & `#tooth` Mutation Suite
 
 Verifies `Obend.Polis.EpiphanyCompositor`:
-1. Exact 95-byte preimage and 32-byte `"OBEND.SHE.SENSOR_SEAL/v1"` golden digest shared with
-   `crates/obend-surfaces/src/epiphany.rs`.
+1. Exact 95-byte preimage and 32-byte `"OBEND.SHE.SENSOR_SEAL/v1"` golden digest.
 2. Concrete refusal witnesses for `chromeIntrusion`, `nonMonotoneSensorSeq`,
    `unredactedPrivateRoi`, `sealMismatch`, `hazardVisibilityViolation`, and `certWitnessMismatch`.
 3. Multi-turn `ValidEpiphanySessionTrace` execution and `0 Classical` `#print axioms` audit.
@@ -46,7 +45,7 @@ private def hexString (b : ByteArray) : String :=
   [[ ⟨10, 20, 30, 255⟩, ⟨0, 0, 0, 0⟩, ⟨0, 0, 0, 0⟩, ⟨40, 50, 60, 255⟩
    , ⟨70, 80, 90, 255⟩, ⟨100, 110, 120, 255⟩, ⟨130, 140, 150, 255⟩, ⟨160, 170, 180, 255⟩ ]]
 
--- Exact 95-byte preimage length and 32-byte digest shared with `crates/obend-surfaces`.
+-- Exact 95-byte preimage length and 32-byte digest for `"OBEND.SHE.SENSOR_SEAL/v1"`.
 #guard (sensorFrameSealPreimage (redactSensorFrame canonicalRawSensorFrame)).length == 95
 #guard hexString (sensorFrameSeal (redactSensorFrame canonicalRawSensorFrame)) ==
   "07e36afa669af0611a69815d73f0fdb2362e7cfbfea48a937e343c38a80ab648"
@@ -273,7 +272,7 @@ private def containsSubstr (haystack needle : String) : Bool :=
 #guard (lecScript cameraScanlineRoiZeroerRtl).regs.length == 2
 
 -- Concrete multi-cycle RTL vectors (including signed-vs-unsigned bit-15 boundary 0x7FFF < 0x8000,
--- bit-31 pixel word, and exclusive y1 boundary) locked bit-for-bit with Rust `epiphany_she_conformance.rs`:
+-- bit-31 pixel word, and exclusive y1 boundary):
 #guard packRgba32 ⟨18, 24, 38, 255⟩ == 0xFF261812#64
 #guard packRgba32 ⟨255, 0, 0, 255⟩ == 0xFF0000FF#64
 #guard packRgba32 ⟨10, 20, 30, 255⟩ == 0xFF1E140A#64

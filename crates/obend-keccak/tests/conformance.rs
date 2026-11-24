@@ -3,9 +3,9 @@
 //! Lean `KMAC256` specification is tested against.
 
 use obend_keccak::{
-    bytepad_encoded_strings, cshake256, cshake256_32, keccak_f1600, kmac256_32, left_encode,
-    right_encode, sha3_256, sha3_512, shake256_32, shake256_into, Cshake256, Kmac256, Midstate,
-    Shake128, Shake256, KECCAK_ROTATION_OFFSETS, KECCAK_ROUND_CONSTANTS, SHAKE128_RATE_BYTES,
+    cshake256, cshake256_32, keccak_f1600, kmac256_32, left_encode, right_encode, sha3_256,
+    sha3_512, shake256_32, shake256_into, Cshake256, KeccakSponge, Kmac256, Midstate, Shake128,
+    Shake256, KECCAK_ROTATION_OFFSETS, KECCAK_ROUND_CONSTANTS, SHAKE128_RATE_BYTES,
     SHAKE256_RATE_BYTES,
 };
 
@@ -324,21 +324,36 @@ fn encoders_match_sp800_185() {
 #[test]
 fn bytepad_stream_matches_the_reference() {
     for first_len in [0, 1, 31, 32, 128, 129, 130, 131, 132, 136, 265, 266, 300] {
+        let first = pattern(NAME_SEED, first_len);
+        let mut s1 = KeccakSponge::<SHAKE256_RATE_BYTES>::new(0x04);
+        s1.absorb_bytepad_1(&first);
+        let mut ref1 = KeccakSponge::<SHAKE256_RATE_BYTES>::new(0x04);
+        ref1.absorb(&reference_bytepad(
+            &reference_encode_string(&first),
+            SHAKE256_RATE_BYTES,
+        ));
+        assert_eq!(s1.position(), 0, "|first| = {first_len}");
+        assert_eq!(s1.lanes(), ref1.lanes(), "|first| = {first_len}");
+
         for second_len in [0, 1, 129, 136] {
-            let first = pattern(NAME_SEED, first_len);
             let second = pattern(CUSTOM_SEED, second_len);
-            let mut streamed = Vec::new();
-            bytepad_encoded_strings::<SHAKE256_RATE_BYTES>(&[&first, &second], |bytes| {
-                streamed.extend_from_slice(bytes);
-            });
+            let mut s2 = KeccakSponge::<SHAKE256_RATE_BYTES>::new(0x04);
+            s2.absorb_bytepad_2(&first, &second);
             let strings = [
                 reference_encode_string(&first),
                 reference_encode_string(&second),
             ]
             .concat();
+            let mut ref2 = KeccakSponge::<SHAKE256_RATE_BYTES>::new(0x04);
+            ref2.absorb(&reference_bytepad(&strings, SHAKE256_RATE_BYTES));
             assert_eq!(
-                streamed,
-                reference_bytepad(&strings, SHAKE256_RATE_BYTES),
+                s2.position(),
+                0,
+                "|first| = {first_len}, |second| = {second_len}"
+            );
+            assert_eq!(
+                s2.lanes(),
+                ref2.lanes(),
                 "|first| = {first_len}, |second| = {second_len}"
             );
         }

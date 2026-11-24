@@ -1,12 +1,12 @@
 //! Keccak-f[1600] and its sponge functions: FIPS 202 SHA-3 and SHAKE, and NIST SP 800-185
 //! `cSHAKE256` and `KMAC256`. Word-wise, `no_std`, and allocation-free.
 //!
-//! The permutation and framing match `Obend.Digest.Cshake256.Spec` and `Obend.Digest.Kmac256`.
+//! The permutation and framing match `Obend.Digest.Cshake256.Spec` and `Obend.Digest.Kmac256`,
+//! and the entire crate extracts cleanly through Charon + Aeneas to pure Lean 4.35 (`aeneas/`).
 //! A partial block lives in the 25-lane state, so a sponge is the lanes plus a byte position.
 //!
 //! Sponges and midstates clear their lanes on drop. Without volatile writes this is best
-//! effort: the compiler is discouraged from removing the clear, and copies it made earlier
-//! are out of reach.
+//! effort: copies the compiler made earlier are out of reach.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -140,14 +140,18 @@ pub fn keccak_f1600(state: &mut [u64; 25]) {
     ];
 }
 
-/// The minimal nonzero byte width of `value`.
-const fn encoded_width(value: u64) -> usize {
-    let bits = (u64::BITS - value.leading_zeros()) as usize;
-    if bits == 0 {
-        1
-    } else {
-        bits.div_ceil(8)
+/// The minimal nonzero byte width of `value` (`1..=8`).
+pub const fn encoded_width(value: u64) -> usize {
+    if value == 0 {
+        return 1;
     }
+    let mut v = value;
+    let mut width = 0usize;
+    while v > 0 {
+        v >>= 8;
+        width += 1;
+    }
+    width
 }
 
 /// SP 800-185 `left_encode`: the byte count, then the minimal big-endian bytes.
@@ -155,7 +159,12 @@ const fn encoded_width(value: u64) -> usize {
 pub fn left_encode(value: u64, out: &mut [u8; 9]) -> usize {
     let width = encoded_width(value);
     out[0] = width as u8;
-    out[1..=width].copy_from_slice(&value.to_be_bytes()[8 - width..]);
+    let mut i = 0usize;
+    while i < width {
+        let shift = (8 * (width - 1 - i)) as u32;
+        out[1 + i] = ((value >> shift) & 0xff) as u8;
+        i += 1;
+    }
     width + 1
 }
 
@@ -163,44 +172,58 @@ pub fn left_encode(value: u64, out: &mut [u8; 9]) -> usize {
 /// Writes into `out` and returns the encoded length.
 pub fn right_encode(value: u64, out: &mut [u8; 9]) -> usize {
     let width = encoded_width(value);
-    out[..width].copy_from_slice(&value.to_be_bytes()[8 - width..]);
+    let mut i = 0usize;
+    while i < width {
+        let shift = (8 * (width - 1 - i)) as u32;
+        out[i] = ((value >> shift) & 0xff) as u8;
+        i += 1;
+    }
     out[width] = width as u8;
     width + 1
 }
 
 fn bit_length(byte_length: usize) -> u64 {
-    u64::try_from(byte_length)
-        .ok()
-        .and_then(|bytes| bytes.checked_mul(8))
-        .expect("bit length fits in u64")
+    let bytes = byte_length as u64;
+    assert!(
+        bytes as usize == byte_length && bytes <= 0x1fff_ffff_ffff_ffff,
+        "bit length fits in u64"
+    );
+    bytes * 8
 }
 
-/// Streams SP 800-185 `bytepad(encode_string(s₀) ‖ encode_string(s₁) ‖ …, WIDTH)` into `sink`.
-pub fn bytepad_encoded_strings<const WIDTH: usize>(strings: &[&[u8]], mut sink: impl FnMut(&[u8])) {
-    const { assert!(WIDTH > 0 && WIDTH <= 200) };
-    let mut encoded = [0u8; 9];
-    let width_len = left_encode(WIDTH as u64, &mut encoded);
-    sink(&encoded[..width_len]);
-    let mut filled = width_len % WIDTH;
-    for &string in strings {
-        let header_len = left_encode(bit_length(string.len()), &mut encoded);
-        sink(&encoded[..header_len]);
-        sink(string);
-        filled = (filled + header_len % WIDTH + string.len() % WIDTH) % WIDTH;
-    }
-    if filled != 0 {
-        sink(&[0u8; 200][..WIDTH - filled]);
+fn zero_lanes(lanes: &mut [u64; 25]) {
+    let mut i = 0usize;
+    while i < 25 {
+        lanes[i] = 0;
+        i += 1;
     }
 }
 
 fn xor_padding<const RATE: usize>(lanes: &mut [u64; 25], pos: usize, suffix: u8) {
-    lanes[pos / 8] ^= u64::from(suffix) << (8 * (pos % 8));
+    let idx0 = pos / 8;
+    let shift0 = (8 * (pos % 8)) as u32;
+    lanes[idx0] = lanes[idx0] ^ ((suffix as u64) << shift0);
     // A suffix ending in bit 7 can fill the block with the first bit of pad10*1.
     // Its closing bit then belongs in a new block.
-    if pos == RATE - 1 && suffix & 0x80 != 0 {
+    let last = RATE - 1;
+    if pos == last && (suffix & 0x80) != 0 {
         keccak_f1600(lanes);
     }
-    lanes[(RATE - 1) / 8] ^= 0x80u64 << (8 * ((RATE - 1) % 8));
+    let idx1 = last / 8;
+    let shift1 = (8 * (last % 8)) as u32;
+    lanes[idx1] = lanes[idx1] ^ (0x80u64 << shift1);
+}
+
+#[inline]
+fn load_le_u64_at(data: &[u8], offset: usize) -> u64 {
+    (data[offset] as u64)
+        | ((data[offset + 1] as u64) << 8)
+        | ((data[offset + 2] as u64) << 16)
+        | ((data[offset + 3] as u64) << 24)
+        | ((data[offset + 4] as u64) << 32)
+        | ((data[offset + 5] as u64) << 40)
+        | ((data[offset + 6] as u64) << 48)
+        | ((data[offset + 7] as u64) << 56)
 }
 
 /// An absorbed sponge state on a rate boundary: 25 lanes and the pending domain suffix.
@@ -232,9 +255,8 @@ impl<const RATE: usize> Midstate<RATE> {
 
 impl<const RATE: usize> Drop for Midstate<RATE> {
     fn drop(&mut self) {
-        self.lanes.fill(0);
+        zero_lanes(&mut self.lanes);
         self.suffix = 0;
-        core::hint::black_box(&self.lanes);
     }
 }
 
@@ -254,7 +276,7 @@ impl<const RATE: usize> Drop for KeccakSponge<RATE> {
 }
 
 impl<const RATE: usize> KeccakSponge<RATE> {
-    const VALID_RATE: () = assert!(RATE > 0 && RATE <= 200 && RATE.is_multiple_of(8));
+    const VALID_RATE: () = assert!(RATE > 0 && RATE <= 200 && RATE % 8 == 0);
 
     /// An empty sponge with a nonzero delimited suffix and a rate of 1 to 25 whole lanes.
     pub const fn new(suffix: u8) -> Self {
@@ -280,16 +302,17 @@ impl<const RATE: usize> KeccakSponge<RATE> {
     }
 
     fn scrub(&mut self) {
-        self.lanes.fill(0);
+        zero_lanes(&mut self.lanes);
         self.pos = 0;
         self.suffix = 0;
         self.squeezing = false;
-        core::hint::black_box(&self.lanes);
     }
 
     #[inline]
     fn absorb_byte(&mut self, byte: u8) {
-        self.lanes[self.pos / 8] ^= u64::from(byte) << (8 * (self.pos % 8));
+        let idx = self.pos / 8;
+        let shift = (8 * (self.pos % 8)) as u32;
+        self.lanes[idx] = self.lanes[idx] ^ ((byte as u64) << shift);
         self.pos += 1;
         if self.pos == RATE {
             keccak_f1600(&mut self.lanes);
@@ -302,41 +325,99 @@ impl<const RATE: usize> KeccakSponge<RATE> {
     /// # Panics
     /// If squeezing has begun.
     pub fn absorb(&mut self, data: &[u8]) {
+        let () = Self::VALID_RATE;
         assert!(!self.squeezing, "cannot absorb after squeezing began");
-        let mut rest = data;
-        while !self.pos.is_multiple_of(8) {
-            let Some((&byte, tail)) = rest.split_first() else {
-                return;
-            };
-            self.absorb_byte(byte);
-            rest = tail;
+        let len = data.len();
+        let mut idx = 0usize;
+        while idx < len && self.pos % 8 != 0 {
+            self.absorb_byte(data[idx]);
+            idx += 1;
         }
-        let (words, tail) = rest.as_chunks::<8>();
-        for word in words {
-            self.lanes[self.pos / 8] ^= u64::from_le_bytes(*word);
+        while len - idx >= 8 {
+            let word = load_le_u64_at(data, idx);
+            let lane_idx = self.pos / 8;
+            self.lanes[lane_idx] = self.lanes[lane_idx] ^ word;
             self.pos += 8;
+            idx += 8;
             if self.pos == RATE {
                 keccak_f1600(&mut self.lanes);
                 self.pos = 0;
             }
         }
-        for &byte in tail {
-            self.absorb_byte(byte);
+        while idx < len {
+            self.absorb_byte(data[idx]);
+            idx += 1;
         }
+    }
+
+    fn absorb_left_encode_count(&mut self, value: u64) -> usize {
+        let mut encoded = [0u8; 9];
+        let len = left_encode(value, &mut encoded);
+        let mut i = 0usize;
+        while i < len {
+            self.absorb_byte(encoded[i]);
+            i += 1;
+        }
+        len
     }
 
     /// Absorbs SP 800-185 `left_encode(value)`.
     pub fn absorb_left_encode(&mut self, value: u64) {
-        let mut encoded = [0u8; 9];
-        let len = left_encode(value, &mut encoded);
-        self.absorb(&encoded[..len]);
+        let () = Self::VALID_RATE;
+        assert!(!self.squeezing, "cannot absorb after squeezing began");
+        let _ = self.absorb_left_encode_count(value);
     }
 
     /// Absorbs SP 800-185 `right_encode(value)`.
     pub fn absorb_right_encode(&mut self, value: u64) {
+        let () = Self::VALID_RATE;
+        assert!(!self.squeezing, "cannot absorb after squeezing began");
         let mut encoded = [0u8; 9];
         let len = right_encode(value, &mut encoded);
-        self.absorb(&encoded[..len]);
+        let mut i = 0usize;
+        while i < len {
+            self.absorb_byte(encoded[i]);
+            i += 1;
+        }
+    }
+
+    fn absorb_encoded_string(&mut self, string: &[u8]) -> usize {
+        let header_len = self.absorb_left_encode_count(bit_length(string.len()));
+        self.absorb(string);
+        (header_len % RATE + string.len() % RATE) % RATE
+    }
+
+    fn finish_bytepad(&mut self, filled: usize) {
+        if filled != 0 {
+            let pad = RATE - filled;
+            let mut i = 0usize;
+            while i < pad {
+                self.absorb_byte(0);
+                i += 1;
+            }
+        }
+    }
+
+    /// Absorbs SP 800-185 `bytepad(encode_string(first), RATE)`.
+    pub fn absorb_bytepad_1(&mut self, first: &[u8]) {
+        let () = Self::VALID_RATE;
+        assert!(!self.squeezing, "cannot absorb after squeezing began");
+        let width_len = self.absorb_left_encode_count(RATE as u64);
+        let first_mod = self.absorb_encoded_string(first);
+        let filled = (width_len % RATE + first_mod) % RATE;
+        self.finish_bytepad(filled);
+    }
+
+    /// Absorbs SP 800-185 `bytepad(encode_string(first) ‖ encode_string(second), RATE)`.
+    pub fn absorb_bytepad_2(&mut self, first: &[u8], second: &[u8]) {
+        let () = Self::VALID_RATE;
+        assert!(!self.squeezing, "cannot absorb after squeezing began");
+        let width_len = self.absorb_left_encode_count(RATE as u64);
+        let first_mod = self.absorb_encoded_string(first);
+        let filled0 = (width_len % RATE + first_mod) % RATE;
+        let second_mod = self.absorb_encoded_string(second);
+        let filled = (filled0 + second_mod) % RATE;
+        self.finish_bytepad(filled);
     }
 
     /// The byte position within the current rate block.
@@ -351,6 +432,7 @@ impl<const RATE: usize> KeccakSponge<RATE> {
 
     /// The lanes as the final absorb would permute them, with the padding xored in.
     pub fn padded_lanes(&self) -> [u64; 25] {
+        let () = Self::VALID_RATE;
         assert!(!self.squeezing, "cannot pad after squeezing began");
         let mut lanes = self.lanes;
         xor_padding::<RATE>(&mut lanes, self.pos, self.suffix);
@@ -359,29 +441,34 @@ impl<const RATE: usize> KeccakSponge<RATE> {
 
     /// The 25-lane state, when absorbing on a rate boundary.
     pub fn midstate(&self) -> Option<Midstate<RATE>> {
-        (!self.squeezing && self.pos == 0).then(|| Midstate::new(self.lanes, self.suffix))
+        if !self.squeezing && self.pos == 0 {
+            Some(Midstate::new(self.lanes, self.suffix))
+        } else {
+            None
+        }
     }
 
     /// Pads on the first call, then writes the next `out.len()` bytes of the output stream.
     pub fn squeeze(&mut self, out: &mut [u8]) {
+        let () = Self::VALID_RATE;
         if !self.squeezing {
             xor_padding::<RATE>(&mut self.lanes, self.pos, self.suffix);
             keccak_f1600(&mut self.lanes);
             self.pos = 0;
             self.squeezing = true;
         }
-        let mut written = 0;
-        while written < out.len() {
+        let out_len = out.len();
+        let mut written = 0usize;
+        while written < out_len {
             if self.pos == RATE {
                 keccak_f1600(&mut self.lanes);
                 self.pos = 0;
             }
-            let lane = self.lanes[self.pos / 8].to_le_bytes();
-            let offset = self.pos % 8;
-            let take = (8 - offset).min(out.len() - written);
-            out[written..written + take].copy_from_slice(&lane[offset..offset + take]);
-            written += take;
-            self.pos += take;
+            let lane = self.lanes[self.pos / 8];
+            let shift = (8 * (self.pos % 8)) as u32;
+            out[written] = ((lane >> shift) & 0xff) as u8;
+            written += take_one();
+            self.pos += 1;
         }
     }
 
@@ -391,6 +478,11 @@ impl<const RATE: usize> KeccakSponge<RATE> {
         self.squeeze(&mut out);
         out
     }
+}
+
+#[inline]
+const fn take_one() -> usize {
+    1
 }
 
 macro_rules! xof_methods {
@@ -477,15 +569,14 @@ impl Cshake256 {
             return Self(KeccakSponge::new(SHAKE_SUFFIX));
         }
         let mut sponge = KeccakSponge::new(CSHAKE_SUFFIX);
-        bytepad_encoded_strings::<SHAKE256_RATE_BYTES>(&[name, customization], |bytes| {
-            sponge.absorb(bytes);
-        });
+        sponge.absorb_bytepad_2(name, customization);
         Self(sponge)
     }
 
     /// `cSHAKE256` with an empty function name and customization `S`.
     pub fn customized(customization: &[u8]) -> Self {
-        Self::new(&[], customization)
+        let empty: [u8; 0] = [];
+        Self::new(&empty, customization)
     }
 
     /// Absorbs SP 800-185 `left_encode(value)`.
@@ -519,7 +610,7 @@ impl Kmac256 {
     /// `KMAC256` under `key` with customization `S`.
     pub fn new(key: &[u8], customization: &[u8]) -> Self {
         let Cshake256(mut sponge) = Cshake256::new(b"KMAC", customization);
-        bytepad_encoded_strings::<SHAKE256_RATE_BYTES>(&[key], |bytes| sponge.absorb(bytes));
+        sponge.absorb_bytepad_1(key);
         Self(sponge)
     }
 
@@ -551,17 +642,19 @@ impl Kmac256 {
     /// # Panics
     /// If `out` is not exactly `bits.div_ceil(8)` bytes long.
     pub fn finalize_bits(mut self, out: &mut [u8], bits: u64) {
+        let out_bytes = out.len() as u64;
+        let needed = if bits == 0 { 0 } else { ((bits - 1) / 8) + 1 };
         assert!(
-            u64::try_from(out.len()).ok() == Some(bits.div_ceil(8)),
+            out_bytes as usize == out.len() && out_bytes == needed,
             "output buffer must hold exactly the requested bits"
         );
         self.0.absorb_right_encode(bits);
         self.0.squeeze(out);
         let spare = bits % 8;
         if spare != 0 {
-            if let Some(last) = out.last_mut() {
-                *last &= (1u8 << spare) - 1;
-            }
+            let last_idx = out.len() - 1;
+            let mask = ((1u16 << (spare as u32)) - 1) as u8;
+            out[last_idx] = out[last_idx] & mask;
         }
     }
 }

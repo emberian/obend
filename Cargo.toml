@@ -6,12 +6,6 @@ members = [
     "crates/obend-keccak",
     "crates/obend-primitives",
     "crates/obend-crypto-exec",
-    "crates/obend-sel4-verifier",
-    "crates/obend-pq-mpc",
-    "crates/obend-surfaces",
-    "crates/obend-lightclients",
-    "crates/obend-prove-worker",
-    "crates/obend-oracles-e2ee",
     "crates/obend-hw-dpi",
 ]
 resolver = "2"

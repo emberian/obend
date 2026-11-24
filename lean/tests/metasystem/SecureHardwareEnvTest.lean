@@ -6,8 +6,7 @@ Verifies `Obend.Polis.SecureHardwareEnv`:
 1. Byte-exact `OBEND.SHE.FLOORS/v1`, `OBEND.SHE.PAYLOAD/v1`, `OBEND.SHE.ZKML_SUITE/v1`,
    `OBEND.SHE.FPAUDIT_WEIGHTS/v1`, `OBEND.SHE.STATE/v1`, `OBEND.SHE.CUSTODIAN_SIG/v1`,
    `OBEND.SHE.SIMPLEX_QC/v1`, `OBEND.PQ.SUITE.CSHAKE256/v1` (256-bit `w=4, ell1=128`), and
-   `OBEND.SHE.TURN/v1` `cSHAKE256` vectors shared byte-for-byte with
-   `crates/obend-oracles-e2ee/tests/anti_vaz_she_ceremony.rs`;
+   `OBEND.SHE.TURN/v1` `cSHAKE256` golden wire vectors;
 2. Grounded `ZkmlSuiteArtifact` (`UD-100` small `(lb=6, q=86, pow=16)` = `100,022` mbit and
    wide-leaf `(lb=2, q=148, pow=0)` = `100,344` mbit) + bit-exact `s8 × E2M1` (`MXFP4`)
    commit-before-coin sampled recompute audit (`fpaudit`), including tolerance-vs-exact
@@ -256,7 +255,7 @@ def signSimp (msg : ByteArray) (pairs : List (Nat × Nat)) : List (Nat × PqHash
       simplexQcSignatures := signSimp (sheSimplexQcMsg stAfter3 act4Unsigned) [(1, 1), (2, 1), (3, 1)]
       custodianSignatures := signCust (sheCustodianActuationMsg stAfter3 act4Unsigned) [(0, 2), (1, 2), (2, 2)] }
   let turn4 : SheTurn := .proposeAndSettleActuation signedAct4
-  -- Locked byte-exact cross-language vectors shared with `anti_vaz_she_ceremony.rs`
+  -- Locked byte-exact wire vectors
   let vectorsOk :=
     (match realCustodianPks.head? with | some pk => hexOfList pk.pkRoot | none => "") == "890b7e07b96ce870b8e5e09f91f7f1b2652d9e6024d425d4dd6e9679c61ea854" &&
     (match realSimplexPks.head? with | some pk => hexOfList pk.pkRoot | none => "") == "3461a82d0f7fd72aa3bd6f1ce4fb77961d0b0fe0ef8873ee83c5ff4f2fdd8bec" &&
