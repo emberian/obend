@@ -932,10 +932,8 @@ theorem encodeSpillLimbs_injective {t₁ t₂ : SpillTuple} (hEq : encodeSpillLi
   have hv0 := congrArg Goldilocks.val hEq.1; have hv1 := congrArg Goldilocks.val hEq.2.1
   have hv2 := congrArg Goldilocks.val hEq.2.2.1; have hv3 := congrArg Goldilocks.val hEq.2.2.2
   simp only [Goldilocks.ofNat, UInt32.toNat, UInt64.toNat] at hv0 hv1 hv2 hv3
-  have hp : goldilocksPrime = 18446744069414584321 := rfl; rw [hp] at hv0 hv1 hv2 hv3
   have := a1.isLt; have := a2.isLt; have := lo1.isLt; have := lo2.isLt; have := hi1.isLt; have := hi2.isLt; have := ts1.isLt; have := ts2.isLt
-  have modP : ∀ {x : Nat}, x < 18446744069414584321 → x % 18446744069414584321 = x := fun h => Nat.mod_eq_of_lt h
-  rw [modP (by omega), modP (by omega)] at hv0 hv1 hv2 hv3
+  rw [mod_goldilocksPrime_of_lt (by omega), mod_goldilocksPrime_of_lt (by omega)] at hv0 hv1 hv2 hv3
   have ha : a1 = a2 := BitVec.eq_of_toNat_eq (by omega); have hlo : lo1 = lo2 := BitVec.eq_of_toNat_eq (by omega)
   have hhi : hi1 = hi2 := BitVec.eq_of_toNat_eq (by omega); have hts : ts1 = ts2 := BitVec.eq_of_toNat_eq (by omega)
   subst ha hlo hhi hts; rfl

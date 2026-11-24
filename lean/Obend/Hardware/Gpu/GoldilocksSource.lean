@@ -2,6 +2,7 @@ module
 public import Obend.Hardware.ArrayBuild
 public import Obend.Hardware.Gpu.LimbsGoldilocks
 public import Obend.Hardware.Gpu.LimbsShift
+public import Obend.Apps.ZkNtt.Goldilocks
 
 /-! Goldilocks source construction and its register-program field semantics.
 This is the shared source used by array graphs and BlockNtt register networks. -/
@@ -9,8 +10,7 @@ public section
 namespace Obend.Hardware.Gpu.GoldilocksSource
 open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.ArrayBuild
-
-@[expose] def goldilocksP : Nat := 18446744069414584321
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- The field constants a vector of length `n` needs: `p`, the low mask and the shift. -/
 structure GlConsts where
@@ -19,7 +19,7 @@ structure GlConsts where
   s32  : Nat
 
 def glConsts (n : Nat) : BuildM GlConsts := do
-  let p ← broadcast n (BitVec.ofNat 64 goldilocksP)
+  let p ← broadcast n (BitVec.ofNat 64 goldilocksPrime)
   let mask ← broadcast n 0xFFFFFFFF#64
   let s32 ← broadcast n 32#64
   pure ⟨p, mask, s32⟩

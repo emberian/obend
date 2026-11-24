@@ -25,7 +25,7 @@ meta def check : Except String Unit := do
     throw "source array pipeline differs from independent expected values"
   let field ← glMulSource 4
   let fieldPlan ← compileSource "SharedGoldilocks" [4,4] field
-  let prime := GoldilocksSource.goldilocksP
+  let prime := Obend.Apps.ZkNtt.goldilocksPrime
   let left : Vec := [0#64,1#64,BitVec.ofNat 64 (prime-1),BitVec.allOnes 64]
   let right : Vec := [5#64,BitVec.ofNat 64 (prime-1),BitVec.ofNat 64 (prime-1),BitVec.allOnes 64]
   let fieldEnv := mkEnv fieldPlan.graph.lengths fieldPlan.graph.inputs [left,right]

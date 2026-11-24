@@ -47,6 +47,7 @@ open Obend.Hardware.Gpu
 open Obend.Hardware.SquareGraphs
 open Obend.Hardware.Gpu.Ntt
 open Obend.Hardware.Gpu.GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-! ## Expected values and external reference checks -/
 
@@ -66,7 +67,7 @@ def writeGraph (name : String) (typed : Obend.Hardware.ArrayTyping.TypedGraph) (
     if name.startsWith "glmul-" then
       let left := (toVec (vals.getD 0 [])).map (·.toNat)
       let right := (toVec (vals.getD 1 [])).map (·.toNat)
-      let fieldReference := List.zipWith (fun a b => a * b % goldilocksP) left right
+      let fieldReference := List.zipWith (fun a b => a * b % goldilocksPrime) left right
       unless (model.getD 0 []).map (·.toNat) == fieldReference do
         throw <| IO.userError s!"{name} vector {v}: source field multiply disagrees with exact Nat arithmetic modulo p"
     outputs := outputs.push model

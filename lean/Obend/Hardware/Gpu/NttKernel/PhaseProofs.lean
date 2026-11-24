@@ -10,6 +10,7 @@ public section
 namespace Obend.Hardware.Gpu.Ntt
 open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.ArrayBuild Obend.Hardware.Gpu.GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 namespace BlockNtt
 open Obend.Hardware.ArrayKernel
 
@@ -194,15 +195,15 @@ partial def nttFast (xs : Array Nat) (ω : Nat) : Array Nat :=
   let n := xs.size
   if n ≤ 1 then xs else
   let half := n / 2
-  let ω2 := ω * ω % goldilocksP
+  let ω2 := ω * ω % goldilocksPrime
   let ev := nttFast ((Array.range half).map fun i => xs[2 * i]!) ω2
   let od := nttFast ((Array.range half).map fun i => xs[2 * i + 1]!) ω2
-  let pw := (Array.range half).map fun j => powMod ω j goldilocksP
+  let pw := (Array.range half).map fun j => powMod ω j goldilocksPrime
   (Array.range n).map fun j =>
-    if j < half then (ev[j]! + pw[j]! * od[j]! % goldilocksP) % goldilocksP
+    if j < half then (ev[j]! + pw[j]! * od[j]! % goldilocksPrime) % goldilocksPrime
     else
       let j' := j - half
-      (ev[j']! + goldilocksP - pw[j']! * od[j']! % goldilocksP) % goldilocksP
+      (ev[j']! + goldilocksPrime - pw[j']! * od[j']! % goldilocksPrime) % goldilocksPrime
 
 
 open Obend.Hardware.ArrayKernel
@@ -703,6 +704,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt
 open GoldilocksSource Stockham
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- Initial raw words need not be canonical; the invariant observes residues,
 matching the source's first register canonicalization. -/
@@ -716,7 +718,7 @@ theorem layout_initial (n ω : Nat) (input : Nat → Nat) :
 DFT, with no input or output permutation left to a consumer. -/
 theorem layout_final (n ω : Nat) (input values : Nat → Nat)
     (h : LayoutValues n 1 ω input values) (k : Nat) (hk : k < n) :
-    values k % goldilocksP = dft n ω input k := by
+    values k % goldilocksPrime = dft n ω input k := by
   have hv := h 0 (by decide) k hk
   simpa [partialTransform_eq,dft,sumMod] using hv
 
@@ -797,6 +799,7 @@ namespace Obend.Hardware.Gpu.NttFieldCorrect
 open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.ArrayBuild Obend.Hardware.ArrayKernel
 open Obend.Hardware.Gpu.GoldilocksSource Obend.Hardware.Gpu.GoldilocksSourceCorrect
+open Obend.Apps.ZkNtt (goldilocksPrime)
 open Obend.Hardware.Gpu.Ntt.BlockNtt Obend.Apps.ZkNtt
 set_option autoImplicit false
 
@@ -983,6 +986,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt.PhaseMetadata
 open ArrayKernel ArrayBuild GoldilocksSource BlockNtt
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 theorem bind_run {α β : Type} (x : BuildM α) (f : α → BuildM β) (st : Build) :
     (x >>= f).run st = (f (x.run st).1).run (x.run st).2 := by rfl
@@ -1206,6 +1210,7 @@ section
 namespace Obend.Hardware.Gpu.Ntt.PhaseArithmetic
 open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open ArrayKernel ArrayBuild GoldilocksSource GoldilocksSourceCorrect NttFieldCorrect
+open Obend.Apps.ZkNtt (goldilocksPrime)
 open BlockNtt RegisterValues
 set_option autoImplicit false
 
@@ -1248,8 +1253,8 @@ theorem pair_correct (n count done radix stride round j : Nat) (k : GlConsts)
     let out := (PhaseMetadata.pairBody n count done radix stride k round j s).run st
     BuildExtends st out.2 ∧
       RegValues out.2 env out.1.value.2
-        (update (update values i0 ((values i0+values i1)%goldilocksP)) i1
-          ((((values i0+goldilocksP-values i1)%goldilocksP)*twiddle)%goldilocksP)) := by
+        (update (update values i0 ((values i0+values i1)%goldilocksPrime)) i1
+          ((((values i0+goldilocksPrime-values i1)%goldilocksPrime)*twiddle)%goldilocksPrime)) := by
   let bit := radix/2^(round+1)
   let di := j%bit
   let i0 := 2*j-di
@@ -1287,7 +1292,7 @@ theorem pair_correct (n count done radix stride round j : Nat) (k : GlConsts)
     dsimp only
     simp only [PhaseMetadata.pairBody,hu,ite_true,bind_run,hr,h.2.1,pure_run,ForInStep.value]
     change BuildExtends st result.2 ∧ RegValues result.2 env _ _
-    simpa only [i0,i1,di,bit,ht,Nat.mul_one,Nat.mod_mod,goldilocksP,Obend.Apps.ZkNtt.goldilocksPrime] using And.intro h.1 hv
+    simpa only [i0,i1,di,bit,ht,Nat.mul_one,Nat.mod_mod,goldilocksPrime] using And.intro h.1 hv
 
 /-- Input-only agreement with the constant-buffer reads present in the actual
 source action. This says nothing about any computed register or output. -/
@@ -1475,6 +1480,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt.PhaseMetadata
 open ArrayKernel ArrayBuild GoldilocksSource BlockNtt
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- The invariant is required only for iterations actually present in the list. -/
 theorem forIn_preserves_mem {α β : Type} (xs : List α) (body : α → β → BuildM (ForInStep β))
@@ -1656,9 +1662,10 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt
 open GoldilocksSource ArrayKernel BlockNtt RegisterValues PhaseArithmetic
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 theorem difLayer_canonical (bits level : Nat) (hl : level<bits) (input : Nat → Nat)
-    (i : Nat) (hi : i<2^bits) : difLayer bits level input i < goldilocksP := by
+    (i : Nat) (hi : i<2^bits) : difLayer bits level input i < goldilocksPrime := by
   induction bits generalizing level input i with
   | zero => omega
   | succ bits ih =>
@@ -1675,8 +1682,8 @@ theorem difLayer_canonical (bits level : Nat) (hl : level<bits) (input : Nat →
       · exact ih level (by omega) _ _ (by rw [hp] at hi; omega)
 
 theorem difStages_canonical (bits start count : Nat) (hc : start+count≤bits) (input : Nat → Nat)
-    (hinput : ∀ i, i<2^bits → input i<goldilocksP) (i : Nat) (hi : i<2^bits) :
-    difStages bits start count input i < goldilocksP := by
+    (hinput : ∀ i, i<2^bits → input i<goldilocksPrime) (i : Nat) (hi : i<2^bits) :
+    difStages bits start count input i < goldilocksPrime := by
   cases count with
   | zero => exact hinput i hi
   | succ count => exact difLayer_canonical bits (start+count) (by omega) _ i hi
@@ -1701,7 +1708,7 @@ theorem phase_rounds_stages (total bits done degree rounds group lane : Nat)
     (hlane : lane<2^bits/2^degree) (input values : Nat → Nat)
     (hvalues : ∀ r, r<2^degree → values r=input
       (laneRegisterIndex (2^degree) (2^bits/(2^done*2^degree)) lane r))
-    (hinput : ∀ i, i<2^bits → input i<goldilocksP) :
+    (hinput : ∀ i, i<2^bits → input i<goldilocksPrime) :
     ∀ r, r<2^degree →
     ((List.range rounds).foldl (fun v round => roundValues (2^degree/2) (2^degree/2^(round+1))
       (fun j => pairTwiddle (2^total) (2^bits) done (2^degree) (2^bits/(2^done*2^degree)) round j
@@ -1735,8 +1742,8 @@ def preparedInput (n count p group : Nat) (first : Bool) (entry : Nat → Nat) (
   if first then mulMod (entry i) (modPow (rootOfUnity n) (i*(group%p)*(n/count/p))) else entry i
 
 theorem preparedInput_canonical (n count p group bound : Nat) (first : Bool) (entry : Nat → Nat)
-    (h : first=false → ∀ i, i<bound → entry i<goldilocksP) :
-    ∀ i, i<bound → preparedInput n count p group first entry i < goldilocksP := by
+    (h : first=false → ∀ i, i<bound → entry i<goldilocksPrime) :
+    ∀ i, i<bound → preparedInput n count p group first entry i < goldilocksPrime := by
   intro i hi
   cases first with
   | false => exact h rfl i hi
@@ -1758,7 +1765,7 @@ theorem inputExponent_power (total bits p done degree group lane r : Nat) (ht : 
 theorem prepared_register_eq (total bits p done degree group lane r : Nat) (first : Bool)
     (entry values : Nat → Nat) (ht : total≤32)
     (hv : values r=entry (laneRegisterIndex (2^degree) (2^bits/(2^done*2^degree)) lane r)) :
-    (if first then if p=1 then values r%goldilocksP else
+    (if first then if p=1 then values r%goldilocksPrime else
       mulMod (values r) (modPow (rootOfUnity (2^total))
         ((PhaseMetadata.inputExponent (2^total) (2^bits) p (2^degree)
           (2^bits/(2^done*2^degree)) r).eval group lane)) else values r) =
@@ -1778,6 +1785,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt.PhaseMetadata
 open ArrayKernel ArrayBuild GoldilocksSource BlockNtt
+open Obend.Apps.ZkNtt (goldilocksPrime)
 open GoldilocksSourceCorrect NttFieldCorrect
 
 /-- Actual loaded registers are distinct and have already been allocated. -/

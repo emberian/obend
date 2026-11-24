@@ -82,7 +82,7 @@ structure ConstsAt (st : Build) (env : Nat → Word) (k : GlConsts) : Prop where
   p_lt : k.p < st.lengths.size
   mask_lt : k.mask < st.lengths.size
   s32_lt : k.s32 < st.lengths.size
-  p_value : evalBuild st env k.p = BitVec.ofNat 64 goldilocksP
+  p_value : evalBuild st env k.p = BitVec.ofNat 64 goldilocksPrime
   mask_value : evalBuild st env k.mask = 0xFFFFFFFF#64
   s32_value : evalBuild st env k.s32 = 32#64
 
@@ -111,7 +111,7 @@ theorem evalBuild_broadcast (st : Build) (env : Nat → Word) (n : Nat) (v : Wor
 theorem glConsts_sound (st : Build) (env : Nat → Word) (n : Nat) (hn : 0 < n) :
     let out := (glConsts n).run st
     ConstsAt out.2 env out.1 := by
-  let r1 := (broadcast n (BitVec.ofNat 64 goldilocksP)).run st
+  let r1 := (broadcast n (BitVec.ofNat 64 goldilocksPrime)).run st
   let r2 := (broadcast n 0xFFFFFFFF#64).run r1.2
   let r3 := (broadcast n 32#64).run r2.2
   change ConstsAt r3.2 env ⟨r1.1,r2.1,r3.1⟩
@@ -138,7 +138,7 @@ theorem constsAt_inhabited (env : Nat → Word) :
 theorem glConsts_frame (st : Build) (env : Nat → Word) (n : Nat) (hn : 0 < n)
     (a : Nat) (ha : a < st.lengths.size) :
     evalBuild ((glConsts n).run st).2 env a = evalBuild st env a := by
-  let r1 := (broadcast n (BitVec.ofNat 64 goldilocksP)).run st
+  let r1 := (broadcast n (BitVec.ofNat 64 goldilocksPrime)).run st
   let r2 := (broadcast n 0xFFFFFFFF#64).run r1.2
   let r3 := (broadcast n 32#64).run r2.2
   change evalBuild r3.2 env a = _
@@ -157,26 +157,26 @@ theorem limbs_bits (x : Word) : (limbs x).bits = x := by
   apply BitVec.eq_of_toNat_eq
   rw [Limbs.Word.bits_val,limbs_val]
 
-theorem prime_bits : Limbs.Goldilocks.prime.bits = BitVec.ofNat 64 goldilocksP := by
+theorem prime_bits : Limbs.Goldilocks.prime.bits = BitVec.ofNat 64 goldilocksPrime := by
   apply BitVec.eq_of_toNat_eq
   rw [Limbs.Word.bits_val,Limbs.Goldilocks.prime_val]
   rfl
 
 theorem canon_bits (a : Limbs.Word) : (Limbs.Goldilocks.canon a).bits =
-    if a.bits.ult (BitVec.ofNat 64 goldilocksP) then a.bits else a.bits-BitVec.ofNat 64 goldilocksP := by
+    if a.bits.ult (BitVec.ofNat 64 goldilocksPrime) then a.bits else a.bits-BitVec.ofNat 64 goldilocksPrime := by
   unfold Limbs.Goldilocks.canon
   rw [Limbs.lt_bits,prime_bits]
   split <;> simp [Limbs.sub_bits,prime_bits]
 
 theorem addCanonical_bits (a b : Limbs.Word) : (Limbs.Goldilocks.addCanonical a b).bits =
-    if a.bits.ult (BitVec.ofNat 64 goldilocksP-b.bits) then a.bits+b.bits
-    else a.bits-(BitVec.ofNat 64 goldilocksP-b.bits) := by
+    if a.bits.ult (BitVec.ofNat 64 goldilocksPrime-b.bits) then a.bits+b.bits
+    else a.bits-(BitVec.ofNat 64 goldilocksPrime-b.bits) := by
   unfold Limbs.Goldilocks.addCanonical
   simp only [Limbs.lt_bits,Limbs.sub_bits,prime_bits]
   split <;> simp [Limbs.add_bits,Limbs.sub_bits,prime_bits]
 
 theorem subCanonical_bits (a b : Limbs.Word) : (Limbs.Goldilocks.subCanonical a b).bits =
-    if a.bits.ult b.bits then (BitVec.ofNat 64 goldilocksP-b.bits)+a.bits else a.bits-b.bits := by
+    if a.bits.ult b.bits then (BitVec.ofNat 64 goldilocksPrime-b.bits)+a.bits else a.bits-b.bits := by
   unfold Limbs.Goldilocks.subCanonical
   rw [Limbs.lt_bits]
   split <;> simp [Limbs.add_bits,Limbs.sub_bits,prime_bits]
@@ -1005,7 +1005,7 @@ theorem broadcast_extends (st : Build) (n : Nat) (v : Word) (hn : 0 < n) :
 
 theorem glConsts_extends (st : Build) (n : Nat) (hn : 0 < n) :
     BuildExtends st ((glConsts n).run st).2 := by
-  let r1 := (broadcast n (BitVec.ofNat 64 goldilocksP)).run st
+  let r1 := (broadcast n (BitVec.ofNat 64 goldilocksPrime)).run st
   let r2 := (broadcast n 0xFFFFFFFF#64).run r1.2
   let r3 := (broadcast n 32#64).run r2.2
   change BuildExtends st r3.2

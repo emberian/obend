@@ -15,6 +15,14 @@ namespace Obend.Apps.ZkNtt
 /-- The Goldilocks prime $p = 2^{64} - 2^{32} + 1 = 18446744069414584321$. -/
 @[expose] def goldilocksPrime : Nat := 18446744069414584321
 
+/-- The prime in powers of two: rewrite with it to let `omega` bound a residue. -/
+theorem goldilocksPrime_eq : goldilocksPrime = 2 ^ 64 - 2 ^ 32 + 1 := by decide
+
+/-- A number below `2^64 - 2^32 + 1` is its own residue. -/
+theorem mod_goldilocksPrime_of_lt {x : Nat} (h : x < 2 ^ 64 - 2 ^ 32 + 1) :
+    x % goldilocksPrime = x :=
+  Nat.mod_eq_of_lt (goldilocksPrime_eq ▸ h)
+
 /-- The Goldilocks reduction constant $\epsilon = 2^{32} - 1 = 4294967295$. -/
 @[expose] def goldilocksEpsilon : Nat := 4294967295
 

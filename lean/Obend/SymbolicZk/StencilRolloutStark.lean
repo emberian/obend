@@ -62,9 +62,9 @@ theorem stencil_numerator_mod_exact (l r : Nat) (hl : l < amplitudeLimit) (hr : 
     ⟨.refl _, .natural l⟩ hlv
     (modEnvAgrees_cons ⟨.refl _, .natural r⟩ hrv (modEnvAgrees_nil _))
   have hlp : l < Obend.Apps.ZkNtt.goldilocksPrime := by
-    simp only [amplitudeLimit] at hl; change l < 18446744069414584321; omega
+    simp only [amplitudeLimit] at hl; rw [Obend.Apps.ZkNtt.goldilocksPrime_eq]; omega
   have hrp : r < Obend.Apps.ZkNtt.goldilocksPrime := by
-    simp only [amplitudeLimit] at hr; change r < 18446744069414584321; omega
+    simp only [amplitudeLimit] at hr; rw [Obend.Apps.ZkNtt.goldilocksPrime_eq]; omega
   simp only [scalarToNat, Nat.mod_eq_of_lt hlp, Nat.mod_eq_of_lt hrp] at h
   exact evaluates_mod_prime_exact_of_rangeSafe _ stencilBounds [.nat l, .nat r] [l, r]
     stencilNumerator (by decide +kernel) h
@@ -280,9 +280,9 @@ theorem checkStencilRow_sound (r : StencilRow) (b : StencilRowBits) (h : checkSt
   have he := of_decide_eq_true h.2
   have hn := congrArg Goldilocks.val he
   have hsum : r.left + r.center < Obend.Apps.ZkNtt.goldilocksPrime := by
-    unfold amplitudeLimit at *; change _ < 18446744069414584321; omega
+    unfold amplitudeLimit at *; rw [Obend.Apps.ZkNtt.goldilocksPrime_eq]; omega
   have hout : 2 * r.quotient + r.remainder < Obend.Apps.ZkNtt.goldilocksPrime := by
-    unfold amplitudeLimit at *; change _ < 18446744069414584321; omega
+    unfold amplitudeLimit at *; rw [Obend.Apps.ZkNtt.goldilocksPrime_eq]; omega
   change (2 * r.quotient + r.remainder) % Obend.Apps.ZkNtt.goldilocksPrime =
     (r.left + r.center) % Obend.Apps.ZkNtt.goldilocksPrime at hn
   rw [Nat.mod_eq_of_lt hsum, Nat.mod_eq_of_lt hout] at hn
@@ -651,8 +651,8 @@ def checkWaveLayer (b : Bool) (w : WordGrid) (rows : WaveLayer) : Bool :=
 theorem amplitude_field_injective (a b : Nat) (ha : a < amplitudeLimit) (hb : b < amplitudeLimit)
     (he : Goldilocks.ofNat a = Goldilocks.ofNat b) : a = b := by
   have h := congrArg Goldilocks.val he
-  have ha' : a < Obend.Apps.ZkNtt.goldilocksPrime := by unfold amplitudeLimit at ha; change a < 18446744069414584321; omega
-  have hb' : b < Obend.Apps.ZkNtt.goldilocksPrime := by unfold amplitudeLimit at hb; change b < 18446744069414584321; omega
+  have ha' : a < Obend.Apps.ZkNtt.goldilocksPrime := by unfold amplitudeLimit at ha; rw [Obend.Apps.ZkNtt.goldilocksPrime_eq]; omega
+  have hb' : b < Obend.Apps.ZkNtt.goldilocksPrime := by unfold amplitudeLimit at hb; rw [Obend.Apps.ZkNtt.goldilocksPrime_eq]; omega
   exact (Nat.mod_eq_of_lt ha').symm.trans (h.trans (Nat.mod_eq_of_lt hb'))
 theorem checkWaveLayer_sound (b : Bool) (w : WordGrid) (rows : WaveLayer) (hw : InRange w)
     (h : checkWaveLayer b w rows = true) : layerOutput rows = waveStep b w := by

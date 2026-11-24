@@ -8,6 +8,7 @@ public section
 namespace Obend.Hardware.Gpu.Ntt
 open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.ArrayBuild Obend.Hardware.Gpu.GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-! ## The NTT -/
 
@@ -22,10 +23,10 @@ termination_by e
 decreasing_by exact Nat.div_lt_self (Nat.pos_of_ne_zero h) (by decide)
 
 /-- A primitive `2^32`-th root of unity in the Goldilocks field (`7^((p-1)/2^32)`). -/
-@[expose] def rootOfUnity2to32 : Nat := powMod 7 ((goldilocksP - 1) / 2 ^ 32) goldilocksP
+@[expose] def rootOfUnity2to32 : Nat := powMod 7 ((goldilocksPrime - 1) / 2 ^ 32) goldilocksPrime
 
 /-- A primitive `n`-th root, `n` a power of two dividing `2^32`. -/
-@[expose] def rootOfUnity (n : Nat) : Nat := powMod rootOfUnity2to32 (2 ^ 32 / n) goldilocksP
+@[expose] def rootOfUnity (n : Nat) : Nat := powMod rootOfUnity2to32 (2 ^ 32 / n) goldilocksPrime
 
 /-! The NTT source uses the general index-parametric multi-output array language.
 Each upload is ec-gpu's Stockham map. A radix-4 (or final radix-2) subnetwork stays in
@@ -70,7 +71,7 @@ end BlockNtt
 field multiplication, with no per-entry modular exponentiation. -/
 def powersLoop (ω : Nat) : Nat → Array Word → Nat → Array Word
   | 0, xs, _ => xs
-  | count+1, xs, v => powersLoop ω count (xs.push (BitVec.ofNat 64 v)) (v*ω%goldilocksP)
+  | count+1, xs, v => powersLoop ω count (xs.push (BitVec.ofNat 64 v)) (v*ω%goldilocksPrime)
 
 def twiddlePowers (n ω : Nat) : Array Word := powersLoop ω n #[] 1
 
@@ -169,6 +170,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt
 open GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- The efficient source computation denotes ordinary modular exponentiation.
 The modulus premise also preserves the historical `powMod b 0 m = 1` convention. -/
@@ -195,24 +197,24 @@ theorem powMod_eq (b e m : Nat) (hm : 1 < m) : powMod b e m = b^e % m := by
         conv => rhs; rw [ee, Nat.pow_add, Nat.pow_add]
         simp
 
-abbrev modPow (b e : Nat) : Nat := powMod b e goldilocksP
+abbrev modPow (b e : Nat) : Nat := powMod b e goldilocksPrime
 
-private theorem modulus_gt_one : 1 < goldilocksP := by decide +kernel
+private theorem modulus_gt_one : 1 < goldilocksPrime := by decide +kernel
 
-theorem modPow_eq (b e : Nat) : modPow b e = b^e % goldilocksP :=
-  powMod_eq b e goldilocksP modulus_gt_one
+theorem modPow_eq (b e : Nat) : modPow b e = b^e % goldilocksPrime :=
+  powMod_eq b e goldilocksPrime modulus_gt_one
 
 @[simp] theorem modPow_zero (b : Nat) : modPow b 0 = 1 := by
   simp [modPow_eq, Nat.mod_eq_of_lt modulus_gt_one]
 
-@[simp] theorem modPow_one (b : Nat) : modPow b 1 = b % goldilocksP := by
+@[simp] theorem modPow_one (b : Nat) : modPow b 1 = b % goldilocksPrime := by
   simp [modPow_eq]
 
 @[simp] theorem modPow_one_base (e : Nat) : modPow 1 e = 1 := by
   simp [modPow_eq, Nat.mod_eq_of_lt modulus_gt_one]
 
 theorem modPow_add (b e f : Nat) :
-    modPow b (e+f) = (modPow b e * modPow b f) % goldilocksP := by
+    modPow b (e+f) = (modPow b e * modPow b f) % goldilocksPrime := by
   simp [modPow_eq, Nat.pow_add]
 
 theorem modPow_mul (b e f : Nat) :
@@ -223,11 +225,11 @@ theorem modPow_mul (b e f : Nat) :
 /-- A kernel-checked logarithmic certificate, not a sampled size check. -/
 theorem root32_value : rootOfUnity2to32 = 1753635133440165772 := by decide +kernel
 
-theorem root32_half : modPow rootOfUnity2to32 (2^31) = goldilocksP-1 := by decide +kernel
+theorem root32_half : modPow rootOfUnity2to32 (2^31) = goldilocksPrime-1 := by decide +kernel
 
 theorem root32_full : modPow rootOfUnity2to32 (2^32) = 1 := by decide +kernel
 
-theorem minus_one_square : modPow (goldilocksP-1) 2 = 1 := by decide +kernel
+theorem minus_one_square : modPow (goldilocksPrime-1) 2 = 1 := by decide +kernel
 
 /-- Exponents can be reduced modulo any certified period. -/
 theorem modPow_periodic (b n e : Nat) (hn : modPow b n = 1) :
@@ -242,19 +244,19 @@ theorem modPow_period_add (b n e : Nat) (hn : modPow b n = 1) :
   simp [modPow_eq]
 
 theorem minus_one_odd (e : Nat) (he : e % 2 = 1) :
-    modPow (goldilocksP-1) e = goldilocksP-1 := by
+    modPow (goldilocksPrime-1) e = goldilocksPrime-1 := by
   rw [modPow_periodic _ 2 e minus_one_square, he, modPow_one]
   exact Nat.mod_eq_of_lt (by decide)
 
 /-- For a power-of-two period, the half-period value `-1` excludes every
 smaller order. This argument uses only modular exponent laws, not primality. -/
 theorem power_two_order (k b e : Nat)
-    (half : 0 < k → modPow b (2^(k-1)) = goldilocksP-1)
+    (half : 0 < k → modPow b (2^(k-1)) = goldilocksPrime-1)
     (one : modPow b e = 1) : 2^k ∣ e := by
   induction k generalizing b e with
   | zero => simp
   | succ k ih =>
-    have hhalf : modPow b (2^k) = goldilocksP-1 := by simpa using half (by omega)
+    have hhalf : modPow b (2^k) = goldilocksPrime-1 := by simpa using half (by omega)
     have even : e % 2 = 0 := by
       have hr := Nat.mod_lt e (by decide : 0 < 2)
       by_cases hz : e%2=0
@@ -263,13 +265,13 @@ theorem power_two_order (k b e : Nat)
         have hex : modPow (modPow b e) (2^k) = modPow (modPow b (2^k)) e := by
           rw [← modPow_mul, ← modPow_mul, Nat.mul_comm e]
         rw [one, modPow_one_base, hhalf, minus_one_odd e odd] at hex
-        have bad : goldilocksP-1 ≠ 1 := by decide
+        have bad : goldilocksPrime-1 ≠ 1 := by decide
         exact False.elim (bad hex.symm)
     have ee : e = 2*(e/2) := by omega
     have small : modPow (modPow b 2) (e/2) = 1 := by
       rw [← modPow_mul, ← ee]
       exact one
-    have smallHalf : 0 < k → modPow (modPow b 2) (2^(k-1)) = goldilocksP-1 := by
+    have smallHalf : 0 < k → modPow (modPow b 2) (2^(k-1)) = goldilocksPrime-1 := by
       intro hk
       rw [← modPow_mul]
       have hp : 2 * 2^(k-1) = 2^k := by
@@ -286,7 +288,7 @@ theorem power_two_order (k b e : Nat)
 /-- Primitive order as an exact divisibility characterization of every exponent. -/
 theorem primitive_of_half (k b : Nat)
     (full : modPow b (2^k) = 1)
-    (half : 0 < k → modPow b (2^(k-1)) = goldilocksP-1) (e : Nat) :
+    (half : 0 < k → modPow b (2^(k-1)) = goldilocksPrime-1) (e : Nat) :
     modPow b e = 1 ↔ 2^k ∣ e := by
   constructor
   · exact power_two_order k b e half
@@ -308,7 +310,7 @@ theorem root_full (k : Nat) (hk : k ≤ 32) :
   exact root32_full
 
 theorem root_half (k : Nat) (hk : 1 ≤ k) (hk32 : k ≤ 32) :
-    modPow (rootOfUnity (2^k)) (2^(k-1)) = goldilocksP-1 := by
+    modPow (rootOfUnity (2^k)) (2^(k-1)) = goldilocksPrime-1 := by
   rw [root_power k hk32, ← modPow_mul, ← Nat.pow_add]
   have he : 32-k+(k-1) = 31 := by omega
   rw [he]
@@ -323,16 +325,16 @@ theorem root_periodic (k : Nat) (hk : k ≤ 32) (e : Nat) :
     modPow (rootOfUnity (2^k)) e = modPow (rootOfUnity (2^k)) (e % 2^k) :=
   modPow_periodic _ _ _ (root_full k hk)
 
-theorem modPow_lt (b e : Nat) : modPow b e < goldilocksP := by
+theorem modPow_lt (b e : Nat) : modPow b e < goldilocksPrime := by
   rw [modPow_eq]
   exact Nat.mod_lt _ (by decide)
 
-theorem root_lt (k : Nat) : rootOfUnity (2^k) < goldilocksP :=
+theorem root_lt (k : Nat) : rootOfUnity (2^k) < goldilocksPrime :=
   modPow_lt _ _
 
 /-- Half-period stated with the actual runtime transform size. -/
 theorem root_half_size (k : Nat) (hk : 1 ≤ k) (hk32 : k ≤ 32) :
-    modPow (rootOfUnity (2^k)) (2^k / 2) = goldilocksP-1 := by
+    modPow (rootOfUnity (2^k)) (2^k / 2) = goldilocksPrime-1 := by
   have hd : 2^k / 2 = 2^(k-1) := by
     simpa using (Nat.pow_div hk (by decide : 0 < 2))
   rw [hd]
@@ -349,7 +351,7 @@ theorem root_square (k : Nat) (hk : k < 32) :
 /-- The butterfly's half-period shift multiplies its twiddle by minus one. -/
 theorem root_half_shift (k : Nat) (hk : 1 ≤ k) (hk32 : k ≤ 32) (e : Nat) :
     modPow (rootOfUnity (2^k)) (e + 2^k/2) =
-      (modPow (rootOfUnity (2^k)) e * (goldilocksP-1)) % goldilocksP := by
+      (modPow (rootOfUnity (2^k)) e * (goldilocksPrime-1)) % goldilocksPrime := by
   rw [modPow_add, root_half_size k hk hk32]
 
 /-- No exponent strictly between zero and the transform size is a period. -/
@@ -383,23 +385,24 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt
 open GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- Canonical modular operations. Their laws below need no primality assumption. -/
-@[expose] def addMod (a b : Nat) : Nat := (a+b) % goldilocksP
-@[expose] def mulMod (a b : Nat) : Nat := (a*b) % goldilocksP
-def negMod (a : Nat) : Nat := mulMod (goldilocksP-1) a
+@[expose] def addMod (a b : Nat) : Nat := (a+b) % goldilocksPrime
+@[expose] def mulMod (a b : Nat) : Nat := (a*b) % goldilocksPrime
+def negMod (a : Nat) : Nat := mulMod (goldilocksPrime-1) a
 def subMod (a b : Nat) : Nat := addMod a (negMod b)
 
-@[simp] theorem addMod_residue_left (a b : Nat) : addMod (a%goldilocksP) b = addMod a b := by
+@[simp] theorem addMod_residue_left (a b : Nat) : addMod (a%goldilocksPrime) b = addMod a b := by
   simp [addMod]
-@[simp] theorem addMod_residue_right (a b : Nat) : addMod a (b%goldilocksP) = addMod a b := by
+@[simp] theorem addMod_residue_right (a b : Nat) : addMod a (b%goldilocksPrime) = addMod a b := by
   simp [addMod]
-@[simp] theorem mulMod_residue_left (a b : Nat) : mulMod (a%goldilocksP) b = mulMod a b := by
+@[simp] theorem mulMod_residue_left (a b : Nat) : mulMod (a%goldilocksPrime) b = mulMod a b := by
   simp [mulMod]
-@[simp] theorem mulMod_residue_right (a b : Nat) : mulMod a (b%goldilocksP) = mulMod a b := by
+@[simp] theorem mulMod_residue_right (a b : Nat) : mulMod a (b%goldilocksPrime) = mulMod a b := by
   simp [mulMod]
-@[simp] theorem mulMod_one (a : Nat) : mulMod a 1 = a%goldilocksP := by simp [mulMod]
-@[simp] theorem one_mulMod (a : Nat) : mulMod 1 a = a%goldilocksP := by simp [mulMod]
+@[simp] theorem mulMod_one (a : Nat) : mulMod a 1 = a%goldilocksPrime := by simp [mulMod]
+@[simp] theorem one_mulMod (a : Nat) : mulMod 1 a = a%goldilocksPrime := by simp [mulMod]
 
 theorem addMod_assoc (a b c : Nat) : addMod (addMod a b) c = addMod a (addMod b c) := by
   simp [addMod, Nat.add_assoc]
@@ -414,7 +417,7 @@ theorem addMod_mulMod (a b c : Nat) :
     mulMod (addMod a b) c = addMod (mulMod a c) (mulMod b c) := by
   simp [mulMod, addMod, Nat.add_mul]
 
-theorem minus_one_even (e : Nat) : modPow (goldilocksP-1) (2*e) = 1 := by
+theorem minus_one_even (e : Nat) : modPow (goldilocksPrime-1) (2*e) = 1 := by
   rw [modPow_mul, minus_one_square, modPow_one_base]
 
 theorem modPow_even (w j k : Nat) :
@@ -426,7 +429,7 @@ theorem modPow_even (w j k : Nat) :
 theorem modPow_odd (w j k : Nat) :
     modPow w (j*(2*k+1)) = mulMod (modPow w j) (modPow (modPow w 2) (j*k)) := by
   rw [Nat.mul_add, Nat.mul_one, modPow_add, modPow_even]
-  exact Nat.mul_comm _ _ |> congrArg (· % goldilocksP)
+  exact Nat.mul_comm _ _ |> congrArg (· % goldilocksPrime)
 
 theorem modPow_block (w n j e : Nat) :
     modPow w ((n+j)*e) = mulMod (modPow (modPow w n) e) (modPow w (j*e)) := by
@@ -434,7 +437,7 @@ theorem modPow_block (w n j e : Nat) :
   rfl
 
 /-- The even-frequency pair in a DIF butterfly. -/
-theorem dif_even_pair (w n j k a b : Nat) (half : modPow w n = goldilocksP-1) :
+theorem dif_even_pair (w n j k a b : Nat) (half : modPow w n = goldilocksPrime-1) :
     addMod (mulMod a (modPow w (j*(2*k))))
       (mulMod b (modPow w ((n+j)*(2*k)))) =
     mulMod (addMod a b) (modPow (modPow w 2) (j*k)) := by
@@ -443,7 +446,7 @@ theorem dif_even_pair (w n j k a b : Nat) (half : modPow w n = goldilocksP-1) :
   exact (addMod_mulMod _ _ _).symm
 
 /-- The odd-frequency pair in a DIF butterfly. -/
-theorem dif_odd_pair (w n j k a b : Nat) (half : modPow w n = goldilocksP-1) :
+theorem dif_odd_pair (w n j k a b : Nat) (half : modPow w n = goldilocksPrime-1) :
     addMod (mulMod a (modPow w (j*(2*k+1))))
       (mulMod b (modPow w ((n+j)*(2*k+1)))) =
     mulMod (mulMod (subMod a b) (modPow w j)) (modPow (modPow w 2) (j*k)) := by
@@ -452,17 +455,17 @@ theorem dif_odd_pair (w n j k a b : Nat) (half : modPow w n = goldilocksP-1) :
   rw [mulMod_assoc, addMod_mulMod]
   simp only [mulMod_assoc]
   congr 1
-  rw [← mulMod_assoc b, mulMod_comm b (goldilocksP-1), mulMod_assoc]
+  rw [← mulMod_assoc b, mulMod_comm b (goldilocksPrime-1), mulMod_assoc]
 
 /-- Mathematical finite sum, reduced once after the exact natural sum. -/
-@[expose] def sumMod (n : Nat) (f : Nat → Nat) : Nat := Sum.sum n f % goldilocksP
+@[expose] def sumMod (n : Nat) (f : Nat → Nat) : Nat := Sum.sum n f % goldilocksPrime
 
 /-- Forward DFT. Inputs need not already be canonical residues. -/
 @[expose] def dft (n root : Nat) (input : Nat → Nat) (k : Nat) : Nat :=
   sumMod n (fun j => input j * modPow root (j*k))
 
 theorem dft_even (n root : Nat) (input : Nat → Nat) (k : Nat)
-    (half : modPow root n = goldilocksP-1) :
+    (half : modPow root n = goldilocksPrime-1) :
     dft (n+n) root input (2*k) =
       dft n (modPow root 2) (fun j => addMod (input j) (input (n+j))) k := by
   unfold dft sumMod
@@ -472,7 +475,7 @@ theorem dft_even (n root : Nat) (input : Nat → Nat) (k : Nat)
   simpa [addMod, mulMod] using dif_even_pair root n j k (input j) (input (n+j)) half
 
 theorem dft_odd (n root : Nat) (input : Nat → Nat) (k : Nat)
-    (half : modPow root n = goldilocksP-1) :
+    (half : modPow root n = goldilocksPrime-1) :
     dft (n+n) root input (2*k+1) =
       dft n (modPow root 2)
         (fun j => mulMod (subMod (input j) (input (n+j))) (modPow root j)) k := by
@@ -483,7 +486,7 @@ theorem dft_odd (n root : Nat) (input : Nat → Nat) (k : Nat)
   simpa [addMod, mulMod] using dif_odd_pair root n j k (input j) (input (n+j)) half
 
 theorem dft_congr_mod (n root k : Nat) (input other : Nat → Nat)
-    (h : ∀ j, j < n → input j % goldilocksP = other j % goldilocksP) :
+    (h : ∀ j, j < n → input j % goldilocksPrime = other j % goldilocksPrime) :
     dft n root input k = dft n root other k := by
   unfold dft sumMod
   apply Sum.cong_mod
@@ -493,7 +496,7 @@ theorem dft_congr_mod (n root k : Nat) (input other : Nat → Nat)
   rw [h j hj]
 
 theorem dft_input_mod (n root : Nat) (input : Nat → Nat) (k : Nat) :
-    dft n root (fun j => input j % goldilocksP) k = dft n root input k :=
+    dft n root (fun j => input j % goldilocksPrime) k = dft n root input k :=
   dft_congr_mod n root k _ _ (by intro j hj; simp)
 
 private theorem sub_residue_nat (m a b : Nat) (hm : 0 < m) (hb : b ≤ m) :
@@ -508,11 +511,11 @@ private theorem sub_residue_nat (m a b : Nat) (hm : 0 < m) (hb : b ≤ m) :
 
 /-- The algebraic difference is ordinary natural subtraction modulo p for a
 canonical subtrahend, matching the source Goldilocks subtraction contract. -/
-theorem subMod_eq_nat (a b : Nat) (hb : b < goldilocksP) :
-    subMod a b = (a+goldilocksP-b) % goldilocksP := by
+theorem subMod_eq_nat (a b : Nat) (hb : b < goldilocksPrime) :
+    subMod a b = (a+goldilocksPrime-b) % goldilocksPrime := by
   unfold subMod negMod mulMod addMod
   rw [Nat.add_mod_mod]
-  exact sub_residue_nat goldilocksP a b (by decide) (by omega)
+  exact sub_residue_nat goldilocksPrime a b (by decide) (by omega)
 
 end Obend.Hardware.Gpu.Ntt
 end
@@ -520,17 +523,18 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt.Stockham
 open GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- The value invariant after `p` transformed digits. The remaining digits are
 strided by `stride`; it specializes to the DFT when `stride = 1`. -/
 def partialTransform (p stride : Nat) (ω : Nat) (input : Nat → Nat) (b k : Nat) : Nat :=
-  Sum.sum p (fun j => input (b+j*stride) * modPow ω (j*k*stride)) % goldilocksP
+  Sum.sum p (fun j => input (b+j*stride) * modPow ω (j*k*stride)) % goldilocksPrime
 
 theorem partialTransform_eq (p stride : Nat) (ω : Nat) (input : Nat → Nat) (b k : Nat) :
-    partialTransform p stride ω input b k = Sum.sum p (fun j => input (b+j*stride) * modPow ω (j*k*stride)) % goldilocksP := by rfl
+    partialTransform p stride ω input b k = Sum.sum p (fun j => input (b+j*stride) * modPow ω (j*k*stride)) % goldilocksPrime := by rfl
 
 theorem initial (ω : Nat) (input : Nat → Nat) (b k stride : Nat) :
-    partialTransform 1 stride ω input b k = input b % goldilocksP := by
+    partialTransform 1 stride ω input b k = input b % goldilocksPrime := by
   simp [partialTransform,Sum.sum]
 
 theorem period_multiple (ω n e q : Nat) (hn : modPow ω n = 1) :
@@ -550,8 +554,8 @@ theorem exponent (p c m j t k r : Nat) :
 theorem term (p c m ω j t k r q : Nat) (input : Nat → Nat)
     (hperiod : modPow ω (p*c*m) = 1) :
     ((input (q+t*m+j*(c*m)) * modPow ω (j*k*(c*m)) *
-      modPow ω (t*k*m)) * modPow ω (t*r*(p*m))) % goldilocksP =
-    (input (q+(j*c+t)*m) * modPow ω ((j*c+t)*(k+r*p)*m)) % goldilocksP := by
+      modPow ω (t*k*m)) * modPow ω (t*r*(p*m))) % goldilocksPrime =
+    (input (q+(j*c+t)*m) * modPow ω ((j*c+t)*(k+r*p)*m)) % goldilocksPrime := by
   have hi : q+t*m+j*(c*m) = q+(j*c+t)*m := by
     simp [Nat.add_mul,Nat.mul_assoc,Nat.add_assoc,Nat.add_comm,Nat.add_left_comm]
   rw [hi,exponent,period_multiple _ _ _ _ hperiod]
@@ -564,24 +568,24 @@ theorem upload (p c m ω q k r : Nat) (input : Nat → Nat)
     (hperiod : modPow ω (p*c*m) = 1) :
     Sum.sum c (fun t =>
       partialTransform p (c*m) ω input (q+t*m) k *
-        modPow ω (t*k*m) * modPow ω (t*r*(p*m))) % goldilocksP =
+        modPow ω (t*k*m) * modPow ω (t*r*(p*m))) % goldilocksPrime =
       partialTransform (p*c) m ω input q (k+r*p) := by
   unfold partialTransform
   have expand : ∀ t,
-      ((Sum.sum p (fun j => input (q+t*m+j*(c*m)) * modPow ω (j*k*(c*m))) % goldilocksP) *
-        modPow ω (t*k*m) * modPow ω (t*r*(p*m))) % goldilocksP =
+      ((Sum.sum p (fun j => input (q+t*m+j*(c*m)) * modPow ω (j*k*(c*m))) % goldilocksPrime) *
+        modPow ω (t*k*m) * modPow ω (t*r*(p*m))) % goldilocksPrime =
       Sum.sum p (fun j => input (q+t*m+j*(c*m)) * modPow ω (j*k*(c*m)) *
-        modPow ω (t*k*m) * modPow ω (t*r*(p*m))) % goldilocksP := by
+        modPow ω (t*k*m) * modPow ω (t*r*(p*m))) % goldilocksPrime := by
     intro t
     rw [Sum.mul_right,Sum.mul_right]
     simp [Nat.mul_assoc]
   calc
     _ = Sum.sum c (fun t => Sum.sum p (fun j =>
           input (q+t*m+j*(c*m)) * modPow ω (j*k*(c*m)) *
-            modPow ω (t*k*m) * modPow ω (t*r*(p*m)))) % goldilocksP :=
+            modPow ω (t*k*m) * modPow ω (t*r*(p*m)))) % goldilocksPrime :=
       Sum.cong_mod _ _ _ _ (fun t _ => expand t)
     _ = Sum.sum c (fun t => Sum.sum p (fun j =>
-          input (q+(j*c+t)*m) * modPow ω ((j*c+t)*(k+r*p)*m))) % goldilocksP := by
+          input (q+(j*c+t)*m) * modPow ω ((j*c+t)*(k+r*p)*m))) % goldilocksPrime := by
       apply Sum.cong_mod
       intro t ht
       apply Sum.cong_mod
@@ -589,14 +593,14 @@ theorem upload (p c m ω q k r : Nat) (input : Nat → Nat)
       exact term p c m ω j t k r q input hperiod
     _ = _ := by
       rw [Sum.swap]
-      exact congrArg (fun v => v % goldilocksP)
+      exact congrArg (fun v => v % goldilocksPrime)
         (Sum.blocks p c (fun j => input (q+j*m) * modPow ω (j*(k+r*p)*m))).symm
 
 /-- The upload factorization stated with the shared DFT specification. The
 input view is exactly the strided load view of a Stockham workgroup. -/
 theorem upload_dft (p c m ω q k r : Nat) (input values : Nat → Nat)
     (hperiod : modPow ω (p*c*m) = 1)
-    (hvalues : ∀ t, t < c → values t % goldilocksP =
+    (hvalues : ∀ t, t < c → values t % goldilocksPrime =
       partialTransform p (c*m) ω input (q+t*m) k) :
     dft c (modPow ω (p*m))
       (fun t => mulMod (values t) (modPow ω (t*k*m))) r =
@@ -643,7 +647,7 @@ theorem input_index (p m q k t : Nat) :
 
 /-- Natural-order partial transforms in the physical Stockham device layout. -/
 @[expose] def LayoutValues (p stride ω : Nat) (input values : Nat → Nat) : Prop :=
-  ∀ b, b < stride → ∀ k, k < p → values (b*p+k) % goldilocksP =
+  ∀ b, b < stride → ∀ k, k < p → values (b*p+k) % goldilocksPrime =
     partialTransform p stride ω input b k
 
 /-- The permutation and twiddle theorem lifted from a single workgroup to its
@@ -677,14 +681,14 @@ theorem layout_upload (p c m ω : Nat) (input before after : Nat → Nat)
     simpa only [hsplit] using hgi
   rw [hgm] at indexEq
   rw [indexEq] at he
-  have values : ∀ t, t < c → before (g+t*(p*m)) % goldilocksP =
+  have values : ∀ t, t < c → before (g+t*(p*m)) % goldilocksPrime =
       partialTransform p (c*m) ω input (q+t*m) low := by
     intro t ht
     have hb : q+t*m < c*m := by
       have h := Nat.mul_le_mul_right m (Nat.succ_le_of_lt ht)
       rw [Nat.succ_mul] at h
       omega
-    change before (q*p+low+t*(p*m)) % goldilocksP = _
+    change before (q*p+low+t*(p*m)) % goldilocksPrime = _
     rw [input_index]
     exact previous (q+t*m) hb low hlo
   have hu := upload_dft p c m ω q low high input (fun t => before (g+t*(p*m))) hperiod values
@@ -725,6 +729,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt
 open GoldilocksSource Obend.Hardware.ArrayHypergraph
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 theorem powersLoop_values (ω count start : Nat) (xs : Array Word) :
     (powersLoop ω count xs (modPow ω start)).toList = xs.toList ++
@@ -732,7 +737,7 @@ theorem powersLoop_values (ω count start : Nat) (xs : Array Word) :
   induction count generalizing start xs with
   | zero => simp [powersLoop]
   | succ count ih =>
-    have next : modPow ω start * ω % goldilocksP = modPow ω (start+1) := by
+    have next : modPow ω start * ω % goldilocksPrime = modPow ω (start+1) := by
       rw [modPow_add,modPow_one]
       simp
     simp only [powersLoop,next,ih,List.range'_succ,List.map_cons,Array.toList_push]
@@ -760,7 +765,7 @@ theorem twiddlePowers_toNat (n ω i : Nat) (hi : i < n) :
   rw [twiddlePowers_getD n ω i hi]
   apply Nat.mod_eq_of_lt
   have h := modPow_lt ω i
-  have hp : goldilocksP < 2^64 := by decide
+  have hp : goldilocksPrime < 2^64 := by decide
   omega
 
 open Obend.Hardware.ArrayKernel
@@ -772,6 +777,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt
 open GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- Storage-order bit reversal: the highest storage bit becomes the lowest
 frequency bit. The theorem below only queries the finite domain `i < 2^bits`. -/
@@ -785,7 +791,7 @@ def reverseIndex : Nat → Nat → Nat
 half-size networks. This is a specification of the register network, not an
 alternative executable source builder. -/
 def difStorage : Nat → (Nat → Nat) → Nat → Nat
-  | 0, input, _ => input 0 % goldilocksP
+  | 0, input, _ => input 0 % goldilocksPrime
   | bits+1, input, i =>
       let half := 2^bits
       if i < half then
@@ -870,7 +876,7 @@ theorem difStorage_eq_dft (bits : Nat) (hbits : bits ≤ 32)
   | succ bits ih =>
     have hb : bits < 32 := by omega
     have hp : 2^(bits+1) = 2^bits+2^bits := by rw [Nat.pow_succ]; omega
-    have hh : modPow (rootOfUnity (2^(bits+1))) (2^bits) = goldilocksP-1 := by
+    have hh : modPow (rootOfUnity (2^(bits+1))) (2^bits) = goldilocksPrime-1 := by
       simpa using root_half (bits+1) (by omega) hbits
     simp only [difStorage, reverseIndex]
     split
@@ -957,6 +963,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt
 open GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- One whole-vector DIF level. Later levels act independently in the two
 halves. The closed index formula below identifies the ordinary flattened loop. -/
@@ -1062,7 +1069,7 @@ theorem difStages_high (bits start count : Nat) (input : Nat → Nat)
 /-- Every sequential DIF level has the recursive network semantics. The sole
 canonical-input premise accounts for the zero-layer size-one transform. -/
 theorem difStages_eq_storage (bits : Nat) (input : Nat → Nat)
-    (canonical : ∀ i, i < 2^bits → input i < goldilocksP)
+    (canonical : ∀ i, i < 2^bits → input i < goldilocksPrime)
     (i : Nat) (hi : i < 2^bits) :
     difStages bits 0 bits input i = difStorage bits input i := by
   induction bits generalizing input i with
@@ -1182,7 +1189,7 @@ theorem difLayer_flat (bits level : Nat) (input : Nat → Nat)
 
 /-- Full flat-level execution is the DFT in bit-reversed storage. -/
 theorem difStages_eq_dft (bits : Nat) (hbits : bits ≤ 32) (input : Nat → Nat)
-    (canonical : ∀ i, i < 2^bits → input i < goldilocksP)
+    (canonical : ∀ i, i < 2^bits → input i < goldilocksPrime)
     (i : Nat) (hi : i < 2^bits) :
     difStages bits 0 bits input i = dft (2^bits) (rootOfUnity (2^bits)) input (reverseIndex bits i) := by
   rw [difStages_eq_storage bits input canonical i hi,difStorage_eq_dft bits hbits input i hi]
@@ -1214,7 +1221,7 @@ theorem flatStages_fuse (bits start a b : Nat) (hc : start+a+b ≤ bits)
     (fun j hj => flatStages_eq bits start a (by omega) input j hj) i hi
 
 theorem flatStages_eq_dft (bits : Nat) (hbits : bits ≤ 32) (input : Nat → Nat)
-    (canonical : ∀ i, i < 2^bits → input i < goldilocksP)
+    (canonical : ∀ i, i < 2^bits → input i < goldilocksPrime)
     (i : Nat) (hi : i < 2^bits) :
     flatStages bits 0 bits input i = dft (2^bits) (rootOfUnity (2^bits)) input (reverseIndex bits i) := by
   rw [flatStages_eq bits 0 bits (by omega) input i hi,difStages_eq_dft bits hbits input canonical i hi]
@@ -1223,7 +1230,7 @@ theorem flatStages_eq_dft (bits : Nat) (hbits : bits ≤ 32) (input : Nat → Na
 the canonicalized flat network still denotes their original modular DFT. -/
 theorem flatStages_canonical_eq_dft (bits : Nat) (hbits : bits ≤ 32) (input : Nat → Nat)
     (i : Nat) (hi : i < 2^bits) :
-    flatStages bits 0 bits (fun j => input j % goldilocksP) i =
+    flatStages bits 0 bits (fun j => input j % goldilocksPrime) i =
       dft (2^bits) (rootOfUnity (2^bits)) input (reverseIndex bits i) := by
   rw [flatStages_eq_dft bits hbits _ (by intro j hj; exact Nat.mod_lt _ (by decide)) i hi,dft_input_mod]
 
@@ -1233,6 +1240,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt.RegisterValues
 open GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- A mathematical register-value update, used to state the refinement of the
 actual phase source loop. It creates no graph, code, phase, or dispatch. -/
@@ -1245,8 +1253,8 @@ theorem update_eq (v : Nat → Nat) (i value : Nat) :
 @[expose] def pairStep (bit twiddle j : Nat) (values : Nat → Nat) : Nat → Nat :=
   let i0 := 2*j-j%bit
   let i1 := i0+bit
-  update (update values i0 ((values i0+values i1)%goldilocksP)) i1
-    ((((values i0+goldilocksP-values i1)%goldilocksP)*twiddle)%goldilocksP)
+  update (update values i0 ((values i0+values i1)%goldilocksPrime)) i1
+    ((((values i0+goldilocksPrime-values i1)%goldilocksPrime)*twiddle)%goldilocksPrime)
 
 /-- Denotation of the source's sequential pair loop, preserving operand order. -/
 def roundValues (pairs bit : Nat) (twiddle : Nat → Nat) (values : Nat → Nat) : Nat → Nat :=
@@ -1261,6 +1269,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt
 open ArrayKernel GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- Numeric denotation of the actual lane/register source index. -/
 def laneRegisterIndex (radix stride lane r : Nat) : Nat :=
@@ -1589,17 +1598,18 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt.RegisterValues
 open GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 abbrev pairIndex (bit j side : Nat) : Nat := 2*j-j%bit+side*bit
 
 theorem pairStep_low (bit twiddle j : Nat) (hb : 0 < bit) (values : Nat → Nat) :
     pairStep bit twiddle j values (2*j-j%bit) =
-      (values (2*j-j%bit)+values (2*j-j%bit+bit))%goldilocksP := by
+      (values (2*j-j%bit)+values (2*j-j%bit+bit))%goldilocksPrime := by
   simp [pairStep,update,show bit ≠ 0 by omega]
 
 theorem pairStep_high (bit twiddle j : Nat) (values : Nat → Nat) :
     pairStep bit twiddle j values (2*j-j%bit+bit) =
-      (((values (2*j-j%bit)+goldilocksP-values (2*j-j%bit+bit))%goldilocksP)*twiddle)%goldilocksP := by
+      (((values (2*j-j%bit)+goldilocksPrime-values (2*j-j%bit+bit))%goldilocksPrime)*twiddle)%goldilocksPrime := by
   simp [pairStep,update]
 
 /-- A different pair cannot change either register of this pair. -/
@@ -1669,7 +1679,7 @@ theorem roundValues_flat_pair (radix stride lane bit root j side : Nat)
     (hs : 0 < stride) (hb : 0 < bit) (hd : 2*bit ∣ radix) (hj : j < radix/2) (hside : side < 2)
     (input values : Nat → Nat)
     (hvalues : ∀ r, r<radix → values r=input (laneRegisterIndex radix stride lane r))
-    (canonical : ∀ r, r<radix → values r<goldilocksP) :
+    (canonical : ∀ r, r<radix → values r<goldilocksPrime) :
     roundValues (radix/2) bit (fun j => modPow root (phasePairOffset stride lane j bit)) values (pairIndex bit j side) =
       flatButterfly (bit*stride) root input (laneRegisterIndex radix stride lane (pairIndex bit j side)) := by
   rw [roundValues_pair _ _ _ _ hb hside _ _ hj]
@@ -1705,7 +1715,7 @@ theorem roundValues_flat (radix stride lane bit root r : Nat)
     (hs : 0 < stride) (hb : 0 < bit) (hd : 2*bit ∣ radix) (hr : r<radix)
     (input values : Nat → Nat)
     (hvalues : ∀ r, r<radix → values r=input (laneRegisterIndex radix stride lane r))
-    (canonical : ∀ r, r<radix → values r<goldilocksP) :
+    (canonical : ∀ r, r<radix → values r<goldilocksPrime) :
     roundValues (radix/2) bit (fun j => modPow root (phasePairOffset stride lane j bit)) values r =
       flatButterfly (bit*stride) root input (laneRegisterIndex radix stride lane r) := by
   obtain ⟨j,hj,side,hside,he⟩ := pair_cover radix bit r hb hd hr
@@ -1720,7 +1730,7 @@ theorem phase_roundValues_layer (total bits done degree round lane r : Nat)
     (input values : Nat → Nat)
     (hvalues : ∀ r, r<2^degree → values r=input
       (laneRegisterIndex (2^degree) (2^bits/(2^done*2^degree)) lane r))
-    (canonical : ∀ r, r<2^degree → values r<goldilocksP) :
+    (canonical : ∀ r, r<2^degree → values r<goldilocksPrime) :
     roundValues (2^degree/2) (2^degree/2^(round+1))
       (fun j => modPow (rootOfUnity (2^total))
         (phasePairOffset (2^bits/(2^done*2^degree)) lane j (2^degree/2^(round+1)) *

@@ -33,6 +33,7 @@ there is no parallel graph-wire builder here. GPU admission also checks the actu
 Core4 composition member and retains the shape/element derivation.
 -/
 open Obend.Hardware.Gpu.GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- Ordinary array routing uses the lexical source compiler shared with the SOACs. -/
 def arrayRouteGraph : ArrayGraph :=
@@ -177,7 +178,7 @@ def vectorFor (kind : Kind) (lens : List Nat) (v : Nat) : List (List Int) :=
   lens.zipIdx.map fun (n, w) =>
     (List.range n).map fun i =>
       match kind with
-      | .field => (draw v w i % goldilocksP : Int)
+      | .field => (draw v w i % goldilocksPrime : Int)
       | .plain =>
         if v < 6 then pool.getD ((i + w + 3 * v) % pool.length) 0
         else if v < 10 then (if w == v - 6 then 7 else 0)
@@ -207,8 +208,8 @@ def graphVectors (g : ArrayGraph) (kind : Kind) (name : String := "") : List (Li
     let inLens := g.inputs.map (g.lengths.getD · 0)
     (List.range (vectorCount g)).map fun v =>
       if name == "glmul-256" && v == 0 then
-        let corners : List Nat := [0, 1, 4294967295, 4294967296, goldilocksP-1, goldilocksP,
-          goldilocksP+1, 18446744073709551615]
+        let corners : List Nat := [0, 1, 4294967295, 4294967296, goldilocksPrime-1, goldilocksPrime,
+          goldilocksPrime+1, 18446744073709551615]
         inLens.zipIdx.map fun (n, w) => (List.range n).map fun i =>
           (corners.getD ((i / (if w == 0 then 1 else corners.length)) % corners.length) 0 : Int)
       else vectorFor kind inLens v

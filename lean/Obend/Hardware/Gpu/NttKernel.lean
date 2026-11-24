@@ -8,6 +8,7 @@ section
 namespace Obend.Hardware.Gpu.Ntt.PhaseInit
 open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open ArrayKernel ArrayBuild GoldilocksSource GoldilocksSourceCorrect NttFieldCorrect
+open Obend.Apps.ZkNtt (goldilocksPrime)
 open BlockNtt RegisterValues PhaseArithmetic
 set_option autoImplicit false
 
@@ -38,7 +39,7 @@ theorem RawRegs.set {st : Build} {env : Nat → Word} {regs : Array Nat} {v : Na
   · rw [Array.getElem!_set!_ne regs i j r he]; simpa [update_eq,Ne.symm he] using h j hj
 
 theorem RawRegs.canonical {st : Build} {env : Nat → Word} {regs : Array Nat} {v : Nat → Nat}
-    (h : RawRegs st env regs v) (hc : ∀ i, i < regs.size → v i < goldilocksP) :
+    (h : RawRegs st env regs v) (hc : ∀ i, i < regs.size → v i < goldilocksPrime) :
     RegValues st env regs v := fun i hi => ⟨(h i hi).bound,(h i hi).value_eq,hc i hi⟩
 
 /-- Mathematical denotation of a once-per-register preparation pass. -/
@@ -64,14 +65,14 @@ theorem canon_step (k : GlConsts) (r : Nat) (regs : Array Nat) (st : Build)
     (hv : RawRegs st env regs values) (hr : r < regs.size) :
     let out := (PhaseMetadata.canonBody k r regs).run st
     BuildExtends st out.2 ∧ RawRegs out.2 env out.1.value
-      (update values r (values r%goldilocksP)) := by
+      (update values r (values r%goldilocksPrime)) := by
   obtain ⟨result,heq⟩ : ∃ result, (glCanon 1 k regs[r]!).run st = result := ⟨_,rfl⟩
   have he := glCanon_extends st 1 k regs[r]!
   have hs := glCanon_sound st env 1 k regs[r]! (hv r hr).bound hk
   have hc := glCanon_coordinates st 1 k regs[r]!
   rw [heq] at he hs hc
-  have hrval : RawValue result.2 env result.1 (values r%goldilocksP) :=
-    ⟨by omega,by simpa only [(hv r hr).value_eq,goldilocksP,Obend.Apps.ZkNtt.goldilocksPrime] using hs.2⟩
+  have hrval : RawValue result.2 env result.1 (values r%goldilocksPrime) :=
+    ⟨by omega,by simpa only [(hv r hr).value_eq,goldilocksPrime] using hs.2⟩
   simp only [PhaseMetadata.canonBody,bind_run,heq,pure_run,ForInStep.value]
   exact ⟨he,(hv.mono he).set r result.1 _ hr hrval⟩
 
@@ -80,14 +81,14 @@ theorem canon_loop (k : GlConsts) (xs : List Nat) (regs : Array Nat) (st : Build
     (hv : RawRegs st env regs values) (hb : ∀ r, r ∈ xs → r < regs.size) :
     let out := (forIn xs regs (PhaseMetadata.canonBody k)).run st
     BuildExtends st out.2 ∧ RawRegs out.2 env out.1
-      (prepareValues xs (fun _ v => v%goldilocksP) values) := by
+      (prepareValues xs (fun _ v => v%goldilocksPrime) values) := by
   induction xs generalizing st regs values with
   | nil => simpa only [List.forIn_nil,pure_run,prepareValues,List.foldl_nil] using And.intro (BuildExtends.refl st) hv
   | cons r xs ih =>
     obtain ⟨result,heq⟩ : ∃ result, (glCanon 1 k regs[r]!).run st = result := ⟨_,rfl⟩
     have hstep := canon_step k r regs st env values hk hv (hb r (by simp))
     simp only [PhaseMetadata.canonBody,bind_run,heq,pure_run,ForInStep.value] at hstep
-    have htail := ih (regs.set! r result.1) result.2 (update values r (values r%goldilocksP))
+    have htail := ih (regs.set! r result.1) result.2 (update values r (values r%goldilocksPrime))
       (hk.mono hstep.1) hstep.2 (fun i hi => by simpa only [Array.size_set!] using hb i (by simp [hi]))
     simp only [List.forIn_cons,bind_run,PhaseMetadata.canonBody,heq,pure_run,prepareValues,List.foldl_cons]
     exact ⟨hstep.1.trans htail.1,htail.2⟩
@@ -96,14 +97,14 @@ theorem canon_all (k : GlConsts) (regs : Array Nat) (st : Build)
     (env : Nat → Word) (values : Nat → Nat) (hk : ConstsAt st env k)
     (hv : RawRegs st env regs values) :
     let out := (forIn (List.range regs.size) regs (PhaseMetadata.canonBody k)).run st
-    BuildExtends st out.2 ∧ RegValues out.2 env out.1 (fun i => values i%goldilocksP) := by
+    BuildExtends st out.2 ∧ RegValues out.2 env out.1 (fun i => values i%goldilocksPrime) := by
   have h := canon_loop k (List.range regs.size) regs st env values hk hv (fun _ hi => List.mem_range.mp hi)
   have hsize := PhaseMetadata.canon_size k (List.range regs.size) regs st
   refine ⟨h.1,?_⟩
   intro i hi
   have hib : i < regs.size := by simpa only [hsize] using hi
   have hr := h.2 i hi
-  have hp := prepareValues_at (List.range regs.size) (fun _ v => v%goldilocksP) values
+  have hp := prepareValues_at (List.range regs.size) (fun _ v => v%goldilocksPrime) values
     List.nodup_range i
   simp only [List.mem_range,if_pos hib] at hp
   rw [hp] at hr
@@ -120,7 +121,7 @@ theorem input_step (n count p radix stride : Nat) (k : GlConsts) (r : Nat)
       ((PhaseMetadata.inputBody n count p radix stride k r s).run st).1.value.1 table) :
     let out := (PhaseMetadata.inputBody n count p radix stride k r s).run st
     BuildExtends st out.2 ∧ RawRegs out.2 env out.1.value.2
-      (update values r ((values r*table (inputExponent n count p radix stride r))%goldilocksP)) := by
+      (update values r ((values r*table (inputExponent n count p radix stride r))%goldilocksPrime)) := by
   let tw := (newWire 1).run st
   obtain ⟨result,heq⟩ : ∃ result, (glMul 1 k s.2[r]! tw.1).run tw.2 = result := ⟨_,rfl⟩
   have ht := newWire_extends st 1
@@ -139,11 +140,11 @@ theorem input_step (n count p radix stride : Nat) (k : GlConsts) (r : Nat)
     change evalBuild st env tw.1 = env tw.1
     exact hstart.fresh_value env tw.1 (by simp [tw,newWire_run])
   have hraw : RawValue result.2 env result.1
-      ((values r*table (inputExponent n count p radix stride r))%goldilocksP) := by
+      ((values r*table (inputExponent n count p radix stride r))%goldilocksPrime) := by
     refine ⟨by omega,?_⟩
     have haValue : (evalBuild tw.2 env s.2[r]!).toNat=values r := ha.value_eq
     rw [haValue,htv,hread] at hs
-    simpa only [goldilocksP,Obend.Apps.ZkNtt.goldilocksPrime] using hs.2
+    simpa only [goldilocksPrime] using hs.2
   simp only [PhaseMetadata.inputBody,bind_run,heq,pure_run,ForInStep.value]
   exact ⟨ht.trans hm,(hv.mono (ht.trans hm)).set r result.1 _ hr hraw⟩
 
@@ -174,7 +175,7 @@ theorem input_loop (n count p radix stride : Nat) (k : GlConsts) (xs : List Nat)
       ((forIn xs s (PhaseMetadata.inputBody n count p radix stride k)).run st).1.1 table) :
     let out := (forIn xs s (PhaseMetadata.inputBody n count p radix stride k)).run st
     BuildExtends st out.2 ∧ RawRegs out.2 env out.1.2
-      (prepareValues xs (fun r v => (v*table (inputExponent n count p radix stride r))%goldilocksP) values) := by
+      (prepareValues xs (fun r v => (v*table (inputExponent n count p radix stride r))%goldilocksPrime) values) := by
   induction xs generalizing st s values with
   | nil => simpa only [List.forIn_nil,pure_run,prepareValues,List.foldl_nil] using And.intro (BuildExtends.refl st) hv
   | cons r xs ih =>
@@ -194,7 +195,7 @@ theorem input_loop (n count p radix stride : Nat) (k : GlConsts) (xs : List Nat)
     have hsize : ss.2.size=s.2.size := by
       have h := PhaseMetadata.input_size n count p radix stride k [r] s st
       simpa only [List.forIn_cons,bind_run,heq,List.forIn_nil,pure_run] using h
-    have htail := ih ss after (update values r ((values r*table (inputExponent n count p radix stride r))%goldilocksP))
+    have htail := ih ss after (update values r ((values r*table (inputExponent n count p radix stride r))%goldilocksPrime))
       (hstart.trans hstep.1) (hk.mono hstep.1) hstep.2
       (fun i hi => by simpa only [hsize] using hb i (by simp [hi])) hreads
     dsimp only
@@ -209,7 +210,7 @@ theorem input_all (n count p radix stride : Nat) (k : GlConsts)
       ((forIn (List.range s.2.size) s (PhaseMetadata.inputBody n count p radix stride k)).run st).1.1 table) :
     let out := (forIn (List.range s.2.size) s (PhaseMetadata.inputBody n count p radix stride k)).run st
     BuildExtends st out.2 ∧ RegValues out.2 env out.1.2
-      (fun i => (values i*table (inputExponent n count p radix stride i))%goldilocksP) := by
+      (fun i => (values i*table (inputExponent n count p radix stride i))%goldilocksPrime) := by
   have h := input_loop n count p radix stride k (List.range s.2.size) s st env values table hstart hk hv
     (fun _ hi => List.mem_range.mp hi) hreads
   have hsize := PhaseMetadata.input_size n count p radix stride k (List.range s.2.size) s st
@@ -218,7 +219,7 @@ theorem input_all (n count p radix stride : Nat) (k : GlConsts)
   have hib : i < s.2.size := by simpa only [hsize] using hi
   have hr := h.2 i hi
   have hp := prepareValues_at (List.range s.2.size)
-    (fun r v => (v*table (inputExponent n count p radix stride r))%goldilocksP) values
+    (fun r v => (v*table (inputExponent n count p radix stride r))%goldilocksPrime) values
     List.nodup_range i
   simp only [List.mem_range,if_pos hib] at hp
   rw [hp] at hr
@@ -233,8 +234,8 @@ abbrev initialLoads (n count done degree src : Nat) (first : Bool) : PhaseMetada
 def preparedValues (n count p done degree : Nat) (first : Bool)
     (inputs : Nat → Nat) (table : Ix → Nat) : Nat → Nat :=
   if first then
-    if p=1 then fun i => inputs i%goldilocksP
-    else fun i => (inputs i*table (inputExponent n count p (2^degree) (count/(2^done*2^degree)) i))%goldilocksP
+    if p=1 then fun i => inputs i%goldilocksPrime
+    else fun i => (inputs i*table (inputExponent n count p (2^degree) (count/(2^done*2^degree)) i))%goldilocksPrime
   else inputs
 
 def roundResultValues (n count done degree : Nat) (table : Ix → Nat) (values : Nat → Nat) : Nat → Nat :=
@@ -287,7 +288,7 @@ theorem phaseAction_values (n count p done degree src : Nat) (first : Bool)
     (env : Nat → Word) (inputs : Nat → Nat) (table : Ix → Nat) (hp : 0 < p)
     (hinputs : RawRegs (initialLoads n count done degree src first).2 env
       (initialLoads n count done degree src first).1.2 inputs)
-    (hcanonical : first=false → ∀ i, i < 2^degree → inputs i < goldilocksP)
+    (hcanonical : first=false → ∀ i, i < 2^degree → inputs i < goldilocksPrime)
     (hreads : Twiddles env ((phaseAction n count p done degree src first).run {}).1.1 table) :
     let out := (phaseAction n count p done degree src first).run {}
     BuildExtends {} out.2 ∧ ∀ i, i < 2^degree →
@@ -322,7 +323,7 @@ theorem phaseAction_values (n count p done degree src : Nat) (first : Bool)
       simp only [Bool.true_and,Nat.reduceBEq,show decide (1>1)=false by decide,Bool.false_eq_true,ite_true,ite_false] at hrun
       rw [hrun] at hreads ⊢
       have hf := finish_rounds n count done degree constants.1 (loaded.1.1,canonical.1) canonical.2 env
-        (fun i => inputs i%goldilocksP) table ((hl.trans hc).trans hcan.1) (hk.mono hcan.1) hcan.2
+        (fun i => inputs i%goldilocksPrime) table ((hl.trans hc).trans hcan.1) (hk.mono hcan.1) hcan.2
         (hcs.trans hs') hreads
       simpa only [phaseResultValues,preparedValues,ite_true] using hf
     · have hpgt : 1 < p := by omega
@@ -344,7 +345,7 @@ theorem phaseAction_values (n count p done degree src : Nat) (first : Bool)
       have hts := PhaseMetadata.input_size n count p (2^degree) (count/(2^done*2^degree)) constants.1
         (List.range (2^degree)) loaded.1 constants.2
       have hf := finish_rounds n count done degree constants.1 twisted.1 twisted.2 env
-        (fun i => (inputs i*table (inputExponent n count p (2^degree) (count/(2^done*2^degree)) i))%goldilocksP)
+        (fun i => (inputs i*table (inputExponent n count p (2^degree) (count/(2^done*2^degree)) i))%goldilocksPrime)
         table ((hl.trans hc).trans htw.1) (hk.mono htw.1) htw.2 (hts.trans hs') hreads
       simpa only [phaseResultValues,preparedValues,ite_true,hp1,ite_false] using hf
 
@@ -428,6 +429,7 @@ end
 section
 namespace Obend.Hardware.Gpu.Ntt
 open ArrayHypergraph ArrayKernel ArrayBuild GoldilocksSource BlockNtt
+open Obend.Apps.ZkNtt (goldilocksPrime)
 open PhaseMetadata PhaseArithmetic NttFieldCorrect
 
 /-- The actual phase loader supplies the initial environment of its emitted code. -/
@@ -531,7 +533,7 @@ stage result, including the actual first-phase input preparation. -/
 theorem phaseResultValues_stages (total bits p done degree group lane : Nat)
     (first : Bool) (entry : Nat → Nat) (ht : total≤32) (hb : bits≤total)
     (hdegree : done+degree≤bits) (hlane : lane<2^bits/2^degree)
-    (hcanonical : first=false → ∀ i, i<2^bits → entry i<goldilocksP) :
+    (hcanonical : first=false → ∀ i, i<2^bits → entry i<goldilocksPrime) :
     ∀ r, r<2^degree →
     PhaseInit.phaseResultValues (2^total) (2^bits) p done degree first
       (fun r => entry (laneRegisterIndex (2^degree) (2^bits/(2^done*2^degree)) lane r))
@@ -555,7 +557,7 @@ theorem phase_register_value (total bits p done degree src dst group lane : Nat)
     (hg : group<2^total/2^bits) (hlane : lane<2^bits/2^degree)
     (hentry : ∀ i, i<2^bits →
       ((mem.getD src #[]).getD (if first then group+i*(2^total/2^bits) else i) 0#64).toNat=entry i)
-    (hcanonical : first=false → ∀ i, i<2^bits → entry i<goldilocksP)
+    (hcanonical : first=false → ∀ i, i<2^bits → entry i<goldilocksPrime)
     (htable : ∀ i, i<2^total → ((mem.getD 4 #[]).getD i 0#64).toNat=modPow (rootOfUnity (2^total)) i)
     (r : Nat) (hr : r<2^degree) :
     ((runRegisters (phase (2^total) (2^bits) bits p done degree src dst first last).code
@@ -1277,6 +1279,7 @@ open Obend.Hardware.Gpu.Ntt Obend.Hardware.Gpu.Ntt.BlockNtt
 open Obend.Hardware.Gpu.NttBatchCorrect Obend.Hardware.Gpu.NttDispatchCorrect
 open Obend.Hardware.Gpu.NttDispatchGeometry Obend.Hardware.Gpu.BlockLower
 open Obend.Hardware.Gpu.PhaseSemantics Obend.Hardware.Gpu.GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 set_option autoImplicit false
 
 theorem packed_phase_value (total bits logP done degree src dst stride k group tile lane r : Nat)
@@ -1290,7 +1293,7 @@ theorem packed_phase_value (total bits logP done degree src dst stride k group t
     (hgood : BlockLower.Good (nttBlockProgram (2^total)) mem)
     (hentry : ∀ i, i<2^bits →
       (valueAt (tileMemory stride tile mem) src (if first then group*k+tile+i*(2^total/2^bits) else i)).toNat=entry i)
-    (hcanonical : first=false → ∀ i, i<2^bits → entry i<goldilocksP)
+    (hcanonical : first=false → ∀ i, i<2^bits → entry i<goldilocksPrime)
     (htable : ∀ i, i<2^total → (valueAt mem 4 i).toNat=modPow (rootOfUnity (2^total)) i) :
     (valueAt (evalPhase (batchPhase stride k
       (phase (2^total) (2^bits) bits (2^logP) done degree src dst first last)) group mem) dst
@@ -1368,6 +1371,7 @@ open Obend.Hardware.Gpu.NttBatchCorrect Obend.Hardware.Gpu.NttDispatchCorrect
 open Obend.Hardware.Gpu.NttDispatchGeometry Obend.Hardware.Gpu.NttPackedValue
 open Obend.Hardware.Gpu.BlockLower Obend.Hardware.Gpu.PhaseSemantics
 open Obend.Hardware.Gpu.GoldilocksSource
+open Obend.Apps.ZkNtt (goldilocksPrime)
 set_option autoImplicit false
 
 def tileInput (total bits logP src G : Nat) (initial : Memory) : Nat → Nat :=
@@ -1467,7 +1471,7 @@ theorem state_step (total bits logP src dst stride k group : Nat) (initial : Mem
         rw [tileMemory_value _ _ _ _ _ (by intro _; omega)]
         have hv := hs.value tile htile j hj (by omega)
         simpa only [observed,if_neg (by omega : done≠bits)] using hv
-    have hcanonical : (done==0)=false → ∀ j, j<2^bits → entry j<goldilocksP := by
+    have hcanonical : (done==0)=false → ∀ j, j<2^bits → entry j<goldilocksPrime := by
       intro hz j hj
       have hz' : done≠0 := by simpa using hz
       simp only [entry,if_neg hz']
@@ -1715,6 +1719,7 @@ namespace Obend.Hardware.Gpu.Ntt
 open Obend.Hardware.ArrayKernel Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.Gpu.BlockLower Obend.Hardware.Gpu.PhaseSemantics
 open GoldilocksSource Stockham
+open Obend.Apps.ZkNtt (goldilocksPrime)
 
 /-- The exact value contract of an actual batched upload. This is an interface
 for proof composition, not an alternative evaluator or an emitted certificate. -/
@@ -1737,7 +1742,7 @@ structure StageInvariant (bits : Nat) (input : Nat → Nat) (done current : Nat)
   twiddles : TwiddleMemory (2^bits) mem
   values : LayoutValues (2^done) (2^bits/2^done) (rootOfUnity (2^bits)) input
     (fun i => (valueAt mem current i).toNat)
-  canonical : 0 < done → ∀ i, i < 2^bits → (valueAt mem current i).toNat < goldilocksP
+  canonical : 0 < done → ∀ i, i < 2^bits → (valueAt mem current i).toNat < goldilocksPrime
 
 /-- One actual upload advances the whole-program invariant. All source indices,
 bit reversal and register arithmetic enter through the upload value theorem. -/
