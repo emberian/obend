@@ -329,6 +329,7 @@ public import Obend.Crypto.ThresholdHashMpc
 public import Obend.Crypto.WireDomainTags
 public import Obend.Polis.EvidencedOcap
 public import Obend.Polis.ZkBiscuit
+public import Obend.Polis.ZkCapFold
 public import Obend.Polis.BlumRam
 public import Obend.Polis.PqThresholdCustody
 public import Obend.Polis.CapTP
