@@ -222,4 +222,53 @@ theorem First.replace_eq_rebuild {key : α → κ} {xs : List α} (ctx : First k
     (ctx.replace value).find q = (First.build key (replaceKey key value xs)).find q := by
   rw [First.find_eq, First.find_eq]
 
+/-! ## Linearithmic Order-Preserving Deduplication -/
+
+def eraseDupsGo (seen : TreeMap κ Unit) (acc : Array κ) : List κ → List κ
+  | [] => acc.toList
+  | x :: xs =>
+    match seen[x]? with
+    | some _ => eraseDupsGo seen acc xs
+    | none => eraseDupsGo (seen.insert x ()) (acc.push x) xs
+
+def eraseDupsFast (xs : List κ) : List κ := eraseDupsGo ∅ #[] xs
+
+theorem filter_insert_unit (seen : TreeMap κ Unit) (x : κ) (xs : List κ) :
+    (xs.filter (fun y => (seen[y]?).isNone)).filter (fun y => !(y == x)) =
+      xs.filter (fun y => ((seen.insert x ())[y]?).isNone) := by
+  rw [List.filter_filter]
+  apply List.filter_congr
+  intro y _
+  rw [TreeMap.getElem?_insert]
+  by_cases h : compare x y = .eq
+  · have hxy : x = y := compare_eq_iff_eq.mp h
+    subst hxy
+    simp
+  · have hne : (y == x) = false := beq_false_of_ne (fun e => h (compare_eq_iff_eq.mpr e.symm))
+    simp [h, hne]
+
+theorem eraseDupsGo_eq :
+    ∀ (xs : List κ) (seen : TreeMap κ Unit) (acc : Array κ),
+      eraseDupsGo seen acc xs = acc.toList ++ (xs.filter (fun y => (seen[y]?).isNone)).eraseDups
+  | [], _, acc => by simp [eraseDupsGo]
+  | x :: xs, seen, acc => by
+    unfold eraseDupsGo
+    cases hs : seen[x]? with
+    | some _ =>
+      simp [hs, eraseDupsGo_eq xs seen acc]
+    | none =>
+      simp only [List.filter_cons, hs, Option.isNone_none, ↓reduceIte, List.eraseDups_cons,
+        eraseDupsGo_eq xs (seen.insert x ()) (acc.push x), Array.toList_push,
+        filter_insert_unit seen x xs, List.append_assoc, List.singleton_append]
+
+omit [LawfulEqOrd κ] [BEq κ] [LawfulBEq κ] in
+theorem filter_empty_isNone (xs : List κ) :
+    xs.filter (fun y => ((∅ : TreeMap κ Unit)[y]?).isNone) = xs := by
+  simp
+
+theorem eraseDupsFast_eq (xs : List κ) : eraseDupsFast xs = xs.eraseDups := by
+  have h := eraseDupsGo_eq xs ∅ #[]
+  rw [filter_empty_isNone] at h
+  simpa [eraseDupsFast] using h
+
 end Obend.Vault.Index

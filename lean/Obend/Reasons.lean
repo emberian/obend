@@ -85,6 +85,7 @@ bookkeeping. Hennix: the 1979 *17 Points on Intensional Logics for Intransitive 
 located in a bibliography and not read; nothing here is attributed to it.
 -/
 public import Lean.Data.Json
+public import Std.Data.TreeMap
 public section
 
 namespace Obend.Reasons
@@ -408,6 +409,607 @@ theorem supported_possible (P : Program) : Sub (wf P).1 (wf P).2 := by
       have h1 : Sub (rounds P (k + 1)) (gamma P (rounds P k)) := gamma_anti P ih
       exact fun x hx => gamma_anti P h1 x hx
   exact this _
+
+/-! ## 4b. Unboxed indexed execution (`gammaExec`, `wfExec`) with early fixpoint termination -/
+
+theorem gamma_eq_T_self (P : Program) (J : List String) :
+    gamma P J = T P J (gamma P J) := by
+  change stage P J ((atomsOf P).length + 1) = T P J (gamma P J)
+  simp only [stage]
+  exact T_congr P (Same.refl J) (stage_gamma P J (Nat.le_refl _))
+
+theorem wf_fst_eq_T (P : Program) :
+    (wf P).1 = T P (wf P).2 (wf P).1 :=
+  calc (wf P).1
+    _ = gamma P (gamma P (rounds P (atomsOf P).length)) := rfl
+    _ = gamma P (wf P).2 := by rw [gamma_congr P (rounds_wf P (Nat.le_refl _))]; rfl
+    _ = T P (wf P).2 (gamma P (wf P).2) := gamma_eq_T_self P (wf P).2
+    _ = T P (wf P).2 (wf P).1 := T_congr P (Same.refl _) (rounds_fix P)
+
+theorem wf_snd_eq_T (P : Program) :
+    (wf P).2 = T P (wf P).1 (wf P).2 :=
+  gamma_eq_T_self P (wf P).1
+
+theorem stage_const_of_same (P : Program) (J : List String) {n : Nat}
+    (hs : Same (stage P J (n + 1)) (stage P J n)) :
+    Same (stage P J n) (gamma P J) := by
+  have hconst : ∀ k, stage P J (n + 1 + k) = stage P J (n + 1) := by
+    intro k
+    induction k with
+    | zero => rfl
+    | succ k ih =>
+      rw [show n + 1 + (k + 1) = (n + 1 + k) + 1 by omega]
+      simp only [stage, ih]
+      exact T_congr P (Same.refl J) hs
+  let m := (n + 1) + (atomsOf P).length
+  have hm : stage P J m = stage P J (n + 1) := hconst (atomsOf P).length
+  exact hs.symm.trans (hm ▸ stage_gamma P J (m := m) (by omega))
+
+theorem rounds_const_of_same (P : Program) {k : Nat}
+    (hs : Same (rounds P (k + 1)) (rounds P k)) :
+    Same (rounds P k) (wf P).1 := by
+  have hconst : ∀ j, rounds P (k + 1 + j) = rounds P (k + 1) := by
+    intro j
+    induction j with
+    | zero => rfl
+    | succ j ih =>
+      rw [show k + 1 + (j + 1) = (k + 1 + j) + 1 by omega]
+      change gamma P (gamma P (rounds P (k + 1 + j))) = rounds P (k + 1)
+      rw [ih]
+      exact congrArg (gamma P) (gamma_congr P hs)
+  let m := (k + 1) + (atomsOf P).length
+  have hm : rounds P m = rounds P (k + 1) := hconst (atomsOf P).length
+  exact hs.symm.trans (hm ▸ rounds_wf P (m := m) (by omega))
+
+/-- Dense `0 .. U - 1` atom interning table backed by `Std.TreeMap String Nat` + `Array String`. -/
+structure AtomTable where
+  toIdx : Std.TreeMap String Nat := ∅
+  ofIdx : Array String := #[]
+
+def AtomTable.WF (tab : AtomTable) : Prop :=
+  ∀ (s : String) (i : Nat), tab.toIdx[s]? = some i ↔ tab.ofIdx[i]? = some s
+
+def internAtom (tab : AtomTable) (s : String) : AtomTable :=
+  match tab.toIdx[s]? with
+  | some _ => tab
+  | none =>
+    let idx := tab.ofIdx.size
+    { toIdx := tab.toIdx.insert s idx, ofIdx := tab.ofIdx.push s }
+
+def internAll (xs : List String) : AtomTable :=
+  xs.foldl internAtom {}
+
+theorem empty_atomTable_wf : ({} : AtomTable).WF := by
+  intro s i
+  simp
+
+theorem internAtom_wf {tab : AtomTable} (hwf : tab.WF) (s : String) :
+    (internAtom tab s).WF ∧ ∃ i, (internAtom tab s).toIdx[s]? = some i := by
+  open Std in
+  unfold internAtom
+  cases hs : tab.toIdx[s]? with
+  | some k =>
+    exact ⟨hwf, k, hs⟩
+  | none =>
+    dsimp only
+    refine ⟨?_, tab.ofIdx.size, by simp⟩
+    intro q i
+    rw [Std.TreeMap.getElem?_insert, Array.getElem?_push]
+    simp only [Std.compare_eq_iff_eq]
+    by_cases hsq : s = q
+    · subst hsq
+      by_cases hi : i = tab.ofIdx.size
+      · subst hi; simp
+      · have hne : tab.ofIdx.size ≠ i := fun e => hi e.symm
+        simp only [Option.some.injEq, hi, hne, ↓reduceIte, false_iff]
+        intro hget
+        have hsome := (hwf s i).2 hget
+        rw [hs] at hsome
+        cases hsome
+    · simp only [hsq, ↓reduceIte]
+      by_cases hi : i = tab.ofIdx.size
+      · subst hi
+        simp only [↓reduceIte, Option.some.injEq]
+        constructor
+        · intro hq
+          have hget := (hwf q tab.ofIdx.size).1 hq
+          have hlt : tab.ofIdx.size < tab.ofIdx.size := (Array.getElem?_eq_some_iff.1 hget).1
+          omega
+        · intro heq; exact absurd heq hsq
+      · simp only [hi, ↓reduceIte]
+        exact hwf q i
+
+theorem internAtom_preserves {tab : AtomTable} (s q : String) (i : Nat)
+    (hq : tab.toIdx[q]? = some i) :
+    (internAtom tab s).toIdx[q]? = some i := by
+  unfold internAtom
+  cases hs : tab.toIdx[s]? with
+  | some _ => exact hq
+  | none =>
+    dsimp only
+    rw [Std.TreeMap.getElem?_insert]
+    simp only [Std.compare_eq_iff_eq]
+    by_cases hsq : s = q
+    · subst hsq; rw [hs] at hq; cases hq
+    · simp [hsq, hq]
+
+theorem foldl_internAtom_wf :
+    ∀ (xs : List String) (tab : AtomTable), tab.WF →
+      (xs.foldl internAtom tab).WF ∧
+      (∀ (s : String) (i : Nat), tab.toIdx[s]? = some i → (xs.foldl internAtom tab).toIdx[s]? = some i) ∧
+      (∀ x ∈ xs, ∃ i, (xs.foldl internAtom tab).toIdx[x]? = some i)
+  | [], tab, hwf => ⟨hwf, fun _ _ h => h, fun _ hx => nomatch hx⟩
+  | x :: xs, tab, hwf => by
+    obtain ⟨hwf1, i0, hi0⟩ := internAtom_wf hwf x
+    obtain ⟨hwf2, hpres2, hmem2⟩ := foldl_internAtom_wf xs (internAtom tab x) hwf1
+    refine ⟨hwf2, fun s i hs => hpres2 s i (internAtom_preserves x s i hs), ?_⟩
+    intro y hy
+    rcases List.mem_cons.1 hy with rfl | hyt
+    · exact ⟨i0, hpres2 y i0 hi0⟩
+    · exact hmem2 y hyt
+
+theorem internAll_wf (xs : List String) :
+    (internAll xs).WF ∧ ∀ x ∈ xs, ∃ i, (internAll xs).toIdx[x]? = some i := by
+  obtain ⟨hwf, _, hmem⟩ := foldl_internAtom_wf xs {} empty_atomTable_wf
+  exact ⟨hwf, hmem⟩
+
+def progAtoms (P : Program) (extra : List String) : List String :=
+  extra ++ P.facts ++ P.rules.flatMap (fun r => r.concl :: (r.pos ++ r.neg))
+
+/-- Bitset invariant: `bits[i]` holds iff `tab.ofIdx[i] ∈ I`. -/
+def Represents (tab : AtomTable) (bits : Array Bool) (I : List String) : Prop :=
+  ∃ hsz : bits.size = tab.ofIdx.size,
+    ∀ (i : Nat) (hi : i < tab.ofIdx.size),
+      bits[i]'(by omega) = true ↔ tab.ofIdx[i]'hi ∈ I
+
+theorem represents_congr {tab : AtomTable} {bits : Array Bool} {I I' : List String}
+    (h : Represents tab bits I) (hs : Same I I') : Represents tab bits I' :=
+  ⟨h.1, fun i hi => (h.2 i hi).trans (hs _)⟩
+
+def encodeBits (tab : AtomTable) (xs : List String) : Array Bool :=
+  xs.foldl (fun acc x =>
+    match tab.toIdx[x]? with
+    | some i => acc.setIfInBounds i true
+    | none => acc) (Array.replicate tab.ofIdx.size false)
+
+theorem encodeBits_step {tab : AtomTable} (hwf : tab.WF) {acc : Array Bool} {I : List String}
+    (hrep : Represents tab acc I) (x : String) :
+    Represents tab (match tab.toIdx[x]? with | some i => acc.setIfInBounds i true | none => acc) (x :: I) := by
+  obtain ⟨hsz, hiff⟩ := hrep
+  cases hx : tab.toIdx[x]? with
+  | none =>
+    refine ⟨hsz, fun i hi => ?_⟩
+    rw [hiff i hi, List.mem_cons]
+    refine ⟨Or.inr, fun h => h.elim (fun heq => ?_) id⟩
+    have hsome : tab.toIdx[x]? = some i := (hwf x i).2 (by rw [Array.getElem?_eq_getElem hi, heq])
+    rw [hx] at hsome; cases hsome
+  | some idx =>
+    dsimp only
+    have hget := (hwf x idx).1 hx
+    obtain ⟨hidx, hxEq⟩ := Array.getElem?_eq_some_iff.1 hget
+    have hidxAcc : idx < acc.size := by omega
+    refine ⟨by simp [hsz], fun i hi => ?_⟩
+    have hiAcc : i < acc.size := by omega
+    rw [List.mem_cons]
+    by_cases heq : idx = i
+    · subst heq
+      simp [hxEq]
+    · rw [Array.getElem_setIfInBounds_ne hiAcc heq, hiff i hi]
+      refine ⟨Or.inr, fun h => h.elim (fun hxs => ?_) id⟩
+      have h1 : tab.toIdx[x]? = some i := (hwf x i).2 (by rw [Array.getElem?_eq_getElem hi, hxs])
+      rw [hx] at h1; injection h1 with h2; exact absurd h2 heq
+
+theorem encodeBits_represents {tab : AtomTable} (hwf : tab.WF) (xs : List String) :
+    Represents tab (encodeBits tab xs) xs := by
+  unfold encodeBits
+  have hgen : ∀ (ys : List String) (acc : Array Bool) (I : List String),
+      Represents tab acc I →
+      Represents tab (ys.foldl (fun a x => match tab.toIdx[x]? with | some i => a.setIfInBounds i true | none => a) acc)
+        (ys.reverse ++ I) := by
+    intro ys
+    induction ys with
+    | nil => intro acc I h; simpa using h
+    | cons y rest ih =>
+      intro acc I h
+      rw [List.foldl_cons, List.reverse_cons, List.append_assoc, List.singleton_append]
+      exact ih _ (y :: I) (encodeBits_step hwf h y)
+  have h0 : Represents tab (Array.replicate tab.ofIdx.size false) [] := by
+    refine ⟨by simp, fun i hi => ?_⟩
+    simp
+  have hf := hgen xs (Array.replicate tab.ofIdx.size false) [] h0
+  rw [List.append_nil] at hf
+  exact represents_congr hf (fun z => List.mem_reverse)
+
+theorem bits_eq_implies_same {tab : AtomTable} (hwf : tab.WF) {U : List String}
+    (hcov : ∀ x ∈ U, ∃ i, tab.toIdx[x]? = some i)
+    {b1 b2 : Array Bool} {I1 I2 : List String}
+    (hr1 : Represents tab b1 I1) (hr2 : Represents tab b2 I2)
+    (hU1 : Sub I1 U) (hU2 : Sub I2 U) (heq : b1 = b2) :
+    Same I1 I2 := by
+  subst heq
+  obtain ⟨hsz1, hiff1⟩ := hr1
+  obtain ⟨_, hiff2⟩ := hr2
+  intro x
+  constructor
+  · intro hx1
+    obtain ⟨i, hi⟩ := hcov x (hU1 x hx1)
+    obtain ⟨hilt, hix⟩ := Array.getElem?_eq_some_iff.1 ((hwf x i).1 hi)
+    have hb : b1[i]'(by omega) = true := (hiff1 i hilt).2 (hix ▸ hx1)
+    exact hix ▸ (hiff2 i hilt).1 hb
+  · intro hx2
+    obtain ⟨i, hi⟩ := hcov x (hU2 x hx2)
+    obtain ⟨hilt, hix⟩ := Array.getElem?_eq_some_iff.1 ((hwf x i).1 hi)
+    have hb : b1[i]'(by omega) = true := (hiff2 i hilt).2 (hix ▸ hx2)
+    exact hix ▸ (hiff1 i hilt).1 hb
+
+/-- Unboxed indexed rule over dense atom IDs `0 .. U - 1`. -/
+structure IndexedRule where
+  concl : Nat
+  pos : Array Nat
+  neg : Array Nat
+
+structure IndexedProg where
+  tab : AtomTable
+  factBits : Array Bool
+  rules : Array IndexedRule
+
+def compileRule (tab : AtomTable) (r : Rule) : IndexedRule :=
+  { concl := tab.toIdx[r.concl]?.getD 0
+    pos := (r.pos.map fun p => tab.toIdx[p]?.getD 0).toArray
+    neg := (r.neg.map fun d => tab.toIdx[d]?.getD 0).toArray }
+
+def compileProg (P : Program) (extra : List String) : IndexedProg :=
+  let tab := internAll (progAtoms P extra)
+  { tab := tab
+    factBits := encodeBits tab P.facts
+    rules := (P.rules.map (compileRule tab)).toArray }
+
+def firesBits (jBits iBits : Array Bool) (ir : IndexedRule) : Bool :=
+  ir.pos.all (fun p => iBits.getD p false) && ir.neg.all (fun d => !jBits.getD d false)
+
+theorem getD_represents {tab : AtomTable} (hwf : tab.WF) {bits : Array Bool} {I : List String}
+    (hrep : Represents tab bits I) {x : String} {idx : Nat} (hx : tab.toIdx[x]? = some idx) :
+    bits.getD idx false = I.contains x := by
+  obtain ⟨hsz, hiff⟩ := hrep
+  obtain ⟨hilt, hix⟩ := Array.getElem?_eq_some_iff.1 ((hwf x idx).1 hx)
+  have hb : idx < bits.size := by omega
+  have hgd : bits.getD idx false = bits[idx]'hb := by simp [Array.getD, hb]
+  rw [hgd]
+  apply Bool.eq_iff_iff.2
+  exact (hiff idx hilt).trans (by rw [hix, List.contains_iff_mem])
+
+theorem all_congr_mem {α : Type} {f g : α → Bool} :
+    ∀ (xs : List α), (∀ x ∈ xs, f x = g x) → xs.all f = xs.all g
+  | [], _ => rfl
+  | x :: xs, h => by
+    simp only [List.all_cons, h x List.mem_cons_self,
+      all_congr_mem xs (fun y hy => h y (List.mem_cons_of_mem _ hy))]
+
+theorem firesBits_eq {tab : AtomTable} (hwf : tab.WF)
+    {jBits iBits : Array Bool} {J I : List String}
+    (hJ : Represents tab jBits J) (hI : Represents tab iBits I)
+    {r : Rule}
+    (hpos : ∀ p ∈ r.pos, ∃ i, tab.toIdx[p]? = some i)
+    (hneg : ∀ d ∈ r.neg, ∃ i, tab.toIdx[d]? = some i) :
+    firesBits jBits iBits (compileRule tab r) = fires J I r := by
+  unfold firesBits compileRule fires
+  rw [← Array.all_toList, ← Array.all_toList]
+  simp only [List.all_map]
+  have hp : r.pos.all ((fun p => iBits.getD p false) ∘ fun p => tab.toIdx[p]?.getD 0) =
+      r.pos.all (fun p => I.contains p) := by
+    apply all_congr_mem r.pos
+    intro p hpMem
+    obtain ⟨idx, hidx⟩ := hpos p hpMem
+    simp only [Function.comp_apply, hidx, Option.getD_some]
+    exact getD_represents hwf hI hidx
+  have hn : r.neg.all ((fun d => !jBits.getD d false) ∘ fun d => tab.toIdx[d]?.getD 0) =
+      r.neg.all (fun d => !J.contains d) := by
+    apply all_congr_mem r.neg
+    intro d hdMem
+    obtain ⟨idx, hidx⟩ := hneg d hdMem
+    simp only [Function.comp_apply, hidx, Option.getD_some]
+    rw [getD_represents hwf hJ hidx]
+  rw [hp, hn]
+
+def stepBits (ip : IndexedProg) (jBits iBits : Array Bool) : Array Bool :=
+  ip.rules.foldl (fun acc ir =>
+    if firesBits jBits iBits ir then acc.setIfInBounds ir.concl true else acc) ip.factBits
+
+theorem rule_atoms_in_progAtoms (P : Program) (extra : List String) {r : Rule} (hr : r ∈ P.rules) :
+    r.concl ∈ progAtoms P extra ∧
+    (∀ p ∈ r.pos, p ∈ progAtoms P extra) ∧
+    (∀ d ∈ r.neg, d ∈ progAtoms P extra) := by
+  refine ⟨?_, ?_, ?_⟩
+  · simp only [progAtoms, List.mem_append, List.mem_flatMap]
+    exact Or.inr ⟨r, hr, List.mem_cons_self⟩
+  · intro p hp
+    simp only [progAtoms, List.mem_append, List.mem_flatMap]
+    exact Or.inr ⟨r, hr, List.mem_cons_of_mem _ (List.mem_append_left _ hp)⟩
+  · intro d hd
+    simp only [progAtoms, List.mem_append, List.mem_flatMap]
+    exact Or.inr ⟨r, hr, List.mem_cons_of_mem _ (List.mem_append_right _ hd)⟩
+
+theorem stepBits_represents (P : Program) (extra : List String)
+    {jBits iBits : Array Bool} {J I : List String}
+    (hJ : Represents (compileProg P extra).tab jBits J)
+    (hI : Represents (compileProg P extra).tab iBits I) :
+    Represents (compileProg P extra).tab (stepBits (compileProg P extra) jBits iBits) (T P J I) := by
+  obtain ⟨hwf, hmem⟩ := internAll_wf (progAtoms P extra)
+  have htab : (compileProg P extra).tab = internAll (progAtoms P extra) := rfl
+  unfold stepBits
+  rw [← Array.foldl_toList]
+  have hrEq : (compileProg P extra).rules.toList = P.rules.map (compileRule (compileProg P extra).tab) := by
+    simp [compileProg]
+  rw [hrEq, List.foldl_map]
+  have hfact : Represents (compileProg P extra).tab (compileProg P extra).factBits P.facts :=
+    encodeBits_represents (htab ▸ hwf) P.facts
+  have hloop : ∀ (rs : List Rule), (∀ r ∈ rs, r ∈ P.rules) →
+      ∀ (acc : Array Bool) (L : List String), Represents (compileProg P extra).tab acc L →
+        Represents (compileProg P extra).tab
+          (rs.foldl (fun a r => if firesBits jBits iBits (compileRule (compileProg P extra).tab r) then
+            a.setIfInBounds (compileRule (compileProg P extra).tab r).concl true else a) acc)
+          (L ++ (rs.filter (fires J I)).map (·.concl)) := by
+    intro rs
+    induction rs with
+    | nil => intro _ acc L hL; simpa using hL
+    | cons r rest ih =>
+      intro hrs acc L hL
+      have hrP : r ∈ P.rules := hrs r List.mem_cons_self
+      have hrestP : ∀ q ∈ rest, q ∈ P.rules := fun q hq => hrs q (List.mem_cons_of_mem _ hq)
+      obtain ⟨hrc, hrp, hrn⟩ := rule_atoms_in_progAtoms P extra hrP
+      have hfb : firesBits jBits iBits (compileRule (compileProg P extra).tab r) = fires J I r :=
+        firesBits_eq (htab ▸ hwf) hJ hI
+          (fun p hp => htab ▸ hmem p (hrp p hp))
+          (fun d hd => htab ▸ hmem d (hrn d hd))
+      simp only [List.foldl_cons, List.filter_cons, hfb]
+      by_cases hf : fires J I r = true
+      · simp only [hf, ↓reduceIte, List.map_cons]
+        obtain ⟨cIdx, hcIdx⟩ := hmem r.concl hrc
+        have hcIdx' : (compileProg P extra).tab.toIdx[r.concl]? = some cIdx := htab ▸ hcIdx
+        have hcEq : (compileRule (compileProg P extra).tab r).concl = cIdx := by simp [compileRule, hcIdx']
+        rw [hcEq]
+        have hstep0 := encodeBits_step (htab ▸ hwf) hL r.concl
+        rw [hcIdx'] at hstep0
+        dsimp only at hstep0
+        have hstep1 : Represents (compileProg P extra).tab (acc.setIfInBounds cIdx true) (L ++ [r.concl]) :=
+          represents_congr hstep0 (fun z => by simp [or_comm])
+        have hrec := ih hrestP (acc.setIfInBounds cIdx true) (L ++ [r.concl]) hstep1
+        simpa [List.append_assoc] using hrec
+      · simp only [hf, Bool.false_eq_true, ↓reduceIte]
+        exact ih hrestP acc L hL
+  exact hloop P.rules (fun _ h => h) (compileProg P extra).factBits P.facts hfact
+
+def gammaBitsLoop (ip : IndexedProg) (jBits : Array Bool) : Nat → Array Bool → Array Bool
+  | 0, cur => cur
+  | fuel + 1, cur =>
+    let next := stepBits ip jBits cur
+    if next == cur then cur
+    else gammaBitsLoop ip jBits fuel next
+
+def gammaBits (P : Program) (ip : IndexedProg) (jBits : Array Bool) : Array Bool :=
+  gammaBitsLoop ip jBits (bound P) (encodeBits ip.tab (stage P [] 0))
+
+theorem stage_sub_progAtoms (P : Program) (J : List String) :
+    ∀ n, Sub (stage P J n) (progAtoms P (stage P [] 0))
+  | 0 => fun x hx => by
+    have h0 : stage P J 0 = stage P [] 0 := rfl
+    rw [h0] at hx
+    simp only [progAtoms, List.mem_append]
+    exact Or.inl (Or.inl hx)
+  | n + 1 => fun x hx => by
+    have hU := T_universe P J (stage P J n) x hx
+    simp only [atomsOf, List.mem_append, List.mem_map] at hU
+    simp only [progAtoms, List.mem_append, List.mem_flatMap]
+    rcases hU with hf | ⟨r, hr, hc⟩
+    · exact Or.inl (Or.inr hf)
+    · exact Or.inr ⟨r, hr, hc ▸ List.mem_cons_self⟩
+
+theorem gammaBits_represents (P : Program) {jBits : Array Bool} {J : List String}
+    (hJ : Represents (compileProg P (stage P [] 0)).tab jBits J) :
+    Represents (compileProg P (stage P [] 0)).tab (gammaBits P (compileProg P (stage P [] 0)) jBits) (gamma P J) := by
+  obtain ⟨hwf, hmem⟩ := internAll_wf (progAtoms P (stage P [] 0))
+  have htab : (compileProg P (stage P [] 0)).tab = internAll (progAtoms P (stage P [] 0)) := rfl
+  have hloop : ∀ (fuel n : Nat) (cur : Array Bool),
+      n + fuel = bound P →
+      Represents (compileProg P (stage P [] 0)).tab cur (stage P J n) →
+      Represents (compileProg P (stage P [] 0)).tab
+        (gammaBitsLoop (compileProg P (stage P [] 0)) jBits fuel cur) (gamma P J) := by
+    intro fuel
+    induction fuel with
+    | zero =>
+      intro n cur hsum hcur
+      have hn : n = bound P := by omega
+      subst hn
+      exact hcur
+    | succ fuel ih =>
+      intro n cur hsum hcur
+      unfold gammaBitsLoop
+      dsimp only
+      have hnext : Represents (compileProg P (stage P [] 0)).tab
+          (stepBits (compileProg P (stage P [] 0)) jBits cur) (stage P J (n + 1)) :=
+        stepBits_represents P (stage P [] 0) hJ hcur
+      by_cases heq : (stepBits (compileProg P (stage P [] 0)) jBits cur == cur) = true
+      · rw [ite_eq_left_iff.2 (fun h => absurd heq h)]
+        have heq' : stepBits (compileProg P (stage P [] 0)) jBits cur = cur := beq_iff_eq.1 heq
+        have hsame : Same (stage P J (n + 1)) (stage P J n) :=
+          bits_eq_implies_same (htab ▸ hwf) (fun x hx => htab ▸ hmem x hx) hnext hcur
+            (stage_sub_progAtoms P J (n + 1)) (stage_sub_progAtoms P J n) heq'
+        exact represents_congr hcur (stage_const_of_same P J hsame)
+      · rw [ite_eq_right_iff.2 (fun h => absurd h heq)]
+        exact ih (n + 1) _ (by omega) hnext
+  have hinit : Represents (compileProg P (stage P [] 0)).tab
+      (encodeBits (compileProg P (stage P [] 0)).tab (stage P [] 0)) (stage P J 0) :=
+    encodeBits_represents (htab ▸ hwf) (stage P [] 0)
+  exact hloop (bound P) 0 _ (by omega) hinit
+
+def materializeT (P : Program) (ip : IndexedProg) (jBits iBits : Array Bool) : List String :=
+  P.facts ++ ((P.rules.zip ip.rules.toList).filter fun (_, ir) => firesBits jBits iBits ir).map (·.1.concl)
+
+theorem zip_map_filter_concl {α β : Type} (xs : List α) (f : α → β) (p : β → Bool) (q : α → Bool)
+    (h : ∀ x ∈ xs, p (f x) = q x) :
+    ((xs.zip (xs.map f)).filter fun (_, b) => p b) = (xs.filter q).map fun x => (x, f x) := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+    have hx := h x List.mem_cons_self
+    have hrest : ∀ y ∈ rest, p (f y) = q y := fun y hy => h y (List.mem_cons_of_mem _ hy)
+    simp only [List.map_cons, List.zip_cons_cons, List.filter_cons, hx, ih hrest]
+    cases q x <;> rfl
+
+theorem materializeT_eq (P : Program) (extra : List String)
+    {jBits iBits : Array Bool} {J I : List String}
+    (hJ : Represents (compileProg P extra).tab jBits J)
+    (hI : Represents (compileProg P extra).tab iBits I) :
+    materializeT P (compileProg P extra) jBits iBits = T P J I := by
+  obtain ⟨hwf, hmem⟩ := internAll_wf (progAtoms P extra)
+  have htab : (compileProg P extra).tab = internAll (progAtoms P extra) := rfl
+  unfold materializeT T
+  congr 1
+  have hrEq : (compileProg P extra).rules.toList = P.rules.map (compileRule (compileProg P extra).tab) := by
+    simp [compileProg]
+  rw [hrEq, zip_map_filter_concl P.rules (compileRule (compileProg P extra).tab) (firesBits jBits iBits) (fires J I)]
+  · simp [List.map_map]
+  · intro r hr
+    obtain ⟨_, hrp, hrn⟩ := rule_atoms_in_progAtoms P extra hr
+    exact firesBits_eq (htab ▸ hwf) hJ hI
+      (fun p hp => htab ▸ hmem p (hrp p hp))
+      (fun d hd => htab ▸ hmem d (hrn d hd))
+
+/-- Fast unboxed execution of `Γ`: compiles `P` once to dense indices, iterates over `Array Bool`
+with immediate fixpoint stop, and materializes the canonical `List String` in one linear pass. -/
+def gammaExec (P : Program) (J : List String) : List String :=
+  let ip := compileProg P (stage P [] 0)
+  let jBits := encodeBits ip.tab J
+  let gBits := gammaBits P ip jBits
+  materializeT P ip jBits gBits
+
+theorem gammaExec_eq (P : Program) (J : List String) :
+    gammaExec P J = gamma P J := by
+  obtain ⟨hwf, _⟩ := internAll_wf (progAtoms P (stage P [] 0))
+  have htab : (compileProg P (stage P [] 0)).tab = internAll (progAtoms P (stage P [] 0)) := rfl
+  have hJ : Represents (compileProg P (stage P [] 0)).tab
+      (encodeBits (compileProg P (stage P [] 0)).tab J) J :=
+    encodeBits_represents (htab ▸ hwf) J
+  have hG := gammaBits_represents P hJ
+  unfold gammaExec
+  rw [materializeT_eq P (stage P [] 0) hJ hG, ← gamma_eq_T_self P J]
+
+def roundsBitsLoop (P : Program) (ip : IndexedProg) : Nat → Array Bool → Array Bool × Array Bool
+  | 0, cur =>
+    let g1 := gammaBits P ip cur
+    (cur, g1)
+  | fuel + 1, cur =>
+    let g1 := gammaBits P ip cur
+    if g1 == cur then (cur, g1)
+    else
+      let next := gammaBits P ip g1
+      if next == cur then (cur, g1)
+      else roundsBitsLoop P ip fuel next
+
+/-- Fast unboxed execution of `wf`: interns atoms once in `O(|P| log U)` (`U = |atomsOf P|`),
+evaluates alternating `gammaBits` passes over `Array Bool` with early fixpoint stop in
+`O(rounds · depth · |P|)` (`O(U² · |P|)` worst-case on deep unstratified chains), and
+materializes `(supported, possible)` in a single pass. -/
+def wfExec (P : Program) : List String × List String :=
+  let ip := compileProg P (stage P [] 0)
+  let (tBits, pBits) := roundsBitsLoop P ip (bound P) (encodeBits ip.tab (rounds P 0))
+  (materializeT P ip pBits tBits, materializeT P ip tBits pBits)
+
+theorem rounds_sub_progAtoms (P : Program) :
+    ∀ k, Sub (rounds P k) (progAtoms P (stage P [] 0))
+  | 0 => fun _ hx => by simp [rounds] at hx
+  | _ + 1 => stage_sub_progAtoms P _ (bound P)
+
+theorem wfExec_eq (P : Program) :
+    wfExec P = wf P := by
+  obtain ⟨hwf, hmem⟩ := internAll_wf (progAtoms P (stage P [] 0))
+  have htab : (compileProg P (stage P [] 0)).tab = internAll (progAtoms P (stage P [] 0)) := rfl
+  have hloop : ∀ (fuel k : Nat) (cur : Array Bool),
+      k + fuel = bound P →
+      Represents (compileProg P (stage P [] 0)).tab cur (rounds P k) →
+      Represents (compileProg P (stage P [] 0)).tab
+        (roundsBitsLoop P (compileProg P (stage P [] 0)) fuel cur).1 (wf P).1 ∧
+      Represents (compileProg P (stage P [] 0)).tab
+        (roundsBitsLoop P (compileProg P (stage P [] 0)) fuel cur).2 (wf P).2 := by
+    intro fuel
+    induction fuel with
+    | zero =>
+      intro k cur hsum hcur
+      have hk : k = bound P := by omega
+      subst hk
+      unfold roundsBitsLoop
+      exact ⟨hcur, gammaBits_represents P hcur⟩
+    | succ fuel ih =>
+      intro k cur hsum hcur
+      unfold roundsBitsLoop
+      dsimp only
+      have hg1 : Represents (compileProg P (stage P [] 0)).tab
+          (gammaBits P (compileProg P (stage P [] 0)) cur) (gamma P (rounds P k)) :=
+        gammaBits_represents P hcur
+      by_cases hg : (gammaBits P (compileProg P (stage P [] 0)) cur == cur) = true
+      · rw [ite_eq_left_iff.2 (fun h => absurd hg h)]
+        dsimp only
+        have hgEq : gammaBits P (compileProg P (stage P [] 0)) cur = cur := beq_iff_eq.1 hg
+        have hs1 : Same (gamma P (rounds P k)) (rounds P k) :=
+          bits_eq_implies_same (htab ▸ hwf) (fun x hx => htab ▸ hmem x hx) hg1 hcur
+            (stage_sub_progAtoms P _ (bound P)) (rounds_sub_progAtoms P k) hgEq
+        have hsRound : Same (rounds P (k + 1)) (rounds P k) := by
+          simp only [rounds, gamma_congr P hs1]
+          exact hs1
+        have hwf1 : Same (rounds P k) (wf P).1 := rounds_const_of_same P hsRound
+        have hwf2 : Same (gamma P (rounds P k)) (wf P).2 := by
+          show Same (gamma P (rounds P k)) (gamma P (wf P).1)
+          rw [gamma_congr P hwf1]
+          exact Same.refl _
+        exact ⟨represents_congr hcur hwf1, represents_congr hg1 hwf2⟩
+      · rw [ite_eq_right_iff.2 (fun h => absurd h hg)]
+        have hnext : Represents (compileProg P (stage P [] 0)).tab
+            (gammaBits P (compileProg P (stage P [] 0)) (gammaBits P (compileProg P (stage P [] 0)) cur))
+            (rounds P (k + 1)) := gammaBits_represents P hg1
+        by_cases hn : (gammaBits P (compileProg P (stage P [] 0))
+            (gammaBits P (compileProg P (stage P [] 0)) cur) == cur) = true
+        · rw [ite_eq_left_iff.2 (fun h => absurd hn h)]
+          dsimp only
+          have hnEq := beq_iff_eq.1 hn
+          have hsRound : Same (rounds P (k + 1)) (rounds P k) :=
+            bits_eq_implies_same (htab ▸ hwf) (fun x hx => htab ▸ hmem x hx) hnext hcur
+              (rounds_sub_progAtoms P (k + 1)) (rounds_sub_progAtoms P k) hnEq
+          have hwf1 : Same (rounds P k) (wf P).1 := rounds_const_of_same P hsRound
+          have hwf2 : Same (gamma P (rounds P k)) (wf P).2 := by
+            show Same (gamma P (rounds P k)) (gamma P (wf P).1)
+            rw [gamma_congr P hwf1]
+            exact Same.refl _
+          exact ⟨represents_congr hcur hwf1, represents_congr hg1 hwf2⟩
+        · rw [ite_eq_right_iff.2 (fun h => absurd h hn)]
+          exact ih (k + 1) _ (by omega) hnext
+  have h0 : Represents (compileProg P (stage P [] 0)).tab
+      (encodeBits (compileProg P (stage P [] 0)).tab (rounds P 0)) (rounds P 0) :=
+    encodeBits_represents (htab ▸ hwf) (rounds P 0)
+  obtain ⟨ht, hp⟩ := hloop (bound P) 0 _ (by omega) h0
+  unfold wfExec
+  dsimp only
+  exact Prod.ext
+    ((materializeT_eq P (stage P [] 0) hp ht).trans (wf_fst_eq_T P).symm)
+    ((materializeT_eq P (stage P [] 0) ht hp).trans (wf_snd_eq_T P).symm)
+
+theorem wfExec_same (P : Program) :
+    Same (wfExec P).1 (wf P).1 ∧ Same (wfExec P).2 (wf P).2 := by
+  rw [wfExec_eq P]
+  exact ⟨Same.refl _, Same.refl _⟩
+
+theorem wfExec_statusIn (P : Program) (x : String) :
+    statusIn (wfExec P) x = statusIn (wf P) x := by
+  rw [wfExec_eq P]
+
+@[csimp]
+theorem gamma_eq_gammaExec : @gamma = @gammaExec := by
+  funext P J
+  exact (gammaExec_eq P J).symm
+
+@[csimp]
+theorem wf_eq_wfExec : @wf = @wfExec := by
+  funext P
+  exact (wfExec_eq P).symm
 
 /-! ## 5. The base: what was observed, assumed, explained, defeated, proposed -/
 
@@ -744,6 +1346,35 @@ def iter (f : List String → List String) : Nat → List String → List String
   | 0, x => x
   | n + 1, x => iter f n (f x)
 
+/-- Iterate with immediate early exit once `f x == x`. -/
+def iterFix (f : List String → List String) : Nat → List String → List String
+  | 0, x => x
+  | n + 1, x =>
+    let x' := f x
+    if x' == x then x else iterFix f n x'
+
+theorem iter_of_fix (f : List String → List String) {x : List String} (hx : f x = x) :
+    ∀ n, iter f n x = x
+  | 0 => rfl
+  | n + 1 => by simp only [iter, hx]; exact iter_of_fix f hx n
+
+theorem iterFix_eq_iter (f : List String → List String) :
+    ∀ (n : Nat) (x : List String), iterFix f n x = iter f n x
+  | 0, _ => rfl
+  | n + 1, x => by
+    unfold iterFix iter
+    by_cases h : (f x == x) = true
+    · simp only [h, ↓reduceIte]
+      have hx : f x = x := beq_iff_eq.1 h
+      rw [hx, iter_of_fix f hx n]
+    · simp only [h, Bool.false_eq_true, ↓reduceIte]
+      exact iterFix_eq_iter f n (f x)
+
+@[csimp]
+theorem iter_eq_iterFix : @iter = @iterFix := by
+  funext f n x
+  exact (iterFix_eq_iter f n x).symm
+
 /-- **The cone of `a`**: the atoms that depend on it (through a premise or a defeater), by bounded
 iteration; `upClosedB` checks it before it is used. -/
 def cone (P : Program) (a : String) : List String :=
@@ -798,10 +1429,10 @@ def localUpdate (kept : List String × List String) (P : Program) (a : String) :
   let C := cone P a
   let D := closure P C
   if coneOk P a C D then
-    let sub := wf (P.restrict D)
+    let sub := wfExec (P.restrict D)
     (kept.1.filter (fun x => !C.contains x) ++ sub.1.filter C.contains,
      kept.2.filter (fun x => !C.contains x) ++ sub.2.filter C.contains)
-  else wf P
+  else wfExec P
 
 /-- How many atoms a step judged anew: the cone's closure, or all of them. -/
 def localWork (P : Program) (a : String) : Nat :=
@@ -827,8 +1458,8 @@ def State.update (s : State) (e : Event) (b' : Base) : List String × List Strin
   | .observe o => localUpdate s.kept b'.program o.name
   | .assume a => localUpdate s.kept b'.program a
   | .withdraw a => localUpdate s.kept b'.program a
-  | .explain _ => judge b'
-  | .defeat _ => judge b'
+  | .explain _ => wfExec b'.program
+  | .defeat _ => wfExec b'.program
 
 /-- **A step**: the base by the event, and the judgment updated (not recomputed, where it need not be). -/
 @[expose] def State.step (s : State) (e : Event) : Except String State :=
@@ -858,7 +1489,7 @@ theorem localUpdate_consistent {s : State} (hs : s.Consistent) {b' : Base} {a : 
     (hr : b'.program.rules = s.base.program.rules)
     (hf : ∀ x, x ≠ a → (x ∈ s.base.program.facts ↔ x ∈ b'.program.facts)) :
     State.Consistent { base := b', kept := localUpdate s.kept b'.program a } := by
-  simp only [State.Consistent, localUpdate]
+  simp only [State.Consistent, localUpdate, wfExec_eq]
   split
   · rename_i hok
     simp only [coneOk, Bool.and_eq_true] at hok
@@ -919,8 +1550,8 @@ theorem step_consistent {s s' : State} {e : Event} (hs : s.Consistent) (h : s.st
     | withdraw a =>
       obtain ⟨hr, hf⟩ := evidence_step (e := .withdraw a) rfl hb
       exact localUpdate_consistent hs hr hf
-    | explain _ => exact ⟨Same.refl _, Same.refl _⟩
-    | defeat _ => exact ⟨Same.refl _, Same.refl _⟩
+    | explain _ => simp only [State.Consistent, State.update, wfExec_eq, judge]; exact ⟨Same.refl _, Same.refl _⟩
+    | defeat _ => simp only [State.Consistent, State.update, wfExec_eq, judge]; exact ⟨Same.refl _, Same.refl _⟩
 
 /-- **Incremental equals from scratch.** After any step from a state whose kept judgment is its
 base's, the kept judgment is the new base's well-founded model: an action kept it, an observation or
