@@ -73,7 +73,7 @@ theorem litTrue_neg (σ : Nat → Bool) {l : Int} (h : l ≠ 0) : litTrue σ (-l
 inductive Step where
   | add (id : Nat) (clause : Clause) (hints : List Int)
   | del (ids : List Nat)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- A certificate: a refutation, or a model (a list of true literals) refuting unsatisfiability. -/
 inductive Cert where
@@ -1408,7 +1408,7 @@ theorem planted_refused : check 1 contradiction planted = .refused .noConflict [
 
 /-- **The registered format**: LRAT 1 over DIMACS, CaDiCaL's text output, the checker above run as
 compiled code on bytes (its theorems are the kernel's). -/
-def format : Format where
+@[expose] def format : Format where
   name := "lrat"
   version := "1"
   Obj := Cnf
