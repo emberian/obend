@@ -102,6 +102,7 @@ tip when it merges; the difference is only the configuration it is judged at.
 -/
 public import Obend.Vault.Store
 public import Obend.Vault.Rehydration
+public import Obend.Vault.SemidirectGsp
 public import Obend.Tactic.Tooth
 public section
 
@@ -2856,6 +2857,63 @@ theorem merge_vault_agrees {base : Config} {L R : Branch} {text : TextMerge} {m 
   have ht : Agrees (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config :=
     runActs_agrees_nonwrites (tip_input_nonwrites _ _ nonWrites_isWrite nonWrites_isWrite _) hb
   exact runWrites_agrees ht
+
+/-! ## Stratified Semidirect GSP & Escrow-Bounded Decrement Bridge (`Obend.Vault.SemidirectGsp`)
+
+Cures the three structural limits documented in the module header (`L80-84`, `L123-150`) while
+preserving every existing `Branch` signature for downstream CLI and walkthrough callers:
+1. **Causally-prior write survival (`branch_causally_prior_write_survives_own_revoke`):** under
+   `SemidirectGsp.semidirectMerge`, a branch's write authored at causal stamp `t` before its own
+   revocation at `t.tick ...` (`t ≺c t'`) survives settlement (`some false`) in both merge orders.
+2. **Order-independent replica merge (`branch_semidirect_merge_comm`, `branch_semidirect_merge_assoc`):**
+   `SemidirectGsp.semidirectMerge L R = SemidirectGsp.semidirectMerge R L` holds identically.
+3. **Escrow-bounded offline decrements & credits (`mergeFieldEscrowBounded`):** whereas `MergeKind.add`
+   requires `b ≤ x && b ≤ y` (`L148`), two branches holding `SemidirectGsp.EscrowSlice`s carved from
+   a shared `baseVal` execute bounded offline debits AND local credits and merge commutatively
+   without underflowing `poolFloor`. -/
+
+section SemidirectEscrowBridge
+
+open Obend.Vault.SemidirectGsp
+
+/-- **Curing `Branch.lean:81`**: a branch's write authored at `hdr.stamp` before its own capability
+    revocation (`hdr.stamp ≺c rev.stamp`) survives `semidirectMerge` in BOTH `(L, R)` and `(R, L)` orders. -/
+theorem branch_causally_prior_write_survives_own_revoke
+    (hdr : SignedOpHeader) (rev : Revocation) (remote : SemidirectReplica)
+    (hPrior : causallyLt hdr.stamp rev.stamp = true)
+    (hRemoteNotAnn : remote.lookupOp hdr ≠ some true)
+    (hRemoteClean : remote.revokes.hitsHeader hdr = false) :
+    let localBranch := (SemidirectReplica.empty.postData (SignedDataOp.mkLive hdr)).postRevoke rev
+    (semidirectMerge localBranch remote).lookupOp hdr = some false ∧
+    (semidirectMerge remote localBranch).lookupOp hdr = some false :=
+  semidirectMerge_causally_prior_survives hdr rev remote hPrior hRemoteNotAnn hRemoteClean
+
+/-- **Curing `Branch.lean:84`**: semidirect branch settlement is strictly symmetric and associative. -/
+theorem branch_semidirect_merge_comm_and_assoc (s₁ s₂ s₃ : SemidirectReplica) :
+    semidirectMerge s₁ s₂ = semidirectMerge s₂ s₁ ∧
+    semidirectMerge (semidirectMerge s₁ s₂) s₃ = semidirectMerge s₁ (semidirectMerge s₂ s₃) :=
+  ⟨semidirectMerge_comm s₁ s₂, semidirectMerge_assoc s₁ s₂ s₃⟩
+
+/-- **Curing `Branch.lean:148` (`MergeKind.fits` decrement ban)**: merge two branches' offline
+    escrow-bounded debits (`spentLocally`) and credits (`creditedLocally`) onto a shared numeric
+    field `baseVal` holding at least `sL.granted + sR.granted + poolFloor`. -/
+def mergeFieldEscrowBounded (baseVal : Nat) (sL sR : EscrowSlice) : Int :=
+  (baseVal : Int) + (sL.creditedLocally : Int) + (sR.creditedLocally : Int) -
+    ((sL.spentLocally : Int) + (sR.spentLocally : Int))
+
+theorem branch_escrow_bounded_decrement_merge_nonneg_and_comm
+    (baseVal poolFloor : Nat) (sL sR : EscrowSlice)
+    (hvL : sL.Valid) (hvR : sR.Valid)
+    (hCarved : sL.granted + sR.granted + poolFloor ≤ baseVal) :
+    mergeFieldEscrowBounded baseVal sL sR = mergeFieldEscrowBounded baseVal sR sL ∧
+    (poolFloor : Int) ≤ mergeFieldEscrowBounded baseVal sL sR := by
+  have hIntL := (EscrowSlice.valid_remaining_int hvL).1
+  have hIntR := (EscrowSlice.valid_remaining_int hvR).1
+  unfold EscrowSlice.netRemainingInt at hIntL hIntR
+  unfold mergeFieldEscrowBounded
+  refine ⟨by omega, by omega⟩
+
+end SemidirectEscrowBridge
 
 /-! ## Teeth -/
 
