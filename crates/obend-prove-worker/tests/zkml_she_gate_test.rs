@@ -52,14 +52,14 @@ fn sample_chain_model_and_witnesses() -> (Mxfp4ModelManifest, Mxfp4ChunkWitness,
     };
 
     let x0 = vec![
-        Goldilocks::new(3),
-        Goldilocks::new(5),
-        Goldilocks::new(2),
-        Goldilocks::new(7),
-        Goldilocks::new(4),
-        Goldilocks::new(1),
-        Goldilocks::new(6),
-        Goldilocks::new(2),
+        Goldilocks::from_u64_reduced(3),
+        Goldilocks::from_u64_reduced(5),
+        Goldilocks::from_u64_reduced(2),
+        Goldilocks::from_u64_reduced(7),
+        Goldilocks::from_u64_reduced(4),
+        Goldilocks::from_u64_reduced(1),
+        Goldilocks::from_u64_reduced(6),
+        Goldilocks::from_u64_reduced(2),
     ];
     let w0 = Mxfp4ChunkWitness::build(model.clone(), 0, 1, 2, 1, 1, x0, q0, s0).expect("w0 valid");
     let w1 = Mxfp4ChunkWitness::build(model.clone(), 1, 1, 1, 1, 1, w0.d_tbl().to_vec(), q1, s1)
@@ -203,10 +203,10 @@ fn mxfp4_e2m1_contraction_degrees_codecs_and_lean_parity_vectors() {
     assert_eq!(
         d_small,
         vec![
-            Goldilocks::new(71),
-            Goldilocks::new(13),
-            Goldilocks::ZERO.sub(Goldilocks::new(80)),
-            Goldilocks::new(88),
+            Goldilocks::from_u64_reduced(71),
+            Goldilocks::from_u64_reduced(13),
+            -Goldilocks::from_u64_reduced(80),
+            Goldilocks::from_u64_reduced(88),
         ]
     );
 

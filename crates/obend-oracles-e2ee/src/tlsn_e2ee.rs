@@ -22,12 +22,11 @@
 
 use std::collections::BTreeSet;
 
+use crate::codec::{base64_decode_strict, hex_decode_strict};
 use crate::curves::{verify_signature, FixtureSigner, SignatureAlgorithm, SubjectPublicKey};
-use crate::sha256::{
-    base64_decode_strict, ct_eq, hex_decode_strict, hkdf_sha256_expand, hkdf_sha256_extract,
-    sha256, Sha256,
-};
+use crate::sha256::{hkdf_sha256_expand, hkdf_sha256_extract, sha256, Sha256};
 use crate::tee::{chutes_report_data_binding, TeeVendor, VerifiedTeeEvidence};
+use obend_primitives::ct::ct_eq;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1582,8 +1581,8 @@ mod notary_signature_tests {
 
     #[test]
     fn e2ee_channel_rejects_noncanonical_ff_ek_and_seals_genuine_mlkem_frames() {
+        use crate::codec::hex_encode_lower;
         use crate::mlkem768::ml_kem_768_keygen_internal;
-        use crate::sha256::hex_encode_lower;
         use crate::tee::{
             fixture_build_intel_tdx_quote, fixture_issue_cert_der, verify_intel_tdx,
             BasicConstraints, CertRecord, FixtureCertSpec, FixtureTdxQuoteFields,

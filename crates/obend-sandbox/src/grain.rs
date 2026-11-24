@@ -5,15 +5,10 @@
 //! hostcall slots (`ReadSlot`, `EmitSlot`, `HashDigest`), and cryptographic execution receipts.
 
 use obend_crypto_exec::transcript::cshake256_32;
-use sha2::{Digest, Sha256};
+pub use obend_primitives::sha256::sha256;
 
 /// Standard linear memory page size (4 KiB) for `Grain` bytecode execution.
 pub const GRAIN_PAGE_SIZE: usize = 4096;
-
-/// Compute exact FIPS 180-4 SHA-256 32-byte digest via `sha2::Sha256`.
-pub fn sha256(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(data).into()
-}
 
 /// DreggNet `Grain` R0–R4 Reproducibility & Metering Tier Ladder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

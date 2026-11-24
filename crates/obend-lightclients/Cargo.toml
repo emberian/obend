@@ -6,4 +6,6 @@ description = "S11-hardened Ethereum Electra and CometBFT light-client header ad
 license = "Apache-2.0"
 
 [dependencies]
-# Zero external dependencies: pure-Rust FIPS 180-4 SHA-256 and verified S11 admission rules.
+# Zero external dependencies: SHA-2, Ed25519 and Montgomery arithmetic come from
+# obend-primitives; the S11 admission rules are local.
+obend-primitives = { path = "../obend-primitives", features = ["alloc"] }

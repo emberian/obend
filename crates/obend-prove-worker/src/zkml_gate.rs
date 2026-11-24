@@ -30,6 +30,8 @@ use crate::grinder::{
     default_grind_window, sha256, windowed_find_map_first_cancellable, MAX_DEFAULT_GRIND_THREADS,
 };
 use crate::service::{CancelToken, CancellableBackend, ProveService, ProveServiceConfig};
+pub use obend_primitives::goldilocks::Goldilocks;
+use obend_primitives::goldilocks::GOLDILOCKS_PRIME;
 
 // ---------------------------------------------------------------------------
 // Constants & Domain Tags
@@ -66,7 +68,7 @@ pub const PROVEN_MIN_MILLI_BITS: u64 = 100_000;
 pub const MILLI_BITS_PER_BIT: u64 = 1_000;
 
 /// Canonical Goldilocks prime modulus (`2^64 - 2^32 + 1 = 0xFFFF_FFFF_0000_0001`).
-pub const GOLDILOCKS_MODULUS: u64 = 0xFFFF_FFFF_0000_0001;
+pub const GOLDILOCKS_MODULUS: u64 = GOLDILOCKS_PRIME;
 /// Bit-width of the Goldilocks prime (`ceil(log2(p)) = 64`).
 pub const GOLDILOCKS_MODULUS_BITS: u32 = 64;
 
@@ -885,53 +887,6 @@ impl ZkmlSuiteArtifact {
 // 2. Canonical Goldilocks Field, E2M1 / 2^sh Domain, Merkle & Transcript
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Goldilocks(pub u64);
-
-impl Goldilocks {
-    pub const ZERO: Self = Self(0);
-    pub const ONE: Self = Self(1);
-
-    #[inline]
-    pub const fn new(raw: u64) -> Self {
-        Self(((raw as u128) % (GOLDILOCKS_MODULUS as u128)) as u64)
-    }
-
-    #[inline]
-    pub const fn from_canonical_u64(raw: u64) -> Option<Self> {
-        if raw < GOLDILOCKS_MODULUS {
-            Some(Self(raw))
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub const fn is_canonical(self) -> bool {
-        self.0 < GOLDILOCKS_MODULUS
-    }
-
-    #[inline]
-    pub const fn add(self, rhs: Self) -> Self {
-        let s = (self.0 as u128) + (rhs.0 as u128);
-        Self((s % (GOLDILOCKS_MODULUS as u128)) as u64)
-    }
-
-    #[inline]
-    pub const fn sub(self, rhs: Self) -> Self {
-        let a = (self.0 as u128) % (GOLDILOCKS_MODULUS as u128);
-        let b = (rhs.0 as u128) % (GOLDILOCKS_MODULUS as u128);
-        let d = (a + (GOLDILOCKS_MODULUS as u128) - b) % (GOLDILOCKS_MODULUS as u128);
-        Self(d as u64)
-    }
-
-    #[inline]
-    pub const fn mul(self, rhs: Self) -> Self {
-        let p = (self.0 as u128) * (rhs.0 as u128);
-        Self((p % (GOLDILOCKS_MODULUS as u128)) as u64)
-    }
-}
-
 #[inline]
 pub fn is_valid_e2m1_mantissa(q: i64) -> bool {
     E2M1_MANTISSA_DOMAIN.contains(&q)
@@ -945,22 +900,22 @@ pub const fn is_valid_mxfp4_shift(sh: u32) -> bool {
 #[inline]
 pub const fn int_to_goldilocks(z: i64) -> Goldilocks {
     if z >= 0 {
-        Goldilocks::new(z as u64)
+        Goldilocks::from_u64_reduced(z as u64)
     } else {
-        Goldilocks::ZERO.sub(Goldilocks::new(z.unsigned_abs()))
+        Goldilocks::from_u64_reduced(z.unsigned_abs()).const_neg()
     }
 }
 
 #[inline]
 pub const fn shift_to_goldilocks(sh: u32) -> Goldilocks {
-    Goldilocks::new(1u64 << sh)
+    Goldilocks::from_u64_reduced(1u64 << sh)
 }
 
 #[inline]
 pub fn gl_horner(coeffs: &[Goldilocks], x: Goldilocks) -> Goldilocks {
     let mut acc = Goldilocks::ZERO;
     for &c in coeffs.iter().rev() {
-        acc = c.add(x.mul(acc));
+        acc = c + x * acc;
     }
     acc
 }
@@ -973,18 +928,18 @@ fn decode_gl_be8(bytes: &[u8]) -> Result<Goldilocks, ZkmlGateRefusal> {
     }
     let mut buf = [0u8; 8];
     buf.copy_from_slice(bytes);
-    Goldilocks::from_canonical_u64(u64::from_be_bytes(buf)).ok_or(
+    Goldilocks::from_be_bytes_canonical(buf).map_err(|_| {
         ZkmlGateRefusal::CandidateBindingMismatch {
             reason: "non-canonical Goldilocks scalar >= modulus",
-        },
-    )
+        }
+    })
 }
 
 pub fn encode_goldilocks_vec(xs: &[Goldilocks]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + xs.len() * 8);
     encode_leb128(xs.len() as u64, &mut out);
     for &x in xs {
-        out.extend_from_slice(&(x.0 % GOLDILOCKS_MODULUS).to_be_bytes());
+        out.extend_from_slice(&x.to_be_bytes());
     }
     out
 }
@@ -1126,7 +1081,7 @@ fn zkml_leaf_32(tag: u8, idx: usize, payload: &[u8]) -> [u8; 32] {
 }
 
 pub fn hash_tensor_leaf(idx: usize, x: Goldilocks) -> [u8; 32] {
-    zkml_leaf_32(0x03, idx, &(x.0 % GOLDILOCKS_MODULUS).to_be_bytes())
+    zkml_leaf_32(0x03, idx, &x.to_be_bytes())
 }
 
 pub fn hash_mantissa_leaf(idx: usize, q: i64) -> [u8; 32] {
@@ -1353,8 +1308,7 @@ impl FsTranscript {
         let out = self.squeeze_challenge_256();
         let mut hi16 = [0u8; 16];
         hi16.copy_from_slice(&out[..16]);
-        let limb = u128::from_be_bytes(hi16);
-        Goldilocks((limb % (GOLDILOCKS_MODULUS as u128)) as u64)
+        Goldilocks::from_u128_reduced(u128::from_be_bytes(hi16))
     }
 
     fn squeeze_goldilocks_vec(&mut self, n: usize) -> Vec<Goldilocks> {
@@ -1390,14 +1344,14 @@ impl RoundPoly {
 
     #[inline]
     pub fn deg_le(&self, max_deg: usize) -> bool {
-        self.coeffs.len() <= max_deg + 1 && self.coeffs.iter().all(|c| c.is_canonical())
+        self.coeffs.len() <= max_deg + 1
     }
 
     fn encode_transcript_msg(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(2 + self.coeffs.len() * 9);
         encode_leb128(self.coeffs.len() as u64, &mut out);
         for &c in &self.coeffs {
-            push_framed_field(&mut out, &c.0.to_be_bytes());
+            push_framed_field(&mut out, &c.to_be_bytes());
         }
         out
     }
@@ -1430,12 +1384,12 @@ pub fn fold_first_var(tbl: &[Goldilocks], r0: Goldilocks) -> Vec<Goldilocks> {
     while i + 1 < tbl.len() {
         let lo = tbl[i];
         let hi = tbl[i + 1];
-        out.push(lo.add(r0.mul(hi.sub(lo))));
+        out.push(lo + r0 * (hi - lo));
         i += 2;
     }
     if i < tbl.len() {
         let lo = tbl[i];
-        out.push(lo.add(r0.mul(Goldilocks::ZERO.sub(lo))));
+        out.push(lo + r0 * (Goldilocks::ZERO - lo));
     }
     out
 }
@@ -1452,17 +1406,17 @@ pub fn mle_eval(tbl: &[Goldilocks], rs: &[Goldilocks]) -> Goldilocks {
     let eqs = eq_table(rs);
     tbl.iter()
         .zip(eqs.iter())
-        .fold(Goldilocks::ZERO, |acc, (&v, &w)| acc.add(v.mul(w)))
+        .fold(Goldilocks::ZERO, |acc, (&v, &w)| acc + v * w)
 }
 
 pub fn eq_table(xs: &[Goldilocks]) -> Vec<Goldilocks> {
     let mut cur = vec![Goldilocks::ONE];
     for &x in xs.iter().rev() {
-        let one_minus_x = Goldilocks::ONE.sub(x);
+        let one_minus_x = Goldilocks::ONE - x;
         let mut next = Vec::with_capacity(cur.len() * 2);
         for &w in &cur {
-            next.push(one_minus_x.mul(w));
-            next.push(x.mul(w));
+            next.push(one_minus_x * w);
+            next.push(x * w);
         }
         cur = next;
     }
@@ -1475,11 +1429,7 @@ pub fn eq_poly_vec(xs: &[Goldilocks], ys: &[Goldilocks]) -> Goldilocks {
     }
     let mut acc = Goldilocks::ONE;
     for (&x, &y) in xs.iter().zip(ys.iter()) {
-        let term = Goldilocks::ONE
-            .sub(x)
-            .mul(Goldilocks::ONE.sub(y))
-            .add(x.mul(y));
-        acc = acc.mul(term);
+        acc *= (Goldilocks::ONE - x) * (Goldilocks::ONE - y) + x * y;
     }
     acc
 }
@@ -1495,11 +1445,11 @@ pub fn quad_pair_round_poly(a: &[Goldilocks], b: &[Goldilocks]) -> RoundPoly {
         let a1 = a[2 * g + 1];
         let b0 = b[2 * g];
         let b1 = b[2 * g + 1];
-        let da = a1.sub(a0);
-        let db = b1.sub(b0);
-        c0 = a0.mul(b0).add(c0);
-        c1 = a0.mul(db).add(da.mul(b0)).add(c1);
-        c2 = da.mul(db).add(c2);
+        let da = a1 - a0;
+        let db = b1 - b0;
+        c0 += a0 * b0;
+        c1 += a0 * db + da * b0;
+        c2 += da * db;
     }
     RoundPoly {
         coeffs: vec![c0, c1, c2],
@@ -1520,16 +1470,16 @@ pub fn cubic_triple_round_poly(a: &[Goldilocks], b: &[Goldilocks], c: &[Goldiloc
         let b1 = b[2 * g + 1];
         let c0 = c[2 * g];
         let c1 = c[2 * g + 1];
-        let da = a1.sub(a0);
-        let db = b1.sub(b0);
-        let dc = c1.sub(c0);
-        let u0 = a0.mul(b0);
-        let u1 = a0.mul(db).add(da.mul(b0));
-        let u2 = da.mul(db);
-        d0 = u0.mul(c0).add(d0);
-        d1 = u0.mul(dc).add(u1.mul(c0)).add(d1);
-        d2 = u1.mul(dc).add(u2.mul(c0)).add(d2);
-        d3 = u2.mul(dc).add(d3);
+        let da = a1 - a0;
+        let db = b1 - b0;
+        let dc = c1 - c0;
+        let u0 = a0 * b0;
+        let u1 = a0 * db + da * b0;
+        let u2 = da * db;
+        d0 += u0 * c0;
+        d1 += u0 * dc + u1 * c0;
+        d2 += u1 * dc + u2 * c0;
+        d3 += u2 * dc;
     }
     RoundPoly {
         coeffs: vec![d0, d1, d2, d3],
@@ -1568,7 +1518,7 @@ pub fn mxfp4_contract_table(
                 for b in 0..cap_b {
                     let x_val = x_tbl[i + cap_i * (b + cap_b * k)];
                     let q_val = int_to_goldilocks(q_ints[b + cap_b * (k + cap_k * j)]);
-                    acc = acc.add(s_kj.mul(q_val).mul(x_val));
+                    acc += s_kj * q_val * x_val;
                 }
             }
             out[i + cap_i * j] = acc;
@@ -1591,7 +1541,7 @@ fn verify_scheduled_sumcheck(
         if !poly.deg_le(max_deg) {
             return None;
         }
-        let sum01 = poly.eval(Goldilocks::ZERO).add(poly.eval(Goldilocks::ONE));
+        let sum01 = poly.eval(Goldilocks::ZERO) + poly.eval(Goldilocks::ONE);
         if sum01 != claimed_sum {
             return None;
         }
@@ -1637,14 +1587,14 @@ fn prove_mxfp4_sumcheck(
     let mut s_eq_kj = Vec::with_capacity(cap_k * cap_j);
     for (j, &ej) in eq_j.iter().enumerate() {
         for k in 0..cap_k {
-            s_eq_kj.push(ej.mul(s_tbl[k + cap_k * j]));
+            s_eq_kj.push(ej * s_tbl[k + cap_k * j]);
         }
     }
     let mut b_b = Vec::with_capacity(cap_b * cap_k * cap_j);
     for (kj, &w) in s_eq_kj.iter().enumerate() {
         let base = kj * cap_b;
         for b in 0..cap_b {
-            b_b.push(w.mul(q_tbl[base + b]));
+            b_b.push(w * q_tbl[base + b]);
         }
     }
 
@@ -1687,7 +1637,7 @@ fn prove_mxfp4_sumcheck(
     full_x_pt.extend_from_slice(&r_k);
     let x_star = mle_eval(x_tbl, &full_x_pt);
 
-    let mut a_j: Vec<Goldilocks> = eq_j.iter().map(|&e| x_star.mul(e)).collect();
+    let mut a_j: Vec<Goldilocks> = eq_j.iter().map(|&e| x_star * e).collect();
     let mut b_j = b_k;
     let mut c_j = fold_vars(s_tbl, &r_k);
     let mut r_jp = Vec::with_capacity(log_j);
@@ -1821,9 +1771,6 @@ fn verify_fold_walk(
     for layer_idx in 0..num_vars {
         let rem = num_vars - 1 - layer_idx;
         let st = &steps[layer_idx];
-        if !st.lo.is_canonical() || !st.hi.is_canonical() {
-            return false;
-        }
         let expected_side = if idx.is_multiple_of(2) { st.lo } else { st.hi };
         if cur_val != expected_side {
             return false;
@@ -1836,7 +1783,7 @@ fn verify_fold_walk(
             return false;
         }
         let r = chals[layer_idx];
-        cur_val = st.lo.add(r.mul(st.hi.sub(st.lo)));
+        cur_val = st.lo + r * (st.hi - st.lo);
         idx = pair_idx;
     }
     idx == 0 && cur_val == expected_final
@@ -1864,10 +1811,10 @@ pub struct Mxfp4QueryOpening {
 
 impl Mxfp4QueryOpening {
     pub fn encode(&self) -> Vec<u8> {
-        let dv = self.d_val.0.to_be_bytes();
+        let dv = self.d_val.to_be_bytes();
         let dp = encode_digest32_list(&self.d_path);
         let df = encode_fold_steps(&self.d_fold_steps);
-        let xv = self.x_val.0.to_be_bytes();
+        let xv = self.x_val.to_be_bytes();
         let xp = encode_digest32_list(&self.x_path);
         let xf = encode_fold_steps(&self.x_fold_steps);
         let qm = encode_signed_int(self.q_mantissa);
@@ -1941,11 +1888,11 @@ impl SuccinctMxfp4IopProof {
         let lj = leb128_vec(self.log_j as u64);
         let lk = leb128_vec(self.log_k as u64);
         let lb = leb128_vec(self.log_b as u64);
-        let dc = self.d_claim.0.to_be_bytes();
+        let dc = self.d_claim.to_be_bytes();
         let sr = encode_round_poly_list(&self.sumcheck_rounds);
-        let xc = self.x_claim.0.to_be_bytes();
-        let qc = self.q_claim.0.to_be_bytes();
-        let sc = self.s_claim.0.to_be_bytes();
+        let xc = self.x_claim.to_be_bytes();
+        let qc = self.q_claim.to_be_bytes();
+        let sc = self.s_claim.to_be_bytes();
         let df = encode_digest32_list(&self.d_fold_roots);
         let xf = encode_digest32_list(&self.x_fold_roots);
         let qf = encode_digest32_list(&self.q_fold_roots);
@@ -2014,9 +1961,9 @@ impl SuccinctMxfp4IopProof {
     }
 
     fn encode_post_fold_payload(&self) -> Vec<u8> {
-        let xc = self.x_claim.0.to_be_bytes();
-        let qc = self.q_claim.0.to_be_bytes();
-        let sc = self.s_claim.0.to_be_bytes();
+        let xc = self.x_claim.to_be_bytes();
+        let qc = self.q_claim.to_be_bytes();
+        let sc = self.s_claim.to_be_bytes();
         let df = encode_digest32_list(&self.d_fold_roots);
         let xf = encode_digest32_list(&self.x_fold_roots);
         let qf = encode_digest32_list(&self.q_fold_roots);
@@ -2340,8 +2287,8 @@ impl Mxfp4ChunkWitness {
         let expected_x = 1usize << ibk;
         let expected_q = 1usize << bkj;
         let expected_s = 1usize << (log_k + log_j);
-        if x_tbl.len() != expected_x || !x_tbl.iter().all(|v| v.is_canonical()) {
-            return Err("x_tbl length or canonicality mismatch");
+        if x_tbl.len() != expected_x {
+            return Err("x_tbl length mismatch");
         }
         if q_ints.len() != expected_q || !q_ints.iter().all(|&q| is_valid_e2m1_mantissa(q)) {
             return Err("q_ints length or E2M1 domain membership failure");
@@ -2484,7 +2431,7 @@ fn setup_mxfp4_transcript(
     let mut tr = FsTranscript::new_instance_bound(ZKML_IOP_PROTOCOL_ID, &rel_bytes, &pub_io, s_out);
     let r_i = tr.squeeze_goldilocks_vec(log_i);
     let r_j = tr.squeeze_goldilocks_vec(log_j);
-    tr.absorb_msg(ZKML_D_CLAIM_LABEL, &d_claim.0.to_be_bytes());
+    tr.absorb_msg(ZKML_D_CLAIM_LABEL, &d_claim.to_be_bytes());
     (r_i, r_j, tr)
 }
 
@@ -2809,17 +2756,6 @@ fn verify_mxfp4_chunk_iop_prevalidated(
         });
     }
 
-    if !p.d_claim.is_canonical()
-        || !p.x_claim.is_canonical()
-        || !p.q_claim.is_canonical()
-        || !p.s_claim.is_canonical()
-    {
-        return Err(ZkmlGateRefusal::InvalidChunkIopProof {
-            chunk_idx: idx,
-            reason: "non-canonical Goldilocks evaluation claim",
-        });
-    }
-
     let v_d = p.log_i + p.log_j;
     let v_x = p.log_i + p.log_b + p.log_k;
     let v_q = p.log_b + p.log_k + p.log_j;
@@ -2866,7 +2802,7 @@ fn verify_mxfp4_chunk_iop_prevalidated(
     let r_k = &all_chals[p.log_b..p.log_b + p.log_k];
     let r_jp = &all_chals[p.log_b + p.log_k..];
 
-    let expected_final = eq_poly_vec(&r_j, r_jp).mul(p.x_claim.mul(p.q_claim.mul(p.s_claim)));
+    let expected_final = eq_poly_vec(&r_j, r_jp) * p.x_claim * p.q_claim * p.s_claim;
     if final_val != expected_final {
         return Err(ZkmlGateRefusal::InvalidChunkIopProof {
             chunk_idx: idx,
@@ -2924,12 +2860,6 @@ fn verify_mxfp4_chunk_iop_prevalidated(
     let n_s = 1usize << v_s;
 
     for (q_raw, op) in raw_queries.into_iter().zip(p.query_openings.iter()) {
-        if !op.d_val.is_canonical() || !op.x_val.is_canonical() {
-            return Err(ZkmlGateRefusal::InvalidChunkIopProof {
-                chunk_idx: idx,
-                reason: "non-canonical opened D or X tensor element",
-            });
-        }
         if !is_valid_e2m1_mantissa(op.q_mantissa) {
             return Err(ZkmlGateRefusal::InvalidChunkIopProof {
                 chunk_idx: idx,

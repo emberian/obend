@@ -6,7 +6,8 @@ description = "Hardened multi-vendor TEE & GPU attestation gate (CAP-24..26), re
 license = "Apache-2.0"
 
 [dependencies]
-# Zero external dependencies: pure-Rust FIPS 180-4 SHA-256 / HMAC / HKDF,
-# ASN.1 DER RFC 5280 & TCG DICE parser, SPDM 1.1 parser, strict JSON walker,
-# and checked exact i128 SDD/KKT arithmetic (0 floats).
+# Zero external dependencies: SHA-2 / HMAC / HKDF, Ed25519 and Montgomery arithmetic come
+# from obend-primitives; the ASN.1 DER RFC 5280 & TCG DICE parser, SPDM 1.1 parser, strict JSON
+# walker, and checked exact i128 SDD/KKT arithmetic (0 floats) are local.
 obend-keccak = { path = "../obend-keccak" }
+obend-primitives = { path = "../obend-primitives", features = ["alloc"] }

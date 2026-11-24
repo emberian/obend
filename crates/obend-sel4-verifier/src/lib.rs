@@ -38,139 +38,12 @@ pub use outbox::*;
 
 pub use obend_keccak::{cshake256, keccak_f1600, left_encode};
 use obend_keccak::{cshake256_32 as hash, Cshake256};
+pub use obend_primitives::ct::ct_eq_32 as ct_eq_digest;
+pub use obend_primitives::goldilocks::Goldilocks;
+use obend_primitives::goldilocks::GOLDILOCKS_PRIME;
+pub use obend_primitives::sha256::{sha256, Sha256};
 
 pub type Digest = [u8; 32];
-const K256: [u32; 64] = [
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-];
-
-/// Stack-only FIPS 180-4 SHA-256 streaming state (`no_std`, zero heap allocation).
-#[derive(Clone, Copy)]
-pub struct Sha256 {
-    state: [u32; 8],
-    block: [u8; 64],
-    block_len: usize,
-    total_bytes: u64,
-}
-impl Default for Sha256 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-impl Sha256 {
-    pub const fn new() -> Self {
-        Self {
-            state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-                0x5be0cd19,
-            ],
-            block: [0u8; 64],
-            block_len: 0,
-            total_bytes: 0,
-        }
-    }
-    fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
-        let mut w = [0u32; 64];
-        for (i, slot) in w.iter_mut().enumerate().take(16) {
-            let off = 4 * i;
-            *slot =
-                u32::from_be_bytes([block[off], block[off + 1], block[off + 2], block[off + 3]]);
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[i - 7])
-                .wrapping_add(s1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
-        for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ ((!e) & g);
-            let temp1 = h
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(K256[i])
-                .wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = s0.wrapping_add(maj);
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
-        }
-        state[0] = state[0].wrapping_add(a);
-        state[1] = state[1].wrapping_add(b);
-        state[2] = state[2].wrapping_add(c);
-        state[3] = state[3].wrapping_add(d);
-        state[4] = state[4].wrapping_add(e);
-        state[5] = state[5].wrapping_add(f);
-        state[6] = state[6].wrapping_add(g);
-        state[7] = state[7].wrapping_add(h);
-    }
-    pub fn update(&mut self, mut bytes: &[u8]) {
-        self.total_bytes = self
-            .total_bytes
-            .checked_add(u64::try_from(bytes.len()).expect("slice length"))
-            .expect("sha256 byte length");
-        while !bytes.is_empty() {
-            let take = (64 - self.block_len).min(bytes.len());
-            self.block[self.block_len..self.block_len + take].copy_from_slice(&bytes[..take]);
-            self.block_len += take;
-            bytes = &bytes[take..];
-            if self.block_len == 64 {
-                Self::compress(&mut self.state, &self.block);
-                self.block_len = 0;
-            }
-        }
-    }
-    pub fn finalize(mut self) -> Digest {
-        let bit_len = self.total_bytes.checked_mul(8).expect("sha256 bit length");
-        self.block[self.block_len] = 0x80;
-        self.block_len += 1;
-        if self.block_len > 56 {
-            self.block[self.block_len..64].fill(0);
-            Self::compress(&mut self.state, &self.block);
-            self.block_len = 0;
-        }
-        self.block[self.block_len..56].fill(0);
-        self.block[56..64].copy_from_slice(&bit_len.to_be_bytes());
-        Self::compress(&mut self.state, &self.block);
-        let mut out = [0u8; 32];
-        for (i, word) in self.state.iter().enumerate() {
-            out[4 * i..4 * i + 4].copy_from_slice(&word.to_be_bytes());
-        }
-        out
-    }
-}
-
-pub fn sha256(input: &[u8]) -> Digest {
-    let mut h = Sha256::new();
-    h.update(input);
-    h.finalize()
-}
-
-/// Branchless full-width 256-bit digest equality check.
-pub fn ct_eq_digest(a: &Digest, b: &Digest) -> bool {
-    let mut diff = 0u8;
-    for i in 0..32 {
-        diff |= a[i] ^ b[i];
-    }
-    diff == 0
-}
 fn leb(mut n: u64, out: &mut [u8; 10]) -> usize {
     let mut i = 0;
     loop {
@@ -264,58 +137,10 @@ impl Transcript<RelationBound> {
     }
     pub fn goldilocks(&mut self) -> Goldilocks {
         let b = self.squeeze();
-        Goldilocks::reduce(u128::from_be_bytes(b[..16].try_into().unwrap()))
+        Goldilocks::from_u128_reduced(u128::from_be_bytes(b[..16].try_into().unwrap()))
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Goldilocks(u64);
-impl Goldilocks {
-    pub const P: u64 = 0xffff_ffff_0000_0001;
-    const EPS: u64 = 0xffff_ffff;
-    pub const ZERO: Self = Self(0);
-    pub const ONE: Self = Self(1);
-    pub const fn new(x: u64) -> Self {
-        let (d, borrow) = x.overflowing_sub(Self::P);
-        Self((d & 0u64.wrapping_sub(!borrow as u64)) | (x & 0u64.wrapping_sub(borrow as u64)))
-    }
-    pub fn value(self) -> u64 {
-        self.0
-    }
-    pub fn reduce(x: u128) -> Self {
-        let lo = x as u64;
-        let hi = (x >> 64) as u64;
-        let (t, borrow) = lo.overflowing_sub(hi >> 32);
-        let t = t.wrapping_sub(Self::EPS & 0u64.wrapping_sub(borrow as u64));
-        let (t, carry) = t.overflowing_add((hi & Self::EPS) * Self::EPS);
-        Self::new(t.wrapping_add(Self::EPS & 0u64.wrapping_sub(carry as u64)))
-    }
-    pub fn centered_norm(self) -> u64 {
-        self.0.min(Self::P - self.0)
-    }
-}
-#[allow(clippy::suspicious_arithmetic_impl)]
-impl core::ops::Add for Goldilocks {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self {
-        let (s, carry) = self.0.overflowing_add(rhs.0);
-        Self::new(s.wrapping_add(Self::EPS & 0u64.wrapping_sub(carry as u64)))
-    }
-}
-#[allow(clippy::suspicious_arithmetic_impl)]
-impl core::ops::Sub for Goldilocks {
-    type Output = Self;
-    fn sub(self, rhs: Self) -> Self {
-        let (s, borrow) = self.0.overflowing_sub(rhs.0);
-        Self(s.wrapping_sub(Self::EPS & 0u64.wrapping_sub(borrow as u64)))
-    }
-}
-impl core::ops::Mul for Goldilocks {
-    type Output = Self;
-    fn mul(self, rhs: Self) -> Self {
-        Self::reduce(self.0 as u128 * rhs.0 as u128)
-    }
-}
 fn eval(coeffs: &[Goldilocks], x: Goldilocks) -> Goldilocks {
     coeffs
         .iter()
@@ -411,7 +236,7 @@ pub fn canopy_leaf(row: &[Goldilocks]) -> Digest {
     let mut s = Cshake256::customized(b"obend.canopy.leaf.v1");
     s.absorb_left_encode(row.len() as u64);
     for x in row {
-        s.absorb(&x.0.to_be_bytes());
+        s.absorb(&x.to_be_bytes());
     }
     s.finalize_32()
 }
@@ -494,18 +319,18 @@ pub fn verify_canopy(
         if proof.cap.get(index) != Some(&h) {
             return false;
         }
-        let x = Goldilocks::new(q.index as u64);
+        let x = Goldilocks::from_u64_reduced(q.index as u64);
         let mut a = Goldilocks::ONE;
         let mut actual = Goldilocks::ZERO;
         let mut predicted = Goldilocks::ZERO;
         for (value, coeffs) in q.row.iter().zip(polynomials) {
-            actual = actual + a * *value;
-            predicted = predicted + a * eval(coeffs, x);
-            a = a * alpha;
+            actual += a * *value;
+            predicted += a * eval(coeffs, x);
+            a *= alpha;
         }
-        acc = acc + weight * actual;
-        expected = expected + weight * predicted;
-        weight = weight * rho;
+        acc += weight * actual;
+        expected += weight * predicted;
+        weight *= rho;
     }
     acc == expected && proof.iacc == acc
 }
@@ -522,9 +347,9 @@ pub fn kronecker_ternary(scratch: &mut [Goldilocks], factors: &[[i8; 3]]) -> Opt
             let mut out = Goldilocks::ZERO;
             for j in 0..3 {
                 match factor[j] {
-                    -1 => out = out - scratch[3 * i + j],
+                    -1 => out -= scratch[3 * i + j],
                     0 => (),
-                    1 => out = out + scratch[3 * i + j],
+                    1 => out += scratch[3 * i + j],
                     _ => return None,
                 }
             }
@@ -557,7 +382,10 @@ pub fn verify_pikku(
     folded: &[Goldilocks],
     beta: u64,
 ) -> bool {
-    if w1.is_empty() || w1.len() != w2.len() || w1.len() != folded.len() || beta > Goldilocks::P / 2
+    if w1.is_empty()
+        || w1.len() != w2.len()
+        || w1.len() != folded.len()
+        || beta > GOLDILOCKS_PRIME / 2
     {
         return false;
     }
@@ -1063,39 +891,6 @@ mod tests {
         assert_eq!(p.encoded().slice(), expected.as_slice());
     }
     #[test]
-    fn field_arithmetic_against_integer_reference() {
-        let p = Goldilocks::P;
-        assert_eq!(Goldilocks::new(p - 1) + Goldilocks::new(2), Goldilocks::ONE);
-        let edge = [0, 1, 2, 0xffff_ffff, 0x1_0000_0000, p - 2, p - 1, u64::MAX];
-        for &a in &edge {
-            for &b in &edge {
-                let x = Goldilocks::new(a);
-                let y = Goldilocks::new(b);
-                assert_eq!((x * y).0, ((x.0 as u128 * y.0 as u128) % p as u128) as u64);
-                assert_eq!((x + y).0, ((x.0 as u128 + y.0 as u128) % p as u128) as u64);
-                assert_eq!(
-                    (x - y).0,
-                    ((x.0 as u128 + p as u128 - y.0 as u128) % p as u128) as u64
-                );
-            }
-        }
-        let mut n = 0x1234_5678_9abc_def0u64;
-        for _ in 0..10000 {
-            n ^= n << 13;
-            n ^= n >> 7;
-            n ^= n << 17;
-            let a = Goldilocks::new(n);
-            n = n.rotate_left(29).wrapping_mul(0x9e3779b97f4a7c15);
-            let b = Goldilocks::new(n);
-            let c = Goldilocks::new(n.reverse_bits());
-            assert_eq!((a * b).0, ((a.0 as u128 * b.0 as u128) % p as u128) as u64);
-            assert_eq!((a * b) * c, a * (b * c));
-            assert_eq!(a * (b + c), a * b + a * c);
-            let wide = ((n as u128) << 64) | n.reverse_bits() as u128;
-            assert_eq!(Goldilocks::reduce(wide).0, (wide % p as u128) as u64);
-        }
-    }
-    #[test]
     fn all_eight_public_inputs_pin_challenge_zero() {
         let p = pi();
         let original = p.transcript().squeeze();
@@ -1132,10 +927,13 @@ mod tests {
     #[test]
     fn shared_cap_rs_iacc_and_tampering() {
         const Q: usize = 4;
-        let coeff = [Goldilocks::new(7), Goldilocks::new(3)];
+        let coeff = [
+            Goldilocks::from_u64_reduced(7),
+            Goldilocks::from_u64_reduced(3),
+        ];
         let polys: [&[Goldilocks]; 1] = [&coeff];
         let rows: [[Goldilocks; 1]; 8] =
-            core::array::from_fn(|i| [eval(&coeff, Goldilocks::new(i as u64))]);
+            core::array::from_fn(|i| [eval(&coeff, Goldilocks::from_u64_reduced(i as u64))]);
         let leaves: [Digest; 8] = core::array::from_fn(|i| canopy_leaf(&rows[i]));
         let cap: [Digest; 4] =
             core::array::from_fn(|i| canopy_parent(&leaves[2 * i], &leaves[2 * i + 1]));
@@ -1156,8 +954,8 @@ mod tests {
         let mut iacc = Goldilocks::ZERO;
         let mut w = Goldilocks::ONE;
         for &i in &indexes {
-            iacc = iacc + w * rows[i][0];
-            w = w * rho;
+            iacc += w * rows[i][0];
+            w *= rho;
         }
         let mut proof = CanopyBatchOpening {
             depth: 3,
@@ -1189,7 +987,7 @@ mod tests {
         ));
         proof.cap = &cap;
         let mut bad_row = rows[indexes[0]];
-        bad_row[0] = bad_row[0] + Goldilocks::ONE;
+        bad_row[0] += Goldilocks::ONE;
         let bad_queries: [CanopyQuery; Q] = core::array::from_fn(|i| CanopyQuery {
             index: indexes[i],
             row: if i == 0 { &bad_row } else { &rows[indexes[i]] },
@@ -1203,7 +1001,10 @@ mod tests {
             &proof
         ));
         proof.queries = &queries;
-        let wrong_coeff = [Goldilocks::new(8), Goldilocks::new(3)];
+        let wrong_coeff = [
+            Goldilocks::from_u64_reduced(8),
+            Goldilocks::from_u64_reduced(3),
+        ];
         assert!(!verify_canopy(
             &mut pi().transcript(),
             &root,
@@ -1220,17 +1021,23 @@ mod tests {
     }
     #[test]
     fn ternary_projection_norm_and_fold() {
-        let mut input = core::array::from_fn::<_, 9, _>(|i| Goldilocks::new(i as u64));
+        let mut input = core::array::from_fn::<_, 9, _>(|i| Goldilocks::from_u64_reduced(i as u64));
         assert_eq!(
             kronecker_ternary(&mut input, &[[1, 0, -1], [1, -1, 1]]),
-            Some(Goldilocks::ZERO - Goldilocks::new(2))
+            Some(Goldilocks::ZERO - Goldilocks::from_u64_reduced(2))
         );
         assert_eq!(
             kronecker_ternary(&mut [Goldilocks::ONE; 3], &[[2, 0, 0]]),
             None
         );
-        let w1 = [Goldilocks::new(3), Goldilocks::new(4)];
-        let w2 = [Goldilocks::new(2), Goldilocks::new(1)];
+        let w1 = [
+            Goldilocks::from_u64_reduced(3),
+            Goldilocks::from_u64_reduced(4),
+        ];
+        let w2 = [
+            Goldilocks::from_u64_reduced(2),
+            Goldilocks::from_u64_reduced(1),
+        ];
         let c = pikku_challenge(&mut pi().transcript(), &w1, &w2);
         let folded = [w1[0] + c * w2[0], w1[1] + c * w2[1]];
         assert!(verify_pikku(
@@ -1238,17 +1045,17 @@ mod tests {
             &w1,
             &w2,
             &folded,
-            Goldilocks::P / 2
+            GOLDILOCKS_PRIME / 2
         ));
         assert!(!verify_pikku(&mut pi().transcript(), &w1, &w2, &folded, 2));
         let mut bad = folded;
-        bad[1] = bad[1] + Goldilocks::ONE;
+        bad[1] += Goldilocks::ONE;
         assert!(!verify_pikku(
             &mut pi().transcript(),
             &w1,
             &w2,
             &bad,
-            Goldilocks::P / 2
+            GOLDILOCKS_PRIME / 2
         ));
         let mut q = pi();
         q.height += 1;
@@ -1257,7 +1064,7 @@ mod tests {
             &w1,
             &w2,
             &folded,
-            Goldilocks::P / 2
+            GOLDILOCKS_PRIME / 2
         ));
     }
     #[test]
@@ -1350,9 +1157,12 @@ mod tests {
     }
     #[test]
     fn verifier_pd_canopy_pikku_end_to_end_ipc() {
-        let coeff = [Goldilocks::new(11), Goldilocks::new(5)];
+        let coeff = [
+            Goldilocks::from_u64_reduced(11),
+            Goldilocks::from_u64_reduced(5),
+        ];
         let rows: [[Goldilocks; 1]; 8] =
-            core::array::from_fn(|i| [eval(&coeff, Goldilocks::new(i as u64))]);
+            core::array::from_fn(|i| [eval(&coeff, Goldilocks::from_u64_reduced(i as u64))]);
         let leaves: [Digest; 8] = core::array::from_fn(|i| canopy_leaf(&rows[i]));
         let cap: [Digest; 4] =
             core::array::from_fn(|i| canopy_parent(&leaves[2 * i], &leaves[2 * i + 1]));
@@ -1383,11 +1193,19 @@ mod tests {
         let mut iacc = Goldilocks::ZERO;
         let mut weight = Goldilocks::ONE;
         for &idx in &indexes {
-            iacc = iacc + weight * rows[idx][0];
-            weight = weight * rho;
+            iacc += weight * rows[idx][0];
+            weight *= rho;
         }
-        let w1 = [Goldilocks::new(4), Goldilocks::new(2), Goldilocks::new(1)];
-        let w2 = [Goldilocks::new(3), Goldilocks::new(1), Goldilocks::new(2)];
+        let w1 = [
+            Goldilocks::from_u64_reduced(4),
+            Goldilocks::from_u64_reduced(2),
+            Goldilocks::from_u64_reduced(1),
+        ];
+        let w2 = [
+            Goldilocks::from_u64_reduced(3),
+            Goldilocks::from_u64_reduced(1),
+            Goldilocks::from_u64_reduced(2),
+        ];
         let c = pikku_challenge(&mut tr, &w1, &w2);
         let folded: [Goldilocks; 3] = core::array::from_fn(|i| w1[i] + c * w2[i]);
         let factors = [[1i8, -1, 1]];
@@ -1408,7 +1226,7 @@ mod tests {
             circuit: p.circuit_desc_digest,
             polynomials: [coeff],
             kronecker_factors: factors,
-            beta: Goldilocks::P / 2,
+            beta: GOLDILOCKS_PRIME / 2,
         };
         let good_bundle = SovereignTurnBundle {
             public_inputs: p,

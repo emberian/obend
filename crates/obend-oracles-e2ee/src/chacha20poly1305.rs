@@ -9,7 +9,7 @@
 //! - RFC 8439 §2.8 `ChaCha20-Poly1305` AEAD seal & constant-time tag-first open (fail-closed:
 //!   never releases unauthenticated plaintext on MAC mismatch).
 
-use crate::sha256::ct_eq;
+use obend_primitives::ct::ct_eq;
 
 /// Length in bytes of a ChaCha20-Poly1305 key (256 bits).
 pub const CHACHA20_KEY_LEN: usize = 32;

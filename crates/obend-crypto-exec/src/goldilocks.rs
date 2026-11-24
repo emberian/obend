@@ -1,7 +1,7 @@
-//! Canonical 64-bit Goldilocks field ($\mathbb{F}_p, p = 2^{64} - 2^{32} + 1$),
-//! 128-bit quadratic challenge extension `GoldilocksExt2` ($\mathbb{F}_p[u]/(u^2 - 7)$),
-//! `CanonicalLift` non-aliasing guard, in-place radix-2 NTT / iNTT, and linear-time
-//! multilinear hypercube `eq_poly` & sumcheck prover/verifier.
+//! 128-bit quadratic challenge extension `GoldilocksExt2` ($\mathbb{F}_p[u]/(u^2 - 7)$) over the
+//! canonical 64-bit Goldilocks field of `obend-primitives` ($\mathbb{F}_p, p = 2^{64} - 2^{32} + 1$,
+//! with its `CanonicalLift` non-aliasing guard), in-place radix-2 NTT / iNTT, linear-time
+//! multilinear hypercube `eq_poly` & sumcheck prover/verifier, and the width-12 Poseidon2 sponge.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -10,36 +10,10 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::transcript::{FenziTranscript, InstanceBound};
 
-/// The Goldilocks prime $p = 2^{64} - 2^{32} + 1 = \text{0xFFFF\_FFFF\_0000\_0001}$.
-pub const GOLDILOCKS_PRIME: u64 = 0xFFFF_FFFF_0000_0001;
-
-/// Reduction constant $\epsilon = 2^{32} - 1 = 2^{64} - p$.
-pub const GOLDILOCKS_EPSILON: u64 = 0xFFFF_FFFF;
-
-/// Multiplicative generator $g = 7$ of $\mathbb{F}_p^\times$ (also quadratic non-residue for $\mathbb{F}_{p^2}$).
-pub const GOLDILOCKS_GENERATOR: u64 = 7;
-
-/// Primitive $2^{32}$-th root of unity $\omega_{2^{32}} = 7^{2^{32} - 1} \bmod p$.
-pub const GOLDILOCKS_ROOT_2_32: u64 = 1_753_635_133_440_165_772;
-
-/// Maximum 2-adicity of the Goldilocks multiplicative group ($2^{32} \mid p - 1$).
-pub const GOLDILOCKS_TWO_ADICITY: u32 = 32;
-
-/// Error returned when a 64-bit word lies in the non-canonical alias range $[p, 2^{64})$.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CanonicalLiftError {
-    pub raw_value: u64,
-}
-
-impl fmt::Display for CanonicalLiftError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "non-canonical Goldilocks encoding 0x{:016x} >= p (0x{:016x})",
-            self.raw_value, GOLDILOCKS_PRIME
-        )
-    }
-}
+pub use obend_primitives::goldilocks::{
+    CanonicalLift, CanonicalLiftError, GOLDILOCKS_EPSILON, GOLDILOCKS_GENERATOR, GOLDILOCKS_PRIME,
+    GOLDILOCKS_ROOT_2_32, GOLDILOCKS_TWO_ADICITY, Goldilocks,
+};
 
 /// Error for NTT / sumcheck operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,262 +77,6 @@ impl fmt::Display for GoldilocksExecError {
             }
             Self::EmptyEvaluationTable => write!(f, "multilinear table must be non-empty"),
         }
-    }
-}
-
-/// Canonical element of the Goldilocks prime field $\mathbb{F}_p$.
-///
-/// Invariant: `self.0 < GOLDILOCKS_PRIME` at all times.
-#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct Goldilocks(u64);
-
-impl fmt::Debug for Goldilocks {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Goldilocks({})", self.0)
-    }
-}
-
-/// Explicit witness-carrying canonical integer lift $< p$ (`K5` / closing `F4` & `0 vs p` alias).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct CanonicalLift(Goldilocks);
-
-impl CanonicalLift {
-    /// Strictly validate `raw < GOLDILOCKS_PRIME`, rejecting all $2^{32}-1$ aliases in $[p, 2^{64})$.
-    #[inline]
-    pub const fn try_new(raw: u64) -> Result<Self, CanonicalLiftError> {
-        if raw < GOLDILOCKS_PRIME {
-            Ok(Self(Goldilocks(raw)))
-        } else {
-            Err(CanonicalLiftError { raw_value: raw })
-        }
-    }
-
-    #[inline]
-    pub const fn into_field(self) -> Goldilocks {
-        self.0
-    }
-
-    #[inline]
-    pub const fn value(self) -> u64 {
-        self.0.0
-    }
-}
-
-impl Goldilocks {
-    pub const ZERO: Self = Self(0);
-    pub const ONE: Self = Self(1);
-    pub const TWO: Self = Self(2);
-    pub const NON_RESIDUE: Self = Self(7);
-    pub const NEG_ONE: Self = Self(GOLDILOCKS_PRIME - 1);
-
-    /// Strict canonical lift: rejects every integer in $[p, 2^{64})$.
-    #[inline]
-    pub const fn from_canonical(raw: u64) -> Result<Self, CanonicalLiftError> {
-        match CanonicalLift::try_new(raw) {
-            Ok(lift) => Ok(lift.0),
-            Err(err) => Err(err),
-        }
-    }
-
-    /// Branch-clean canonicalization of an arbitrary `u64` modulo $p$ (`x < p ? x : x - p`).
-    /// Named `_reduced` so callers never confuse modular reduction with `CanonicalLift`.
-    #[inline]
-    pub const fn from_u64_reduced(x: u64) -> Self {
-        let (diff, borrow) = x.overflowing_sub(GOLDILOCKS_PRIME);
-        let mask = (borrow as u64).wrapping_neg();
-        Self((x & mask) | (diff & !mask))
-    }
-
-    /// Hardware-exact 128-to-64 branch-clean Goldilocks modular reduction matching
-    /// `Obend.Apps.ZkNtt.goldilocksReduce128Spec`.
-    #[inline]
-    pub const fn reduce128(x: u128) -> Self {
-        let lo = x as u64;
-        let hi = (x >> 64) as u64;
-        let hi_lo = hi & GOLDILOCKS_EPSILON;
-        let hi_hi = hi >> 32;
-        let mid = (hi_lo << 32).wrapping_sub(hi_lo);
-        let lo_c = Self::from_u64_reduced(lo);
-        lo_c.const_add(Self(mid)).const_sub(Self(hi_hi))
-    }
-
-    /// Reduce an arbitrary 128-bit integer modulo $p$ (used for 128-bit challenge sampling).
-    #[inline]
-    pub const fn from_u128_reduced(x: u128) -> Self {
-        Self::reduce128(x)
-    }
-
-    /// Return the guaranteed-canonical representative in $[0, p - 1]$.
-    #[inline]
-    pub const fn to_canonical_u64(self) -> u64 {
-        self.0
-    }
-
-    /// Encode as 8 big-endian bytes (matching `Obend.Crypto.encodeGoldilocksBytes`).
-    #[inline]
-    pub const fn to_be_bytes(self) -> [u8; 8] {
-        self.0.to_be_bytes()
-    }
-
-    /// Encode as 8 little-endian bytes.
-    #[inline]
-    pub const fn to_le_bytes(self) -> [u8; 8] {
-        self.0.to_le_bytes()
-    }
-
-    /// Decode 8 big-endian bytes, strictly rejecting non-canonical values in $[p, 2^{64})$.
-    #[inline]
-    pub const fn from_be_bytes_canonical(bytes: [u8; 8]) -> Result<Self, CanonicalLiftError> {
-        Self::from_canonical(u64::from_be_bytes(bytes))
-    }
-
-    /// Decode 8 little-endian bytes, strictly rejecting non-canonical values in $[p, 2^{64})$.
-    #[inline]
-    pub const fn from_le_bytes_canonical(bytes: [u8; 8]) -> Result<Self, CanonicalLiftError> {
-        Self::from_canonical(u64::from_le_bytes(bytes))
-    }
-
-    /// Branch-clean modular addition matching `glAdd` in `Obend/Apps/ZkNtt.lean`.
-    #[inline]
-    pub const fn const_add(self, rhs: Self) -> Self {
-        let rem_p = GOLDILOCKS_PRIME - rhs.0;
-        let (diff, borrow) = self.0.overflowing_sub(rem_p);
-        let plain_sum = self.0.wrapping_add(rhs.0);
-        let mask = (borrow as u64).wrapping_neg();
-        Self((plain_sum & mask) | (diff & !mask))
-    }
-
-    /// Branch-clean modular subtraction matching `glSub` in `Obend/Apps/ZkNtt.lean`.
-    #[inline]
-    pub const fn const_sub(self, rhs: Self) -> Self {
-        let (diff, borrow) = self.0.overflowing_sub(rhs.0);
-        let adj = (borrow as u64).wrapping_neg() & GOLDILOCKS_PRIME;
-        Self(diff.wrapping_add(adj))
-    }
-
-    /// Branch-clean negation (`0 - self mod p`).
-    #[inline]
-    pub const fn const_neg(self) -> Self {
-        Self::ZERO.const_sub(self)
-    }
-
-    /// Branch-clean modular multiplication via 128-to-64 shift/mask reduction.
-    #[inline]
-    pub const fn const_mul(self, rhs: Self) -> Self {
-        Self::reduce128((self.0 as u128) * (rhs.0 as u128))
-    }
-
-    #[inline]
-    pub const fn square(self) -> Self {
-        self.const_mul(self)
-    }
-
-    /// Constant-stride binary exponentiation for public exponents.
-    #[inline]
-    pub const fn pow(self, mut exp: u64) -> Self {
-        let mut base = self;
-        let mut acc = Self::ONE;
-        while exp > 0 {
-            if (exp & 1) == 1 {
-                acc = acc.const_mul(base);
-            }
-            base = base.square();
-            exp >>= 1;
-        }
-        acc
-    }
-
-    /// Multiplicative inverse $a^{p - 2} \bmod p$ via fixed addition chain (`None` iff `self == 0`).
-    #[inline]
-    pub const fn inv(self) -> Option<Self> {
-        if self.0 == 0 {
-            return None;
-        }
-        // p - 2 = 0xFFFF_FFFE_FFFF_FFFF = (2^32 - 2) * 2^32 + (2^32 - 1)
-        let t2 = self.square().const_mul(self); // a^(2^2 - 1)
-        let t3 = t2.square().const_mul(self); // a^(2^3 - 1)
-        let t6 = exp_pow2(t3, 3).const_mul(t3); // a^(2^6 - 1)
-        let t12 = exp_pow2(t6, 6).const_mul(t6); // a^(2^12 - 1)
-        let t24 = exp_pow2(t12, 12).const_mul(t12); // a^(2^24 - 1)
-        let t30 = exp_pow2(t24, 6).const_mul(t6); // a^(2^30 - 1)
-        let t31 = t30.square().const_mul(self); // a^(2^31 - 1)
-        let t32 = t31.square().const_mul(self); // a^(2^32 - 1)
-        // a^((2^31 - 1) * 2^33 + (2^32 - 1)) = a^(2^64 - 2^33 + 2^32 - 1) = a^(p - 2)
-        let hi = exp_pow2(t31, 33);
-        Some(hi.const_mul(t32))
-    }
-
-    /// Return the canonical $2^k$-th primitive root of unity in $\mathbb{F}_p$ ($0 \le k \le 32$).
-    #[inline]
-    pub const fn primitive_root_of_unity(log_n: u32) -> Result<Self, GoldilocksExecError> {
-        if log_n > GOLDILOCKS_TWO_ADICITY {
-            return Err(GoldilocksExecError::LogLengthExceedsTwoAdicity(log_n));
-        }
-        let root = exp_pow2(Self(GOLDILOCKS_ROOT_2_32), GOLDILOCKS_TWO_ADICITY - log_n);
-        Ok(root)
-    }
-}
-
-#[inline]
-const fn exp_pow2(mut x: Goldilocks, mut k: u32) -> Goldilocks {
-    while k > 0 {
-        x = x.square();
-        k -= 1;
-    }
-    x
-}
-
-impl Add for Goldilocks {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Self) -> Self {
-        self.const_add(rhs)
-    }
-}
-
-impl AddAssign for Goldilocks {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = self.const_add(rhs);
-    }
-}
-
-impl Sub for Goldilocks {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Self) -> Self {
-        self.const_sub(rhs)
-    }
-}
-
-impl SubAssign for Goldilocks {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = self.const_sub(rhs);
-    }
-}
-
-impl Neg for Goldilocks {
-    type Output = Self;
-    #[inline]
-    fn neg(self) -> Self {
-        self.const_neg()
-    }
-}
-
-impl Mul for Goldilocks {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Self) -> Self {
-        self.const_mul(rhs)
-    }
-}
-
-impl MulAssign for Goldilocks {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = self.const_mul(rhs);
     }
 }
 
@@ -697,7 +415,8 @@ pub fn ntt_in_place(values: &mut [Goldilocks]) -> Result<(), GoldilocksExecError
     let mut len = 2usize;
     while len <= n {
         let half = len >> 1;
-        let step_root = Goldilocks::primitive_root_of_unity(stage_log)?;
+        let step_root = Goldilocks::primitive_root_of_unity(stage_log)
+            .ok_or(GoldilocksExecError::LogLengthExceedsTwoAdicity(stage_log))?;
         let mut start = 0usize;
         while start < n {
             let mut w = Goldilocks::ONE;
@@ -736,7 +455,8 @@ pub fn intt_in_place(values: &mut [Goldilocks]) -> Result<(), GoldilocksExecErro
     let mut len = 2usize;
     while len <= n {
         let half = len >> 1;
-        let step_root = Goldilocks::primitive_root_of_unity(stage_log)?;
+        let step_root = Goldilocks::primitive_root_of_unity(stage_log)
+            .ok_or(GoldilocksExecError::LogLengthExceedsTwoAdicity(stage_log))?;
         let step_root_inv = step_root.inv().expect("primitive root is non-zero");
         let mut start = 0usize;
         while start < n {
@@ -1259,7 +979,7 @@ pub fn poseidon2_apply_mi(st: &mut Poseidon2State12) {
     for x in st.iter() {
         s += *x;
     }
-    st[0] = s - Goldilocks(64) * st[0];
+    st[0] = s - Goldilocks::from_u64_reduced(64) * st[0];
     st[1] += s;
     let mut d = Goldilocks::TWO;
     for x in st.iter_mut().skip(2) {
@@ -1311,7 +1031,7 @@ pub fn bytes_to_limbs56(msg: &[u8]) -> Vec<Goldilocks> {
         .0
         .iter()
         .map(|chunk| {
-            Goldilocks(
+            Goldilocks::from_u64_reduced(
                 chunk
                     .iter()
                     .fold(0u64, |acc, byte| (acc << 8) | *byte as u64),
@@ -1325,21 +1045,21 @@ pub fn bytes_to_limbs56(msg: &[u8]) -> Vec<Goldilocks> {
 pub fn poseidon2_pad(limbs: &mut Vec<Goldilocks>) {
     let z = (8 - (limbs.len() + 1) % 8) % 8;
     if z == 0 {
-        limbs.push(Goldilocks((1u64 << 56) + 1));
+        limbs.push(Goldilocks::from_u64_reduced((1u64 << 56) + 1));
     } else {
         limbs.push(Goldilocks::ONE);
         limbs.extend(core::iter::repeat_n(Goldilocks::ZERO, z - 1));
-        limbs.push(Goldilocks(1u64 << 56));
+        limbs.push(Goldilocks::from_u64_reduced(1u64 << 56));
     }
 }
 
 /// `poseidon2InitState`: zero rate, capacity `(8, 4, 32, "POS2_GL1")`.
 pub const POSEIDON2_INIT_STATE: Poseidon2State12 = {
     let mut st = [Goldilocks::ZERO; 12];
-    st[8] = Goldilocks(8);
-    st[9] = Goldilocks(4);
-    st[10] = Goldilocks(32);
-    st[11] = Goldilocks(POSEIDON2_CONST_IV);
+    st[8] = Goldilocks::from_u64_reduced(8);
+    st[9] = Goldilocks::from_u64_reduced(4);
+    st[10] = Goldilocks::from_u64_reduced(32);
+    st[11] = Goldilocks::from_u64_reduced(POSEIDON2_CONST_IV);
     st
 };
 
@@ -1367,54 +1087,6 @@ mod tests {
     use crate::transcript::FenziTranscript;
 
     #[test]
-    fn test_canonical_lift_rejects_entire_alias_band() {
-        assert_eq!(
-            CanonicalLift::try_new(GOLDILOCKS_PRIME - 1)
-                .unwrap()
-                .value(),
-            GOLDILOCKS_PRIME - 1
-        );
-        assert!(CanonicalLift::try_new(GOLDILOCKS_PRIME).is_err());
-        assert!(CanonicalLift::try_new(GOLDILOCKS_PRIME + 1).is_err());
-        assert!(CanonicalLift::try_new(u64::MAX).is_err());
-        assert!(Goldilocks::from_be_bytes_canonical(GOLDILOCKS_PRIME.to_be_bytes()).is_err());
-        assert!(Goldilocks::from_le_bytes_canonical(u64::MAX.to_le_bytes()).is_err());
-    }
-
-    #[test]
-    fn test_goldilocks_arithmetic_and_inverse_identities() {
-        let edge_vals = [
-            0u64,
-            1,
-            2,
-            7,
-            (1u64 << 32) - 1,
-            1u64 << 32,
-            GOLDILOCKS_PRIME - 2,
-            GOLDILOCKS_PRIME - 1,
-        ];
-        let p = GOLDILOCKS_PRIME as u128;
-        for &a_raw in &edge_vals {
-            let a = Goldilocks::from_canonical(a_raw).unwrap();
-            if a_raw != 0 {
-                let inv = a.inv().expect("non-zero element invertible");
-                assert_eq!(a * inv, Goldilocks::ONE);
-            } else {
-                assert!(a.inv().is_none());
-            }
-            for &b_raw in &edge_vals {
-                let b = Goldilocks::from_canonical(b_raw).unwrap();
-                let exp_add = ((a_raw as u128 + b_raw as u128) % p) as u64;
-                let exp_sub = ((a_raw as u128 + p - b_raw as u128) % p) as u64;
-                let exp_mul = ((a_raw as u128 * b_raw as u128) % p) as u64;
-                assert_eq!((a + b).to_canonical_u64(), exp_add);
-                assert_eq!((a - b).to_canonical_u64(), exp_sub);
-                assert_eq!((a * b).to_canonical_u64(), exp_mul);
-            }
-        }
-    }
-
-    #[test]
     fn test_ext2_irreducibility_and_field_laws() {
         // Euler criterion: 7^((p-1)/2) == -1 mod p proves X^2 - 7 is irreducible over F_p
         let euler = Goldilocks::NON_RESIDUE.pow((GOLDILOCKS_PRIME - 1) / 2);
@@ -1440,8 +1112,8 @@ mod tests {
     fn test_radix2_ntt_intt_and_polynomial_convolution() {
         // Verify root of unity order
         let root32 = Goldilocks::primitive_root_of_unity(32).unwrap();
-        assert_eq!(exp_pow2(root32, 31), Goldilocks::NEG_ONE);
-        assert_eq!(exp_pow2(root32, 32), Goldilocks::ONE);
+        assert_eq!(root32.exp_power_of_2(31), Goldilocks::NEG_ONE);
+        assert_eq!(root32.exp_power_of_2(32), Goldilocks::ONE);
 
         // Roundtrip on N = 256
         let mut poly: Vec<Goldilocks> = (0..256u64)
@@ -1603,7 +1275,7 @@ mod tests {
     #[test]
     fn test_poseidon2_framing_and_padding_match_lean() {
         let mut limbs = bytes_to_limbs56(&[0x01, 0x02, 0x03]);
-        assert_eq!(limbs, vec![Goldilocks(283686901645312)]);
+        assert_eq!(limbs, vec![Goldilocks::from_u64_reduced(283686901645312)]);
         poseidon2_pad(&mut limbs);
         let padded: Vec<u64> = limbs.iter().map(|x| x.to_canonical_u64()).collect();
         assert_eq!(

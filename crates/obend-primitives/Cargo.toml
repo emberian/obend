@@ -1,0 +1,13 @@
+[package]
+name = "obend-primitives"
+version = "0.1.0"
+edition = "2021"
+description = "Allocation-free no_std FIPS 180-4 SHA-256 and SHA-384/512 with HMAC and HKDF, RFC 8032 Ed25519 verification, Montgomery big-integer arithmetic, the Goldilocks prime field, and constant-time equality"
+license = "Apache-2.0"
+
+[features]
+default = []
+# `Vec`-returning big-integer encoders for callers that link `alloc`.
+alloc = []
+
+[dependencies]

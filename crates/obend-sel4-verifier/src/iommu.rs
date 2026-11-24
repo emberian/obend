@@ -2727,17 +2727,6 @@ pub enum TlbiReconfigError {
     RadixRebuildFailed(RadixBuildError),
 }
 
-#[inline]
-const fn ct_eq_digest32(a: &Digest, b: &Digest) -> bool {
-    let mut diff = 0u8;
-    let mut idx = 0usize;
-    while idx < 32 {
-        diff |= a[idx] ^ b[idx];
-        idx += 1;
-    }
-    diff == 0
-}
-
 /// Stateful `#![no_std]` SMMUv3 IOTLB + Command Queue epoch engine.
 pub struct SmmuIotlbEngine<const MAX_IOTLB: usize, const MAX_CMDS: usize> {
     epoch: u64,
@@ -2800,7 +2789,7 @@ impl<const MAX_IOTLB: usize, const MAX_CMDS: usize> SmmuIotlbEngine<MAX_IOTLB, M
             return false;
         }
         if let Some(pinned) = &self.active_policy_digest {
-            if !ct_eq_digest32(pinned, &arena.policy_digest) {
+            if !ct_eq_digest(pinned, &arena.policy_digest) {
                 return false;
             }
             if self.active_arena_base != Some(arena.arena_base_paddr) {

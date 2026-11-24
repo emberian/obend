@@ -16,3 +16,4 @@ required-features = ["std"]
 
 [dependencies]
 obend-keccak = { path = "../obend-keccak" }
+obend-primitives = { path = "../obend-primitives" }

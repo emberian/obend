@@ -95,6 +95,7 @@ name = "obend-crypto-exec"
 version = "0.1.0"
 dependencies = [
  "obend-keccak",
+ "obend-primitives",
 ]
 
 [[package]]
@@ -113,6 +114,7 @@ name = "obend-gui"
 version = "0.1.0"
 dependencies = [
  "obend-ffi",
+ "obend-primitives",
  "serde",
  "serde_json",
 ]
@@ -128,12 +130,16 @@ version = "0.1.0"
 [[package]]
 name = "obend-lightclients"
 version = "0.1.0"
+dependencies = [
+ "obend-primitives",
+]
 
 [[package]]
 name = "obend-oracles-e2ee"
 version = "0.1.0"
 dependencies = [
  "obend-keccak",
+ "obend-primitives",
 ]
 
 [[package]]
@@ -145,10 +151,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "obend-primitives"
+version = "0.1.0"
+
+[[package]]
 name = "obend-prove-worker"
 version = "0.1.0"
 dependencies = [
  "obend-keccak",
+ "obend-primitives",
 ]
 
 [[package]]
@@ -157,6 +168,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "obend-crypto-exec",
+ "obend-primitives",
  "serde",
  "serde_json",
  "sha2",
@@ -167,6 +179,7 @@ name = "obend-sel4-verifier"
 version = "0.1.0"
 dependencies = [
  "obend-keccak",
+ "obend-primitives",
 ]
 
 [[package]]
@@ -174,6 +187,7 @@ name = "obend-surfaces"
 version = "0.1.0"
 dependencies = [
  "obend-keccak",
+ "obend-primitives",
 ]
 
 [[package]]

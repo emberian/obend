@@ -18,9 +18,9 @@
 //! - **Constitutional Non-Regression (`vaz_coercive_floor_downgrade_refused`)** & **Sealed Oracle
 //!   Ingress** treating all external sensors/displays strictly as untrusted I/O.
 
-use crate::sha256::ct_eq;
 use crate::tee::{TcbPosture, TeeVendor, VerifiedTeeEvidence};
 use crate::tlsn_e2ee::{VerifiedCallTree, VerifiedE2eeChannel, VerifiedHttpsTranscript};
+use obend_primitives::ct::ct_eq;
 
 // ---------------------------------------------------------------------------
 // `cSHAKE256` & LEB128 Framing

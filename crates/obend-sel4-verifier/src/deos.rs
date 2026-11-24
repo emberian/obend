@@ -657,7 +657,7 @@ impl<const COLS: usize, const DEG: usize, const LAYERS: usize, const W: usize, c
         }
         // Cross-binding: PikkuFold folds exactly the column Canopy opened, under a
         // challenge that depends on the Canopy claim, and projects to the claimed value.
-        tr.absorb(b"deos.canopy.iacc", &p.iacc.0.to_be_bytes());
+        tr.absorb(b"deos.canopy.iacc", &p.iacc.to_be_bytes());
         if !verify_pikku(&mut tr, &p.w1, &p.w2, &p.folded, self.proofs.beta) {
             return Err(PikkuFold);
         }
@@ -735,9 +735,12 @@ mod tests {
     );
 
     fn canopy_fixture() -> CanopyFixture {
-        let coeff = [Goldilocks::new(11), Goldilocks::new(5)];
+        let coeff = [
+            Goldilocks::from_u64_reduced(11),
+            Goldilocks::from_u64_reduced(5),
+        ];
         let rows: [[Goldilocks; 1]; 8] =
-            core::array::from_fn(|i| [eval(&coeff, Goldilocks::new(i as u64))]);
+            core::array::from_fn(|i| [eval(&coeff, Goldilocks::from_u64_reduced(i as u64))]);
         let leaves: [Digest; 8] = core::array::from_fn(|i| canopy_leaf(&rows[i]));
         let cap: [Digest; 4] =
             core::array::from_fn(|i| canopy_parent(&leaves[2 * i], &leaves[2 * i + 1]));
@@ -818,7 +821,7 @@ mod tests {
                 circuit: p.circuit_desc_digest,
                 polynomials: [coeff],
                 kronecker_factors: [[1, -1, 1]],
-                beta: Goldilocks::P / 2,
+                beta: GOLDILOCKS_PRIME / 2,
             },
             spent: window,
         };
@@ -840,9 +843,14 @@ mod tests {
         let iacc = (0..3)
             .rev()
             .fold(Goldilocks::ZERO, |acc, i| acc * rho + rows[idx[i]][0]);
-        tr.absorb(b"deos.canopy.iacc", &iacc.0.to_be_bytes());
-        let w1: [Goldilocks; 3] = core::array::from_fn(|i| rows[idx[i]][0] + Goldilocks::new(skew));
-        let w2 = [Goldilocks::new(3), Goldilocks::new(1), Goldilocks::new(2)];
+        tr.absorb(b"deos.canopy.iacc", &iacc.to_be_bytes());
+        let w1: [Goldilocks; 3] =
+            core::array::from_fn(|i| rows[idx[i]][0] + Goldilocks::from_u64_reduced(skew));
+        let w2 = [
+            Goldilocks::from_u64_reduced(3),
+            Goldilocks::from_u64_reduced(1),
+            Goldilocks::from_u64_reduced(2),
+        ];
         let c = pikku_challenge(&mut tr, &w1, &w2);
         let folded: [Goldilocks; 3] = core::array::from_fn(|i| w1[i] + c * w2[i]);
         let mut scratch = folded;

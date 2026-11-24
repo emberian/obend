@@ -7,18 +7,17 @@
 //! `dregg-oracle` (remediating `CAP-24`, `CAP-25`, `CAP-26`, `V3`, `V4`, opt-in GPU bypass,
 //! missing AEAD AAD, and omitted `FHQPB001` matrix-pin).
 
-pub mod bigint;
 pub mod chacha20poly1305;
+pub mod codec;
 pub mod curves;
-pub mod ed25519;
 pub mod kkt;
 pub mod mlkem768;
 pub mod rsa;
-pub mod sha256;
-pub mod sha512;
 pub mod she_ceremony;
 pub mod tee;
 pub mod tlsn_e2ee;
+
+pub use obend_primitives::{bigint, ed25519, sha256, sha512};
 
 pub use chacha20poly1305::{
     chacha20_block, chacha20_xor, chacha20poly1305_open, chacha20poly1305_open_combined,
@@ -35,6 +34,7 @@ pub use mlkem768::{
     ML_KEM_768_SS_LEN, ML_KEM_N, ML_KEM_Q,
 };
 
+pub use codec::{base64_decode_strict, hex_decode_strict, hex_encode_lower};
 pub use curves::{
     encode_ecdsa_der, parse_ecdsa_der, verify_ecdsa_raw, verify_signature, CryptoError,
     FixtureSigner, HashAlg, SignatureAlgorithm, SubjectPublicKey,
@@ -48,10 +48,8 @@ pub use kkt::{
     VerifiedZeroKktQpCertificate, FHQPB001_MAGIC, FHSDD001_MAGIC, MAX_EXACT_SDD_DIMENSION,
     MAX_QP_BUNDLE_DIMENSION, MAX_QP_SCALE, QP_CERT_EXACT_SCALE,
 };
-pub use sha256::{
-    base64_decode_strict, ct_eq, hex_decode_strict, hex_encode_lower, hkdf_sha256_expand,
-    hkdf_sha256_extract, hmac_sha256, sha256, Sha256,
-};
+pub use obend_primitives::ct::ct_eq;
+pub use sha256::{hkdf_sha256_expand, hkdf_sha256_extract, hmac_sha256, sha256, Sha256};
 pub use sha512::{hmac_sha384, hmac_sha512, sha384, sha512, Sha512};
 pub use she_ceremony::{
     apply_oracle_attested_actuation, apply_she_turn, encode_she_field, encode_she_fields,

@@ -18,8 +18,9 @@
 //!   (catching wrong-sign dual forgery), complete public-problem `(P, q, A, l, u)` binding,
 //!   and TEE attestation binding ([`verify_attested_solver_quote`]).
 
-use crate::sha256::{ct_eq, Sha256};
+use crate::sha256::Sha256;
 use crate::tee::VerifiedTeeEvidence;
+use obend_primitives::ct::ct_eq;
 
 // ---------------------------------------------------------------------------
 // Constants (byte-compatible with `breadstuffs/fhir`)

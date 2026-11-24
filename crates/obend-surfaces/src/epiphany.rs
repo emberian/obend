@@ -1246,15 +1246,7 @@ impl EpiphanyCompositor {
 
 pub use obend_keccak::cshake256_32;
 use obend_keccak::Cshake256;
-
-/// Constant-time 256-bit digest equality check.
-pub fn ct_eq_digest(a: &Digest, b: &Digest) -> bool {
-    let mut diff = 0u8;
-    for i in 0..32 {
-        diff |= a[i] ^ b[i];
-    }
-    diff == 0
-}
+pub use obend_primitives::ct::ct_eq_32 as ct_eq_digest;
 
 fn push_leb128(buf: &mut Vec<u8>, mut n: u64) {
     loop {

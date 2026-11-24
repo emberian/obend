@@ -15,7 +15,7 @@
 //!   constant-time Fujisaki–Okamoto implicit-rejection `ml_kem_768_decaps_internal(dk, ct)`
 //!   (`J(z || c)` fallback with branchless comparison and bitwise conditional select).
 
-use crate::sha256::ct_eq;
+use obend_primitives::ct::ct_eq;
 
 /// Degree of ML-KEM ring polynomials $R_q = \mathbb{Z}_q[X]/(X^{256} + 1)$.
 pub const ML_KEM_N: usize = 256;

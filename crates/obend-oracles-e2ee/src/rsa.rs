@@ -9,7 +9,7 @@
 
 use crate::bigint::{limbs_bits, limbs_from_be, limbs_ge, Limbs, Mont};
 use crate::curves::{CryptoError, HashAlg};
-use crate::sha256::ct_eq;
+use obend_primitives::ct::ct_eq;
 
 const LIMBS: usize = 64;
 pub const RSA_MIN_BITS: usize = 2048;

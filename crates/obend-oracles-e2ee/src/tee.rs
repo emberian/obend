@@ -16,14 +16,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::codec::{base64_decode_strict, hex_decode_strict, hex_encode_lower};
 use crate::curves::{
     der_encode, der_encode_uint, der_uint, verify_ecdsa_raw, verify_signature, FixtureSigner,
     HashAlg, SignatureAlgorithm, SubjectPublicKey,
 };
-use crate::sha256::{
-    base64_decode_strict, ct_eq, hex_decode_strict, hex_encode_lower, sha256, Sha256,
-};
+use crate::sha256::{sha256, Sha256};
 use crate::sha512::sha384;
+use obend_primitives::ct::ct_eq;
 
 // ---------------------------------------------------------------------------
 // Constants, Bitmasks, & ASN.1 OIDs

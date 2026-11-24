@@ -8,3 +8,4 @@ license = "Apache-2.0"
 [dependencies]
 # Zero external dependencies: pure std Rust (#![forbid(unsafe_code)]).
 obend-keccak = { path = "../obend-keccak" }
+obend-primitives = { path = "../obend-primitives" }
