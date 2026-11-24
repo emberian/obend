@@ -1186,5 +1186,38 @@ theorem embedNExprChecked_lit_sub_exact (nh : String → Nat) (pfh : String → 
     rcases hw.1 with _ | ⟨st1, rest1⟩; have hm1 := Obend.Equiv.step_deterministic hs1 st1; subst hm1
     rcases rest1 with _ | ⟨st2, rest2⟩; have hm2 := Obend.Equiv.step_deterministic (.ifFalse _ _) st2; subst hm2
     cases Obend.Equiv.value_steps_eq (.boolean false) rest2
+
+/-- Pointwise relational lifting over lists (`List.Forall₂` without Mathlib). -/
+inductive ListForall2 {α β : Type} (R : α → β → Prop) : List α → List β → Prop where
+  | nil : ListForall2 R [] []
+  | cons {x : α} {y : β} {xs : List α} {ys : List β} :
+      R x y → ListForall2 R xs ys → ListForall2 R (x :: xs) (y :: ys)
+
+/-- Semantic agreement of two residual moves `r₁, r₂` under assignment `a` and store `k`:
+    used by `Obend.Vault.CertifiedPartialView` to transport homomorphically certified residual
+    expressions directly into `pairsOf` and `VaultTurn` balance conservation. -/
+def RMove.EvalEquivOn (k : Known) (a : Assignment) (r₁ r₂ : RMove) : Prop :=
+  r₁.asset = r₂.asset ∧
+  r₁.src.subst a = r₂.src.subst a ∧
+  r₁.dst.subst a = r₂.dst.subst a ∧
+  (r₁.amount.subst a).eval k = (r₂.amount.subst a).eval k ∧
+  (r₁.amount.subst a).holes = (r₂.amount.subst a).holes ∧
+  (r₁.debit.subst a).eval k = (r₂.debit.subst a).eval k ∧
+  (r₁.credit.subst a).eval k = (r₂.credit.subst a).eval k
+
+theorem RMove.pair_congr_eval {k : Known} {a : Assignment} {r₁ r₂ : RMove}
+    (h : RMove.EvalEquivOn k a r₁ r₂) :
+    (r₁.subst a).pair k = (r₂.subst a).pair k := by
+  rcases h with ⟨hAsset, hSrc, hDst, hAmt, hHoles, hDeb, hCred⟩
+  simp only [RMove.pair, NExpr.firstHole, hAsset, hSrc, hDst, hAmt, hHoles, hDeb, hCred]
+
+theorem pairsOf_congr_eval {k : Known} {a : Assignment} :
+    ∀ {rs₁ rs₂ : List RMove},
+      ListForall2 (RMove.EvalEquivOn k a) rs₁ rs₂ →
+      pairsOf k (rs₁.map (·.subst a)) = pairsOf k (rs₂.map (·.subst a))
+  | [], [], .nil => rfl
+  | _ :: _, _ :: _, .cons hhd htl => by
+    simp only [List.map_cons, pairsOf, RMove.pair_congr_eval hhd, pairsOf_congr_eval htl]
+
 end Obend.Vault.Form
 end
