@@ -48,11 +48,13 @@ inductive Tok
 deriving DecidableEq, Repr
 
 /-- The name of a wikilink whose `[[` has been read, and what follows its `]]`; `none` when the
-line ends first. -/
+line ends first, when the brackets are empty (`[[]]`), or when an unclosed `[[` meets another `[[`
+on the same line. -/
 def takeLink : List Char → List Char → Option (List Char × List Char)
   | [], _ => none
   | '\n' :: _, _ => none
-  | ']' :: ']' :: rest, acc => some (acc.reverse, rest)
+  | '[' :: '[' :: _, _ => none
+  | ']' :: ']' :: rest, acc => if acc.isEmpty then none else some (acc.reverse, rest)
   | c :: rest, acc => takeLink rest (c :: acc)
 
 /-- An inline code span whose opening backtick has been read: its characters reversed (as the run
@@ -87,17 +89,105 @@ def lex : Nat → List Char → List Char → List Tok
   | n + 1, '\n' :: rest, acc => flush ('\n' :: acc) ++ lex n rest []
   | n + 1, c :: rest, acc => lex n rest (c :: acc)
 
+/-- Stack-safe tail-recursive accumulator helper for `lex`. -/
+def flushOnto (acc : List Char) (toks : List Tok) : List Tok :=
+  if acc = [] then toks else .text acc.reverse :: toks
+
+theorem flushOnto_reverse (acc : List Char) (toks : List Tok) :
+    (flushOnto acc toks).reverse = toks.reverse ++ flush acc := by
+  unfold flushOnto flush
+  split <;> simp
+
+def lexAcc : Nat → List Char → List Char → List Tok → List Tok
+  | 0, _, acc, toks => (flushOnto acc toks).reverse
+  | _ + 1, [], acc, toks => (flushOnto acc toks).reverse
+  | n + 1, '!' :: '[' :: '[' :: rest, acc, toks => match takeLink rest [] with
+    | some (name, rest') => lexAcc n rest' [] (.embed name :: flushOnto acc toks)
+    | none => lexAcc n ('[' :: '[' :: rest) ('!' :: acc) toks
+  | n + 1, '[' :: '[' :: rest, acc, toks => match takeLink rest [] with
+    | some (name, rest') => lexAcc n rest' [] (.link name :: flushOnto acc toks)
+    | none => lexAcc n ('[' :: rest) ('[' :: acc) toks
+  | n + 1, '`' :: rest, acc, toks => match takeCode rest ['`'] with
+    | some (code, rest') => lexAcc n rest' (code ++ acc) toks
+    | none => lexAcc n rest ('`' :: acc) toks
+  | n + 1, '\n' :: rest, acc, toks => lexAcc n rest [] (flushOnto ('\n' :: acc) toks)
+  | n + 1, c :: rest, acc, toks => lexAcc n rest (c :: acc) toks
+
+theorem lexAcc_eq : ∀ (n : Nat) (cs acc : List Char) (toks : List Tok),
+    lexAcc n cs acc toks = toks.reverse ++ lex n cs acc
+  | 0, _, acc, toks => by simp [lexAcc, lex, flushOnto_reverse]
+  | _ + 1, [], acc, toks => by simp [lexAcc, lex, flushOnto_reverse]
+  | n + 1, c :: rest, acc, toks => by
+    by_cases h1 : c = '!'
+    · subst h1
+      cases rest with
+      | nil => exact lexAcc_eq n [] ('!' :: acc) toks
+      | cons c2 r2 =>
+        by_cases h2 : c2 = '['
+        · subst h2
+          cases r2 with
+          | nil => exact lexAcc_eq n ['['] ('!' :: acc) toks
+          | cons c3 r3 =>
+            by_cases h3 : c3 = '['
+            · subst h3
+              simp only [lexAcc, lex]
+              cases takeLink r3 [] with
+              | none => exact lexAcc_eq n ('[' :: '[' :: r3) ('!' :: acc) toks
+              | some p =>
+                simp only [lexAcc_eq n p.2 [] (.embed p.1 :: flushOnto acc toks),
+                  List.reverse_cons, flushOnto_reverse, List.append_assoc, List.singleton_append]
+            · simp [lexAcc, lex, h3, lexAcc_eq n ('[' :: c3 :: r3) ('!' :: acc) toks]
+        · simp [lexAcc, lex, h2, lexAcc_eq n (c2 :: r2) ('!' :: acc) toks]
+    · by_cases h2 : c = '['
+      · subst h2
+        cases rest with
+        | nil => exact lexAcc_eq n [] ('[' :: acc) toks
+        | cons c2 r2 =>
+          by_cases h22 : c2 = '['
+          · subst h22
+            simp only [lexAcc, lex]
+            cases takeLink r2 [] with
+            | none => exact lexAcc_eq n ('[' :: r2) ('[' :: acc) toks
+            | some p =>
+              simp only [lexAcc_eq n p.2 [] (.link p.1 :: flushOnto acc toks),
+                List.reverse_cons, flushOnto_reverse, List.append_assoc, List.singleton_append]
+          · simp [lexAcc, lex, h22, lexAcc_eq n (c2 :: r2) ('[' :: acc) toks]
+      · by_cases h3 : c = '`'
+        · subst h3
+          simp only [lexAcc, lex]
+          cases takeCode rest ['`'] with
+          | none => exact lexAcc_eq n rest ('`' :: acc) toks
+          | some p => exact lexAcc_eq n p.2 (p.1 ++ acc) toks
+        · by_cases h4 : c = '\n'
+          · subst h4
+            simp only [lexAcc, lex, lexAcc_eq n rest [] (flushOnto ('\n' :: acc) toks),
+              flushOnto_reverse, List.append_assoc]
+          · simp_all [lexAcc, lex, lexAcc_eq n rest (c :: acc) toks]
+
+def lexExec (n : Nat) (cs acc : List Char) : List Tok := lexAcc n cs acc []
+
+@[csimp] theorem lex_eq_exec : @lex = @lexExec := by
+  funext n cs acc
+  simpa [lexExec] using (lexAcc_eq n cs acc []).symm
+
 /-- The tokens of a markdown text. -/
 @[expose] def tokens (md : String) : List Tok := lex (md.length + 1) md.toList []
 
-/-- A wikilink's page and what of it the link cites. An alias, `[[P|shown as]]`, is display text:
-everything from the first `|` is dropped before the name is read (Obsidian's alias syntax; the
-atom's text keeps it). Of what is left, the text before the first `#` names the page; `#^b` after
-it is the block `b`; for an embed `![[P#Heading]]`, `#Heading` cites the heading block, while for
-an ordinary link `[[P#Heading]]` it cites the page's identity; a bare `![[P]]` cites the page's
-whole text. -/
+/-- Strip display alias after `|` or Markdown-table escaped `\|`. -/
+def stripAlias : List Char → List Char
+  | [] => []
+  | '\\' :: '|' :: _ => []
+  | '|' :: _ => []
+  | c :: cs => c :: stripAlias cs
+
+/-- A wikilink's page and what of it the link cites. An alias, `[[P|shown as]]` (or `[[P\|shown as]]`
+inside Markdown tables), is display text: everything from the first `|` or `\|` is dropped before the
+name is read (Obsidian's alias syntax; the atom's text keeps it). Of what is left, the text before
+the first `#` names the page; `#^b` after it is the block `b`; for an embed `![[P#Heading]]`,
+`#Heading` cites the heading block, while for an ordinary link `[[P#Heading]]` it cites the page's
+identity; a bare `![[P]]` cites the page's whole text. -/
 @[expose] def target (embed : Bool) (name : List Char) : List Char × Span :=
-  let name := name.takeWhile (· != '|')
+  let name := stripAlias name
   let page := name.takeWhile (· != '#')
   match name.dropWhile (· != '#') with
   | '#' :: '^' :: b => (page, .block (String.ofList b))
@@ -157,6 +247,100 @@ abbrev Vault := List (String × String)
   fun p => if p = 0 then [] else match V[p - 1]? with
     | some e => [Graph.empty.apply (readPage resolve e.2)]
     | none => []
+
+private theorem idOf_eq_lookup (V : Vault) (name : String) :
+    V.idOf name = ((V.zipIdx.map fun e => (e.1.1, e.2 + 1)).lookup name) := by
+  unfold Vault.idOf
+  generalize 0 = start
+  induction V generalizing start with
+  | nil => rfl
+  | cons hd tl ih =>
+    simp only [List.zipIdx_cons, List.find?_cons, List.map_cons, List.lookup]
+    by_cases h : hd.1 == name
+    · have hs : (name == hd.1) = true := beq_iff_eq.mpr (beq_iff_eq.mp h).symm
+      simp [h, hs]
+    · have hs : (name == hd.1) = false :=
+        beq_eq_false_iff_ne.mpr (fun he => h (beq_iff_eq.mpr he.symm))
+      simp [h, hs, ih (start + 1)]
+
+/-- Pre-indexed $O(P \log P + \text{bytes})$ vault reader: builds `idMap`, `drafts`, and committed
+`pages` once in `Array`s and answers `World` queries in $O(1)$. -/
+def Vault.readExec (H : Hash) (V : Vault) : World :=
+  let idMap := buildStrMap (V.zipIdx.map fun e => (e.1.1, e.2 + 1))
+  let drafts : Array Graph := V.toArray.map fun e =>
+    Graph.empty.apply (readPage (fun _ sp => some ⟨0, sp, 0, [], .following⟩) e.2)
+  let resolve : Resolve := fun name sp =>
+    (lookupStrMap idMap name).bind fun q =>
+      (if h : q - 1 < drafts.size then some (drafts[q - 1]'h) else none).bind fun G =>
+        match sp with
+        | .identity => some ⟨q, .identity, 0, [], .following⟩
+        | _ => (quoteOf G sp).map fun b => ⟨q, sp, 0, H b, .following⟩
+  let pages : Array Graph := V.toArray.map fun e => Graph.empty.apply (readPage resolve e.2)
+  fun p =>
+    if p = 0 then []
+    else if h : p - 1 < pages.size then [pages[p - 1]'h] else []
+
+private theorem array_map_get? {α β : Type} (xs : List α) (f : α → β) (i : Nat) :
+    (if h : i < (xs.toArray.map f).size then some ((xs.toArray.map f)[i]'h) else none) =
+      (xs[i]?).map f := by
+  by_cases hlt : i < xs.length
+  · have hsz : i < (xs.toArray.map f).size := by
+      rw [Array.size_map, List.size_toArray]; exact hlt
+    simp only [hsz, ↓reduceDIte, Array.getElem_map, List.getElem_toArray,
+      List.getElem?_eq_getElem hlt, Option.map_some]
+  · have hnsz : ¬(i < (xs.toArray.map f).size) := by
+      rw [Array.size_map, List.size_toArray]; exact hlt
+    simp only [hnsz, ↓reduceDIte, List.getElem?_eq_none (Nat.le_of_not_lt hlt), Option.map_none]
+
+@[csimp] theorem Vault.read_eq_exec : @Vault.read = @Vault.readExec := by
+  funext H V p
+  unfold Vault.read Vault.readExec
+  dsimp only
+  have hres :
+      ((fun (name : String) (sp : Span) =>
+        (lookupStrMap (buildStrMap (V.zipIdx.map fun e => (e.1.1, e.2 + 1))) name).bind fun q =>
+          (if h : q - 1 < (V.toArray.map fun e =>
+              Graph.empty.apply (readPage (fun _ sp => some ⟨0, sp, 0, [], .following⟩) e.2)).size then
+            some ((V.toArray.map fun e =>
+              Graph.empty.apply (readPage (fun _ sp => some ⟨0, sp, 0, [], .following⟩) e.2))[q - 1]'h)
+          else none).bind fun G =>
+            match sp with
+            | .identity => some ⟨q, .identity, 0, [], .following⟩
+            | _ => (quoteOf G sp).map fun b => ⟨q, sp, 0, H b, .following⟩) : Resolve) =
+      ((fun (name : String) (sp : Span) =>
+        (V.idOf name).bind fun q =>
+          ((V[q - 1]?).map fun e =>
+            Graph.empty.apply (readPage (fun _ sp => some ⟨0, sp, 0, [], .following⟩) e.2)).bind fun G =>
+            match sp with
+            | .identity => some ⟨q, .identity, 0, [], .following⟩
+            | _ => (quoteOf G sp).map fun b => ⟨q, sp, 0, H b, .following⟩) : Resolve) := by
+    funext name sp
+    rw [lookupStrMap_buildStrMap, ← idOf_eq_lookup]
+    congr 1
+    funext q
+    rw [array_map_get?]
+  rw [hres]
+  by_cases hp0 : p = 0
+  · simp only [hp0, ↓reduceIte]
+  · simp only [hp0, ↓reduceIte]
+    let fPage : String × String → Graph := fun e =>
+      Graph.empty.apply (readPage (fun name sp =>
+        (V.idOf name).bind fun q =>
+          ((V[q - 1]?).map fun e =>
+            Graph.empty.apply (readPage (fun _ sp => some ⟨0, sp, 0, [], .following⟩) e.2)).bind fun G =>
+            match sp with
+            | .identity => some ⟨q, .identity, 0, [], .following⟩
+            | _ => (quoteOf G sp).map fun b => ⟨q, sp, 0, H b, .following⟩) e.2)
+    have hpg := array_map_get? V fPage (p - 1)
+    by_cases hsz : p - 1 < (V.toArray.map fPage).size
+    · rw [dite_eq_left hsz] at hpg ⊢
+      cases hV : V[p - 1]? with
+      | none => rw [hV, Option.map_none] at hpg; cases hpg
+      | some e => rw [hV, Option.map_some] at hpg; injection hpg with heq; rw [heq]; rfl
+    · rw [dite_eq_right hsz] at hpg ⊢
+      cases hV : V[p - 1]? with
+      | none => rfl
+      | some e => rw [hV, Option.map_some] at hpg; cases hpg
 
 /-! ## Rendering at a view -/
 

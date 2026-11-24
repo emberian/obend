@@ -33,6 +33,10 @@ directly on borrowed `ByteArray` slices via `cshake256ByteArrayFast`. -/
 @[expose] def cshake256Kernel (customization input : @& ByteArray) : ByteArray :=
   cshake256ByteArrayFast customization input
 
+@[simp] theorem cshake256Kernel_size (customization input : ByteArray) :
+    (cshake256Kernel customization input).size = 32 := by
+  simp [cshake256Kernel]
+
 theorem cshake256Kernel_toList (customization input : ByteArray) :
     (cshake256Kernel customization input).data.toList =
       cshake256Bytes customization.data.toList input.data.toList :=
@@ -51,10 +55,26 @@ theorem cshake256Native_eq (customization input : List UInt8) :
 
 end Native
 
+/-- Pure-Lean `ByteArray` execution wrapper for `namedBytes` (`Fast.namedByteArrayFast`, not C FFI). -/
+def namedBytesFast (name custom input : List UInt8) : List UInt8 :=
+  (Fast.namedByteArrayFast
+    (Native.bytesOfList name) (Native.bytesOfList custom) (Native.bytesOfList input)).data.toList
+
+theorem namedBytesFast_eq (name custom input : List UInt8) :
+    namedBytesFast name custom input = namedBytes name custom input := by
+  unfold namedBytesFast
+  rw [Fast.namedByteArrayFast_eq, Native.bytesOfList_toList,
+    Native.bytesOfList_toList, Native.bytesOfList_toList]
+
 /-- The compiled cSHAKE256 is the zero-copy `ByteArray` kernel seam. -/
 @[csimp] theorem cshake256Bytes_eq_native : cshake256Bytes = Native.cshake256Native := by
   funext customization input
   exact (Native.cshake256Native_eq customization input).symm
+
+/-- Route compiled `namedBytes` calls through the pure-Lean unboxed `UInt64` + `ByteArray` sponge. -/
+@[csimp] theorem namedBytes_eq_fast : namedBytes = namedBytesFast := by
+  funext name custom input
+  exact (namedBytesFast_eq name custom input).symm
 
 #tooth Fast.cshake256ByteArrayFast_eq by mutation Fast.cshake256ByteArrayFast :=
   fun _ m => Fast.squeezeByteArray (Fast.absorbByteArray m 0x1f Fast.zeroS)

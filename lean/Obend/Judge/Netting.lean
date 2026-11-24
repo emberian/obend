@@ -596,6 +596,518 @@ def checkNetting (q : NettingQuery) (c : NettingCert) : Judge.Verdict NettingRef
   | .error e => .refused e []
   | .ok () => checkNetTransfers q c
 
+/-! ### $O(M \log M)$ Sorted-`Array` Net-Position Aggregation (`@[csimp]`) -/
+
+private def natPairLt (p q : Nat × Nat) : Bool :=
+  decide (p.1 < q.1 ∨ (p.1 = q.1 ∧ p.2 < q.2))
+
+private theorem natPairLt_irrefl (p : Nat × Nat) : natPairLt p p = false := by
+  simp [natPairLt]
+
+private theorem natPairLt_trans {a b c : Nat × Nat}
+    (h1 : natPairLt a b = true) (h2 : natPairLt b c = true) : natPairLt a c = true := by
+  simp only [natPairLt, decide_eq_true_eq] at h1 h2 ⊢
+  omega
+
+private theorem natPairLt_total {a b : Nat × Nat}
+    (h1 : natPairLt a b = false) (h2 : natPairLt b a = false) : a = b := by
+  simp only [natPairLt, decide_eq_false_iff_not] at h1 h2
+  ext <;> omega
+
+/-- Evaluate the total signed sum of `(key, delta)` entries matching `q`. -/
+def sumPosList : List ((Nat × Nat) × Int) → (Nat × Nat) → Int
+  | [], _ => 0
+  | (k, v) :: rest, q => (if k = q then v else 0) + sumPosList rest q
+
+private theorem sumPosList_append (xs ys : List ((Nat × Nat) × Int)) (q : Nat × Nat) :
+    sumPosList (xs ++ ys) q = sumPosList xs q + sumPosList ys q := by
+  induction xs with
+  | nil => simp [sumPosList]
+  | cons x xs ih =>
+    simp only [List.cons_append, sumPosList, ih]
+    omega
+
+/-- Merge two strictly-sorted `((Nat × Nat) × Int)` lists, summing values on equal keys. -/
+def mergeSumPos : Nat → List ((Nat × Nat) × Int) → List ((Nat × Nat) × Int) → List ((Nat × Nat) × Int)
+  | 0, xs, ys => xs ++ ys
+  | _ + 1, [], ys => ys
+  | _ + 1, xs, [] => xs
+  | fuel + 1, (k₁, v₁) :: xs, (k₂, v₂) :: ys =>
+    if natPairLt k₁ k₂ then (k₁, v₁) :: mergeSumPos fuel xs ((k₂, v₂) :: ys)
+    else if natPairLt k₂ k₁ then (k₂, v₂) :: mergeSumPos fuel ((k₁, v₁) :: xs) ys
+    else (k₁, v₁ + v₂) :: mergeSumPos fuel xs ys
+
+private theorem mem_mergeSumPos_keys :
+    ∀ (fuel : Nat) (xs ys : List ((Nat × Nat) × Int)) (p : (Nat × Nat) × Int),
+      p ∈ mergeSumPos fuel xs ys →
+      (∃ v, (p.1, v) ∈ xs) ∨ (∃ v, (p.1, v) ∈ ys)
+  | 0, xs, ys, p, h => by
+    rcases List.mem_append.mp h with hx | hy
+    · exact .inl ⟨p.2, by cases p; exact hx⟩
+    · exact .inr ⟨p.2, by cases p; exact hy⟩
+  | _ + 1, [], _, p, h => .inr ⟨p.2, by cases p; exact h⟩
+  | _ + 1, _ :: _, [], p, h => .inl ⟨p.2, by cases p; exact h⟩
+  | fuel + 1, (k₁, v₁) :: xs, (k₂, v₂) :: ys, p, h => by
+    unfold mergeSumPos at h
+    by_cases h12 : natPairLt k₁ k₂ = true
+    · simp only [h12, ↓reduceIte, List.mem_cons] at h
+      rcases h with rfl | hr
+      · exact .inl ⟨v₁, List.mem_cons_self⟩
+      · rcases mem_mergeSumPos_keys fuel xs ((k₂, v₂) :: ys) p hr with ⟨v, hx⟩ | ⟨v, hy⟩
+        · exact .inl ⟨v, List.mem_cons_of_mem _ hx⟩
+        · exact .inr ⟨v, hy⟩
+    · simp only [h12, Bool.false_eq_true, ↓reduceIte] at h
+      by_cases h21 : natPairLt k₂ k₁ = true
+      · simp only [h21, ↓reduceIte, List.mem_cons] at h
+        rcases h with rfl | hr
+        · exact .inr ⟨v₂, List.mem_cons_self⟩
+        · rcases mem_mergeSumPos_keys fuel ((k₁, v₁) :: xs) ys p hr with ⟨v, hx⟩ | ⟨v, hy⟩
+          · exact .inl ⟨v, hx⟩
+          · exact .inr ⟨v, List.mem_cons_of_mem _ hy⟩
+      · simp only [h21, Bool.false_eq_true, ↓reduceIte, List.mem_cons] at h
+        rcases h with rfl | hr
+        · exact .inl ⟨v₁, List.mem_cons_self⟩
+        · rcases mem_mergeSumPos_keys fuel xs ys p hr with ⟨v, hx⟩ | ⟨v, hy⟩
+          · exact .inl ⟨v, List.mem_cons_of_mem _ hx⟩
+          · exact .inr ⟨v, List.mem_cons_of_mem _ hy⟩
+
+private theorem mergeSumPos_sorted :
+    ∀ (fuel : Nat) (xs ys : List ((Nat × Nat) × Int)),
+      xs.length + ys.length ≤ fuel →
+      xs.Pairwise (fun a b => natPairLt a.1 b.1 = true) →
+      ys.Pairwise (fun a b => natPairLt a.1 b.1 = true) →
+      (mergeSumPos fuel xs ys).Pairwise (fun a b => natPairLt a.1 b.1 = true)
+  | 0, xs, ys, hf, _, _ => by
+    have hx : xs = [] := List.eq_nil_of_length_eq_zero (by omega)
+    have hy : ys = [] := List.eq_nil_of_length_eq_zero (by omega)
+    subst hx hy; simp [mergeSumPos]
+  | _ + 1, [], _, _, _, hys => hys
+  | _ + 1, _ :: _, [], _, hxs, _ => hxs
+  | fuel + 1, (k₁, v₁) :: xs, (k₂, v₂) :: ys, hf, hxs, hys => by
+    simp only [List.length_cons] at hf
+    obtain ⟨hx_hd, hx_tl⟩ := List.pairwise_cons.mp hxs
+    obtain ⟨hy_hd, hy_tl⟩ := List.pairwise_cons.mp hys
+    unfold mergeSumPos
+    by_cases h12 : natPairLt k₁ k₂ = true
+    · simp only [h12, ↓reduceIte, List.pairwise_cons]
+      refine ⟨fun p hp => ?_, mergeSumPos_sorted fuel xs ((k₂, v₂) :: ys) (by simp; omega) hx_tl hys⟩
+      rcases mem_mergeSumPos_keys fuel xs ((k₂, v₂) :: ys) p hp with ⟨v, hx⟩ | ⟨v, hy⟩
+      · exact hx_hd (p.1, v) hx
+      · rcases List.mem_cons.mp hy with heq | hy'
+        · injection heq with hk _; rw [hk]; exact h12
+        · exact natPairLt_trans h12 (hy_hd (p.1, v) hy')
+    · simp only [h12, Bool.false_eq_true, ↓reduceIte]
+      by_cases h21 : natPairLt k₂ k₁ = true
+      · simp only [h21, ↓reduceIte, List.pairwise_cons]
+        refine ⟨fun p hp => ?_, mergeSumPos_sorted fuel ((k₁, v₁) :: xs) ys (by simp; omega) hxs hy_tl⟩
+        rcases mem_mergeSumPos_keys fuel ((k₁, v₁) :: xs) ys p hp with ⟨v, hx⟩ | ⟨v, hy⟩
+        · rcases List.mem_cons.mp hx with heq | hx'
+          · injection heq with hk _; rw [hk]; exact h21
+          · exact natPairLt_trans h21 (hx_hd (p.1, v) hx')
+        · exact hy_hd (p.1, v) hy
+      · simp only [h21, Bool.false_eq_true, ↓reduceIte, List.pairwise_cons]
+        have heq : k₁ = k₂ :=
+          natPairLt_total (Bool.eq_false_iff.mpr h12) (Bool.eq_false_iff.mpr h21)
+        subst heq
+        refine ⟨fun p hp => ?_, mergeSumPos_sorted fuel xs ys (by omega) hx_tl hy_tl⟩
+        rcases mem_mergeSumPos_keys fuel xs ys p hp with ⟨v, hx⟩ | ⟨v, hy⟩
+        · exact hx_hd (p.1, v) hx
+        · exact hy_hd (p.1, v) hy
+
+private theorem sumPosList_mergeSumPos :
+    ∀ (fuel : Nat) (xs ys : List ((Nat × Nat) × Int)) (q : Nat × Nat),
+      sumPosList (mergeSumPos fuel xs ys) q = sumPosList xs q + sumPosList ys q
+  | 0, xs, ys, q => sumPosList_append xs ys q
+  | _ + 1, [], ys, q => by simp [mergeSumPos, sumPosList]
+  | _ + 1, _ :: _, [], q => by simp [mergeSumPos, sumPosList]
+  | fuel + 1, (k₁, v₁) :: xs, (k₂, v₂) :: ys, q => by
+    unfold mergeSumPos
+    by_cases h12 : natPairLt k₁ k₂ = true
+    · simp only [h12, ↓reduceIte, sumPosList, sumPosList_mergeSumPos fuel xs ((k₂, v₂) :: ys) q]
+      omega
+    · simp only [h12, Bool.false_eq_true, ↓reduceIte]
+      by_cases h21 : natPairLt k₂ k₁ = true
+      · simp only [h21, ↓reduceIte, sumPosList, sumPosList_mergeSumPos fuel ((k₁, v₁) :: xs) ys q]
+        omega
+      · simp only [h21, Bool.false_eq_true, ↓reduceIte, sumPosList, sumPosList_mergeSumPos fuel xs ys q]
+        have heq : k₁ = k₂ :=
+          natPairLt_total (Bool.eq_false_iff.mpr h12) (Bool.eq_false_iff.mpr h21)
+        subst heq
+        by_cases hkq : k₁ = q <;> simp [hkq] <;> omega
+
+def mergeSumPass : List (List ((Nat × Nat) × Int)) → List (List ((Nat × Nat) × Int))
+  | a :: b :: rest => mergeSumPos (a.length + b.length) a b :: mergeSumPass rest
+  | runs => runs
+
+def mergeSumLoop : Nat → List (List ((Nat × Nat) × Int)) → List ((Nat × Nat) × Int)
+  | 0, runs => runs.foldr (fun r acc => mergeSumPos (r.length + acc.length) r acc) []
+  | _ + 1, [] => []
+  | _ + 1, [a] => a
+  | fuel + 1, a :: b :: rest => mergeSumLoop fuel (mergeSumPass (a :: b :: rest))
+
+private theorem mergeSumPass_spec :
+    ∀ (runs : List (List ((Nat × Nat) × Int))),
+      (∀ r ∈ runs, r.Pairwise (fun a b => natPairLt a.1 b.1 = true)) →
+      (∀ r ∈ mergeSumPass runs, r.Pairwise (fun a b => natPairLt a.1 b.1 = true)) ∧
+      (∀ q, sumPosList (mergeSumPass runs).flatten q = sumPosList runs.flatten q)
+  | [], _ => ⟨fun _ h => (nomatch h), fun _ => rfl⟩
+  | [a], h => ⟨h, fun _ => rfl⟩
+  | a :: b :: rest, h => by
+    have ha := h a List.mem_cons_self
+    have hb := h b (List.mem_cons_of_mem _ List.mem_cons_self)
+    have hr := fun r hm => h r (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ hm))
+    obtain ⟨ih_s, ih_l⟩ := mergeSumPass_spec rest hr
+    refine ⟨fun r hm => ?_, fun q => ?_⟩
+    · rcases List.mem_cons.mp hm with rfl | hm'
+      · exact mergeSumPos_sorted _ a b (Nat.le_refl _) ha hb
+      · exact ih_s r hm'
+    · simp only [mergeSumPass, List.flatten_cons, sumPosList_append,
+        sumPosList_mergeSumPos _ a b q, ih_l q]
+      omega
+
+private theorem foldr_mergeSumPos_spec :
+    ∀ (runs : List (List ((Nat × Nat) × Int))),
+      (∀ r ∈ runs, r.Pairwise (fun a b => natPairLt a.1 b.1 = true)) →
+      let out := runs.foldr (fun r acc => mergeSumPos (r.length + acc.length) r acc) []
+      out.Pairwise (fun a b => natPairLt a.1 b.1 = true) ∧
+      ∀ q, sumPosList out q = sumPosList runs.flatten q
+  | [], _ => ⟨.nil, fun _ => rfl⟩
+  | r :: rs, h => by
+    have hr := h r List.mem_cons_self
+    obtain ⟨ih_s, ih_l⟩ := foldr_mergeSumPos_spec rs (fun x hx => h x (List.mem_cons_of_mem _ hx))
+    refine ⟨mergeSumPos_sorted _ r _ (Nat.le_refl _) hr ih_s, fun q => ?_⟩
+    simp only [List.foldr_cons, List.flatten_cons, sumPosList_append,
+      sumPosList_mergeSumPos _ r _ q, ih_l q]
+
+private theorem mergeSumLoop_spec :
+    ∀ (fuel : Nat) (runs : List (List ((Nat × Nat) × Int))),
+      (∀ r ∈ runs, r.Pairwise (fun a b => natPairLt a.1 b.1 = true)) →
+      (mergeSumLoop fuel runs).Pairwise (fun a b => natPairLt a.1 b.1 = true) ∧
+      ∀ q, sumPosList (mergeSumLoop fuel runs) q = sumPosList runs.flatten q
+  | 0, runs, h => foldr_mergeSumPos_spec runs h
+  | _ + 1, [], _ => ⟨.nil, fun _ => rfl⟩
+  | _ + 1, [a], h => ⟨h a List.mem_cons_self, fun q => by simp [mergeSumLoop]⟩
+  | fuel + 1, a :: b :: rest, h => by
+    obtain ⟨hp_s, hp_l⟩ := mergeSumPass_spec (a :: b :: rest) h
+    obtain ⟨ih_s, ih_l⟩ := mergeSumLoop_spec fuel (mergeSumPass (a :: b :: rest)) hp_s
+    exact ⟨ih_s, fun q => (ih_l q).trans (hp_l q)⟩
+
+/-- Sorted 1-or-2 entry run produced by a single `Obligation`. -/
+def obPosRun (ob : Obligation) : List ((Nat × Nat) × Int) :=
+  mergeSumPos 2 [((ob.payee, ob.asset), (ob.amount : Int))] [((ob.payer, ob.asset), -(ob.amount : Int))]
+
+private theorem obPosRun_spec (ob : Obligation) :
+    (obPosRun ob).Pairwise (fun a b => natPairLt a.1 b.1 = true) ∧
+    ∀ acc ast, sumPosList (obPosRun ob) (acc, ast) = ob.delta acc ast := by
+  refine ⟨mergeSumPos_sorted 2 _ _ (Nat.le_refl 2) (List.pairwise_singleton _ _) (List.pairwise_singleton _ _),
+    fun acc ast => ?_⟩
+  rw [obPosRun, sumPosList_mergeSumPos]
+  simp only [sumPosList, Obligation.delta]
+  by_cases hast : ast = ob.asset
+  · subst hast
+    by_cases hpe : acc = ob.payee
+    · subst hpe
+      by_cases hpr : ob.payee = ob.payer
+      · simp [hpr]; omega
+      · have hne1 : (ob.payer, ob.asset) ≠ (ob.payee, ob.asset) := fun h => hpr (Prod.mk.inj h).1.symm
+        simp [hpr, hne1]
+    · by_cases hpr : acc = ob.payer
+      · subst hpr
+        have hne1 : (ob.payee, ob.asset) ≠ (ob.payer, ob.asset) := fun h => hpe (Prod.mk.inj h).1.symm
+        simp [hpe, hne1]
+      · have hne1 : (ob.payee, ob.asset) ≠ (acc, ob.asset) := fun h => hpe (Prod.mk.inj h).1.symm
+        have hne2 : (ob.payer, ob.asset) ≠ (acc, ob.asset) := fun h => hpr (Prod.mk.inj h).1.symm
+        simp [hpe, hpr, hne1, hne2]
+  · have h1 : (ob.payee, ob.asset) ≠ (acc, ast) := fun h => hast (Prod.mk.inj h).2.symm
+    have h2 : (ob.payer, ob.asset) ≠ (acc, ast) := fun h => hast (Prod.mk.inj h).2.symm
+    simp [hast, h1, h2]
+
+/-- Build an $O(M \log M)$ sorted net-position array from `obs : List Obligation`. -/
+def buildPosArray (obs : List Obligation) : Array ((Nat × Nat) × Int) :=
+  (mergeSumLoop (obs.length + 1) (obs.map obPosRun)).toArray
+
+private theorem sumPosList_map_obPosRun :
+    ∀ (obs : List Obligation) (acc : AccountId) (ast : AssetId),
+      sumPosList (obs.map obPosRun).flatten (acc, ast) = netPosition obs acc ast
+  | [], _, _ => rfl
+  | ob :: rest, acc, ast => by
+    simp only [List.map_cons, List.flatten_cons, sumPosList_append, (obPosRun_spec ob).2 acc ast,
+      sumPosList_map_obPosRun rest acc ast, netPosition_cons]
+
+private theorem sumPosList_of_sorted_lookup :
+    ∀ {l : List ((Nat × Nat) × Int)}, l.Pairwise (fun a b => natPairLt a.1 b.1 = true) →
+      ∀ q, sumPosList l q = (l.lookup q).getD 0
+  | [], _, _ => rfl
+  | (k, v) :: rest, hp, q => by
+    obtain ⟨hhd, htl⟩ := List.pairwise_cons.mp hp
+    simp only [sumPosList]
+    by_cases hkq : k = q
+    · subst hkq
+      have hzero : sumPosList rest k = 0 := by
+        clear hp htl
+        induction rest with
+        | nil => rfl
+        | cons x xs ih =>
+          obtain ⟨xk, xv⟩ := x
+          have hlt := hhd (xk, xv) List.mem_cons_self
+          have hne : xk ≠ k := fun he => by rw [he, natPairLt_irrefl] at hlt; cases hlt
+          simp only [sumPosList, hne, ↓reduceIte, Int.zero_add]
+          exact ih (fun y hy => hhd y (List.mem_cons_of_mem _ hy))
+      simp [List.lookup, hzero]
+    · have hb : (q == k) = false := beq_eq_false_iff_ne.mpr (Ne.symm hkq)
+      simp [hkq, List.lookup, hb, sumPosList_of_sorted_lookup htl q]
+
+/-- $O(\log M)$ binary search lookup in a sorted position array. -/
+def bsearchPos (m : @& Array ((Nat × Nat) × Int)) (q : Nat × Nat) :
+    Nat → Nat → Nat → Option Int
+  | 0, _, _ => none
+  | fuel + 1, lo, hi =>
+    if lo < hi then
+      let mid := (lo + hi) / 2
+      if hm : mid < m.size then
+        let kv := m[mid]'hm
+        if natPairLt kv.1 q then bsearchPos m q fuel (mid + 1) hi
+        else if natPairLt q kv.1 then bsearchPos m q fuel lo mid
+        else some kv.2
+      else none
+    else none
+
+def lookupPos (m : @& Array ((Nat × Nat) × Int)) (acc : AccountId) (ast : AssetId) : Int :=
+  (bsearchPos m (acc, ast) (m.size + 1) 0 m.size).getD 0
+
+private theorem pairwise_natPair_getElem? :
+    ∀ {l : List ((Nat × Nat) × Int)}, l.Pairwise (fun a b => natPairLt a.1 b.1 = true) →
+      ∀ {i j : Nat} {x y : (Nat × Nat) × Int},
+        l[i]? = some x → l[j]? = some y → i < j → natPairLt x.1 y.1 = true
+  | [], _, _, _, _, _, hi, _, _ => by simp at hi
+  | a :: l, hp, i, j, x, y, hi, hj, hij => by
+    cases j with
+    | zero => omega
+    | succ j =>
+      rw [List.getElem?_cons_succ] at hj
+      cases i with
+      | zero =>
+        rw [List.getElem?_cons_zero] at hi
+        cases hi; exact (List.pairwise_cons.mp hp).1 y (List.mem_of_getElem? hj)
+      | succ i =>
+        rw [List.getElem?_cons_succ] at hi
+        exact pairwise_natPair_getElem? (List.pairwise_cons.mp hp).2 hi hj (by omega)
+
+private theorem lookup_natPair_of_sorted :
+    ∀ {l : List ((Nat × Nat) × Int)}, l.Pairwise (fun a b => natPairLt a.1 b.1 = true) →
+      ∀ {i : Nat} {e : (Nat × Nat) × Int}, l[i]? = some e → l.lookup e.1 = some e.2
+  | [], _, _, _, h => by simp at h
+  | a :: l, hp, i, e, h => by
+    cases i with
+    | zero =>
+      rw [List.getElem?_cons_zero] at h
+      cases h; simp [List.lookup]
+    | succ i =>
+      rw [List.getElem?_cons_succ] at h
+      have hlt := (List.pairwise_cons.mp hp).1 e (List.mem_of_getElem? h)
+      have hne : e.1 ≠ a.1 := fun he => by rw [he, natPairLt_irrefl] at hlt; cases hlt
+      have hb : (e.1 == a.1) = false := beq_eq_false_iff_ne.mpr hne
+      simp [List.lookup, hb, lookup_natPair_of_sorted (List.pairwise_cons.mp hp).2 h]
+
+private theorem lookup_natPair_none_of_not_mem {l : List ((Nat × Nat) × Int)} {q : Nat × Nat}
+    (h : ∀ p ∈ l, p.1 ≠ q) : l.lookup q = none := by
+  induction l with
+  | nil => rfl
+  | cons p ps ih =>
+    have hne : q ≠ p.1 := Ne.symm (h p List.mem_cons_self)
+    simp [List.lookup, beq_eq_false_iff_ne.mpr hne, ih (fun x hx => h x (List.mem_cons_of_mem _ hx))]
+
+private theorem bsearchPos_eq_lookup (m : Array ((Nat × Nat) × Int)) (q : Nat × Nat)
+    (hs : m.toList.Pairwise (fun a b => natPairLt a.1 b.1 = true)) :
+    ∀ (fuel lo hi : Nat), hi ≤ m.size → hi - lo < fuel →
+      (∀ (i : Nat) (e : (Nat × Nat) × Int), m.toList[i]? = some e → (i < lo ∨ hi ≤ i) → e.1 ≠ q) →
+      bsearchPos m q fuel lo hi = m.toList.lookup q
+  | 0, _, _, _, hf, _ => by omega
+  | fuel + 1, lo, hi, hhi, hf, hout => by
+    unfold bsearchPos
+    by_cases hlt : lo < hi
+    · simp only [hlt, ↓reduceIte]
+      have hmid : (lo + hi) / 2 < m.size := by omega
+      simp only [hmid, ↓reduceDIte]
+      have hel : m.toList[(lo + hi) / 2]? = some (m[(lo + hi) / 2]'hmid) := by
+        rw [Array.getElem?_toList, Array.getElem?_eq_getElem hmid]
+      by_cases hk1 : natPairLt (m[(lo + hi) / 2]'hmid).1 q = true
+      · simp only [hk1, ↓reduceIte]
+        refine bsearchPos_eq_lookup m q hs fuel ((lo + hi) / 2 + 1) hi hhi (by omega) ?_
+        intro i x hx hcase
+        rcases hcase with hlo' | hhi'
+        · by_cases hlo : i < lo
+          · exact hout i x hx (.inl hlo)
+          · intro hxq
+            by_cases him : i = (lo + hi) / 2
+            · subst him; rw [hel] at hx; cases hx; rw [hxq, natPairLt_irrefl] at hk1; cases hk1
+            · have hxe := pairwise_natPair_getElem? hs hx hel (by omega)
+              have hqq := natPairLt_trans hxe hk1
+              rw [hxq, natPairLt_irrefl] at hqq; cases hqq
+        · exact hout i x hx (.inr hhi')
+      · simp only [hk1, Bool.false_eq_true, ↓reduceIte]
+        by_cases hk2 : natPairLt q (m[(lo + hi) / 2]'hmid).1 = true
+        · simp only [hk2, ↓reduceIte]
+          refine bsearchPos_eq_lookup m q hs fuel lo ((lo + hi) / 2) (by omega) (by omega) ?_
+          intro i x hx hcase
+          rcases hcase with hlo' | hhi'
+          · exact hout i x hx (.inl hlo')
+          · by_cases hhi0 : hi ≤ i
+            · exact hout i x hx (.inr hhi0)
+            · intro hxq
+              by_cases him : i = (lo + hi) / 2
+              · subst him; rw [hel] at hx; cases hx; rw [hxq, natPairLt_irrefl] at hk2; cases hk2
+              · have hex := pairwise_natPair_getElem? hs hel hx (by omega)
+                have hqq := natPairLt_trans hk2 hex
+                rw [hxq, natPairLt_irrefl] at hqq; cases hqq
+        · simp only [hk2, Bool.false_eq_true, ↓reduceIte]
+          have heq : (m[(lo + hi) / 2]'hmid).1 = q :=
+            natPairLt_total (Bool.eq_false_iff.mpr hk1) (Bool.eq_false_iff.mpr hk2)
+          rw [← heq]
+          exact (lookup_natPair_of_sorted hs hel).symm
+    · simp only [hlt, ↓reduceIte]
+      symm
+      apply lookup_natPair_none_of_not_mem
+      intro p hp
+      obtain ⟨i, hi', hget⟩ := List.mem_iff_getElem.mp hp
+      have hp? : m.toList[i]? = some p := by rw [List.getElem?_eq_getElem hi', hget]
+      exact hout i p hp? (by omega)
+
+theorem lookupPos_buildPosArray (obs : List Obligation) (acc : AccountId) (ast : AssetId) :
+    lookupPos (buildPosArray obs) acc ast = netPosition obs acc ast := by
+  have hruns : ∀ r ∈ obs.map obPosRun, r.Pairwise (fun a b => natPairLt a.1 b.1 = true) := by
+    intro r hr
+    obtain ⟨ob, _, rfl⟩ := List.mem_map.mp hr
+    exact (obPosRun_spec ob).1
+  obtain ⟨hs, hsum⟩ := mergeSumLoop_spec (obs.length + 1) (obs.map obPosRun) hruns
+  have hs' : (buildPosArray obs).toList.Pairwise (fun a b => natPairLt a.1 b.1 = true) := by
+    simpa [buildPosArray] using hs
+  rw [← sumPosList_map_obPosRun obs acc ast, ← hsum (acc, ast)]
+  change lookupPos (buildPosArray obs) acc ast = sumPosList (buildPosArray obs).toList (acc, ast)
+  rw [sumPosList_of_sorted_lookup hs', lookupPos,
+    bsearchPos_eq_lookup (buildPosArray obs) (acc, ast) hs' _ 0 _ (Nat.le_refl _) (by omega)]
+  intro i e he hcase
+  rcases hcase with h0 | hge
+  · omega
+  · have hlt : i < (buildPosArray obs).toList.length := (List.getElem?_eq_some_iff.mp he).1
+    rw [Array.length_toList] at hlt; omega
+
+/-- Check `(acc, ast)` positions using pre-aggregated $O(M \log M)$ sorted arrays (`O(\log M)` per lookup,
+plus an $O(M)$ fast-path equality check when both position arrays already match identically!). -/
+def checkPositionsGridExec (gArr nArr : @& Array ((Nat × Nat) × Int)) :
+    List AccountId → List AssetId → Except NettingRefusal Unit
+  | [], _ => .ok ()
+  | acc :: restAccs, asts =>
+    match asts.find? (fun ast => decide (lookupPos nArr acc ast ≠ lookupPos gArr acc ast)) with
+    | some badAst =>
+      .error (.positionMismatch acc badAst (lookupPos gArr acc badAst) (lookupPos nArr acc badAst))
+    | none =>
+      checkPositionsGridExec gArr nArr restAccs asts
+
+private theorem checkPositionsGridExec_eq (gross net : List Obligation) :
+    ∀ (accs : List AccountId) (asts : List AssetId),
+      checkPositionsGridExec (buildPosArray gross) (buildPosArray net) accs asts =
+        checkPositionsGrid gross net accs asts
+  | [], _ => rfl
+  | acc :: restAccs, asts => by
+    unfold checkPositionsGridExec checkPositionsGrid
+    have hpred : (fun ast => decide (lookupPos (buildPosArray net) acc ast ≠ lookupPos (buildPosArray gross) acc ast)) =
+        (fun ast => decide (netPosition net acc ast ≠ netPosition gross acc ast)) := by
+      funext ast
+      simp [lookupPos_buildPosArray]
+    rw [hpred]
+    cases asts.find? (fun ast => decide (netPosition net acc ast ≠ netPosition gross acc ast)) with
+    | some badAst => simp [lookupPos_buildPosArray]
+    | none => exact checkPositionsGridExec_eq gross net restAccs asts
+
+/-- Strip zero-valued entries from a sorted position list so two equivalent nettings compare equal in $O(M)$. -/
+def dropZeroPos (arr : @& Array ((Nat × Nat) × Int)) : Array ((Nat × Nat) × Int) :=
+  arr.filter (fun kv => kv.2 != 0)
+
+private theorem sumPosList_filter_nonzero :
+    ∀ (xs : List ((Nat × Nat) × Int)) (q : Nat × Nat),
+      sumPosList (xs.filter (fun kv => kv.2 != 0)) q = sumPosList xs q
+  | [], _ => rfl
+  | (k, v) :: rest, q => by
+    by_cases hv : v = 0
+    · subst hv; simp [sumPosList, sumPosList_filter_nonzero rest q]
+    · have hb : (v != 0) = true := bne_iff_ne.mpr hv
+      simp [hb, sumPosList, sumPosList_filter_nonzero rest q]
+
+private theorem checkPositionsGrid_ok_of_equal_pos {gross net : List Obligation}
+    (heq : ∀ acc ast, netPosition net acc ast = netPosition gross acc ast) :
+    ∀ (accs : List AccountId) (asts : List AssetId),
+      checkPositionsGrid gross net accs asts = .ok ()
+  | [], _ => rfl
+  | acc :: restAccs, asts => by
+    unfold checkPositionsGrid
+    have hnone : asts.find? (fun ast => decide (netPosition net acc ast ≠ netPosition gross acc ast)) = none := by
+      rw [List.find?_eq_none]
+      intro ast _
+      simp [heq acc ast]
+    rw [hnone]
+    exact checkPositionsGrid_ok_of_equal_pos heq restAccs asts
+
+/-- $O(M \log M)$ netting verifier: builds `gArr` and `nArr` in $O(M \log M)$, accepts in $O(M)$
+whenever their non-zero sorted position arrays match (every valid certificate!), and otherwise
+pinpoints the exact first `(acc, badAst)` mismatch via $O(\log M)$ binary search. -/
+def checkNettingExec (q : NettingQuery) (c : NettingCert) : Judge.Verdict NettingRefusal :=
+  match checkWellFormedGross 0 q.grossObligations with
+  | .error e => .refused e []
+  | .ok () =>
+    match checkWellFormedTransfers 0 c.netTransfers with
+    | .error e => .refused e []
+    | .ok () =>
+      let gExp := grossExposure q.grossObligations
+      let nExp := grossExposure c.netTransfers
+      if decide (gExp < nExp) then
+        .refused (.grossExposureIncreased gExp nExp) []
+      else
+        let gArr := buildPosArray q.grossObligations
+        let nArr := buildPosArray c.netTransfers
+        if dropZeroPos nArr == dropZeroPos gArr then
+          .ok
+        else
+          let accs := touchedAccounts q.grossObligations c.netTransfers
+          let asts := touchedAssets q.grossObligations c.netTransfers
+          match checkPositionsGridExec gArr nArr accs asts with
+          | .error e => .refused e []
+          | .ok () => .ok
+
+@[csimp] theorem checkNetting_eq_exec : @checkNetting = @checkNettingExec := by
+  funext q c
+  unfold checkNetting checkNettingExec checkNetTransfers
+  cases checkWellFormedGross 0 q.grossObligations with
+  | error _ => rfl
+  | ok _ =>
+    cases checkWellFormedTransfers 0 c.netTransfers with
+    | error _ => rfl
+    | ok _ =>
+      dsimp only
+      split
+      · rfl
+      · by_cases hfast : (dropZeroPos (buildPosArray c.netTransfers) ==
+            dropZeroPos (buildPosArray q.grossObligations)) = true
+        · simp only [hfast, ↓reduceIte]
+          have harr_eq : dropZeroPos (buildPosArray c.netTransfers) =
+              dropZeroPos (buildPosArray q.grossObligations) := beq_iff_eq.mp hfast
+          have hpos_eq : ∀ acc ast,
+              netPosition c.netTransfers acc ast = netPosition q.grossObligations acc ast := by
+            intro acc ast
+            have hsum_eq : ∀ obs : List Obligation,
+                netPosition obs acc ast = sumPosList (dropZeroPos (buildPosArray obs)).toList (acc, ast) := by
+              intro obs
+              have hruns : ∀ r ∈ obs.map obPosRun, r.Pairwise (fun a b => natPairLt a.1 b.1 = true) := by
+                intro r hr; obtain ⟨ob, _, rfl⟩ := List.mem_map.mp hr; exact (obPosRun_spec ob).1
+              obtain ⟨_, hsum⟩ := mergeSumLoop_spec (obs.length + 1) (obs.map obPosRun) hruns
+              rw [← sumPosList_map_obPosRun obs acc ast, ← hsum (acc, ast)]
+              dsimp only [dropZeroPos, buildPosArray]
+              rw [Array.toList_filter, sumPosList_filter_nonzero, List.toList_toArray]
+            rw [hsum_eq c.netTransfers, hsum_eq q.grossObligations, harr_eq]
+          rw [checkPositionsGrid_ok_of_equal_pos hpos_eq]
+        · simp only [hfast, Bool.false_eq_true, ↓reduceIte,
+            checkPositionsGridExec_eq q.grossObligations c.netTransfers]
+
 theorem checkNetting_sound {q : NettingQuery} {c : NettingCert}
     (h : checkNetting q c = .ok) : NettingSpec q c := by
   unfold checkNetting at h

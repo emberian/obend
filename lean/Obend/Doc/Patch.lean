@@ -119,6 +119,49 @@ namespace Graph
 /-- Apply a patch. -/
 @[expose] def apply (G : Graph) (p : Patch) : Graph := p.foldl step G
 
+/-- `Array`-backed mutable accumulator for $O(N)$ patch application (`0` quadratic `List.append`s). -/
+structure GraphArrays where
+  atoms : Array (AtomId × Content)
+  dead : Array AtomId
+  edges : Array (AtomId × AtomId)
+
+def GraphArrays.ofGraph (G : Graph) : GraphArrays :=
+  ⟨G.atoms.toArray, G.dead.toArray, G.edges.toArray⟩
+
+def GraphArrays.toGraph (A : GraphArrays) : Graph :=
+  ⟨A.atoms.toList, A.dead.toList, A.edges.toList⟩
+
+def stepArrays (A : GraphArrays) : Op → GraphArrays
+  | .add i c a => { A with atoms := A.atoms.push (i, c), edges := A.edges.push (a, i) }
+  | .delete i => { A with dead := A.dead.push i }
+  | .connect s d => { A with edges := A.edges.push (s, d) }
+  | .setField i n v => { A with atoms := A.atoms.push (i, .field n v) }
+  | .unadd i _ a =>
+    { A with atoms := A.atoms.filter (·.1 != i), edges := A.edges.filter (· != (a, i)) }
+  | .resurrect i => { A with dead := A.dead.filter (· != i) }
+  | .disconnect s d => { A with edges := A.edges.filter (· != (s, d)) }
+  | .unsetField i _ _ => { A with atoms := A.atoms.filter (·.1 != i) }
+
+theorem stepArrays_toGraph (A : GraphArrays) (o : Op) :
+    (stepArrays A o).toGraph = A.toGraph.step o := by
+  cases o <;> simp [stepArrays, GraphArrays.toGraph, step, Array.toList_push, Array.toList_filter]
+
+def applyExec (G : Graph) (p : Patch) : Graph :=
+  (p.foldl stepArrays (GraphArrays.ofGraph G)).toGraph
+
+theorem foldl_stepArrays_toGraph (p : Patch) (A : GraphArrays) :
+    (p.foldl stepArrays A).toGraph = A.toGraph.apply p := by
+  induction p generalizing A with
+  | nil => rfl
+  | cons o rest ih =>
+    simp only [List.foldl_cons, apply, ih, stepArrays_toGraph]
+
+@[csimp] theorem apply_eq_exec : @apply = @applyExec := by
+  funext G p
+  unfold applyExec
+  rw [foldl_stepArrays_toGraph]
+  cases G; rfl
+
 /-! ### Each operation, read through the observations -/
 
 theorem lookup_cons_ne {β : Type} (l : List (AtomId × β)) {a k : AtomId} (v : β) (h : a ≠ k) :

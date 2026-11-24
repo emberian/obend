@@ -34,6 +34,8 @@ the definition; its rejections are exercised by vectors); a parser from bytes to
 public import Obend.Judge.Class
 public import Obend.Judge.SymbolicRegexBisim
 import Obend.Codec.Hex
+import all Obend.Codec.DetCbor
+import all Obend.Digest.HashBytes
 public section
 namespace Obend.Judge.VpaJson
 open Obend.Codec.DetCbor
@@ -826,6 +828,82 @@ def checkJsonRedaction (doc : ByteArray) (l r : Nat) (mask : ByteArray) : Bool :
     decide (walkInterior (jsonStateAt doc l) ((doc.data.toList.drop l).take (r - l)) =
       some (jsonStateAt doc l)) &&
     mask.data.toList.all isSafeMaskByte
+
+/-- Walk `[i, e)` directly on borrowed `doc : @& ByteArray` without `doc.data.toList` conversion. -/
+def walkInteriorBytes (doc : @& ByteArray) : Nat → Nat → Nat → JState → Option JState
+  | 0, _, _, st => some st
+  | fuel + 1, i, e, st =>
+    if i < e then
+      let st' := stepJson st (byteAt doc i)
+      if inValueString st' then walkInteriorBytes doc fuel (i + 1) e st' else none
+    else some st
+
+theorem walkInteriorBytes_eq (doc : ByteArray) :
+    ∀ (fuel i e : Nat) (st : JState), e ≤ doc.size → e - i ≤ fuel →
+      walkInteriorBytes doc fuel i e st =
+        walkInterior st ((doc.data.toList.drop i).take (e - i))
+  | 0, i, e, st, _, hf => by
+    have hi : ¬(i < e) := by omega
+    rw [slice_nil doc i e hi]; rfl
+  | fuel + 1, i, e, st, he, hf => by
+    unfold walkInteriorBytes
+    by_cases hi : i < e
+    · rw [ite_eq_left hi, slice_cons doc i e hi he, walkInterior]
+      dsimp only
+      split
+      · exact walkInteriorBytes_eq doc fuel (i + 1) e _ he (by omega)
+      · rfl
+    · rw [ite_eq_right hi, slice_nil doc i e hi]; rfl
+
+/-- Check `p` on every byte of borrowed `b : @& ByteArray` without allocating `b.data.toList`. -/
+def allBytesLoop (p : UInt8 → Bool) (b : @& ByteArray) : Nat → Nat → Bool
+  | 0, _ => true
+  | fuel + 1, i =>
+    if h : i < b.size then
+      if p (b[i]'h) then allBytesLoop p b fuel (i + 1) else false
+    else true
+
+theorem allBytesLoop_eq (p : UInt8 → Bool) (b : ByteArray) :
+    ∀ (fuel i : Nat), b.size - i ≤ fuel →
+      allBytesLoop p b fuel i = (b.data.toList.drop i).all p
+  | 0, i, hf => by
+    have hge : b.data.toList.length ≤ i := by rw [toList_length]; omega
+    simp [allBytesLoop, List.drop_eq_nil_of_le hge]
+  | fuel + 1, i, hf => by
+    unfold allBytesLoop
+    by_cases h : i < b.size
+    · have hl : i < b.data.toList.length := by rwa [toList_length]
+      rw [List.drop_eq_getElem_cons hl]
+      simp only [h, ↓reduceDIte, List.all_cons]
+      have hg : b.data.toList[i]'hl = b[i]'h := rfl
+      rw [hg]
+      cases p (b[i]'h)
+      · rfl
+      · simpa using allBytesLoop_eq p b fuel (i + 1) (by omega)
+    · have hge : b.data.toList.length ≤ i := by rw [toList_length]; omega
+      simp [h, List.drop_eq_nil_of_le hge]
+
+/-- Zero-`List` `ByteArray` execution of `checkJsonRedaction` (evaluates `jsonStateAt doc l` once). -/
+def checkJsonRedactionExec (doc : @& ByteArray) (l r : Nat) (mask : @& ByteArray) : Bool :=
+  if l ≤ r then
+    if r ≤ doc.size then
+      let stL := jsonStateAt doc l
+      decide (stL.mode = .str false .normal) &&
+        decide (walkInteriorBytes doc (r - l) l r stL = some stL) &&
+        allBytesLoop isSafeMaskByte mask mask.size 0
+    else false
+  else false
+
+@[csimp] theorem checkJsonRedaction_eq_exec : @checkJsonRedaction = @checkJsonRedactionExec := by
+  funext doc l r mask
+  unfold checkJsonRedaction checkJsonRedactionExec
+  by_cases hlr : l ≤ r
+  · by_cases hr : r ≤ doc.size
+    · simp only [hlr, hr, decide_true, Bool.true_and, ↓reduceIte,
+        walkInteriorBytes_eq doc (r - l) l r _ hr (Nat.le_refl _),
+        allBytesLoop_eq isSafeMaskByte mask mask.size 0 (by omega), List.drop_zero]
+    · simp [hlr, hr]
+  · simp [hlr]
 /-- A safe byte inside a value string leaves the whole machine state unchanged. -/
 theorem stepJson_safe {st : JState} {b : UInt8} (hm : st.mode = .str false .normal)
     (hb : isSafeMaskByte b = true) : stepJson st b = st := by
@@ -911,6 +989,37 @@ def leafMsg (span : ByteArray) : ByteArray :=
   ⟨(leafPrefix :: (beNat 8 span.size ++ span.data.toList)).toArray⟩
 def pairMsg (pre : UInt8) (l r : ByteArray) : ByteArray :=
   ⟨(pre :: (l.data.toList ++ r.data.toList)).toArray⟩
+
+private theorem be_eq_beNat : ∀ (k v : Nat), Obend.Digest.HashBytes.be k v = beNat k v
+  | 0, _ => rfl
+  | k + 1, v => by
+    have hb : UInt8.ofNat (v % 256) = UInt8.ofNat v := by
+      apply UInt8.toNat_inj.mp; simp [UInt8.toNat_ofNat']
+    simp [Obend.Digest.HashBytes.be, beNat, be_eq_beNat k (v / 256), hb]
+
+/-- Zero-`List` `ByteArray` construction of `leafMsg` via `pushBENat` + C `memcpy` append. -/
+def leafMsgExec (span : @& ByteArray) : ByteArray :=
+  Obend.Digest.HashBytes.pushBENat 8 span.size
+    ((ByteArray.emptyWithCapacity (9 + span.size)).push leafPrefix) ++ span
+
+@[csimp] theorem leafMsg_eq_exec : @leafMsg = @leafMsgExec := by
+  funext span
+  apply byteArray_eq_of_toList
+  have h1 : ((ByteArray.emptyWithCapacity (9 + span.size)).push leafPrefix).data.toList = [leafPrefix] := rfl
+  simp only [leafMsgExec, ByteArray.data_append, Array.toList_append,
+    Obend.Digest.HashBytes.pushBENat_toList, h1, be_eq_beNat, List.singleton_append, leafMsg]
+  rfl
+
+/-- Zero-`List` `ByteArray` construction of `pairMsg` via pre-allocated `ByteArray` + C `memcpy`. -/
+def pairMsgExec (pre : UInt8) (l r : @& ByteArray) : ByteArray :=
+  ((ByteArray.emptyWithCapacity (1 + l.size + r.size)).push pre) ++ l ++ r
+
+@[csimp] theorem pairMsg_eq_exec : @pairMsg = @pairMsgExec := by
+  funext pre l r
+  apply byteArray_eq_of_toList
+  have h1 : ((ByteArray.emptyWithCapacity (1 + l.size + r.size)).push pre).data.toList = [pre] := rfl
+  simp only [pairMsgExec, ByteArray.data_append, Array.toList_append, h1, List.cons_append, pairMsg]
+  rfl
 /-- A node message: the prefix and the two children. -/
 def nodeMsg (l r : ByteArray) : ByteArray := pairMsg nodePrefix l r
 def rootMsg (countDigest top : ByteArray) : ByteArray := pairMsg rootPrefix countDigest top

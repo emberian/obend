@@ -362,6 +362,272 @@ example : hexCharsToBytes? "00FF".toList = none ∧ hexCharsToBytesAnyCase? "00F
   decide
 example : hexAsciiToBytes? [48, 102] = some [15] ∧ isHexByte 70 = true ∧ isHexByte 103 = false := by decide
 
+/-! ## Stack-Safe & `ByteArray` `Exec` Refinements (`@[csimp]`) -/
+
+/-- Single-pass tail-recursive hex `Char` encoder without per-byte 2-element list allocation. -/
+def bytesToHexCharsRev : List UInt8 → List Char → List Char
+  | [], acc => acc.reverse
+  | b :: bs, acc =>
+    bytesToHexCharsRev bs (hexNibbleChar (b.toNat % 16) :: hexNibbleChar (b.toNat / 16) :: acc)
+
+theorem bytesToHexCharsRev_eq (bs : List UInt8) (acc : List Char) :
+    bytesToHexCharsRev bs acc = acc.reverse ++ bytesToHexChars bs := by
+  induction bs generalizing acc with
+  | nil => simp [bytesToHexCharsRev, bytesToHexChars]
+  | cons b bs ih =>
+    simp only [bytesToHexCharsRev, ih, List.reverse_cons, List.append_assoc,
+      List.cons_append, List.nil_append, bytesToHexChars_cons]
+
+def bytesToHexCharsExec (bs : List UInt8) : List Char := bytesToHexCharsRev bs []
+
+@[csimp] theorem bytesToHexChars_eq_exec : @bytesToHexChars = @bytesToHexCharsExec := by
+  funext bs
+  simpa [bytesToHexCharsExec] using (bytesToHexCharsRev_eq bs []).symm
+
+/-- Single-pass tail-recursive ASCII hex encoder without per-byte 2-element list allocation. -/
+def bytesToHexAsciiRev : List UInt8 → List UInt8 → List UInt8
+  | [], acc => acc.reverse
+  | b :: bs, acc =>
+    bytesToHexAsciiRev bs (hexNibbleByte (b.toNat % 16) :: hexNibbleByte (b.toNat / 16) :: acc)
+
+theorem bytesToHexAsciiRev_eq (bs acc : List UInt8) :
+    bytesToHexAsciiRev bs acc = acc.reverse ++ bytesToHexAscii bs := by
+  induction bs generalizing acc with
+  | nil => simp [bytesToHexAsciiRev, bytesToHexAscii]
+  | cons b bs ih =>
+    simp only [bytesToHexAsciiRev, ih, List.reverse_cons, List.append_assoc,
+      List.cons_append, List.nil_append, bytesToHexAscii_cons]
+
+def bytesToHexAsciiExec (bs : List UInt8) : List UInt8 := bytesToHexAsciiRev bs []
+
+@[csimp] theorem bytesToHexAscii_eq_exec : @bytesToHexAscii = @bytesToHexAsciiExec := by
+  funext bs
+  simpa [bytesToHexAsciiExec] using (bytesToHexAsciiRev_eq bs []).symm
+
+/-- Direct `ByteArray` ASCII hex encoder (`0` intermediate `List` allocations). -/
+def byteArrayToHexAsciiLoop (src : @& ByteArray) : Nat → Nat → ByteArray → ByteArray
+  | 0, _, dst => dst
+  | fuel + 1, i, dst =>
+    if h : i < src.size then
+      let b := src[i]'h
+      let dst' := (dst.push (hexNibbleByte (b.toNat >>> 4))).push (hexNibbleByte (b.toNat &&& 15))
+      byteArrayToHexAsciiLoop src fuel (i + 1) dst'
+    else dst
+
+def byteArrayToHexAscii (src : @& ByteArray) : ByteArray :=
+  byteArrayToHexAsciiLoop src src.size 0 (ByteArray.emptyWithCapacity (2 * src.size))
+
+private theorem push_data_hex (b : ByteArray) (x : UInt8) :
+    (b.push x).data.toList = b.data.toList ++ [x] := by
+  cases b; simp [ByteArray.push]
+
+theorem byteArrayToHexAsciiLoop_eq (src : ByteArray) :
+    ∀ (fuel i : Nat) (dst : ByteArray), src.size - i ≤ fuel →
+      (byteArrayToHexAsciiLoop src fuel i dst).data.toList =
+        dst.data.toList ++ bytesToHexAscii (src.data.toList.drop i)
+  | 0, i, dst, hf => by
+    have hge : src.data.toList.length ≤ i := by
+      rw [Array.length_toList, ByteArray.size_data]; omega
+    simp [byteArrayToHexAsciiLoop, List.drop_eq_nil_of_le hge, bytesToHexAscii]
+  | fuel + 1, i, dst, hf => by
+    unfold byteArrayToHexAsciiLoop
+    by_cases h : i < src.size
+    · have hl : i < src.data.toList.length := by
+        rwa [Array.length_toList, ByteArray.size_data]
+      have hdrop : src.data.toList.drop i = (src[i]'h) :: src.data.toList.drop (i + 1) :=
+        List.drop_eq_getElem_cons hl
+      have hhi : (src[i]'h).toNat >>> 4 = (src[i]'h).toNat / 16 := by
+        rw [Nat.shiftRight_eq_div_pow]
+      have hlo : ((src[i]'h).toNat &&& 15) = (src[i]'h).toNat % 16 := by
+        change (src[i]'h).toNat &&& (2 ^ 4 - 1) = (src[i]'h).toNat % 2 ^ 4
+        exact Nat.and_two_pow_sub_one_eq_mod _ 4
+      simp only [h, ↓reduceDIte, byteArrayToHexAsciiLoop_eq src fuel (i + 1) _ (by omega),
+        push_data_hex, hhi, hlo, hdrop, bytesToHexAscii_cons, List.append_assoc,
+        List.cons_append, List.nil_append]
+    · have hge : src.data.toList.length ≤ i := by
+        rw [Array.length_toList, ByteArray.size_data]; omega
+      simp [h, List.drop_eq_nil_of_le hge, bytesToHexAscii]
+
+theorem byteArrayToHexAscii_toList (src : ByteArray) :
+    (byteArrayToHexAscii src).data.toList = bytesToHexAscii src.data.toList := by
+  have hemp : (ByteArray.emptyWithCapacity (2 * src.size)).data.toList = [] := rfl
+  unfold byteArrayToHexAscii
+  rw [byteArrayToHexAsciiLoop_eq src src.size 0 _ (by omega), hemp, List.drop_zero, List.nil_append]
+
+/-- Stack-safe tail-recursive strict lowercase hex `Char` decoder. -/
+def hexCharsToBytesLoop : List Char → List UInt8 → Option (List UInt8)
+  | [], acc => some acc.reverse
+  | [_], _ => none
+  | a :: b :: rest, acc =>
+    match decodeHexNibble? a, decodeHexNibble? b with
+    | some hi, some lo => hexCharsToBytesLoop rest ((hi * 16 + lo).toUInt8 :: acc)
+    | _, _ => none
+
+theorem hexCharsToBytesLoop_eq : ∀ (cs : List Char) (acc : List UInt8),
+    hexCharsToBytesLoop cs acc = (hexCharsToBytes? cs).map (acc.reverse ++ ·)
+  | [], acc => by simp [hexCharsToBytesLoop, hexCharsToBytes?]
+  | [_], _ => by simp [hexCharsToBytesLoop, hexCharsToBytes?]
+  | a :: b :: rest, acc => by
+    simp only [hexCharsToBytesLoop, hexCharsToBytes?, bind, Option.bind]
+    cases decodeHexNibble? a with
+    | none => rfl
+    | some hi =>
+      cases decodeHexNibble? b with
+      | none => rfl
+      | some lo =>
+        dsimp only
+        rw [hexCharsToBytesLoop_eq rest]
+        cases hexCharsToBytes? rest <;> simp [List.reverse_cons, List.append_assoc]
+
+def hexCharsToBytesExec? (cs : List Char) : Option (List UInt8) := hexCharsToBytesLoop cs []
+
+@[csimp] theorem hexCharsToBytes?_eq_exec : @hexCharsToBytes? = @hexCharsToBytesExec? := by
+  funext cs
+  simpa [hexCharsToBytesExec?] using (hexCharsToBytesLoop_eq cs []).symm
+
+/-- Stack-safe tail-recursive case-insensitive hex `Char` decoder. -/
+def hexCharsToBytesAnyCaseLoop : List Char → List UInt8 → Option (List UInt8)
+  | [], acc => some acc.reverse
+  | [_], _ => none
+  | a :: b :: rest, acc =>
+    match decodeHexNibbleAnyCase? a, decodeHexNibbleAnyCase? b with
+    | some hi, some lo => hexCharsToBytesAnyCaseLoop rest ((hi * 16 + lo).toUInt8 :: acc)
+    | _, _ => none
+
+theorem hexCharsToBytesAnyCaseLoop_eq : ∀ (cs : List Char) (acc : List UInt8),
+    hexCharsToBytesAnyCaseLoop cs acc = (hexCharsToBytesAnyCase? cs).map (acc.reverse ++ ·)
+  | [], acc => by simp [hexCharsToBytesAnyCaseLoop, hexCharsToBytesAnyCase?]
+  | [_], _ => by simp [hexCharsToBytesAnyCaseLoop, hexCharsToBytesAnyCase?]
+  | a :: b :: rest, acc => by
+    simp only [hexCharsToBytesAnyCaseLoop, hexCharsToBytesAnyCase?, bind, Option.bind]
+    cases decodeHexNibbleAnyCase? a with
+    | none => rfl
+    | some hi =>
+      cases decodeHexNibbleAnyCase? b with
+      | none => rfl
+      | some lo =>
+        dsimp only
+        rw [hexCharsToBytesAnyCaseLoop_eq rest]
+        cases hexCharsToBytesAnyCase? rest <;> simp [List.reverse_cons, List.append_assoc]
+
+def hexCharsToBytesAnyCaseExec? (cs : List Char) : Option (List UInt8) :=
+  hexCharsToBytesAnyCaseLoop cs []
+
+@[csimp] theorem hexCharsToBytesAnyCase?_eq_exec :
+    @hexCharsToBytesAnyCase? = @hexCharsToBytesAnyCaseExec? := by
+  funext cs
+  simpa [hexCharsToBytesAnyCaseExec?] using (hexCharsToBytesAnyCaseLoop_eq cs []).symm
+
+/-- Stack-safe tail-recursive strict ASCII hex byte decoder. -/
+def hexAsciiToBytesLoop : List UInt8 → List UInt8 → Option (List UInt8)
+  | [], acc => some acc.reverse
+  | [_], _ => none
+  | a :: b :: rest, acc =>
+    match decodeHexNibbleByte? a, decodeHexNibbleByte? b with
+    | some hi, some lo => hexAsciiToBytesLoop rest ((hi * 16 + lo).toUInt8 :: acc)
+    | _, _ => none
+
+theorem hexAsciiToBytesLoop_eq : ∀ (bs acc : List UInt8),
+    hexAsciiToBytesLoop bs acc = (hexAsciiToBytes? bs).map (acc.reverse ++ ·)
+  | [], acc => by simp [hexAsciiToBytesLoop, hexAsciiToBytes?]
+  | [_], _ => by simp [hexAsciiToBytesLoop, hexAsciiToBytes?]
+  | a :: b :: rest, acc => by
+    simp only [hexAsciiToBytesLoop, hexAsciiToBytes?, bind, Option.bind]
+    cases decodeHexNibbleByte? a with
+    | none => rfl
+    | some hi =>
+      cases decodeHexNibbleByte? b with
+      | none => rfl
+      | some lo =>
+        dsimp only
+        rw [hexAsciiToBytesLoop_eq rest]
+        cases hexAsciiToBytes? rest <;> simp [List.reverse_cons, List.append_assoc]
+
+def hexAsciiToBytesExec? (bs : List UInt8) : Option (List UInt8) := hexAsciiToBytesLoop bs []
+
+@[csimp] theorem hexAsciiToBytes?_eq_exec : @hexAsciiToBytes? = @hexAsciiToBytesExec? := by
+  funext bs
+  simpa [hexAsciiToBytesExec?] using (hexAsciiToBytesLoop_eq bs []).symm
+
+/-- Zero-`List` strict lowercase hex decoder directly over `ByteArray` into `ByteArray`. -/
+def hexByteArrayStrictLoop (src : @& ByteArray) : Nat → Nat → ByteArray → Option ByteArray
+  | 0, i, dst => if i == src.size then some dst else none
+  | fuel + 1, i, dst =>
+    if h2 : i + 1 < src.size then
+      match decodeHexNibbleByte? (src[i]'(by omega)), decodeHexNibbleByte? (src[i + 1]'h2) with
+      | some hi, some lo => hexByteArrayStrictLoop src fuel (i + 2) (dst.push (hi * 16 + lo).toUInt8)
+      | _, _ => none
+    else if i == src.size then some dst else none
+
+def hexByteArrayStrict? (src : @& ByteArray) : Option ByteArray :=
+  if src.size % 2 != 0 then none
+  else hexByteArrayStrictLoop src (src.size / 2) 0 (ByteArray.emptyWithCapacity (src.size / 2))
+
+theorem hexByteArrayStrictLoop_eq (src : ByteArray) :
+    ∀ (fuel i : Nat) (dst : ByteArray), i ≤ src.size → src.size - i ≤ 2 * fuel →
+      (hexByteArrayStrictLoop src fuel i dst).map (fun b => b.data.toList) =
+        (hexAsciiToBytes? (src.data.toList.drop i)).map (dst.data.toList ++ ·)
+  | 0, i, dst, hle, hf => by
+    have heq : i = src.size := by omega
+    subst heq
+    have hnil : src.data.toList.drop src.size = [] :=
+      List.drop_eq_nil_of_le (by rw [Array.length_toList, ByteArray.size_data]; exact Nat.le_refl _)
+    simp [hexByteArrayStrictLoop, hnil, hexAsciiToBytes?]
+  | fuel + 1, i, dst, hle, hf => by
+    unfold hexByteArrayStrictLoop
+    by_cases h2 : i + 1 < src.size
+    · have hl0 : i < src.data.toList.length := by
+        rw [Array.length_toList, ByteArray.size_data]; omega
+      have hl1 : i + 1 < src.data.toList.length := by
+        rw [Array.length_toList, ByteArray.size_data]; omega
+      have hdrop0 : src.data.toList.drop i = (src[i]'(by omega)) :: src.data.toList.drop (i + 1) :=
+        List.drop_eq_getElem_cons hl0
+      have hdrop1 : src.data.toList.drop (i + 1) = (src[i + 1]'h2) :: src.data.toList.drop (i + 2) :=
+        List.drop_eq_getElem_cons hl1
+      simp only [h2, ↓reduceDIte, hdrop0, hdrop1, hexAsciiToBytes?, bind, Option.bind]
+      cases decodeHexNibbleByte? (src[i]'(by omega)) with
+      | none => rfl
+      | some hi =>
+        cases decodeHexNibbleByte? (src[i + 1]'h2) with
+        | none => rfl
+        | some lo =>
+          dsimp only
+          rw [hexByteArrayStrictLoop_eq src fuel (i + 2) _ (by omega) (by omega), push_data_hex]
+          cases hexAsciiToBytes? (src.data.toList.drop (i + 2)) <;>
+            simp [List.append_assoc]
+    · simp only [h2, ↓reduceDIte]
+      by_cases heq : i = src.size
+      · subst heq
+        have hnil : src.data.toList.drop src.size = [] :=
+          List.drop_eq_nil_of_le (by rw [Array.length_toList, ByteArray.size_data]; exact Nat.le_refl _)
+        simp [hnil, hexAsciiToBytes?]
+      · have hl0 : i < src.data.toList.length := by
+          rw [Array.length_toList, ByteArray.size_data]; omega
+        have hdrop0 : src.data.toList.drop i = (src[i]'(by omega)) :: src.data.toList.drop (i + 1) :=
+          List.drop_eq_getElem_cons hl0
+        have hnil1 : src.data.toList.drop (i + 1) = [] :=
+          List.drop_eq_nil_of_le (by rw [Array.length_toList, ByteArray.size_data]; omega)
+        have hne_b : (i == src.size) = false := beq_eq_false_iff_ne.mpr heq
+        simp [hne_b, hdrop0, hnil1, hexAsciiToBytes?]
+
+theorem hexByteArrayStrict?_toList (src : ByteArray) :
+    (hexByteArrayStrict? src).map (fun b => b.data.toList) = hexAsciiToBytes? src.data.toList := by
+  unfold hexByteArrayStrict?
+  by_cases hodd : src.size % 2 != 0
+  · have hlen_odd : src.data.toList.length % 2 ≠ 0 := by
+      rw [Array.length_toList]
+      exact bne_iff_ne.mp hodd
+    simp [hodd, hexAsciiToBytes?_of_odd _ hlen_odd]
+  · have heven : src.size % 2 = 0 := Decidable.of_not_not (fun h => hodd (bne_iff_ne.mpr h))
+    have hb : (src.size % 2 != 0) = false := bne_eq_false_iff_eq.mpr heven
+    have hdiv : src.size - 0 ≤ 2 * (src.size / 2) := by
+      have h := Nat.div_add_mod src.size 2
+      omega
+    have hemp : (ByteArray.emptyWithCapacity (src.size / 2)).data.toList = [] := rfl
+    simp only [hb, Bool.false_eq_true, ↓reduceIte,
+      hexByteArrayStrictLoop_eq src (src.size / 2) 0 _ (Nat.zero_le _) hdiv,
+      List.drop_zero, hemp, List.nil_append, Option.map_id']
+
 end Obend.Codec.Hex
 
 end
