@@ -566,11 +566,7 @@ impl EpochLatchState {
             return Err(EpochLatchError::CorruptPersistence);
         }
         let expected_checksum = cshake256_hash32(TAG_LATCH_WAL, &bytes[0..46]);
-        let mut diff = 0u8;
-        for i in 0..32 {
-            diff |= expected_checksum[i] ^ bytes[46 + i];
-        }
-        if diff != 0 {
+        if !obend_primitives::ct::ct_eq(&expected_checksum, &bytes[46..]) {
             return Err(EpochLatchError::CorruptPersistence);
         }
         match bytes[5] {
@@ -609,11 +605,7 @@ impl EpochLatchState {
                     self.high_water = Some((epoch, mu));
                     Ok(())
                 } else if epoch == hw {
-                    let mut diff = 0u8;
-                    for i in 0..32 {
-                        diff |= bound_mu[i] ^ mu[i];
-                    }
-                    if diff == 0 {
+                    if obend_primitives::ct::ct_eq_32(&bound_mu, &mu) {
                         Ok(())
                     } else {
                         Err(EpochLatchError::EquivocationRefused { epoch })

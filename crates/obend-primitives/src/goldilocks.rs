@@ -36,6 +36,71 @@ impl fmt::Display for CanonicalLiftError {
     }
 }
 
+/// Error for NTT / sumcheck operations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoldilocksExecError {
+    InvalidPowerOfTwoLength(usize),
+    LogLengthExceedsTwoAdicity(u32),
+    ZeroBlowupFactor,
+    ZeroCosetShift,
+    RoundCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    DegreeBoundExceeded {
+        max_deg: usize,
+        actual_coeffs: usize,
+    },
+    RoundSumCheckFailed {
+        round: usize,
+    },
+    FinalEqEvaluationMismatch,
+    EmptyEvaluationTable,
+}
+
+impl fmt::Display for GoldilocksExecError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPowerOfTwoLength(n) => {
+                write!(f, "length {n} is not a non-zero power of two")
+            }
+            Self::LogLengthExceedsTwoAdicity(k) => {
+                write!(f, "log2(N)={k} exceeds Goldilocks 2-adicity 32")
+            }
+            Self::ZeroBlowupFactor => write!(f, "LDE blowup factor must be a power of two >= 1"),
+            Self::ZeroCosetShift => write!(f, "coset LDE shift must be non-zero in F_p^*"),
+            Self::RoundCountMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "sumcheck round count mismatch: expected {expected}, got {actual}"
+                )
+            }
+            Self::DegreeBoundExceeded {
+                max_deg,
+                actual_coeffs,
+            } => {
+                write!(
+                    f,
+                    "round polynomial has {actual_coeffs} coeffs, exceeding max_deg {max_deg}"
+                )
+            }
+            Self::RoundSumCheckFailed { round } => {
+                write!(
+                    f,
+                    "sumcheck round {round} failed p(0) + p(1) == claimed_sum"
+                )
+            }
+            Self::FinalEqEvaluationMismatch => {
+                write!(
+                    f,
+                    "weighted sumcheck final evaluation disagrees with eq_poly factor"
+                )
+            }
+            Self::EmptyEvaluationTable => write!(f, "multilinear table must be non-empty"),
+        }
+    }
+}
+
 /// Canonical element of the Goldilocks prime field $\mathbb{F}_p$.
 ///
 /// Invariant: `self.0 < GOLDILOCKS_PRIME` at all times.
@@ -81,11 +146,58 @@ impl CanonicalLift {
 }
 
 impl Goldilocks {
+    pub const P: u64 = GOLDILOCKS_PRIME;
     pub const ZERO: Self = Self(0);
     pub const ONE: Self = Self(1);
     pub const TWO: Self = Self(2);
     pub const NON_RESIDUE: Self = Self(GOLDILOCKS_GENERATOR);
     pub const NEG_ONE: Self = Self(GOLDILOCKS_PRIME - 1);
+
+    /// Reduce a machine word modulo the field prime.
+    pub const fn new(raw: u64) -> Self {
+        Self::from_u64_reduced(raw)
+    }
+
+    /// Strict constructor for a wire-format field element.
+    pub const fn try_new(raw: u64) -> Result<Self, CanonicalLiftError> {
+        Self::from_canonical(raw)
+    }
+
+    pub const fn from_canonical_u64(raw: u64) -> Option<Self> {
+        match Self::from_canonical(raw) {
+            Ok(value) => Some(value),
+            Err(_) => None,
+        }
+    }
+
+    pub const fn is_canonical(self) -> bool {
+        self.0 < Self::P
+    }
+
+    pub const fn value(self) -> u64 {
+        self.to_canonical_u64()
+    }
+
+    pub const fn reduce(raw: u128) -> Self {
+        Self::from_u128_reduced(raw)
+    }
+
+    pub const fn reduce128(raw: u128) -> Self {
+        Self::from_u128_reduced(raw)
+    }
+
+    // The proving worker exposes these operations to const callers.
+    pub const fn add(self, rhs: Self) -> Self {
+        self.const_add(rhs)
+    }
+
+    pub const fn sub(self, rhs: Self) -> Self {
+        self.const_sub(rhs)
+    }
+
+    pub const fn mul(self, rhs: Self) -> Self {
+        self.const_mul(rhs)
+    }
 
     /// Strict canonical lift: rejects every integer in $[p, 2^{64})$.
     #[inline]
@@ -199,7 +311,7 @@ impl Goldilocks {
         x
     }
 
-    /// Constant-stride binary exponentiation for public exponents.
+    /// Binary exponentiation for public exponents.
     #[inline]
     pub const fn pow(self, mut exp: u64) -> Self {
         let mut base = self;
@@ -233,13 +345,13 @@ impl Goldilocks {
         Some(t31.exp_power_of_2(33).const_mul(t32))
     }
 
-    /// The canonical $2^k$-th primitive root of unity in $\mathbb{F}_p$ (`None` for $k > 32$).
+    /// The canonical $2^k$-th primitive root of unity in $\mathbb{F}_p$ (error for $k > 32$).
     #[inline]
-    pub const fn primitive_root_of_unity(log_n: u32) -> Option<Self> {
+    pub const fn primitive_root_of_unity(log_n: u32) -> Result<Self, GoldilocksExecError> {
         if log_n > GOLDILOCKS_TWO_ADICITY {
-            return None;
+            return Err(GoldilocksExecError::LogLengthExceedsTwoAdicity(log_n));
         }
-        Some(Self(GOLDILOCKS_ROOT_2_32).exp_power_of_2(GOLDILOCKS_TWO_ADICITY - log_n))
+        Ok(Self(GOLDILOCKS_ROOT_2_32).exp_power_of_2(GOLDILOCKS_TWO_ADICITY - log_n))
     }
 
     /// The distance from zero in the centered representation, $\min(x, p - x)$.
@@ -417,13 +529,13 @@ mod tests {
         assert_eq!(root32.exp_power_of_2(32), Goldilocks::ONE);
         assert_eq!(
             Goldilocks::primitive_root_of_unity(1),
-            Some(Goldilocks::NEG_ONE)
+            Ok(Goldilocks::NEG_ONE)
         );
+        assert_eq!(Goldilocks::primitive_root_of_unity(0), Ok(Goldilocks::ONE));
         assert_eq!(
-            Goldilocks::primitive_root_of_unity(0),
-            Some(Goldilocks::ONE)
+            Goldilocks::primitive_root_of_unity(33),
+            Err(GoldilocksExecError::LogLengthExceedsTwoAdicity(33))
         );
-        assert_eq!(Goldilocks::primitive_root_of_unity(33), None);
         // Euler's criterion: 7 is a quadratic non-residue, so X^2 - 7 is irreducible over F_p.
         assert_eq!(
             Goldilocks::NON_RESIDUE.pow((P - 1) / 2),

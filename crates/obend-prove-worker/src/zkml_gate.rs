@@ -30,8 +30,7 @@ use crate::grinder::{
     default_grind_window, sha256, windowed_find_map_first_cancellable, MAX_DEFAULT_GRIND_THREADS,
 };
 use crate::service::{CancelToken, CancellableBackend, ProveService, ProveServiceConfig};
-pub use obend_primitives::goldilocks::Goldilocks;
-use obend_primitives::goldilocks::GOLDILOCKS_PRIME;
+pub use obend_primitives::goldilocks::{Goldilocks, GOLDILOCKS_PRIME};
 
 // ---------------------------------------------------------------------------
 // Constants & Domain Tags

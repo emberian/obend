@@ -12,73 +12,8 @@ use crate::transcript::{FenziTranscript, InstanceBound};
 
 pub use obend_primitives::goldilocks::{
     CanonicalLift, CanonicalLiftError, GOLDILOCKS_EPSILON, GOLDILOCKS_GENERATOR, GOLDILOCKS_PRIME,
-    GOLDILOCKS_ROOT_2_32, GOLDILOCKS_TWO_ADICITY, Goldilocks,
+    GOLDILOCKS_ROOT_2_32, GOLDILOCKS_TWO_ADICITY, Goldilocks, GoldilocksExecError,
 };
-
-/// Error for NTT / sumcheck operations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GoldilocksExecError {
-    InvalidPowerOfTwoLength(usize),
-    LogLengthExceedsTwoAdicity(u32),
-    ZeroBlowupFactor,
-    ZeroCosetShift,
-    RoundCountMismatch {
-        expected: usize,
-        actual: usize,
-    },
-    DegreeBoundExceeded {
-        max_deg: usize,
-        actual_coeffs: usize,
-    },
-    RoundSumCheckFailed {
-        round: usize,
-    },
-    FinalEqEvaluationMismatch,
-    EmptyEvaluationTable,
-}
-
-impl fmt::Display for GoldilocksExecError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidPowerOfTwoLength(n) => {
-                write!(f, "length {n} is not a non-zero power of two")
-            }
-            Self::LogLengthExceedsTwoAdicity(k) => {
-                write!(f, "log2(N)={k} exceeds Goldilocks 2-adicity 32")
-            }
-            Self::ZeroBlowupFactor => write!(f, "LDE blowup factor must be a power of two >= 1"),
-            Self::ZeroCosetShift => write!(f, "coset LDE shift must be non-zero in F_p^*"),
-            Self::RoundCountMismatch { expected, actual } => {
-                write!(
-                    f,
-                    "sumcheck round count mismatch: expected {expected}, got {actual}"
-                )
-            }
-            Self::DegreeBoundExceeded {
-                max_deg,
-                actual_coeffs,
-            } => {
-                write!(
-                    f,
-                    "round polynomial has {actual_coeffs} coeffs, exceeding max_deg {max_deg}"
-                )
-            }
-            Self::RoundSumCheckFailed { round } => {
-                write!(
-                    f,
-                    "sumcheck round {round} failed p(0) + p(1) == claimed_sum"
-                )
-            }
-            Self::FinalEqEvaluationMismatch => {
-                write!(
-                    f,
-                    "weighted sumcheck final evaluation disagrees with eq_poly factor"
-                )
-            }
-            Self::EmptyEvaluationTable => write!(f, "multilinear table must be non-empty"),
-        }
-    }
-}
 
 /// Quadratic extension $\mathbb{F}_{p^2} = \mathbb{F}_p[u]/(u^2 - 7)$ providing full ~128-bit
 /// Fiat–Shamir & sumcheck soundness (`K5`/`K7`, closing `F4`).
@@ -415,8 +350,7 @@ pub fn ntt_in_place(values: &mut [Goldilocks]) -> Result<(), GoldilocksExecError
     let mut len = 2usize;
     while len <= n {
         let half = len >> 1;
-        let step_root = Goldilocks::primitive_root_of_unity(stage_log)
-            .ok_or(GoldilocksExecError::LogLengthExceedsTwoAdicity(stage_log))?;
+        let step_root = Goldilocks::primitive_root_of_unity(stage_log)?;
         let mut start = 0usize;
         while start < n {
             let mut w = Goldilocks::ONE;
@@ -455,8 +389,7 @@ pub fn intt_in_place(values: &mut [Goldilocks]) -> Result<(), GoldilocksExecErro
     let mut len = 2usize;
     while len <= n {
         let half = len >> 1;
-        let step_root = Goldilocks::primitive_root_of_unity(stage_log)
-            .ok_or(GoldilocksExecError::LogLengthExceedsTwoAdicity(stage_log))?;
+        let step_root = Goldilocks::primitive_root_of_unity(stage_log)?;
         let step_root_inv = step_root.inv().expect("primitive root is non-zero");
         let mut start = 0usize;
         while start < n {

@@ -47,10 +47,6 @@ fn authenticate_hop(root_secret: &[u8; 32], nullifier: &[u8; 32]) -> [u8; 32] {
     cshake256_32(b"OBEND.POLIS.HOP_MAC/v1", &pre)
 }
 
-fn tags_equal(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    a.iter().zip(b).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
-}
-
 /// Stable machine-readable refusal codes emitted by the `ZkBiscuit` + `DualPcsReceipt` verifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RefusalCode {
@@ -1009,7 +1005,7 @@ impl ZkBiscuitChain {
         }
         let lineage = self.verify_chain(revocations)?;
         for (idx, hop) in self.hops.iter().enumerate() {
-            if !tags_equal(
+            if !obend_primitives::ct::ct_eq_32(
                 &hop.authentication,
                 &authenticate_hop(root_secret, &hop.hop_nullifier),
             ) {

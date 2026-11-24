@@ -39,8 +39,7 @@ pub use outbox::*;
 pub use obend_keccak::{cshake256, keccak_f1600, left_encode};
 use obend_keccak::{cshake256_32 as hash, Cshake256};
 pub use obend_primitives::ct::ct_eq_32 as ct_eq_digest;
-pub use obend_primitives::goldilocks::Goldilocks;
-use obend_primitives::goldilocks::GOLDILOCKS_PRIME;
+pub use obend_primitives::goldilocks::{Goldilocks, GOLDILOCKS_PRIME};
 pub use obend_primitives::sha256::{sha256, Sha256};
 
 pub type Digest = [u8; 32];

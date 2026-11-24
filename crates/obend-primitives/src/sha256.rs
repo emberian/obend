@@ -24,8 +24,8 @@ const H0: [u32; 8] = [
 
 const BLOCK_BYTES: usize = 64;
 
-/// Streaming FIPS 180-4 SHA-256. The state is cleared on drop.
-#[derive(Clone)]
+/// Streaming FIPS 180-4 SHA-256. The state can be copied to fork a hash at a shared prefix.
+#[derive(Clone, Copy)]
 pub struct Sha256 {
     state: [u32; 8],
     block: [u8; BLOCK_BYTES],
@@ -45,16 +45,6 @@ impl fmt::Debug for Sha256 {
     }
 }
 
-impl Drop for Sha256 {
-    fn drop(&mut self) {
-        self.state = [0; 8];
-        self.block.fill(0);
-        self.block_len = 0;
-        self.total_bytes = 0;
-        core::hint::black_box((&self.state, &self.block));
-    }
-}
-
 impl Sha256 {
     pub const fn new() -> Self {
         Self {
@@ -65,7 +55,7 @@ impl Sha256 {
         }
     }
 
-    /// Absorbs `data`. Panics past the FIPS 180-4 bound of `2^64 - 1` message bits.
+    /// Absorb the next part of the message.
     pub fn update(&mut self, mut data: &[u8]) {
         self.total_bytes = u64::try_from(data.len())
             .ok()
@@ -91,6 +81,10 @@ impl Sha256 {
     }
 
     pub fn finalize(mut self) -> [u8; 32] {
+        self.finish()
+    }
+
+    fn finish(&mut self) -> [u8; 32] {
         let bit_len = self
             .total_bytes
             .checked_mul(8)
@@ -107,6 +101,9 @@ impl Sha256 {
         for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(self.state) {
             *bytes = word.to_be_bytes();
         }
+        self.state.fill(0);
+        self.block.fill(0);
+        core::hint::black_box((&self.state, &self.block));
         out
     }
 }
@@ -181,7 +178,7 @@ fn hmac_sha256_parts(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     for part in parts {
         inner.update(part);
     }
-    let inner = inner.finalize();
+    let inner = inner.finish();
     for b in &mut pad {
         *b ^= 0x36 ^ 0x5c;
     }
@@ -190,7 +187,7 @@ fn hmac_sha256_parts(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     outer.update(&inner);
     pad.fill(0);
     core::hint::black_box(&pad);
-    outer.finalize()
+    outer.finish()
 }
 
 /// RFC 2104 HMAC-SHA-256.

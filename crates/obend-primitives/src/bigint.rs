@@ -142,7 +142,7 @@ pub fn limbs_from_be<const N: usize>(bytes: &[u8]) -> Option<Limbs<N>> {
 /// does not fit.
 pub fn limbs_to_be_into<const N: usize>(a: &Limbs<N>, out: &mut [u8]) -> Option<()> {
     let len = out.len();
-    if limbs_bits(a) > 8 * len {
+    if limbs_bits(a).div_ceil(8) > len {
         return None;
     }
     out.fill(0);
@@ -387,7 +387,7 @@ impl<const N: usize> Mont<N> {
     }
 
     /// Montgomery form to exactly `out.len()` big-endian bytes of the canonical integer (panics if
-    /// the modulus is wider than `out`).
+    /// the representative is wider than `out`).
     pub fn to_be_into(&self, a: &Limbs<N>, out: &mut [u8]) {
         limbs_to_be_into(&self.from_mont(a), out).expect("Mont::to_be_into: width too small");
     }

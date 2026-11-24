@@ -1,9 +1,8 @@
 //! Constant-time equality for digests, MACs and other authenticators.
 //!
-//! Every byte pair is folded into one accumulator, and the accumulator passes through
-//! [`core::hint::black_box`] before it is tested: the compiler must produce its exact value, so it
-//! cannot stop at the first difference. The functions are never inlined, so a caller's branch on
-//! the result cannot be merged into the fold. Lengths are public.
+//! For equal public lengths, the loop reads every pair and accumulates the full XOR difference.
+//! The optimization barrier and out-of-line calls discourage early-exit code generation.
+//! Constant-time machine code depends on the compiler and target.
 
 /// OR of the byte-wise XOR of two equal-length slices.
 #[inline(always)]

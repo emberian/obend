@@ -571,11 +571,7 @@ impl KernelSessionVerifier {
             return false;
         }
         let expected_mac = self.compute_mac(&expected_binding);
-        let mut diff = 0u8;
-        for (a, b) in token.mac_tag.iter().zip(expected_mac.iter()) {
-            diff |= a ^ b;
-        }
-        diff == 0
+        obend_primitives::ct::ct_eq_32(&token.mac_tag, &expected_mac)
     }
 }
 

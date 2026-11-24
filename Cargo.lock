@@ -148,6 +148,7 @@ version = "0.1.0"
 dependencies = [
  "obend-crypto-exec",
  "obend-keccak",
+ "obend-primitives",
 ]
 
 [[package]]

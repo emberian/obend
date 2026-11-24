@@ -2,10 +2,11 @@
 //! and RFC 5869 HKDF, RFC 8032 Ed25519 strict verification, fixed-width Montgomery arithmetic over
 //! `u64` limbs, the Goldilocks prime field `p = 2^64 - 2^32 + 1`, and constant-time equality.
 //!
-//! `no_std` and allocation-free. The `alloc` feature adds the `Vec`-returning big-integer encoders
+//! `no_std` and allocation-free. The `alloc` feature adds `sha512::Sha512::finalize_vec` and the big-integer encoders
 //! `bigint::limbs_to_be` and `bigint::Mont::to_be`.
 //!
-//! Hash states and HMAC key blocks are cleared when they go out of scope. Without volatile writes
+//! SHA-256 clears its working state on finalization. SHA-512 clears its state on drop.
+//! HMAC clears its key block after use. Without volatile writes
 //! this is best effort: the compiler is discouraged from removing the clear, and copies it made
 //! earlier are out of reach.
 

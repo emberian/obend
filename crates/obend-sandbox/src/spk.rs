@@ -5,13 +5,18 @@
 //!
 //! Quarried and hardened from `breadstuffs/sandstorm-package/src/{spk.rs,manifest.rs}` +
 //! `minidregg/native/spk-rpc/src/{bridge_config.rs,protocol.rs}` with `#![forbid(unsafe_code)]`
-//! and zero external crate dependencies beyond `sha2`, `serde`, and `serde_json`.
+//! and shared SHA-2 and signature verification from `obend-primitives`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use obend_primitives::{
+    ct::{ct_eq, ct_eq_32},
+    ed25519,
+    sha256::sha256,
+    sha512::{sha512, Sha512},
+};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256, Sha512};
 
 use crate::capnp_wire::{self, Message, Struct, WireContent, WireFile};
 
@@ -63,7 +68,7 @@ pub fn sandstorm_base32_encode(bytes: &[u8]) -> String {
 }
 
 // =========================================================================
-// Pure-Rust RFC 8032 Ed25519 (`sign` + `verify_strict`) over `sha2::Sha512`
+// Pure-Rust RFC 8032 Ed25519 (`sign` + `verify_strict`) over the shared SHA-512 core
 // =========================================================================
 
 const MASK51: u64 = (1u64 << 51) - 1;
@@ -171,13 +176,7 @@ impl Fe255 {
     }
 
     fn eq_ct(self, other: Self) -> bool {
-        let a = self.to_bytes();
-        let b = other.to_bytes();
-        let mut diff = 0u8;
-        for i in 0..32 {
-            diff |= a[i] ^ b[i];
-        }
-        std::hint::black_box(diff) == 0
+        ct_eq_32(&self.to_bytes(), &other.to_bytes())
     }
 
     fn is_zero(self) -> bool {
@@ -417,29 +416,8 @@ impl GeP3 {
         }
     }
 
-    fn neg(self) -> Self {
-        Self {
-            x: self.x.neg(),
-            y: self.y,
-            z: self.z,
-            t: self.t.neg(),
-        }
-    }
-
     fn double(self, two_d: Fe255) -> Self {
         self.add(self, two_d)
-    }
-
-    fn eq_proj(self, rhs: Self) -> bool {
-        self.x.mul(rhs.z).eq_ct(rhs.x.mul(self.z)) && self.y.mul(rhs.z).eq_ct(rhs.y.mul(self.z))
-    }
-
-    /// Returns `true` iff $P$ lies in the 8-torsion subgroup ($[8]P = \mathcal{O}$).
-    fn is_small_order(self, two_d: Fe255) -> bool {
-        let p2 = self.double(two_d);
-        let p4 = p2.double(two_d);
-        let p8 = p4.double(two_d);
-        p8.eq_proj(Self::IDENTITY)
     }
 
     fn scalar_mul(self, scalar_le: &[u8; 32], two_d: Fe255) -> Self {
@@ -563,7 +541,7 @@ impl Drop for Ed25519SigningKey {
 
 impl Ed25519SigningKey {
     pub fn from_bytes(seed: &[u8; 32]) -> Self {
-        let mut h: [u8; 64] = Sha512::digest(seed).into();
+        let mut h: [u8; 64] = sha512(seed);
         let mut scalar = [0u8; 32];
         scalar.copy_from_slice(&h[..32]);
         scalar[0] &= 248;
@@ -587,7 +565,7 @@ impl Ed25519SigningKey {
     }
 
     pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
-        let mut h: [u8; 64] = Sha512::digest(self.seed).into();
+        let mut h: [u8; 64] = sha512(&self.seed);
         let mut a = [0u8; 32];
         a.copy_from_slice(&h[..32]);
         a[0] &= 248;
@@ -598,7 +576,8 @@ impl Ed25519SigningKey {
         let mut r_hasher = Sha512::new();
         r_hasher.update(prefix);
         r_hasher.update(msg);
-        let r_wide: [u8; 64] = r_hasher.finalize().into();
+        let mut r_wide = [0; 64];
+        r_hasher.finalize_into(&mut r_wide);
         let r_scalar = reduce_512_mod_ell(&r_wide);
 
         let d = curve_d();
@@ -606,10 +585,11 @@ impl Ed25519SigningKey {
         let big_r = GeP3::basepoint().scalar_mul(&r_scalar, two_d).to_bytes();
 
         let mut k_hasher = Sha512::new();
-        k_hasher.update(big_r);
-        k_hasher.update(self.public_key);
+        k_hasher.update(&big_r);
+        k_hasher.update(&self.public_key);
         k_hasher.update(msg);
-        let k_wide: [u8; 64] = k_hasher.finalize().into();
+        let mut k_wide = [0; 64];
+        k_hasher.finalize_into(&mut k_wide);
         let k_scalar = reduce_512_mod_ell(&k_wide);
 
         let s_scalar = mul_add_mod_ell(&r_scalar, &k_scalar, &a);
@@ -635,38 +615,9 @@ pub fn ed25519_verify_strict(
     msg: &[u8],
     signature: &[u8; 64],
 ) -> Result<(), SpkError> {
-    let mut r_bytes = [0u8; 32];
-    let mut s_bytes = [0u8; 32];
-    r_bytes.copy_from_slice(&signature[..32]);
-    s_bytes.copy_from_slice(&signature[32..]);
-
-    if !le_lt_32(&s_bytes, &ED25519_L) {
-        return Err(SpkError::BadSignature);
-    }
-
-    let d = curve_d();
-    let two_d = d.add(d);
-    let a_pt = GeP3::from_bytes_strict(public_key).ok_or(SpkError::BadSignature)?;
-    let r_pt = GeP3::from_bytes_strict(&r_bytes).ok_or(SpkError::BadSignature)?;
-    if a_pt.is_small_order(two_d) || r_pt.is_small_order(two_d) {
-        return Err(SpkError::BadSignature);
-    }
-
-    let mut k_hasher = Sha512::new();
-    k_hasher.update(r_bytes);
-    k_hasher.update(public_key);
-    k_hasher.update(msg);
-    let k_wide: [u8; 64] = k_hasher.finalize().into();
-    let k_scalar = reduce_512_mod_ell(&k_wide);
-
-    // Verify `[s]B == R + [k]A` <=> `[s]B - [k]A == R`
-    let sb = GeP3::basepoint().scalar_mul(&s_bytes, two_d);
-    let ka = a_pt.scalar_mul(&k_scalar, two_d);
-    let rhs = r_pt.add(ka, two_d);
-    if !sb.eq_proj(rhs) || sb.add(ka.neg(), two_d).to_bytes() != r_bytes {
-        return Err(SpkError::BadSignature);
-    }
-    Ok(())
+    ed25519::verify_strict(public_key, msg, signature)
+        .then_some(())
+        .ok_or(SpkError::BadSignature)
 }
 
 // =========================================================================
@@ -1339,7 +1290,7 @@ pub fn xz_decompress_bounded(input: &[u8], limit: usize) -> Result<Vec<u8>, SpkE
                 }
             }
             0x0A => {
-                let dig: [u8; 32] = Sha256::digest(block_out).into();
+                let dig: [u8; 32] = sha256(block_out);
                 if check_bytes != dig {
                     return Err(SpkError::Decompress("xz block SHA-256 mismatch".into()));
                 }
@@ -1771,12 +1722,8 @@ impl Spk {
         sig_bytes.copy_from_slice(&sig_field[..64]);
         embedded_hash.copy_from_slice(&sig_field[64..128]);
 
-        let computed: [u8; 64] = Sha512::digest(archive_bytes).into();
-        let mut diff = 0u8;
-        for (&a, &b) in embedded_hash.iter().zip(computed.iter()) {
-            diff |= a ^ b;
-        }
-        if std::hint::black_box(diff) != 0 {
+        let computed: [u8; 64] = sha512(archive_bytes);
+        if !ct_eq(&embedded_hash, &computed) {
             return Err(SpkError::BadSignature);
         }
 
@@ -1838,7 +1785,7 @@ impl SpkBuilder {
     pub fn pack(self, signing_key: &Ed25519SigningKey) -> Vec<u8> {
         let archive = SpkArchive { files: self.files };
         let archive_msg = archive.to_capnp_bytes();
-        let hash: [u8; 64] = Sha512::digest(&archive_msg).into();
+        let hash: [u8; 64] = sha512(&archive_msg);
         let sig = signing_key.sign(&hash);
 
         let mut sig_field = Vec::with_capacity(128);

@@ -682,12 +682,8 @@ pub fn ml_kem_768_decaps_internal(
     let c_prime = k_pke_encrypt(&ek_pke, &m_prime, &r_prime);
 
     // Branchless constant-time comparison across all 1088 ciphertext bytes.
-    let mut diff = 0u16;
-    for i in 0..ML_KEM_768_CT_LEN {
-        diff |= u16::from(ct[i] ^ c_prime[i]);
-    }
-    // mismatch_mask == 0xff iff diff != 0, else 0x00.
-    let mismatch_mask = (((diff | diff.wrapping_neg()) >> 15) as u8).wrapping_neg();
+    // Keep the all-ones or all-zeros mask opaque during key selection.
+    let mismatch_mask = core::hint::black_box(u8::from(!ct_eq(ct, &c_prime)).wrapping_neg());
 
     let mut shared_secret = [0u8; ML_KEM_768_SS_LEN];
     for i in 0..ML_KEM_768_SS_LEN {

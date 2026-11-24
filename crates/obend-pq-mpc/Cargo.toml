@@ -10,5 +10,6 @@ default = []
 std = ["obend-crypto-exec/std"]
 
 [dependencies]
+obend-primitives = { path = "../obend-primitives" }
 obend-keccak = { path = "../obend-keccak" }
 obend-crypto-exec = { path = "../obend-crypto-exec", default-features = false }

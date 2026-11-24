@@ -456,11 +456,7 @@ pub fn chacha20_poly1305_open(
     otk.fill(0);
     std::hint::black_box(&otk);
 
-    let mut diff = 0u8;
-    for (&a, &b) in claimed_tag.iter().zip(expected_tag.iter()) {
-        diff |= a ^ b;
-    }
-    if std::hint::black_box(diff) != 0 {
+    if !obend_primitives::ct::ct_eq(claimed_tag, &expected_tag) {
         return Err(SecretSealError::AuthenticationFailed);
     }
 

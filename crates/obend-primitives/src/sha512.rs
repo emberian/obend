@@ -112,16 +112,17 @@ const H384: [u64; 8] = [
 
 const BLOCK_BYTES: usize = 128;
 
-/// The SHA-512 compression state. SHA-384 is the same with another IV, truncated to 48 bytes.
+/// Streaming SHA-512 or SHA-384. The constructor selects the IV and digest length.
 #[derive(Clone)]
-struct Core {
+pub struct Sha512 {
     state: [u64; 8],
     block: [u8; BLOCK_BYTES],
     block_len: usize,
     total_bytes: u128,
+    digest_len: usize,
 }
 
-impl Drop for Core {
+impl Drop for Sha512 {
     fn drop(&mut self) {
         self.state = [0; 8];
         self.block.fill(0);
@@ -131,17 +132,26 @@ impl Drop for Core {
     }
 }
 
-impl Core {
-    const fn new(iv: [u64; 8]) -> Self {
+impl Sha512 {
+    pub const fn new() -> Self {
+        Self::with_iv(H512, 64)
+    }
+
+    pub const fn new_384() -> Self {
+        Self::with_iv(H384, 48)
+    }
+
+    const fn with_iv(iv: [u64; 8], digest_len: usize) -> Self {
         Self {
             state: iv,
+            digest_len,
             block: [0; BLOCK_BYTES],
             block_len: 0,
             total_bytes: 0,
         }
     }
 
-    fn update(&mut self, mut data: &[u8]) {
+    pub fn update(&mut self, mut data: &[u8]) {
         self.total_bytes = self
             .total_bytes
             .checked_add(data.len() as u128)
@@ -166,7 +176,7 @@ impl Core {
     }
 
     /// Pads and returns all eight state words big-endian; the caller truncates for SHA-384.
-    fn finalize(&mut self) -> [u8; 64] {
+    fn finish(&mut self) -> [u8; 64] {
         let bit_len = self
             .total_bytes
             .checked_mul(8)
@@ -184,6 +194,19 @@ impl Core {
             *bytes = word.to_be_bytes();
         }
         out
+    }
+
+    /// Write the digest into exactly 64 bytes for SHA-512 or 48 bytes for SHA-384.
+    pub fn finalize_into(mut self, out: &mut [u8]) {
+        assert_eq!(out.len(), self.digest_len, "SHA-512 family digest width");
+        out.copy_from_slice(&self.finish()[..out.len()]);
+    }
+
+    /// Return the digest of the selected algorithm.
+    #[cfg(feature = "alloc")]
+    pub fn finalize_vec(mut self) -> alloc::vec::Vec<u8> {
+        let len = self.digest_len;
+        self.finish()[..len].to_vec()
     }
 }
 
@@ -226,10 +249,6 @@ fn compress(state: &mut [u64; 8], block: &[u8; BLOCK_BYTES]) {
     }
 }
 
-/// Streaming FIPS 180-4 SHA-512. The state is cleared on drop.
-#[derive(Clone)]
-pub struct Sha512(Core);
-
 impl Default for Sha512 {
     fn default() -> Self {
         Self::new()
@@ -242,65 +261,15 @@ impl fmt::Debug for Sha512 {
     }
 }
 
-impl Sha512 {
-    pub const fn new() -> Self {
-        Self(Core::new(H512))
-    }
-
-    /// Absorbs `data`. Panics past the FIPS 180-4 bound of `2^128 - 1` message bits.
-    pub fn update(&mut self, data: &[u8]) {
-        self.0.update(data);
-    }
-
-    pub fn finalize(mut self) -> [u8; 64] {
-        self.0.finalize()
-    }
-}
-
-/// Streaming FIPS 180-4 SHA-384. The state is cleared on drop.
-#[derive(Clone)]
-pub struct Sha384(Core);
-
-impl Default for Sha384 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl fmt::Debug for Sha384 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sha384").finish_non_exhaustive()
-    }
-}
-
-impl Sha384 {
-    pub const fn new() -> Self {
-        Self(Core::new(H384))
-    }
-
-    /// Absorbs `data`. Panics past the FIPS 180-4 bound of `2^128 - 1` message bits.
-    pub fn update(&mut self, data: &[u8]) {
-        self.0.update(data);
-    }
-
-    pub fn finalize(mut self) -> [u8; 48] {
-        truncate(&self.0.finalize())
-    }
-}
-
-fn truncate<const OUT: usize>(full: &[u8; 64]) -> [u8; OUT] {
-    let mut out = [0u8; OUT];
-    out.copy_from_slice(&full[..OUT]);
-    out
-}
-
 /// One SHA-512-family digest of the concatenation of `parts`, truncated to `OUT` bytes.
 fn digest<const OUT: usize>(iv: [u64; 8], parts: &[&[u8]]) -> [u8; OUT] {
-    let mut core = Core::new(iv);
+    let mut core = Sha512::with_iv(iv, OUT);
     for part in parts {
         core.update(part);
     }
-    truncate(&core.finalize())
+    let mut out = [0; OUT];
+    core.finalize_into(&mut out);
+    out
 }
 
 /// FIPS 180-4 SHA-512.
@@ -387,13 +356,17 @@ mod tests {
         let data: Vec<u8> = (0..1000u32).map(|i| (i * 7 + 3) as u8).collect();
         for chunk in [1, 37, 111, 128, 129, 400] {
             let mut s512 = Sha512::new();
-            let mut s384 = Sha384::new();
+            let mut s384 = Sha512::new_384();
             for piece in data.chunks(chunk) {
                 s512.update(piece);
                 s384.update(piece);
             }
-            assert_eq!(s512.finalize(), sha512(&data), "chunk {chunk}");
-            assert_eq!(s384.finalize(), sha384(&data), "chunk {chunk}");
+            let mut d512 = [0; 64];
+            let mut d384 = [0; 48];
+            s512.finalize_into(&mut d512);
+            s384.finalize_into(&mut d384);
+            assert_eq!(d512, sha512(&data), "chunk {chunk}");
+            assert_eq!(d384, sha384(&data), "chunk {chunk}");
         }
     }
 

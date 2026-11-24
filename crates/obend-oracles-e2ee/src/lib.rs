@@ -8,7 +8,7 @@
 //! missing AEAD AAD, and omitted `FHQPB001` matrix-pin).
 
 pub mod chacha20poly1305;
-pub mod codec;
+mod codec;
 pub mod curves;
 pub mod kkt;
 pub mod mlkem768;
@@ -17,7 +17,14 @@ pub mod she_ceremony;
 pub mod tee;
 pub mod tlsn_e2ee;
 
-pub use obend_primitives::{bigint, ed25519, sha256, sha512};
+pub use obend_primitives::{bigint, ed25519, sha512};
+
+/// SHA-256, MAC and wire-format helpers used by oracle clients.
+pub mod sha256 {
+    pub use crate::codec::{base64_decode_strict, hex_decode_strict, hex_encode_lower};
+    pub use obend_primitives::ct::ct_eq;
+    pub use obend_primitives::sha256::*;
+}
 
 pub use chacha20poly1305::{
     chacha20_block, chacha20_xor, chacha20poly1305_open, chacha20poly1305_open_combined,

@@ -1,7 +1,7 @@
 //! Pure-Rust RFC 8032 Ed25519 (`verify_strict` + deterministic fixture signing) over the generic
 //! [`crate::bigint::Mont`] engine and [`crate::sha512`] (zero external crates).
 //!
-//! `verify_strict` matches the `ed25519-dalek` strict policy:
+//! `verify_strict` enforces the following decoding and verification rules:
 //! 1. `S` must be canonical (`S < ℓ`);
 //! 2. `A` and `R` are decoded strictly (RFC 8032 §5.1.3: `y < p`, on-curve, no negative zero);
 //! 3. small-order `A` or `R` (`[8]P = O`) is refused;
@@ -179,7 +179,8 @@ fn hash_mod_l(parts: &[&[u8]]) -> Fe {
     for p in parts {
         h.update(p);
     }
-    let mut digest = h.finalize();
+    let mut digest = [0; 64];
+    h.finalize_into(&mut digest);
     digest.reverse();
     L.from_be_reduce(&digest)
 }
