@@ -102,7 +102,7 @@ inductive Refusal where
 abbrev Db := List (Nat × Clause)
 
 /-- `l` is falsified by the literals `α` taken true. -/
-def falsified (α : List Int) (l : Int) : Bool := l != 0 && α.contains (-l)
+@[expose] def falsified (α : List Int) (l : Int) : Bool := l != 0 && α.contains (-l)
 
 /-- Reverse unit propagation along `hints`, from the literals `α` taken true: `ok` on a conflict. -/
 @[expose] def propagate (db : Db) : List Int → List Int → Except Refusal Unit
@@ -118,7 +118,7 @@ def falsified (α : List Int) (l : Int) : Bool := l != 0 && α.contains (-l)
       | _ => .error (.notUnit h)
 
 /-- The literals a clause's negation takes true. -/
-def negation (c : Clause) : List Int := (c.filter (· != 0)).map (- ·)
+@[expose] def negation (c : Clause) : List Int := (c.filter (· != 0)).map (- ·)
 
 /-- Run the steps from the held clauses; `ok` when the empty clause is added. The refusal carries
 the step's index. -/
@@ -1408,7 +1408,7 @@ theorem planted_refused : check 1 contradiction planted = .refused .noConflict [
 
 /-- **The registered format**: LRAT 1 over DIMACS, CaDiCaL's text output, the checker above run as
 compiled code on bytes (its theorems are the kernel's). -/
-@[expose] def format : Format where
+def format : Format where
   name := "lrat"
   version := "1"
   Obj := Cnf
