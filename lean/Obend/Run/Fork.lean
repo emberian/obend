@@ -450,6 +450,288 @@ theorem stitch_double_spend {i₀ : Ix} {d₀ : L.Rec} {O : ι → Open S Hole A
 
 end
 
+/-! ## Per-cone independent non-aborting settlement (`settleByCone`, `stitchByCone`, `jstitchByCone`)
+
+`settle` above is all-or-nothing across the entire escalated list: a single conflicting row in one
+causal cone aborts every accepted row in disjoint cones. `settleByCone` partitions escalated rows
+into causal-cone buckets (`coneBuckets coneOf`) and settles each cone independently:
+- If a cone's replay produces zero conflicts, that cone **commits** even when subsequent disjoint
+  cones conflict (`settleByConeBuckets_clean_head_commits`, `settleByConeBuckets_clean_proj_survives`).
+- If a cone's replay produces conflicts, **only that cone** rolls back to its pre-cone state,
+  preserving per-cone atomicity (`settleByConeBuckets_conflict_rolls_back_cone`) and returning every
+  refusal witness (`settleByCone_conflict_sound`).
+- Every state invariant preserved by `step` (including `JReachable` and `Exclusive`) is preserved
+  across `stitchByCone` and `jstitchByCone` (`jstitchByCone_is_commit`, `jstitchByCone_exclusive`). -/
+
+section PerConeSettlement
+
+/-- Deduplicate causal cone IDs in encounter order. -/
+def dedupCones {ConeId : Type} [DecidableEq ConeId] : List ConeId → List ConeId
+  | [] => []
+  | c :: rest => c :: (dedupCones rest).filter (fun x => !decide (x = c))
+
+theorem mem_dedupCones {ConeId : Type} [DecidableEq ConeId] {cs : List ConeId} {x : ConeId} :
+    x ∈ dedupCones cs ↔ x ∈ cs := by
+  induction cs with
+  | nil => rfl
+  | cons c rest ih =>
+    simp only [dedupCones, List.mem_cons, List.mem_filter, ih]
+    by_cases hxc : x = c
+    · subst hxc; simp
+    · simp [hxc]
+
+theorem nodup_dedupCones {ConeId : Type} [DecidableEq ConeId] :
+    ∀ (cs : List ConeId), (dedupCones cs).Nodup
+  | [] => List.Pairwise.nil
+  | c :: rest => by
+    simp only [dedupCones, List.nodup_cons]
+    refine ⟨?_, (nodup_dedupCones rest).filter _⟩
+    intro hc
+    have hne := (List.mem_filter.mp hc).2
+    simp at hne
+
+/-- Partition `es` into per-cone buckets `(c, rows_of_c)` in encounter order. -/
+def coneBuckets {ConeId E : Type} [DecidableEq ConeId] (coneOf : E → ConeId) (es : List E) :
+    List (ConeId × List E) :=
+  (dedupCones (es.map coneOf)).map (fun c => (c, es.filter (fun e => decide (coneOf e = c))))
+
+theorem mem_coneBuckets_of_mem {ConeId E : Type} [DecidableEq ConeId]
+    (coneOf : E → ConeId) {es : List E} {e : E} (he : e ∈ es) :
+    ∃ bucket ∈ coneBuckets coneOf es, bucket.1 = coneOf e ∧ e ∈ bucket.2 := by
+  refine ⟨(coneOf e, es.filter (fun x => decide (coneOf x = coneOf e))), ?_, rfl, ?_⟩
+  · simp only [coneBuckets, List.mem_map]
+    exact ⟨coneOf e, (mem_dedupCones).mpr (List.mem_map_of_mem he), rfl⟩
+  · exact List.mem_filter.mpr ⟨he, by simp⟩
+
+/-- Per-cone settlement decision (`#tooth` mutation target): commits `tentative` iff this cone's
+    own replay produced zero conflicts; otherwise rolls back only this cone to `s`. -/
+def settleConeOutcome {St E R : Type} (s tentative : St) (conflicts : List (E × R)) : Bool × St :=
+  if conflicts.isEmpty then (true, tentative) else (false, s)
+
+/-- Sequentially settle pre-partitioned causal cone buckets: clean cones commit while conflicting
+    cones roll back locally without aborting earlier or later disjoint cones. -/
+def settleByConeBuckets {ConeId St E R : Type} (step : St → E → Except R St) :
+    St → List (ConeId × List E) → St × List ConeId × List (ConeId × List (E × R))
+  | s, [] => (s, [], [])
+  | s, (c, es) :: rest =>
+    let r := replay step s es
+    let dec := settleConeOutcome s r.1 r.2
+    let tail := settleByConeBuckets step dec.2 rest
+    if dec.1 then
+      (tail.1, c :: tail.2.1, tail.2.2)
+    else
+      (tail.1, tail.2.1, (c, r.2) :: tail.2.2)
+
+/-- Settle escalated rows partitioned by `coneOf`. -/
+def settleByCone {ConeId St E R : Type} [DecidableEq ConeId]
+    (coneOf : E → ConeId) (step : St → E → Except R St) (s : St) (es : List E) :
+    St × List ConeId × List (ConeId × List (E × R)) :=
+  settleByConeBuckets step s (coneBuckets coneOf es)
+
+/-- Per-cone non-aborting stitch over any main step. -/
+def stitchByCone {ConeId St E R M Tok : Type} [DecidableEq ConeId] [DecidableEq M]
+    (coneOf : E → ConeId) (step : St → E → Except R St) (main : St × List M) (F : Fork Tok M E) :
+    (St × List M) × List ConeId × List (ConeId × List (E × R)) :=
+  let res := settleByCone coneOf step main.1 F.escalated
+  ((res.1, union main.2 F.grown), res.2.1, res.2.2)
+
+theorem settleByConeBuckets_keeps {ConeId St E R : Type} (step : St → E → Except R St) (P : St → Prop)
+    (keep : ∀ s e s', P s → step s e = .ok s' → P s') :
+    ∀ (bs : List (ConeId × List E)) (s : St), P s → P (settleByConeBuckets step s bs).1
+  | [], _, hs => hs
+  | (c, es) :: rest, s, hs => by
+    by_cases hc : (replay step s es).2.isEmpty = true
+    · simp only [settleByConeBuckets, settleConeOutcome, hc, ↓reduceIte]
+      exact settleByConeBuckets_keeps step P keep rest (replay step s es).1
+        (replay_keeps step P keep es s hs)
+    · have hf : (replay step s es).2.isEmpty = false := Bool.eq_false_iff.mpr hc
+      simp only [settleByConeBuckets, settleConeOutcome, hf, Bool.false_eq_true, ↓reduceIte]
+      exact settleByConeBuckets_keeps step P keep rest s hs
+
+theorem stitchByCone_keeps {ConeId St E R M Tok : Type} [DecidableEq ConeId] [DecidableEq M]
+    (coneOf : E → ConeId) (step : St → E → Except R St) (P : St → Prop)
+    (keep : ∀ s e s', P s → step s e = .ok s' → P s')
+    (main : St × List M) (F : Fork Tok M E) (h : P main.1) :
+    P (stitchByCone coneOf step main F).1.1 :=
+  settleByConeBuckets_keeps step P keep (coneBuckets coneOf F.escalated) main.1 h
+
+theorem stitchByCone_union {ConeId St E R M Tok : Type} [DecidableEq ConeId] [DecidableEq M]
+    (coneOf : E → ConeId) (step : St → E → Except R St) (main : St × List M) (F : Fork Tok M E) (x : M) :
+    x ∈ (stitchByCone coneOf step main F).1.2 ↔ x ∈ main.2 ∨ x ∈ F.grown := mem_union
+
+/-- **Clean cones commit despite sibling conflicts**: if the head cone `(c, es)` replays with zero
+    conflicts, `c` is committed and its post-state seeds the remaining buckets regardless of whether
+    any subsequent disjoint cone in `rest` conflicts and rolls back. -/
+theorem settleByConeBuckets_clean_head_commits {ConeId St E R : Type}
+    (step : St → E → Except R St) (s : St) (c : ConeId) (es : List E) (rest : List (ConeId × List E))
+    (hClean : (replay step s es).2 = []) :
+    c ∈ (settleByConeBuckets step s ((c, es) :: rest)).2.1 ∧
+    (settleByConeBuckets step s ((c, es) :: rest)).1 =
+      (settleByConeBuckets step (replay step s es).1 rest).1 := by
+  refine ⟨?_, ?_⟩
+  · simp only [settleByConeBuckets, settleConeOutcome, hClean, List.isEmpty_nil, ↓reduceIte]
+    exact List.mem_cons_self ..
+  · simp only [settleByConeBuckets, settleConeOutcome, hClean, List.isEmpty_nil, ↓reduceIte]
+
+/-- **Disjoint-cone state survival**: when subsequent buckets `rest` frame-preserve `proj : St → V`,
+    a conflict-free cone `(c, es)` preserves its exact committed projection `proj (replay step s es).1`
+    in the final settled state even if every bucket in `rest` aborts with conflicts. -/
+theorem settleByConeBuckets_frame_keeps {ConeId St E R V : Type}
+    (step : St → E → Except R St) (proj : St → V) :
+    ∀ (bs : List (ConeId × List E)) (s : St),
+      (∀ b ∈ bs, ∀ e ∈ b.2, ∀ s₁ s₂, step s₁ e = .ok s₂ → proj s₂ = proj s₁) →
+      proj (settleByConeBuckets step s bs).1 = proj s
+  | [], _, _ => rfl
+  | (c, es) :: rest, s, hFrame => by
+    have hReplayProj : ∀ (xs : List E) (st : St),
+        (∀ x ∈ xs, ∀ s₁ s₂, step s₁ x = .ok s₂ → proj s₂ = proj s₁) →
+        proj (replay step st xs).1 = proj st := by
+      intro xs
+      induction xs with
+      | nil => intro _ _; rfl
+      | cons x tl ih =>
+        intro st hF
+        simp only [replay]
+        cases hx : step st x with
+        | ok st' =>
+          rw [ih st' (fun y hy => hF y (List.mem_cons_of_mem _ hy))]
+          exact hF x List.mem_cons_self st st' hx
+        | error _ => exact ih st (fun y hy => hF y (List.mem_cons_of_mem _ hy))
+    have hRestFrame : ∀ b ∈ rest, ∀ e ∈ b.2, ∀ s₁ s₂, step s₁ e = .ok s₂ → proj s₂ = proj s₁ :=
+      fun b hb => hFrame b (List.mem_cons_of_mem _ hb)
+    by_cases hc : (replay step s es).2.isEmpty = true
+    · simp only [settleByConeBuckets, settleConeOutcome, hc, ↓reduceIte]
+      rw [settleByConeBuckets_frame_keeps step proj rest _ hRestFrame]
+      exact hReplayProj es s (hFrame (c, es) List.mem_cons_self)
+    · have hf : (replay step s es).2.isEmpty = false := Bool.eq_false_iff.mpr hc
+      simp only [settleByConeBuckets, settleConeOutcome, hf, Bool.false_eq_true, ↓reduceIte]
+      exact settleByConeBuckets_frame_keeps step proj rest s hRestFrame
+
+theorem settleByConeBuckets_clean_proj_survives {ConeId St E R V : Type}
+    (step : St → E → Except R St) (proj : St → V)
+    (s : St) (c : ConeId) (es : List E) (rest : List (ConeId × List E))
+    (hClean : (replay step s es).2 = [])
+    (hDisjoint : ∀ b ∈ rest, ∀ e ∈ b.2, ∀ s₁ s₂, step s₁ e = .ok s₂ → proj s₂ = proj s₁) :
+    proj (settleByConeBuckets step s ((c, es) :: rest)).1 = proj (replay step s es).1 := by
+  rw [(settleByConeBuckets_clean_head_commits step s c es rest hClean).2]
+  exact settleByConeBuckets_frame_keeps step proj rest (replay step s es).1 hDisjoint
+
+/-- **Per-cone atomic rollback**: if a cone's replay produces at least one conflict, none of its
+    partial mutations leak into the continuation state, and its conflicts are recorded verbatim. -/
+theorem settleByConeBuckets_conflict_rolls_back_cone {ConeId St E R : Type}
+    (step : St → E → Except R St) (s : St) (c : ConeId) (es : List E) (rest : List (ConeId × List E))
+    (hConf : (replay step s es).2 ≠ []) :
+    (c, (replay step s es).2) ∈ (settleByConeBuckets step s ((c, es) :: rest)).2.2 ∧
+    (settleByConeBuckets step s ((c, es) :: rest)).1 = (settleByConeBuckets step s rest).1 := by
+  have hFalse : (replay step s es).2.isEmpty = false := List.isEmpty_eq_false_iff.mpr hConf
+  refine ⟨?_, ?_⟩
+  · simp only [settleByConeBuckets, settleConeOutcome, hFalse, Bool.false_eq_true, ↓reduceIte]
+    exact List.mem_cons_self ..
+  · simp only [settleByConeBuckets, settleConeOutcome, hFalse, Bool.false_eq_true, ↓reduceIte]
+
+/-- **Anti-narrowing refusal witness (`replay_error_witness`)**: every `(e, r)` in `replay`'s
+    conflict list came from a genuine failed `step s_mid e = .error r` on an element `e ∈ es`. -/
+theorem replay_conflict_witness {St E R : Type} (step : St → E → Except R St) :
+    ∀ (es : List E) (s : St) {e : E} {r : R},
+      (e, r) ∈ (replay step s es).2 → e ∈ es ∧ ∃ s_mid, step s_mid e = .error r
+  | [], _, _, _, h => by cases h
+  | x :: rest, s, e, r, h => by
+    simp only [replay] at h
+    cases hx : step s x with
+    | ok s' =>
+      rw [hx] at h
+      obtain ⟨hmem, sm, hsm⟩ := replay_conflict_witness step rest s' h
+      exact ⟨List.mem_cons_of_mem _ hmem, sm, hsm⟩
+    | error rx =>
+      rw [hx] at h
+      rcases List.mem_cons.mp h with heq | hrest
+      · cases heq
+        exact ⟨List.mem_cons_self .., s, hx⟩
+      · obtain ⟨hmem, sm, hsm⟩ := replay_conflict_witness step rest s hrest
+        exact ⟨List.mem_cons_of_mem _ hmem, sm, hsm⟩
+
+/-- **Conflict conservation & anti-narrowing (`settleByConeBuckets_conflict_sound`)**: every aborted
+    cone bucket in `settleByConeBuckets` is non-empty and every reported `(e, r)` genuinely failed
+    `step` on a row belonging to that bucket. -/
+theorem settleByConeBuckets_conflict_sound {ConeId St E R : Type} (step : St → E → Except R St) :
+    ∀ (bs : List (ConeId × List E)) (s : St) {c : ConeId} {confs : List (E × R)},
+      (c, confs) ∈ (settleByConeBuckets step s bs).2.2 →
+      confs ≠ [] ∧ ∃ es, (c, es) ∈ bs ∧ ∀ e r, (e, r) ∈ confs → e ∈ es ∧ ∃ s_mid, step s_mid e = .error r
+  | [], _, _, _, h => by cases h
+  | (c₀, es₀) :: rest, s, c, confs, h => by
+    by_cases hc : (replay step s es₀).2.isEmpty = true
+    · simp only [settleByConeBuckets, settleConeOutcome, hc, ↓reduceIte] at h
+      obtain ⟨hne, es, hes, hsound⟩ :=
+        settleByConeBuckets_conflict_sound step rest (replay step s es₀).1 h
+      exact ⟨hne, es, List.mem_cons_of_mem _ hes, hsound⟩
+    · have hf : (replay step s es₀).2.isEmpty = false := Bool.eq_false_iff.mpr hc
+      simp only [settleByConeBuckets, settleConeOutcome, hf, Bool.false_eq_true, ↓reduceIte] at h
+      rcases List.mem_cons.mp h with heq | htail
+      · cases heq
+        refine ⟨List.isEmpty_eq_false_iff.mp hf, es₀, List.mem_cons_self .., ?_⟩
+        intro e r her
+        exact replay_conflict_witness step es₀ s her
+      · obtain ⟨hne, es, hes, hsound⟩ := settleByConeBuckets_conflict_sound step rest s htail
+        exact ⟨hne, es, List.mem_cons_of_mem _ hes, hsound⟩
+
+/-- **Two-cone independent commit + localized conflict (`settleByCone_two_disjoint_first_commits`)**:
+    for two distinct causal cones `c₁ ≠ c₂`, if `e₁` (in `c₁`) succeeds on `s` while `e₂` (in `c₂`)
+    fails on the post-state `s₁`, `settleByCone` commits `c₁` (reaching `s₁`) and records `c₂` as
+    conflicted without aborting `c₁`. -/
+theorem settleByCone_two_disjoint_first_commits {ConeId St E R : Type} [DecidableEq ConeId]
+    (coneOf : E → ConeId) (step : St → E → Except R St)
+    (s s₁ : St) (e₁ e₂ : E) (r₂ : R)
+    (hne : coneOf e₁ ≠ coneOf e₂)
+    (hOk₁ : step s e₁ = .ok s₁)
+    (hErr₂ : step s₁ e₂ = .error r₂) :
+    let res := settleByCone coneOf step s [e₁, e₂]
+    res.1 = s₁ ∧ coneOf e₁ ∈ res.2.1 ∧ (coneOf e₂, [(e₂, r₂)]) ∈ res.2.2 := by
+  have hBuckets : coneBuckets coneOf [e₁, e₂] = [(coneOf e₁, [e₁]), (coneOf e₂, [e₂])] := by
+    simp [coneBuckets, dedupCones, hne, Ne.symm hne]
+  dsimp only [settleByCone]
+  rw [hBuckets]
+  simp [settleByConeBuckets, settleConeOutcome, replay, hOk₁, hErr₂]
+
+end PerConeSettlement
+
+section JointPerConeStitch
+variable {ConeId Ix : Type} {S : Sig Ix} {Hole : Ix → Type} {A : Ix → Type}
+variable {ι P Cred Cand Tok Fact Ob W M : Type}
+variable [DecidableEq ConeId] [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)]
+variable [DecidableEq Tok] [DecidableEq Cand] [DecidableEq (Σ i, S.Op i)] [DecidableEq M]
+
+/-- **Per-cone non-aborting joint stitch**: independent causal cones commit through `jstep` even
+    when a disjoint cone's escalated dispatch fails. -/
+def jstitchByCone (coneOf : Deferred ι S → ConeId)
+    (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j) {i₀ : Ix}
+    (main : JCfg L S Hole A P Cand Fact Ob i₀ × List M) (F : Fork Tok M (Deferred ι S)) :=
+  stitchByCone coneOf (jstep L base sp au k) main F
+
+variable {L : Ledger ι W Tok} {base : W → View Tok Fact} {sp : ι → Spec S Tok Fact Ob}
+variable {au : ι → Authority P Cred} {k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j}
+
+/-- **Per-cone joint stitch is a valid joint commit**: every state reached by `jstitchByCone` is
+    reachable from `J₀` by accepted `jrun` dispatches. -/
+theorem jstitchByCone_is_commit {i₀ : Ix} {J₀ : JCfg L S Hole A P Cand Fact Ob i₀}
+    (coneOf : Deferred ι S → ConeId)
+    (main : JCfg L S Hole A P Cand Fact Ob i₀ × List M) (F : Fork Tok M (Deferred ι S))
+    (h : JReachable L base sp au k J₀ main.1) :
+    JReachable L base sp au k J₀ (jstitchByCone coneOf L base sp au k main F).1.1 :=
+  stitchByCone_keeps coneOf (jstep L base sp au k) (JReachable L base sp au k J₀)
+    (fun _ e _ hs hst => .step (.dispatch e.1 e.2) hs hst) main F h
+
+/-- **Per-cone joint stitch preserves ledger exclusion**: no shared token is ever double-granted
+    across committed cones. -/
+theorem jstitchByCone_exclusive {i₀ : Ix} (coneOf : Deferred ι S → ConeId)
+    (main : JCfg L S Hole A P Cand Fact Ob i₀ × List M)
+    (F : Fork Tok M (Deferred ι S)) (hx : Exclusive L main.1.led) :
+    Exclusive L (jstitchByCone coneOf L base sp au k main F).1.1.led :=
+  stitchByCone_keeps coneOf (jstep L base sp au k) (fun J => Exclusive L J.led)
+    (fun _ _ _ hs hst => jstep_exclusive hs hst) main F hx
+
+end JointPerConeStitch
+
 end Obend.Run.Fork
 
 end

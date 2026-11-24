@@ -134,6 +134,7 @@ public import Obend.Vault.WorldTree
 public import Obend.Vault.UnifiedDeos
 public import Obend.Vault.SwarmLedgerSeams
 public import Obend.Vault.Branch
+public import Obend.Vault.SemidirectGsp
 public import Obend.Vault.BranchCli
 public import Obend.Vault.Merge
 public import Obend.Vault.Cli
