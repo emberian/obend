@@ -9,6 +9,20 @@ use obend_surfaces::{
     ViewNode, ViewPatch, WorldState, MAX_VIEW_DEPTH,
 };
 
+#[test]
+fn interposed_label_preserves_dvn1_bytes() {
+    let node = ViewNode::Host {
+        cell: "oracle".into(),
+        status: HostStatus::Interposed {
+            label: "cached".into(),
+        },
+        view: Some(Box::new(ViewNode::Divider)),
+    };
+    let wire = b"DVN1\x01\x0c\x06\0\0\0oracle\x03\x06\0\0\0cached\x01\x0b";
+    assert_eq!(node.encode().unwrap(), wire);
+    assert_eq!(ViewNode::decode(wire).unwrap(), node);
+}
+
 fn all_25_variants() -> Vec<ViewNode> {
     vec![
         ViewNode::VStack(vec![ViewNode::Text("v".into())]),
@@ -241,7 +255,7 @@ fn frustum_fog_of_war_noninterference_and_nonvacuity() {
     policies.insert(
         "oracle".to_owned(),
         Disposition::Interpose {
-            mock_label: "cached".into(),
+            label: "cached".into(),
         },
     );
     policies.insert(

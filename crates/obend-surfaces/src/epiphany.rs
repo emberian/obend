@@ -797,8 +797,8 @@ fn validate_belief_tree(
         ViewNode::Divider => {}
         ViewNode::Host { cell, status, view } => {
             check_str_no_spoof(circle_id, "Host.cell", cell)?;
-            if let HostStatus::Interposed { mock_label } = status {
-                check_str_no_spoof(circle_id, "Host.mock_label", mock_label)?;
+            if let HostStatus::Interposed { label } = status {
+                check_str_no_spoof(circle_id, "Host.label", label)?;
             }
             if let Some(inner) = view {
                 validate_belief_tree(circle_id, inner, depth + 1, node_count)?;

@@ -175,7 +175,7 @@ pub enum HostStatus {
     Live,
     Severed { snapshot_digest: u64 },
     Attenuated { allowed_count: usize },
-    Interposed { mock_label: String },
+    Interposed { label: String },
 }
 
 /// Complete 25-variant toolkit-free `ViewNode` IR matching `breadstuffs/deos-view/src/tree.rs:25-249`
@@ -580,9 +580,9 @@ fn encode_node(
                     buf.push(2);
                     put_usize(buf, *allowed_count)?;
                 }
-                HostStatus::Interposed { mock_label } => {
+                HostStatus::Interposed { label } => {
                     buf.push(3);
-                    put_str(buf, mock_label)?;
+                    put_str(buf, label)?;
                 }
             }
             match view {
@@ -865,7 +865,7 @@ fn decode_node(r: &mut Reader<'_>, depth: usize) -> Result<ViewNode, CodecError>
                     allowed_count: r.read_usize()?,
                 },
                 3 => HostStatus::Interposed {
-                    mock_label: r.read_str()?,
+                    label: r.read_str()?,
                 },
                 other => return Err(CodecError::InvalidTag("HostStatus", other)),
             };
@@ -1253,7 +1253,7 @@ pub fn apply_patch(v: &ViewNode, patch: &ViewPatch) -> Result<ViewNode, PatchErr
 pub enum Disposition {
     Sever { snapshot_digest: u64 },
     Attenuate { allowed_slots: BTreeSet<(String, usize)> },
-    Interpose { mock_label: String },
+    Interpose { label: String },
     Tether,
 }
 
@@ -1409,9 +1409,9 @@ pub fn project_view_node(
                         .map(|v| Box::new(project_view_node(&narrowed, state, cell, v))),
                 }
             }
-            Disposition::Interpose { mock_label } => ViewNode::Host {
+            Disposition::Interpose { label } => ViewNode::Host {
                 cell: cell.clone(),
-                status: HostStatus::Interposed { mock_label },
+                status: HostStatus::Interposed { label },
                 view: None,
             },
             Disposition::Tether => ViewNode::Host {

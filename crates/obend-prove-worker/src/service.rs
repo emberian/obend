@@ -458,10 +458,7 @@ where
             return 0;
         };
         let mut removed = 0usize;
-        loop {
-            let Some((&(settled_at, seq), &id)) = self.ttl_order.first_key_value() else {
-                break;
-            };
+        while let Some((&(settled_at, seq), &id)) = self.ttl_order.first_key_value() {
             if now.saturating_duration_since(settled_at) < ttl {
                 break;
             }

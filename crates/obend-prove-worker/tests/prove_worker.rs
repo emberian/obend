@@ -598,10 +598,7 @@ fn adversarial_slow_low_thread_fast_high_thread_still_returns_lowest_nonce() {
 
 #[test]
 fn windowed_find_map_first_handles_boundary_spans_and_misses() {
-    assert_eq!(
-        windowed_find_map_first_with_threads(0, 64, 8, |u| Some(u)),
-        None
-    );
+    assert_eq!(windowed_find_map_first_with_threads(0, 64, 8, Some), None);
     assert_eq!(
         windowed_find_map_first_with_threads(1, 64, 8, |u| (u == 0).then_some(99u64)),
         Some(99)

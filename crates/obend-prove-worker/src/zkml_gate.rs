@@ -203,14 +203,36 @@ impl CshakeSponge {
         s
     }
 
+    /// Absorbs up to a lane boundary bytewise, then whole little-endian lanes, then the tail.
     fn absorb(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.lanes[self.pos / 8] ^= (b as u64) << (8 * (self.pos % 8));
-            self.pos += 1;
-            if self.pos == KECCAK_RATE_BYTES {
-                keccak_f1600(&mut self.lanes);
-                self.pos = 0;
-            }
+        let mut rest = bytes;
+        while !self.pos.is_multiple_of(8) {
+            let Some((&b, tail)) = rest.split_first() else {
+                return;
+            };
+            self.absorb_byte(b);
+            rest = tail;
+        }
+        let (lanes, tail) = rest.as_chunks::<8>();
+        for lane in lanes {
+            self.lanes[self.pos / 8] ^= u64::from_le_bytes(*lane);
+            self.advance(8);
+        }
+        for &b in tail {
+            self.absorb_byte(b);
+        }
+    }
+
+    fn absorb_byte(&mut self, b: u8) {
+        self.lanes[self.pos / 8] ^= (b as u64) << (8 * (self.pos % 8));
+        self.advance(1);
+    }
+
+    fn advance(&mut self, n: usize) {
+        self.pos += n;
+        if self.pos == KECCAK_RATE_BYTES {
+            keccak_f1600(&mut self.lanes);
+            self.pos = 0;
         }
     }
 
@@ -229,9 +251,14 @@ impl CshakeSponge {
         self.absorb(bytes);
     }
 
-    fn finalize_32(mut self) -> [u8; 32] {
+    /// Xors the domain suffix at the current position and the final bit of the rate.
+    fn pad(&mut self) {
         self.lanes[self.pos / 8] ^= (self.suffix as u64) << (8 * (self.pos % 8));
         self.lanes[(KECCAK_RATE_BYTES - 1) / 8] ^= 0x80u64 << (8 * ((KECCAK_RATE_BYTES - 1) % 8));
+    }
+
+    fn finalize_32(mut self) -> [u8; 32] {
+        self.pad();
         keccak_f1600(&mut self.lanes);
         let mut out = [0u8; 32];
         for (i, byte) in out.iter_mut().enumerate() {
@@ -248,16 +275,21 @@ pub fn cshake256_32(customization: &[u8], input: &[u8]) -> [u8; 32] {
     sponge.finalize_32()
 }
 
-/// Appends canonical unsigned LEB128 encoding of `value`, matching `Obend.Crypto.leb128`.
-pub fn encode_leb128(mut value: u64, out: &mut Vec<u8>) {
-    loop {
-        if value < 128 {
-            out.push(value as u8);
-            break;
-        }
-        out.push(((value & 0x7f) as u8) | 0x80);
+/// Encodes a u64 in at most ten canonical unsigned LEB128 bytes.
+fn leb128_bytes(mut value: u64, buf: &mut [u8; 10]) -> &[u8] {
+    let mut i = 0;
+    while value >= 128 {
+        buf[i] = (value as u8 & 0x7f) | 0x80;
         value >>= 7;
+        i += 1;
     }
+    buf[i] = value as u8;
+    &buf[..=i]
+}
+
+/// Appends canonical unsigned LEB128 encoding of `value`, matching `Obend.Crypto.leb128`.
+pub fn encode_leb128(value: u64, out: &mut Vec<u8>) {
+    out.extend_from_slice(leb128_bytes(value, &mut [0; 10]));
 }
 
 fn leb128_vec(value: u64) -> Vec<u8> {
@@ -402,19 +434,19 @@ fn read_bounded_framed_fields(
 /// Checks whether the first `bits` low bits (little-endian in `digest[0..8]`) of `digest` are zero.
 #[inline]
 pub fn digest_has_low_zero_bits(digest: &[u8; 32], bits: u32) -> bool {
-    if bits == 0 {
-        return true;
-    }
-    if bits > 64 {
-        return false;
-    }
     let sample = u64::from_le_bytes([
         digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
     ]);
-    if bits == 64 {
-        sample == 0
-    } else {
-        (sample & ((1u64 << bits) - 1)) == 0
+    low_bits_zero(sample, bits)
+}
+
+/// Whether the low `bits` bits of `sample` are zero; more than 64 bits is never satisfied.
+fn low_bits_zero(sample: u64, bits: u32) -> bool {
+    match bits {
+        0 => true,
+        1..=63 => sample & ((1u64 << bits) - 1) == 0,
+        64 => sample == 0,
+        _ => false,
     }
 }
 
@@ -1455,12 +1487,16 @@ impl FsTranscript {
         }
     }
 
-    fn absorb_msg(&mut self, label: &[u8], msg_bytes: &[u8]) {
+    fn absorbed_state(&self, label: &[u8], msg_bytes: &[u8]) -> [u8; 32] {
         let mut third = Vec::with_capacity(10 + msg_bytes.len());
         encode_leb128(self.step_count, &mut third);
         third.extend_from_slice(msg_bytes);
         let frame = encode_zkml_fields(&[&self.state, label, &third]);
-        self.state = cshake256_32(FS_ABSORB_TAG, &frame);
+        cshake256_32(FS_ABSORB_TAG, &frame)
+    }
+
+    fn absorb_msg(&mut self, label: &[u8], msg_bytes: &[u8]) {
+        self.state = self.absorbed_state(label, msg_bytes);
         self.step_count += 1;
     }
 
@@ -2308,6 +2344,91 @@ impl ZkmlChunkReceipt {
 /// preventing job-supplied `grind_threads` from exhausting host OS threads while preserving `1T == NT` parity.
 pub const MAX_ZKML_GRIND_THREADS: usize = MAX_DEFAULT_GRIND_THREADS;
 
+/// Evaluates `FsTranscript::absorb_msg(label, nonce)` for many nonces at one transcript position.
+///
+/// When the frame and its padding fit one rate block, the `FS_ABSORB_TAG` prefix permutation and
+/// every frame byte except the nonce are computed once, so a candidate costs one permutation and
+/// no allocation. A longer frame goes through the transcript.
+enum NonceAbsorber<'a> {
+    OneBlock {
+        /// The absorbed tag state xored with the padded frame, its nonce bytes zero.
+        seeded: [u64; 25],
+        lane: usize,
+        shift: u32,
+    },
+    General {
+        transcript: FsTranscript,
+        label: &'a [u8],
+    },
+}
+
+impl<'a> NonceAbsorber<'a> {
+    fn new(state: &[u8; 32], step_count: u64, label: &'a [u8]) -> Self {
+        let mut step_buf = [0; 10];
+        let step = leb128_bytes(step_count, &mut step_buf);
+        let third_len = step.len() + 8;
+        // A fitting label is shorter than 128, so all three field lengths take one byte.
+        let fixed_len = 3 + state.len() + third_len;
+        if label.len() >= KECCAK_RATE_BYTES - fixed_len {
+            return Self::General {
+                transcript: FsTranscript {
+                    state: *state,
+                    step_count,
+                },
+                label,
+            };
+        }
+        let mut sponge = CshakeSponge::new(FS_ABSORB_TAG);
+        sponge.absorb(&[state.len() as u8]);
+        sponge.absorb(state);
+        sponge.absorb(&[label.len() as u8]);
+        sponge.absorb(label);
+        sponge.absorb(&[third_len as u8]);
+        sponge.absorb(step);
+        let nonce_at = sponge.pos;
+        sponge.absorb(&[0; 8]);
+        sponge.pad();
+        Self::OneBlock {
+            seeded: sponge.lanes,
+            lane: nonce_at / 8,
+            shift: 8 * (nonce_at % 8) as u32,
+        }
+    }
+
+    /// The 32-byte digest `absorb_msg` would store, as four little-endian lanes.
+    fn digest_lanes(&self, nonce: u64) -> [u64; 4] {
+        match self {
+            Self::OneBlock {
+                seeded,
+                lane,
+                shift,
+            } => {
+                let mut st = *seeded;
+                // The frame holds the nonce big-endian and lanes read bytes little-endian.
+                let word = nonce.swap_bytes();
+                st[*lane] ^= word << shift;
+                if *shift != 0 {
+                    st[*lane + 1] ^= word >> (64 - shift);
+                }
+                keccak_f1600(&mut st);
+                [st[0], st[1], st[2], st[3]]
+            }
+            Self::General { transcript, label } => {
+                digest_lanes(&transcript.absorbed_state(label, &nonce.to_be_bytes()))
+            }
+        }
+    }
+}
+
+/// A 32-byte digest as its four little-endian lanes.
+fn digest_lanes(digest: &[u8; 32]) -> [u64; 4] {
+    let mut out = [0u64; 4];
+    for (word, bytes) in out.iter_mut().zip(digest.as_chunks::<8>().0) {
+        *word = u64::from_le_bytes(*bytes);
+    }
+    out
+}
+
 /// Deterministic `1T == NT` post-commit PoW grinder returning the exact lowest matching nonce `w`
 /// (matching `grindChunkPowWindowed` in `EinSumcheckMxfp4.lean`, where `w - 1` is provably invalid).
 pub fn grind_zkml_chunk_pow(
@@ -2326,14 +2447,9 @@ pub fn grind_zkml_chunk_pow(
     }
     let window = default_grind_window(grind_bits as usize, 1);
     let capped_threads = threads.clamp(1, MAX_ZKML_GRIND_THREADS);
-    let base_tr = FsTranscript {
-        state: *post_fold_state,
-        step_count: post_fold_step_count,
-    };
+    let absorber = NonceAbsorber::new(post_fold_state, post_fold_step_count, ZKML_POW_NONCE_LABEL);
     windowed_find_map_first_cancellable(span, window, capped_threads, cancel, |cand| {
-        let mut tr = base_tr.clone();
-        tr.absorb_msg(ZKML_POW_NONCE_LABEL, &cand.to_be_bytes());
-        digest_has_low_zero_bits(&tr.state, grind_bits).then_some(cand)
+        low_bits_zero(absorber.digest_lanes(cand)[0], grind_bits).then_some(cand)
     })
     .map(|(_, nonce)| nonce)
 }
@@ -3756,4 +3872,191 @@ pub fn spawn_streaming_zkml_service(
     config: ProveServiceConfig,
 ) -> ProveService<StreamingZkmlJob, CandidateComputation> {
     ProveService::spawn_cancellable(backend.into_cancellable_backend(), config)
+}
+
+#[cfg(test)]
+mod nonce_absorber_tests {
+    use super::*;
+
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        }
+
+        fn digest(&mut self) -> [u8; 32] {
+            let mut out = [0u8; 32];
+            for chunk in out.as_chunks_mut::<8>().0 {
+                *chunk = self.next().to_le_bytes();
+            }
+            out
+        }
+
+        /// A step count whose LEB128 width varies across the whole `u64` range.
+        fn step_count(&mut self) -> u64 {
+            let shift = self.next() % 64;
+            self.next() >> shift
+        }
+    }
+
+    fn transcript_lanes(state: &[u8; 32], step_count: u64, label: &[u8], nonce: u64) -> [u64; 4] {
+        let mut tr = FsTranscript {
+            state: *state,
+            step_count,
+        };
+        tr.absorb_msg(label, &nonce.to_be_bytes());
+        digest_lanes(&tr.state)
+    }
+
+    fn leb_width(value: u64) -> usize {
+        leb128_vec(value).len()
+    }
+
+    #[test]
+    fn grind_absorber_matches_absorb_msg_on_random_tuples() {
+        let mut rng = SplitMix(0x5eed);
+        for _ in 0..10_000 {
+            let state = rng.digest();
+            let step_count = rng.step_count();
+            let nonce = rng.next();
+            let absorber = NonceAbsorber::new(&state, step_count, ZKML_POW_NONCE_LABEL);
+            assert!(matches!(absorber, NonceAbsorber::OneBlock { .. }));
+            assert_eq!(
+                absorber.digest_lanes(nonce),
+                transcript_lanes(&state, step_count, ZKML_POW_NONCE_LABEL, nonce)
+            );
+        }
+    }
+
+    #[test]
+    fn grind_absorber_covers_every_nonce_alignment_and_the_block_boundary() {
+        let mut rng = SplitMix(0xa119);
+        let mut shifts_seen = [false; 8];
+        let (mut at_135, mut at_136) = (false, false);
+        for label_len in 0..=110usize {
+            let label = vec![0xa5u8; label_len];
+            for width in 1..=10u32 {
+                let step_count = 1u64 << (7 * (width - 1));
+                assert_eq!(leb_width(step_count), width as usize);
+                let frame_len =
+                    1 + 32 + leb_width(label_len as u64) + label_len + 1 + width as usize + 8;
+                let state = rng.digest();
+                let nonce = rng.next();
+                let absorber = NonceAbsorber::new(&state, step_count, &label);
+                match &absorber {
+                    NonceAbsorber::OneBlock { shift, .. } => {
+                        assert!(frame_len <= 135);
+                        shifts_seen[(*shift / 8) as usize] = true;
+                    }
+                    NonceAbsorber::General { .. } => assert!(frame_len >= 136),
+                }
+                at_135 |= frame_len == 135;
+                at_136 |= frame_len == 136;
+                assert_eq!(
+                    absorber.digest_lanes(nonce),
+                    transcript_lanes(&state, step_count, &label, nonce)
+                );
+            }
+        }
+        assert!(at_135 && at_136 && shifts_seen.iter().all(|&seen| seen));
+    }
+
+    #[test]
+    fn grind_absorber_covers_leb128_endpoints() {
+        let state = [0xff; 32];
+        let mut steps = vec![0, u64::MAX];
+        for shift in (7..64).step_by(7) {
+            steps.extend([(1u64 << shift) - 1, 1u64 << shift]);
+        }
+        for step in steps {
+            for label in [ZKML_POW_NONCE_LABEL, &[0x5a; 128], &[0x5a; 272]] {
+                let absorber = NonceAbsorber::new(&state, step, label);
+                let tr = FsTranscript {
+                    state,
+                    step_count: step,
+                };
+                for nonce in [0u64, 0x0123_4567_89ab_cdef, u64::MAX] {
+                    assert_eq!(
+                        absorber.digest_lanes(nonce),
+                        digest_lanes(&tr.absorbed_state(label, &nonce.to_be_bytes()))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grind_padding_combines_domain_and_final_bit_in_last_byte() {
+        let mut sponge = CshakeSponge::new(FS_ABSORB_TAG);
+        sponge.absorb(&[0xa5; KECCAK_RATE_BYTES - 1]);
+        let mut expected = sponge.lanes;
+        expected[16] ^= 0x84 << 56;
+        sponge.pad();
+        assert_eq!(sponge.lanes, expected);
+    }
+
+    #[test]
+    fn grind_word_absorb_matches_bytewise_absorb_across_splits() {
+        let mut rng = SplitMix(0xb10c);
+        for _ in 0..2_000 {
+            let len = (rng.next() % 500) as usize;
+            let msg: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+            let mut bytewise = CshakeSponge::new(FS_ABSORB_TAG);
+            for &b in &msg {
+                bytewise.absorb_byte(b);
+            }
+            let mut split = CshakeSponge::new(FS_ABSORB_TAG);
+            let mut rest = msg.as_slice();
+            while !rest.is_empty() {
+                let take = 1 + (rng.next() as usize) % rest.len().min(150);
+                let (head, tail) = rest.split_at(take);
+                split.absorb(head);
+                rest = tail;
+            }
+            assert_eq!(split.finalize_32(), bytewise.finalize_32());
+        }
+    }
+
+    #[test]
+    fn grind_returns_the_lowest_nonce_of_a_direct_scan() {
+        let mut rng = SplitMix(0x90d);
+        for (bits, rounds) in [(1u32, 6), (4, 6), (8, 6), (12, 4), (16, 2)] {
+            for _ in 0..rounds {
+                let state = rng.digest();
+                let step_count = rng.step_count();
+                let direct = (0..1u64 << 22)
+                    .find(|&nonce| {
+                        let mut tr = FsTranscript { state, step_count };
+                        tr.absorb_msg(ZKML_POW_NONCE_LABEL, &nonce.to_be_bytes());
+                        digest_has_low_zero_bits(&tr.state, bits)
+                    })
+                    .expect("a witness below 2^22");
+                for threads in [1, 4] {
+                    let cancel = CancelToken::new();
+                    assert_eq!(
+                        grind_zkml_chunk_pow(&state, step_count, bits, 1 << 22, threads, &cancel),
+                        Some(direct)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grind_low_bit_predicate_boundaries() {
+        assert!(low_bits_zero(u64::MAX, 0));
+        assert!(low_bits_zero(0, 64));
+        assert!(!low_bits_zero(1 << 63, 64));
+        assert!(!low_bits_zero(0, 65));
+        for k in 0..64u32 {
+            let sample = 1u64 << k;
+            assert!(low_bits_zero(sample, k));
+            assert!(!low_bits_zero(sample, k + 1));
+        }
+    }
 }

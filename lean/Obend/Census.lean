@@ -273,6 +273,7 @@ import Obend.Digest.Cshake256.Fast
 import Obend.Digest.Cshake256.Seam
 import Obend.Digest.Cshake256.Spec
 import Obend.Digest.HashBytes
+import Obend.Digest.Kmac256
 import Obend.Doc
 import Obend.Doc.Backlinks
 import Obend.Doc.Graph
@@ -483,6 +484,7 @@ import Obend.Lower.Pancake.LcnfSimHelpers
 import Obend.Lower.Pancake.PanSem
 import Obend.Lower.Pancake.PancakeCshake256
 import Obend.Lower.Pancake.PancakeKeccak
+import Obend.Lower.Pancake.PancakeKmac256
 import Obend.Lower.Pancake.RefinesClkPan
 import Obend.Lower.Pancake.SpongeFrame
 import Obend.Lower.Pancake.WordBuffer

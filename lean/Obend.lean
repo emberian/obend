@@ -251,6 +251,7 @@ public import Obend.Lower.LCNF
 public import Obend.Lower.Pancake.BeltLatch
 public import Obend.Lower.Pancake.MacaroonVerifier
 public import Obend.Lower.Pancake.PancakeCshake256
+public import Obend.Lower.Pancake.PancakeKmac256
 public import Obend.Lower.Pancake.PanSem
 public import Obend.Lower.Pancake.CondSClk
 public import Obend.Lower.Pancake.RefinesClkPan

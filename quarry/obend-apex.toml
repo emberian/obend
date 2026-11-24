@@ -448,6 +448,27 @@ theorem = "pancakeCshake256_correct"
 description = "The exported Pancake sponge on mapped raw function-name, customization and message slices returns the 32 bytes of the SP 800-185 specification."
 
 [[apex]]
+id = "lower-pancake-kmac256"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.PancakeKmac256"
+theorem = "pancakeKmac256_correct"
+description = "The exported Pancake function on mapped raw key, customization and message slices returns the 32-byte SP 800-185 KMAC256 tag."
+
+[[apex]]
+id = "lower-pancake-kmac-resume"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.PancakeKmac256"
+theorem = "pancakeKmacResume_correct"
+description = "The exported Pancake resume function, started from the 25-word state after the KMAC name and key blocks, returns the one-shot KMAC256 tag for every message."
+
+[[apex]]
+id = "lower-pancake-cshake-resume"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.PancakeKmac256"
+theorem = "pancakeCshakeResume_correct"
+description = "The same resume function with no trailer, started from an absorbed cSHAKE256 name and customization block, returns the one-shot named digest for every message."
+
+[[apex]]
 id = "lower-pancake-macaroon-verify"
 subsystem = "Lower"
 module = "Obend.Lower.Pancake.MacaroonVerifier"

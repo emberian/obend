@@ -666,7 +666,7 @@ fn adversarial_geometry_overflow_nonopaque_chrome_and_depth_budget_refusals() {
         root: ViewNode::Host {
             cell: "sub".into(),
             status: HostStatus::Interposed {
-                mock_label: "fake_hardware_led".into(),
+                label: "fake_hardware_led".into(),
             },
             view: None,
         },
@@ -1007,7 +1007,7 @@ fn software_scanline_stream_sealer_zero_leakage_completeness_and_u64_max_guard()
             ],
         },
     ];
-    let stream_b = vec![
+    let stream_b = [
         ScanlinePacket {
             line_y: 0,
             start_x: 0,

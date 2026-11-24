@@ -83,9 +83,11 @@ structure Layout where
   message : Slice
   memory : ByteMemory.Memory
   domain : Word → Bool
+  /-- Workspace reserved past the cSHAKE bound, for a caller whose frame holds more. -/
+  headroom : Nat := 0
 
 def Layout.capacity (c : Layout) :=
-  c.name.bytes.length + c.custom.bytes.length + c.message.bytes.length + 294
+  c.name.bytes.length + c.custom.bytes.length + c.message.bytes.length + 294 + c.headroom
 
 def Layout.inFrame (c : Layout) (a : Word) :=
   ∃ i, i < c.capacity ∧ byte_align (offset c.frame i) = a
@@ -642,7 +644,7 @@ private theorem prefix_correct {c} (ok : Valid c) : Runs c writePrefix {} (prefi
   let ne := Cshake256.leftEncode (8*n.length)
   let se := Cshake256.leftEncode (8*s.length)
   have cap := ok.size
-  have sizes : c.capacity = n.length+s.length+c.message.bytes.length+294 := rfl
+  have sizes : c.capacity = n.length+s.length+c.message.bytes.length+294+c.headroom := rfl
   have hn := leftEncode_bound (n := n.length) (by omega)
   have hs := leftEncode_bound (n := s.length) (by omega)
   let a : Cursor := {bytes := [1]}
