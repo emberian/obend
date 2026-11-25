@@ -13,6 +13,7 @@ Verifies `Obend.Polis.EpiphanyCompositor`:
 -/
 public import Obend.Polis.EpiphanyCompositor
 import all Obend.Polis.EpiphanyCompositor
+import all Obend.Vault.FrustumMembrane
 import all Obend.Hardware.HDL
 import all Obend.Hardware.YosysLec
 import all Obend.Judge.Class
@@ -97,28 +98,45 @@ private def testHazardPlane : PhysicalHazardReticlePlane :=
 #guard checkEpiphanyScanout 0 canonicalFrameQuery canonicalScanoutCert == .uncovered
 #guard checkEpiphanyScanout 10 canonicalFrameQuery canonicalScanoutCert == .ok
 
-private def intrudingQuery : EpiphanyFrameQuery :=
+private def hiddenQuery : EpiphanyFrameQuery demoWorld "alice" :=
+  { canonicalFrameQuery with beliefPlane := ⟨[⟨"vault", .pillBadge, ⟨40, 60, 30, 20⟩, ⟨80, 160, 255, 180⟩⟩]⟩ }
+
+private theorem hiddenQuery_refused (c : EpiphanyScanoutCert) :
+    checkEpiphanyScanout 10 hiddenQuery c = .refused .unauthorizedBeliefOverlay [9] := by
+  apply checkEpiphanyScanout_unreachable _ _ _ (by decide) (List.Mem.head _)
+  intro reach
+  have allowed := canObserve_iff.mpr reach
+  revert allowed
+  decide
+
+#tooth checkEpiphanyScanout_unreachable by
+  mutation overlaysObservable := fun _ => true
+
+#guard checkEpiphanyScanout 10 hiddenQuery canonicalScanoutCert == .refused .unauthorizedBeliefOverlay [9]
+#guard (stepEpiphanySession canonicalDisplayPolicy ⟨[(7, 41)], []⟩ ⟨10, hiddenQuery, canonicalScanoutCert⟩).isNone
+
+private def intrudingQuery : EpiphanyFrameQuery demoWorld "alice" :=
   { canonicalFrameQuery with
-    beliefPlane := { overlays := [⟨"cell/evil", .pillBadge, ⟨20, 12, 50, 20⟩, ⟨255, 255, 255, 255⟩⟩] } }
+    beliefPlane := { overlays := [⟨"bob", .pillBadge, ⟨20, 12, 50, 20⟩, ⟨255, 255, 255, 255⟩⟩] } }
 #guard checkEpiphanyScanout 10 intrudingQuery canonicalScanoutCert ==
   .refused .chromeIntrusion [6]
 
-private def replayQuery : EpiphanyFrameQuery :=
+private def replayQuery : EpiphanyFrameQuery demoWorld "alice" :=
   { canonicalFrameQuery with prevMonoSeq? := some 42 }
 #guard checkEpiphanyScanout 10 replayQuery canonicalScanoutCert ==
   .refused .nonMonotoneSensorSeq [2]
 
-private def unredactedQuery : EpiphanyFrameQuery :=
+private def unredactedQuery : EpiphanyFrameQuery demoWorld "alice" :=
   { canonicalFrameQuery with deliveredFrame := canonicalRawSensorFrame }
 #guard checkEpiphanyScanout 10 unredactedQuery canonicalScanoutCert ==
   .refused .unredactedPrivateRoi [4]
 
-private def badSealQuery : EpiphanyFrameQuery :=
+private def badSealQuery : EpiphanyFrameQuery demoWorld "alice" :=
   { canonicalFrameQuery with claimedSeal := ⟨(List.replicate 32 (0xFF : UInt8)).toArray⟩ }
 #guard checkEpiphanyScanout 10 badSealQuery canonicalScanoutCert ==
   .refused .sealMismatch [5]
 
-private def washedHazardQuery : EpiphanyFrameQuery :=
+private def washedHazardQuery : EpiphanyFrameQuery demoWorld "alice" :=
   { canonicalFrameQuery with
     hazardPlane := { boxes := [{ canonicalHazardBox with hiColor := ⟨100, 100, 100, 40⟩ }] } }
 #guard checkEpiphanyScanout 10 washedHazardQuery canonicalScanoutCert ==
@@ -131,7 +149,7 @@ private def washedHazardQuery : EpiphanyFrameQuery :=
 -- Multi-turn session progression (seq 1 -> seq 2 succeeds; seq 2 -> seq 2 replay fails).
 private def turnFrame1 : SensorFrame := { canonicalRawSensorFrame with monoSeq := 1 }
 private def turnRed1 : SensorFrame := redactSensorFrame turnFrame1
-private def turnQuery1 : EpiphanyFrameQuery :=
+private def turnQuery1 : EpiphanyFrameQuery demoWorld "alice" :=
   { canonicalFrameQuery with
     prevMonoSeq? := none
     rawFrame := turnFrame1
@@ -141,7 +159,7 @@ private def turnCert1 : EpiphanyScanoutCert := ⟨turnRed1, turnQuery1.claimedSe
 
 private def turnFrame2 : SensorFrame := { canonicalRawSensorFrame with monoSeq := 2 }
 private def turnRed2 : SensorFrame := redactSensorFrame turnFrame2
-private def turnQuery2 : EpiphanyFrameQuery :=
+private def turnQuery2 : EpiphanyFrameQuery demoWorld "alice" :=
   { canonicalFrameQuery with
     prevMonoSeq? := some 1
     rawFrame := turnFrame2
@@ -313,7 +331,7 @@ private def maxSeqRawFrame : SensorFrame := { canonicalRawSensorFrame with monoS
   | .error (.seqOverflowWraparound 7 s) => s == maxSensorMonoSeq | _ => false
 #guard match stepSensorSealer ⟨[(7, maxSensorMonoSeq - 1)], []⟩ maxSeqRawFrame with
   | .error (.seqOverflowWraparound 7 s) => s == maxSensorMonoSeq | _ => false
-private def maxSeqQuery : EpiphanyFrameQuery :=
+private def maxSeqQuery : EpiphanyFrameQuery demoWorld "alice" :=
   let red := redactSensorFrame maxSeqRawFrame
   { canonicalFrameQuery with
     prevMonoSeq? := none

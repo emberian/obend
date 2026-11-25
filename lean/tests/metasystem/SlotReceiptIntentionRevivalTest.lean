@@ -46,6 +46,7 @@ import all Obend.Intention
 import all Obend.Slot.Budget
 import all Obend.Equiv.Clairvoyant
 import all Obend.Equiv.Cost
+import all Obend.Core.HeapImage
 import all Obend.Receipt.Merkle
 import all Obend.Fold.Collapse
 import all Obend.Reasons
@@ -146,11 +147,41 @@ def transportCandV1 : SlotCandidate String :=
   , ⟨0x30313233#256, [0xCC, 0x03]⟩
   , ⟨0x40414243#256, [0xDD, 0x04]⟩ ]
 
+abbrev revivalBindings : List (BoundSlot String) :=
+  [⟨codecIface, codecCandV1⟩, ⟨transportIface, transportCandV1⟩]
+
+def revivalLeaves : List SaltedLeaf256 :=
+  [⟨0x10111213#256, bindingPayload (⟨codecIface, codecCandV1⟩ : BoundSlot String)⟩,
+   ⟨0x20212223#256, bindingPayload (⟨transportIface, transportCandV1⟩ : BoundSlot String)⟩,
+   ⟨0x30313233#256, [0xCC, 0x03]⟩, ⟨0x40414243#256, [0xDD, 0x04]⟩]
+
+private theorem revivalReceipt (H : Obend.Digest.HashBytes.Hash) :
+    verifyNonEmptyBlindedMultiproof256 H revivalBindings
+      (buildBlindedMultiproof256 H revivalLeaves [0, 1]) (saltedTreeRoot256 H revivalLeaves) = true := by
+  unfold verifyNonEmptyBlindedMultiproof256
+  have he : openedBindingPayloads (buildBlindedMultiproof256 H revivalLeaves [0, 1]) =
+      expectedBindingPayloads revivalBindings := by
+    rw [openedBindingPayloads_build _ _ _ (by decide)]
+    rfl
+  rw [he, beq_self_eq_true, buildBlindedMultiproof256_queriedIndices,
+    verifyBlindedMultiproof256_complete H revivalLeaves [0, 1] (by decide)]
+  rfl
+
+/-- The old fixture has a valid root and the right positions, but its payloads describe neither binding. -/
+theorem unrelated_receipt_rejected (H : Obend.Digest.HashBytes.Hash) :
+    let p := buildBlindedMultiproof256 H sampleLeaves256 [0, 1]
+    let r := saltedTreeRoot256 H sampleLeaves256
+    verifyBlindedMultiproof256 H p r = true ∧
+      verifyNonEmptyBlindedMultiproof256 H revivalBindings p r = false := by
+  refine ⟨verifyBlindedMultiproof256_complete H _ _ (by decide), unrelated_opening_rejected _ _ _ _ ?_⟩
+  rw [openedBindingPayloads_build _ _ _ (by decide)]
+  decide +kernel
+
 /-- End-to-end 5-organ synthesis:
 1. `negotiateSlots` prunes `codecCandOverBudget` locally and `codecCandV2` by arc-consistency,
    selecting `[codecCandV1, transportCandV1]` in 1 round and conserving Clairvoyant budget.
 2. Shared `"keccak-lut"` resource cost is strictly subadditive (`glued < unglued`).
-3. 256-bit `cSHAKE256` blinded multiproof over `[0, 3]` verifies and redacts middle leaves `[1, 2]`.
+3. 256-bit `cSHAKE256` blinded multiproof over `[0, 1]` verifies and redacts leaves `[2, 3]`.
 4. `diagnoseDialecticalBlame` certifies admissibility (`.inl cert`) with `"admissible:realization"`
    `.supported` in the unique GL stable equilibrium of `buildDialecticalAuditBase`. -/
 theorem endToEnd_schelling_slot_receipt_equilibrium_certified :
@@ -158,8 +189,8 @@ theorem endToEnd_schelling_slot_receipt_equilibrium_certified :
       [ ⟨codecIface, [codecCandOverBudget, codecCandV2, codecCandV1]⟩
       , ⟨transportIface, [transportCandV1]⟩ ]
     let costOf : String → Nat := fun r => if r == "keccak-lut" then 10 else 1
-    let proof := buildBlindedMultiproof256 cshakeMultiproofHash sampleLeaves256 [0, 3]
-    let root := saltedTreeRoot256 cshakeMultiproofHash sampleLeaves256
+    let proof := buildBlindedMultiproof256 cshakeMultiproofHash revivalLeaves [0, 1]
+    let root := saltedTreeRoot256 cshakeMultiproofHash revivalLeaves
     ∃ realizer cert,
       negotiateSlots revivalKinds revivalIntention () proposals = .ok realizer ∧
       realizer.bindings = [⟨codecIface, codecCandV1⟩, ⟨transportIface, transportCandV1⟩] ∧
@@ -171,7 +202,7 @@ theorem endToEnd_schelling_slot_receipt_equilibrium_certified :
       status (buildDialecticalAuditBase revivalKinds revivalIntention () cshakeMultiproofHash
         realizer.bindings proof root) realizationAdmissibleAtom = .supported := by
   dsimp only
-  have hVer := verifyBlindedMultiproof256_complete cshakeMultiproofHash sampleLeaves256 [0, 3] (by decide)
+  have hVer := verifyBlindedMultiproof256_complete cshakeMultiproofHash revivalLeaves [0, 1] (by decide)
   have hAudOver :
       checkCandidateLocal revivalKinds revivalIntention () codecIface codecCandOverBudget = false := by
     simp (config := { decide := true }) [checkCandidateLocal, auditCandidateLocal,
@@ -213,23 +244,18 @@ theorem endToEnd_schelling_slot_receipt_equilibrium_certified :
       findFirstGluingConflict
         [⟨codecIface, codecCandV1⟩, ⟨transportIface, transportCandV1⟩] = none := by
     simp [findFirstGluingConflict, findIncompatiblePeer, hGluePair]
-  have hNonEmpty :
-      verifyNonEmptyBlindedMultiproof256 cshakeMultiproofHash
-        (buildBlindedMultiproof256 cshakeMultiproofHash sampleLeaves256 [0, 3])
-        (saltedTreeRoot256 cshakeMultiproofHash sampleLeaves256) = true := by
-    unfold verifyNonEmptyBlindedMultiproof256
-    rw [buildBlindedMultiproof256_queriedIndices, hVer]
-    rfl
+  have hNonEmpty := revivalReceipt cshakeMultiproofHash
+  unfold revivalBindings at hNonEmpty
   have hInl :
       diagnoseDialecticalBlame revivalKinds revivalIntention () cshakeMultiproofHash
         [⟨codecIface, codecCandV1⟩, ⟨transportIface, transportCandV1⟩]
-        (buildBlindedMultiproof256 cshakeMultiproofHash sampleLeaves256 [0, 3])
-        (saltedTreeRoot256 cshakeMultiproofHash sampleLeaves256) =
+        (buildBlindedMultiproof256 cshakeMultiproofHash revivalLeaves [0, 1])
+        (saltedTreeRoot256 cshakeMultiproofHash revivalLeaves) =
       .inl { supportedAtoms :=
                (buildDialecticalAuditState revivalKinds revivalIntention () cshakeMultiproofHash
                  [⟨codecIface, codecCandV1⟩, ⟨transportIface, transportCandV1⟩]
-                 (buildBlindedMultiproof256 cshakeMultiproofHash sampleLeaves256 [0, 3])
-                 (saltedTreeRoot256 cshakeMultiproofHash sampleLeaves256)).kept.1
+                 (buildBlindedMultiproof256 cshakeMultiproofHash revivalLeaves [0, 1])
+                 (saltedTreeRoot256 cshakeMultiproofHash revivalLeaves)).kept.1
              slotCount := 2
              totalDeclaredBudget := 4 } := by
     unfold diagnoseDialecticalBlame
@@ -240,7 +266,7 @@ theorem endToEnd_schelling_slot_receipt_equilibrium_certified :
     rw [hSlotsOk, hMapIf, hGraphOk, hGlueOk, hNonEmpty, hBud]
     rfl
   refine ⟨⟨[⟨codecIface, codecCandV1⟩, ⟨transportIface, transportCandV1⟩], 1⟩, _,
-    hNeg, rfl, ?_, hVer, hInl, (diagnoseDialecticalBlame_inl_sound hInl).2.2.2.2.2.1⟩
+    hNeg, rfl, ?_, hVer, hInl, (diagnoseDialecticalBlame_inl_sound hInl).2.2.2.2.2.2.1⟩
   exact gluedSharedResourceCost_lt_of_shared_bindings
     (fun r => if r == "keccak-lut" then 10 else 1)
     ⟨codecIface, codecCandV1⟩ ⟨transportIface, transportCandV1⟩ []
@@ -260,7 +286,7 @@ theorem multiproof_adversarial_indices_rejected (H : Obend.Digest.HashBytes.Hash
     verifyBlindedMultiproof256 H pDup root = false ∧
     verifyBlindedMultiproof256 H pUnsorted root = false ∧
     verifyBlindedMultiproof256 H pOob root = false ∧
-    verifyNonEmptyBlindedMultiproof256 H pZeroQuery root = false ∧
+    verifyNonEmptyBlindedMultiproof256 H revivalBindings pZeroQuery root = false ∧
     verifyBlindedMultiproof256 H pMismatchSpan root = false := by
   dsimp only
   refine ⟨?_, ?_, ?_, rfl, ?_⟩
@@ -407,8 +433,8 @@ theorem cyclic_reasons_defeat_graphs_terminate_with_blame :
     let bPos3Cycle : Base := { explanations := [rAB, rBC, rCA] }
     let bFallback1 : Base := { observations := [obsOk], explanations := [rAB, rBC, rCA, rGood] }
     let bFallback2 : Base := { observations := [obsOk], explanations := [rGood, rAB, rBC, rCA] }
-    let proof := buildBlindedMultiproof256 cshakeMultiproofHash sampleLeaves256 [0]
-    let root := saltedTreeRoot256 cshakeMultiproofHash sampleLeaves256
+    let proof := buildBlindedMultiproof256 cshakeMultiproofHash revivalLeaves [0, 1]
+    let root := saltedTreeRoot256 cshakeMultiproofHash revivalLeaves
     let bs := [⟨codecIface, codecCandV1⟩, ⟨transportIface, transportCandV1⟩]
     diagnoseDialecticalBlame revivalKinds revivalIntention () cshakeMultiproofHash
       bs proof root bOdd (some "p") =
@@ -431,7 +457,7 @@ theorem cyclic_reasons_defeat_graphs_terminate_with_blame :
         bs proof root bFallback2 (some "a") with
      | .inl _ => true | .inr _ => false) = true := by
   dsimp only
-  have hVer := verifyBlindedMultiproof256_complete cshakeMultiproofHash sampleLeaves256 [0] (by decide)
+  have hVer := verifyBlindedMultiproof256_complete cshakeMultiproofHash revivalLeaves [0, 1] (by decide)
   have hAudC : auditCandidateLocal revivalKinds revivalIntention () codecIface codecCandV1 = none := by
     simp (config := { decide := true }) [auditCandidateLocal, checkSlotCostContract,
       sameObservedLiteral, codecIface, codecCandV1]
@@ -450,15 +476,10 @@ theorem cyclic_reasons_defeat_graphs_terminate_with_blame :
       findFirstGluingConflict
         [⟨codecIface, codecCandV1⟩, ⟨transportIface, transportCandV1⟩] = none := by
     simp [findFirstGluingConflict, findIncompatiblePeer, hGluePair]
-  have hNonEmpty :
-      verifyNonEmptyBlindedMultiproof256 cshakeMultiproofHash
-        (buildBlindedMultiproof256 cshakeMultiproofHash sampleLeaves256 [0])
-        (saltedTreeRoot256 cshakeMultiproofHash sampleLeaves256) = true := by
-    unfold verifyNonEmptyBlindedMultiproof256
-    rw [buildBlindedMultiproof256_queriedIndices, hVer]
-    rfl
-  generalize buildBlindedMultiproof256 cshakeMultiproofHash sampleLeaves256 [0] = proof at hNonEmpty ⊢
-  generalize saltedTreeRoot256 cshakeMultiproofHash sampleLeaves256 = root at hNonEmpty ⊢
+  have hNonEmpty := revivalReceipt cshakeMultiproofHash
+  unfold revivalBindings at hNonEmpty
+  generalize buildBlindedMultiproof256 cshakeMultiproofHash revivalLeaves [0, 1] = proof at hNonEmpty ⊢
+  generalize saltedTreeRoot256 cshakeMultiproofHash revivalLeaves = root at hNonEmpty ⊢
   have hOdd :
       ({ base := { explanations := [{ name := "odd", concl := "p", pos := [], neg := ["p"] }] }
          kept := judge { explanations := [{ name := "odd", concl := "p", pos := [], neg := ["p"] }] } } : State).status "p" =
@@ -602,6 +623,17 @@ theorem clairvoyant_cost_boundary_sharp :
 -- 19–21: Reasons & Reasons.DialecticalBlame
 #tooth Obend.Reasons.traceUnsupportedRoot_sound by
   mutation Obend.Reasons.traceUnsupportedRoot := fun _ x => .unexplained x
+
+#tooth Obend.Reasons.DialecticalBlame.bindingPayload_injective by
+  mutation Obend.Reasons.DialecticalBlame.bindingPayload := fun _ => []
+
+#tooth unrelated_receipt_rejected by
+  mutation Obend.Reasons.DialecticalBlame.verifyNonEmptyBlindedMultiproof256 :=
+    fun H _ p r => !p.queriedIndices.isEmpty && verifyBlindedMultiproof256 H p r
+
+#print axioms receipt_bindings_unique
+#print axioms bindingPayload_injective
+#print axioms unrelated_receipt_rejected
 
 #tooth Obend.Reasons.DialecticalBlame.diagnoseDialecticalBlame_inl_sound by
   mutation Obend.Reasons.DialecticalBlame.diagnoseDialecticalBlame :=

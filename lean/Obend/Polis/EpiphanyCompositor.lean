@@ -16,6 +16,7 @@ public import Obend.Hardware.HDL
 public import Obend.Hardware.YosysLec
 public import Obend.Judge.Class
 public import Obend.Vault.FrustumMembrane
+import all Obend.Vault.FrustumMembrane
 public section
 namespace Obend.Polis.EpiphanyCompositor
 open Obend.Crypto Obend.Digest.Cshake256 Obend.Digest.HashBytes
@@ -679,7 +680,10 @@ def bytesEq (a b : ByteArray) : Bool := a.data.toList == b.data.toList
 theorem bytesEq_iff (a b : ByteArray) : bytesEq a b = true ↔ a = b := by
   unfold bytesEq; rw [beq_iff_eq]
   exact ⟨byteArray_eq_of_toList_eq, congrArg (fun (x : ByteArray) => x.data.toList)⟩
-structure EpiphanyFrameQuery where
+variable {w : World} {viewer : CellId}
+
+/-- The caller chooses the authority snapshot for the entire session. -/
+structure EpiphanyFrameQuery (w : World) (viewer : CellId) where
   (policy : EpiphanyDisplayPolicy) (prevMonoSeq? : Option UInt64) (rawFrame deliveredFrame : SensorFrame)
   (claimedSeal : ByteArray) (beliefPlane : UntrustedBeliefPlane)
   (hazardPlane : PhysicalHazardReticlePlane) (chromePlane : TrustedConsentChromePlane)
@@ -690,7 +694,7 @@ structure EpiphanyScanoutCert where
 inductive EpiphanyRefusalClause where
   | invalidDisplayPolicy | nonOpaqueConsentChrome | nonMonotoneSensorSeq
   | malformedSensorGeometry | unredactedPrivateRoi | sealMismatch
-  | chromeIntrusion | hazardVisibilityViolation | certWitnessMismatch deriving DecidableEq, Repr
+  | unauthorizedBeliefOverlay | chromeIntrusion | hazardVisibilityViolation | certWitnessMismatch deriving DecidableEq, Repr
 def MonoSeqAdvances (prev? : Option UInt64) (cur : UInt64) : Prop :=
   cur ≠ maxSensorMonoSeq ∧ match prev? with | none => True | some prev => prev.toNat < cur.toNat
 def checkMonoSeqAdvances (prev? : Option UInt64) (cur : UInt64) : Bool :=
@@ -699,24 +703,38 @@ theorem checkMonoSeqAdvances_iff (prev? : Option UInt64) (cur : UInt64) :
     checkMonoSeqAdvances prev? cur = true ↔ MonoSeqAdvances prev? cur := by
   cases prev? <;> simp [checkMonoSeqAdvances, MonoSeqAdvances, bne_iff_ne]
 /-- Declarative semantic meaning established by `epiphanyScanoutJudge` (never restates `check`). -/
-structure EpiphanyScanoutMeaning (q : EpiphanyFrameQuery) (c : EpiphanyScanoutCert) : Prop where
+structure EpiphanyScanoutMeaning (q : EpiphanyFrameQuery w viewer) (c : EpiphanyScanoutCert) : Prop where
   (validPolicy : ValidDisplayPolicy q.policy) (opaqueChrome : OpaqueConsentChrome q.policy q.chromePlane)
   (ledHonest : q.rawFrame.tiles ≠ [] → q.chromePlane.sensorLedActive = true)
   (seqMonotone : MonoSeqAdvances q.prevMonoSeq? q.rawFrame.monoSeq) (frameGeometry : checkFrameGeometry q.rawFrame = true)
   (roiRedacted : q.deliveredFrame = redactSensorFrame q.rawFrame)
   (sealAuthentic : q.claimedSeal = sensorFrameSeal (redactSensorFrame q.rawFrame))
+  (observable : ∀ ov ∈ q.beliefPlane.overlays, Reach w viewer ov.cellId)
   (noIntrusion : ∀ ov ∈ q.beliefPlane.overlays, overlayIntrudesChrome q.policy q.chromePlane ov = false)
   (hazardsValid : AllHazardsValid q.policy q.hazardPlane)
   (certMatchesRed : c.auditedRedactedFrame = q.deliveredFrame) (certMatchesSeal : c.auditedSeal = q.claimedSeal)
   (certMatchesCnt : c.verifiedOverlayCount = q.beliefPlane.overlays.length)
-structure EpiphanyDecidableFragment (q : EpiphanyFrameQuery) : Prop where
+structure EpiphanyDecidableFragment (q : EpiphanyFrameQuery w viewer) : Prop where
   (overlayBudget : q.beliefPlane.overlays.length ≤ maxEpiphanyViewNodes)
   (tileBudget : q.rawFrame.tiles.length ≤ maxEpiphanySensorTiles)
-def epiphanyWorkCost (q : EpiphanyFrameQuery) : Nat :=
+def epiphanyWorkCost (q : EpiphanyFrameQuery w viewer) : Nat :=
   q.beliefPlane.overlays.length + q.hazardPlane.boxes.length + q.rawFrame.tiles.length
-def checkEpiphanyScanout (grade : Nat) (q : EpiphanyFrameQuery) (c : EpiphanyScanoutCert) :
+/-- Share the viewer's capability crawl across the plane. -/
+def overlaysObservable (q : EpiphanyFrameQuery w viewer) : Bool :=
+  let visible := w.visible viewer
+  q.beliefPlane.overlays.all fun ov => visible.contains ov.cellId
+
+theorem overlaysObservable_iff (q : EpiphanyFrameQuery w viewer) :
+    overlaysObservable q = true ↔ ∀ ov ∈ q.beliefPlane.overlays, Reach w viewer ov.cellId := by
+  unfold overlaysObservable
+  rw [List.all_eq_true]
+  exact ⟨fun h ov hm => Obend.Vault.FrustumMembrane.canObserve_iff.mp (h ov hm),
+    fun h ov hm => Obend.Vault.FrustumMembrane.canObserve_iff.mpr (h ov hm)⟩
+
+def checkEpiphanyScanout (grade : Nat) (q : EpiphanyFrameQuery w viewer) (c : EpiphanyScanoutCert) :
     Obend.Judge.Verdict EpiphanyRefusalClause :=
   if decide (grade < epiphanyWorkCost q) then .uncovered
+  else if !overlaysObservable q then .refused .unauthorizedBeliefOverlay [9]
   else if !checkDisplayPolicy q.policy then .refused .invalidDisplayPolicy [0]
   else if !(checkOpaqueConsentChrome q.policy q.chromePlane && (q.rawFrame.tiles.isEmpty || q.chromePlane.sensorLedActive)) then
     .refused .nonOpaqueConsentChrome [1]
@@ -735,7 +753,7 @@ private theorem guard_refused_ok {C : Type} {cond : Bool} {cl : C} {p : List Nat
   cases cond with | true => cases h | false => exact ⟨rfl, h⟩
 private theorem of_not_eq_false {b : Bool} (h : (!b) = false) : b = true := by
   cases b with | true => rfl | false => cases h
-private theorem meaning_implies_query_checks {q : EpiphanyFrameQuery} {c : EpiphanyScanoutCert} (hm : EpiphanyScanoutMeaning q c) :
+private theorem meaning_implies_query_checks {q : EpiphanyFrameQuery w viewer} {c : EpiphanyScanoutCert} (hm : EpiphanyScanoutMeaning q c) :
     checkDisplayPolicy q.policy = true ∧
     (checkOpaqueConsentChrome q.policy q.chromePlane && (q.rawFrame.tiles.isEmpty || q.chromePlane.sensorLedActive)) = true ∧
     checkMonoSeqAdvances q.prevMonoSeq? q.rawFrame.monoSeq = true ∧ checkFrameGeometry q.rawFrame = true ∧
@@ -747,12 +765,13 @@ private theorem meaning_implies_query_checks {q : EpiphanyFrameQuery} {c : Epiph
   · rw [Bool.and_eq_true_iff]; refine ⟨(checkOpaqueConsentChrome_iff _ _).mpr hm.opaqueChrome, ?_⟩
     cases hT : q.rawFrame.tiles with | nil => rfl | cons _ _ => simp [hm.ledHonest (by simp [hT])]
   · unfold anyOverlayIntrudesChrome; rw [List.any_eq_false]; intro ov hMem; simp [hm.noIntrusion ov hMem]
-theorem checkEpiphanyScanout_ok_iff (r : Nat) (q : EpiphanyFrameQuery) (c : EpiphanyScanoutCert) :
+theorem checkEpiphanyScanout_ok_iff (r : Nat) (q : EpiphanyFrameQuery w viewer) (c : EpiphanyScanoutCert) :
     checkEpiphanyScanout r q c = .ok ↔ epiphanyWorkCost q ≤ r ∧ EpiphanyScanoutMeaning q c := by
   constructor
   · intro hOk; unfold checkEpiphanyScanout at hOk
     cases hGrade : decide (r < epiphanyWorkCost q)
     · rw [hGrade] at hOk; simp only [Bool.false_eq_true, ↓reduceIte] at hOk
+      obtain ⟨hObsN, hOk⟩ := guard_refused_ok hOk
       obtain ⟨hPolN, hOk⟩ := guard_refused_ok hOk; obtain ⟨hChN, hOk⟩ := guard_refused_ok hOk
       obtain ⟨hSeqN, hOk⟩ := guard_refused_ok hOk; obtain ⟨hGeomN, hOk⟩ := guard_refused_ok hOk
       obtain ⟨hRedN, hOk⟩ := guard_refused_ok hOk; obtain ⟨hSealN, hOk⟩ := guard_refused_ok hOk
@@ -761,7 +780,8 @@ theorem checkEpiphanyScanout_ok_iff (r : Nat) (q : EpiphanyFrameQuery) (c : Epip
       obtain ⟨hChOp, hLedOr⟩ := Bool.and_eq_true_iff.mp (of_not_eq_false hChN)
       obtain ⟨⟨hCRed, hCSeal⟩, hCCnt⟩ := (Bool.and_eq_true_iff.mp (of_not_eq_false hCertN)).imp Bool.and_eq_true_iff.mp id
       refine ⟨by have := decide_eq_false_iff_not.mp hGrade; omega,
-        { validPolicy := (checkDisplayPolicy_iff _).mp (of_not_eq_false hPolN)
+        { observable := (overlaysObservable_iff q).mp (of_not_eq_false hObsN)
+          validPolicy := (checkDisplayPolicy_iff _).mp (of_not_eq_false hPolN)
           opaqueChrome := (checkOpaqueConsentChrome_iff _ _).mp hChOp
           ledHonest := fun hNe => by cases hT : q.rawFrame.tiles with | nil => exact False.elim (hNe hT) | cons _ _ => simpa [hT] using hLedOr
           seqMonotone := (checkMonoSeqAdvances_iff _ _).mp (of_not_eq_false hSeqN)
@@ -782,17 +802,17 @@ theorem checkEpiphanyScanout_ok_iff (r : Nat) (q : EpiphanyFrameQuery) (c : Epip
     have hCRed : (c.auditedRedactedFrame == q.deliveredFrame) = true := beq_iff_eq.mpr hm.certMatchesRed
     have hCSeal : bytesEq c.auditedSeal q.claimedSeal = true := (bytesEq_iff _ _).mpr hm.certMatchesSeal
     have hCCnt : (c.verifiedOverlayCount == q.beliefPlane.overlays.length) = true := beq_iff_eq.mpr hm.certMatchesCnt
-    unfold checkEpiphanyScanout; rw [hGrade, hPol, hCh, hSeq, hGeom, hRed, hSeal, hIntr, hHaz, hCRed, hCSeal, hCCnt]; rfl
-theorem checkEpiphanyScanout_sound {r : Nat} {q : EpiphanyFrameQuery} {c : EpiphanyScanoutCert}
+    unfold checkEpiphanyScanout; rw [hGrade, (overlaysObservable_iff q).mpr hm.observable, hPol, hCh, hSeq, hGeom, hRed, hSeal, hIntr, hHaz, hCRed, hCSeal, hCCnt]; rfl
+theorem checkEpiphanyScanout_sound {r : Nat} {q : EpiphanyFrameQuery w viewer} {c : EpiphanyScanoutCert}
     (hOk : checkEpiphanyScanout r q c = .ok) : EpiphanyScanoutMeaning q c := ((checkEpiphanyScanout_ok_iff r q c).mp hOk).2
-theorem checkEpiphanyScanout_refuted {r : Nat} {q : EpiphanyFrameQuery} {c : EpiphanyScanoutCert}
+theorem checkEpiphanyScanout_refuted {r : Nat} {q : EpiphanyFrameQuery w viewer} {c : EpiphanyScanoutCert}
     {k : EpiphanyRefusalClause} {p : List Nat}
     (hRef : checkEpiphanyScanout r q c = .refused k p) (hRefutes : epiphanyClauseRefutes k = true) :
     ∀ c', ¬ EpiphanyScanoutMeaning q c' := by
   intro c' hm; obtain ⟨hPol, hCh, hSeq, hGeom, hRed, hSeal, hIntr, hHaz⟩ := meaning_implies_query_checks hm
   unfold checkEpiphanyScanout at hRef
   cases hGrade : decide (r < epiphanyWorkCost q)
-  · rw [hGrade, hPol, hCh, hSeq, hGeom, hRed, hSeal, hIntr, hHaz] at hRef
+  · rw [hGrade, (overlaysObservable_iff q).mpr hm.observable, hPol, hCh, hSeq, hGeom, hRed, hSeal, hIntr, hHaz] at hRef
     simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
     cases hCert : (c.auditedRedactedFrame == q.deliveredFrame && bytesEq c.auditedSeal q.claimedSeal &&
         c.verifiedOverlayCount == q.beliefPlane.overlays.length) <;> rw [hCert] at hRef
@@ -800,7 +820,7 @@ theorem checkEpiphanyScanout_refuted {r : Nat} {q : EpiphanyFrameQuery} {c : Epi
     · simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef; cases hRef
   · rw [hGrade] at hRef; cases hRef
 /-- **First-Class Epiphany Lens Scanout & Sensor-Sealing Judge (`epiphanyScanoutJudge`)**. -/
-instance epiphanyScanoutJudge : Obend.Judge EpiphanyFrameQuery EpiphanyScanoutCert where
+instance epiphanyScanoutJudge : Obend.Judge (EpiphanyFrameQuery w viewer) EpiphanyScanoutCert where
   Clause := EpiphanyRefusalClause; Meaning := EpiphanyScanoutMeaning; check := checkEpiphanyScanout
   sound := checkEpiphanyScanout_sound; refutes := epiphanyClauseRefutes; refuted := checkEpiphanyScanout_refuted
   Fragment := EpiphanyDecidableFragment
@@ -809,27 +829,27 @@ instance epiphanyScanoutJudge : Obend.Judge EpiphanyFrameQuery EpiphanyScanoutCe
     refine ⟨⟨q.deliveredFrame, q.claimedSeal, q.beliefPlane.overlays.length⟩, epiphanyWorkCost q,
       (checkEpiphanyScanout_ok_iff _ _ _).mpr ⟨Nat.le_refl _,
         ⟨hm.validPolicy, hm.opaqueChrome, hm.ledHonest, hm.seqMonotone, hm.frameGeometry, hm.roiRedacted,
-         hm.sealAuthentic, hm.noIntrusion, hm.hazardsValid, rfl, rfl, rfl⟩⟩⟩
+         hm.sealAuthentic, hm.observable, hm.noIntrusion, hm.hazardsValid, rfl, rfl, rfl⟩⟩⟩
   mono := by
     intro r r' q c hle hDecided; unfold checkEpiphanyScanout at hDecided ⊢
     cases hLt : decide (r < epiphanyWorkCost q) with
     | true => rw [hLt] at hDecided; exact False.elim (hDecided rfl)
     | false => have hNotLt := decide_eq_false_iff_not.mp hLt; rw [decide_eq_false (by omega : ¬ r' < epiphanyWorkCost q)]
-structure EpiphanySessionTurn where (grade : Nat) (query : EpiphanyFrameQuery) (cert : EpiphanyScanoutCert) deriving DecidableEq, Repr
-def stepEpiphanySession (policy : EpiphanyDisplayPolicy) (st : SensorSealerState) (turn : EpiphanySessionTurn) : Option SensorSealerState :=
+structure EpiphanySessionTurn (w : World) (viewer : CellId) where (grade : Nat) (query : EpiphanyFrameQuery w viewer) (cert : EpiphanyScanoutCert) deriving DecidableEq, Repr
+def stepEpiphanySession (policy : EpiphanyDisplayPolicy) (st : SensorSealerState) (turn : EpiphanySessionTurn w viewer) : Option SensorSealerState :=
   if turn.query.policy == policy && turn.query.prevMonoSeq? == st.lookupSeq turn.query.rawFrame.sensorId then
     match checkEpiphanyScanout turn.grade turn.query turn.cert, stepSensorSealer st turn.query.rawFrame with
     | .ok, .ok (st', _, _) => some st' | _, _ => none
   else none
-inductive ValidEpiphanySessionTrace (policy : EpiphanyDisplayPolicy) :
-    SensorSealerState → List EpiphanySessionTurn → SensorSealerState → Prop where
-  | nil (st : SensorSealerState) : ValidEpiphanySessionTrace policy st [] st
-  | cons {st stMid stEnd : SensorSealerState} {t : EpiphanySessionTurn} {ts : List EpiphanySessionTurn} :
-      stepEpiphanySession policy st t = some stMid → ValidEpiphanySessionTrace policy stMid ts stEnd →
-      ValidEpiphanySessionTrace policy st (t :: ts) stEnd
+inductive ValidEpiphanySessionTrace {w : World} {viewer : CellId} (policy : EpiphanyDisplayPolicy) :
+    SensorSealerState → List (EpiphanySessionTurn w viewer) → SensorSealerState → Prop where
+  | nil (st : SensorSealerState) : ValidEpiphanySessionTrace (w := w) (viewer := viewer) policy st [] st
+  | cons {st stMid stEnd : SensorSealerState} {t : EpiphanySessionTurn w viewer} {ts : List (EpiphanySessionTurn w viewer)} :
+      stepEpiphanySession policy st t = some stMid → ValidEpiphanySessionTrace (w := w) (viewer := viewer) policy stMid ts stEnd →
+      ValidEpiphanySessionTrace (w := w) (viewer := viewer) policy st (t :: ts) stEnd
 theorem validEpiphanySessionTrace_sound {policy : EpiphanyDisplayPolicy} :
-    ∀ {turns : List EpiphanySessionTurn} {st₀ stEnd : SensorSealerState},
-      ValidEpiphanySessionTrace policy st₀ turns stEnd →
+    ∀ {turns : List (EpiphanySessionTurn w viewer)} {st₀ stEnd : SensorSealerState},
+      ValidEpiphanySessionTrace (w := w) (viewer := viewer) policy st₀ turns stEnd →
       (∀ t ∈ turns, EpiphanyScanoutMeaning t.query t.cert) ∧ ValidSensorSealTrace st₀ (turns.map (·.query.rawFrame)) stEnd
   | [], _, _, .nil st => ⟨(fun _ hm => nomatch hm), ValidSensorSealTrace.nil st⟩
   | t :: _, st, _, .cons hStep hRest => by
@@ -860,10 +880,10 @@ def canonicalRawSensorFrame : SensorFrame :=
     tiles := [⟨0, 0, 4, 2,
       [ ⟨10, 20, 30, 255⟩, ⟨99, 99, 99, 255⟩, ⟨88, 77, 66, 255⟩, ⟨40, 50, 60, 255⟩
       , ⟨70, 80, 90, 255⟩, ⟨100, 110, 120, 255⟩, ⟨130, 140, 150, 255⟩, ⟨160, 170, 180, 255⟩ ]⟩] }
-def canonicalFrameQuery : EpiphanyFrameQuery :=
+def canonicalFrameQuery : EpiphanyFrameQuery Obend.Vault.FrustumMembrane.demoWorld "alice" :=
   let red := redactSensorFrame canonicalRawSensorFrame
   ⟨canonicalDisplayPolicy, some 41, canonicalRawSensorFrame, red, sensorFrameSeal red,
-   ⟨[⟨"cell/nav", .pillBadge, ⟨40, 60, 30, 20⟩, ⟨80, 160, 255, 180⟩⟩]⟩,
+   ⟨[⟨"bob", .pillBadge, ⟨40, 60, 30, 20⟩, ⟨80, 160, 255, 180⟩⟩]⟩,
    ⟨[canonicalHazardBox]⟩, canonicalConsentChrome⟩
 def canonicalScanoutCert : EpiphanyScanoutCert :=
   ⟨canonicalFrameQuery.deliveredFrame, canonicalFrameQuery.claimedSeal, 1⟩
@@ -882,20 +902,29 @@ theorem epiphanyScanoutJudge_inhabited_ok :
     { validPolicy := canonicalDisplayPolicy_valid, opaqueChrome := canonicalConsentChrome_opaque
       ledHonest := fun _ => rfl, seqMonotone := (checkMonoSeqAdvances_iff _ _).mp (by decide)
       frameGeometry := by decide, roiRedacted := rfl, sealAuthentic := rfl
+      observable := (overlaysObservable_iff _).mp (by decide)
       noIntrusion := fun ov hMem => by
         simp only [canonicalFrameQuery, List.mem_singleton] at hMem; subst hMem; decide
       hazardsValid := fun box hMem => by
         simp only [canonicalFrameQuery, List.mem_singleton] at hMem; subst hMem; exact canonicalHazardBox_valid
       certMatchesRed := rfl, certMatchesSeal := rfl, certMatchesCnt := rfl }
   exact ⟨hFrag, (checkEpiphanyScanout_ok_iff 10 _ _).mpr ⟨by decide, hm⟩, hm⟩
-theorem epiphanyScanoutJudge_refutes_nonconstant :
-    epiphanyScanoutJudge.refutes .chromeIntrusion = true ∧
-    epiphanyScanoutJudge.refutes .nonMonotoneSensorSeq = true ∧
-    epiphanyScanoutJudge.refutes .unredactedPrivateRoi = true ∧
-    epiphanyScanoutJudge.refutes .sealMismatch = true ∧
-    epiphanyScanoutJudge.refutes .certWitnessMismatch = false := ⟨rfl, rfl, rfl, rfl, rfl⟩
+theorem checkEpiphanyScanout_unreachable (q : EpiphanyFrameQuery w viewer)
+    (c : EpiphanyScanoutCert) (grade : Nat) (budget : epiphanyWorkCost q ≤ grade)
+    {ov : BeliefViewOverlay} (member : ov ∈ q.beliefPlane.overlays) (hidden : ¬ Reach w viewer ov.cellId) :
+    checkEpiphanyScanout grade q c = .refused .unauthorizedBeliefOverlay [9] := by
+  have no : overlaysObservable q = false := Bool.eq_false_iff.mpr
+    (fun h => hidden ((overlaysObservable_iff q).mp h ov member))
+  simp [checkEpiphanyScanout, Nat.not_lt_of_ge budget, no]
+
+theorem epiphanyScanoutJudge_refutes_nonconstant (w : World) (viewer : CellId) :
+    (epiphanyScanoutJudge (w := w) (viewer := viewer)).refutes .chromeIntrusion = true ∧
+    (epiphanyScanoutJudge (w := w) (viewer := viewer)).refutes .nonMonotoneSensorSeq = true ∧
+    (epiphanyScanoutJudge (w := w) (viewer := viewer)).refutes .unredactedPrivateRoi = true ∧
+    (epiphanyScanoutJudge (w := w) (viewer := viewer)).refutes .sealMismatch = true ∧
+    (epiphanyScanoutJudge (w := w) (viewer := viewer)).refutes .certWitnessMismatch = false := ⟨rfl, rfl, rfl, rfl, rfl⟩
 theorem validEpiphanySessionTrace_inhabited :
-    ∃ st₀ turns stEnd, 0 < turns.length ∧ ValidEpiphanySessionTrace canonicalDisplayPolicy st₀ turns stEnd := by
+    ∃ st₀ turns stEnd, 0 < turns.length ∧ ValidEpiphanySessionTrace (w := Obend.Vault.FrustumMembrane.demoWorld) (viewer := "alice") canonicalDisplayPolicy st₀ turns stEnd := by
   have hChk : checkEpiphanyScanout 10 canonicalFrameQuery canonicalScanoutCert = .ok := epiphanyScanoutJudge_inhabited_ok.2.1
   have hStep : stepEpiphanySession canonicalDisplayPolicy ⟨[(7, 41)], []⟩ ⟨10, canonicalFrameQuery, canonicalScanoutCert⟩ =
       some ⟨[(7, 42)], [(7, 42, canonicalFrameQuery.claimedSeal)]⟩ := by

@@ -30,8 +30,11 @@ defeat graphs), this module:
 public import Obend.Reasons
 public import Obend.Reasons.UnifiedEquilibrium
 public import Obend.Slot.Budget
+public import Obend.Core.HeapImage
 public import Obend.Receipt.Merkle
 public import Obend.Digest.HashBytes
+import all Obend.Receipt.Merkle
+import all Obend.Reasons.UnifiedEquilibrium
 public section
 
 namespace Obend.Reasons.DialecticalBlame
@@ -129,15 +132,140 @@ receipt checks hold and no violation defeater is supported. -/
     pos := slotPositiveAtoms 0 bindings ++ [gluingVerifiedAtom, receiptVerifiedAtom]
     neg := slotNegativeAtoms 0 bindings ++ [gluingConflictAtom, receiptInvalidAtom] }
 
-/-- Non-vacuous receipt verification check: requires at least one opened leaf index
-(`!proof.queriedIndices.isEmpty`) AND valid 256-bit salted blinded multiproof verification,
-preventing vacuous zero-opening `.blinded root` proofs from certifying a realization. -/
-@[expose] def verifyNonEmptyBlindedMultiproof256 (H : Hash) (proof : BlindedMultiproof256)
-    (expectedRoot : Digest256) : Bool :=
-  !proof.queriedIndices.isEmpty && verifyBlindedMultiproof256 H proof expectedRoot
+/-- Stable, injective receipt identity for the intention's abstract pin carrier. -/
+class ReceiptPin (Pin : Type) where
+  key : Pin → String
+  key_inj : ∀ {a b}, key a = key b → a = b
+
+instance : ReceiptPin String := ⟨id, fun h => h⟩
+
+/-- Domain-separated serialization of the entire interface and candidate in declaration order.
+Nested pair and list fields use the same unbounded length framing as the Merkle codec. -/
+def bindingPayload {Pin : Type} [ReceiptPin Pin] (b : BoundSlot Pin) : List UInt8 :=
+  let str := Obend.Core.HeapImage.encStrSpec
+  let pairs (xs : List (String × String)) :=
+    encodeFields (xs.map fun (a, v) => encodeFields [str a, str v])
+  let term (t : Obend.Core.Term.Term) := (Obend.Core.HeapImage.pushTerm ByteArray.empty t).data.toList
+  let i := b.iface
+  let c := b.cand
+  encodeFields [str "obend.bound-slot.v1", str i.slotId, str i.expectedKind, str i.intentionRef,
+    leb128 i.budget.grade, leb128 i.fuel, term i.specTerm, pairs i.peerDeps,
+    str c.candId, str c.slotId, str c.kindPin.name, leb128 c.kindPin.version,
+    encodeFields (c.kindPin.ancestors.map fun k => encodeFields [str k.name, leb128 k.version]),
+    str (ReceiptPin.key c.intentionPin), term c.implTerm, pairs c.gluingTags,
+    encodeFields (c.sharedResourceIds.map str)]
+
+private theorem str_inj {a b : String} (h : Core.HeapImage.encStrSpec a = Core.HeapImage.encStrSpec b) :
+    a = b := by
+  let fuel := (Core.HeapImage.encStrSpec b).length
+  have ha := Core.HeapImage.decStrSpec_encStrSpec a fuel [] (by simp [fuel, h])
+  have hb := Core.HeapImage.decStrSpec_encStrSpec b fuel [] (Nat.le_refl _)
+  rw [h, hb] at ha
+  exact (Prod.mk.inj (Option.some.inj ha)).1.symm
+
+private theorem term_inj {a b : Core.Term.Term}
+    (h : (Core.HeapImage.pushTerm ByteArray.empty a).data.toList =
+      (Core.HeapImage.pushTerm ByteArray.empty b).data.toList) : a = b := by
+  simp only [Core.HeapImage.pushTerm_toList] at h
+  change Core.HeapImage.encTermSpec a = Core.HeapImage.encTermSpec b at h
+  let fuel := (Core.HeapImage.encTermSpec b).length
+  have ha := Core.HeapImage.decTermSpec_enc a fuel [] (by simp [fuel, h])
+  have hb := Core.HeapImage.decTermSpec_enc b fuel [] (Nat.le_refl _)
+  rw [h, hb] at ha
+  exact (Prod.mk.inj (Option.some.inj ha)).1.symm
+
+private theorem framedMap_inj {α : Type} {f : α → List UInt8}
+    (inj : ∀ a b, f a = f b → a = b) {xs ys : List α}
+    (h : encodeFields (xs.map f) = encodeFields (ys.map f)) : xs = ys :=
+  (List.map_inj_right inj).mp (encodeFields_injective _ _ h)
+
+private theorem pairBytes_inj (a b : String × String)
+    (h : encodeFields [Core.HeapImage.encStrSpec a.1, Core.HeapImage.encStrSpec a.2] =
+      encodeFields [Core.HeapImage.encStrSpec b.1, Core.HeapImage.encStrSpec b.2]) : a = b := by
+  have hf := encodeFields_injective _ _ h
+  simp only [List.cons.injEq, and_true] at hf
+  exact Prod.ext (str_inj hf.1) (str_inj hf.2)
+
+private theorem versionBytes_inj (a b : Kind.KindVersion)
+    (h : encodeFields [Core.HeapImage.encStrSpec a.name, leb128 a.version] =
+      encodeFields [Core.HeapImage.encStrSpec b.name, leb128 b.version]) : a = b := by
+  have hf := encodeFields_injective _ _ h
+  simp only [List.cons.injEq, and_true] at hf
+  cases a; cases b
+  simp only [Kind.KindVersion.mk.injEq]
+  exact ⟨str_inj hf.1, leb128_injective hf.2⟩
+
+/-- Equal receipt payloads identify the entire bound slot, including both executable terms. -/
+theorem bindingPayload_injective {Pin : Type} [ReceiptPin Pin] {a b : BoundSlot Pin}
+    (h : bindingPayload a = bindingPayload b) : a = b := by
+  unfold bindingPayload at h
+  have hf := encodeFields_injective _ _ h
+  simp only [List.cons.injEq, true_and, and_true] at hf
+  obtain ⟨sid, kind, ref, budget, fuel, spec, deps, cid, csid, kn, kv, lineage, pin, impl, tags, res⟩ := hf
+  have eDeps := framedMap_inj pairBytes_inj deps
+  have eTags := framedMap_inj pairBytes_inj tags
+  have eAnc := framedMap_inj versionBytes_inj lineage
+  have eRes := framedMap_inj (fun _ _ => str_inj) res
+  have ePin := ReceiptPin.key_inj (str_inj pin)
+  obtain ⟨⟨_, _, _, ⟨_⟩, _, _, _⟩, ⟨_, _, ⟨_, _, _⟩, _, _, _, _⟩⟩ := a
+  obtain ⟨⟨_, _, _, ⟨_⟩, _, _, _⟩, ⟨_, _, ⟨_, _, _⟩, _, _, _, _⟩⟩ := b
+  simp only [BoundSlot.mk.injEq, OpenSlotInterface.mk.injEq, SlotCandidate.mk.injEq,
+    Kind.KindPin.mk.injEq, Obend.Slot.Core4.Budget.mk.injEq]
+  exact ⟨⟨str_inj sid, str_inj kind, str_inj ref, leb128_injective budget, leb128_injective fuel,
+      term_inj spec, eDeps⟩, str_inj cid, str_inj csid,
+      ⟨str_inj kn, leb128_injective kv, eAnc⟩, ePin, term_inj impl, eTags, eRes⟩
+
+def openedBindingPayloads (proof : BlindedMultiproof256) : List (Nat × List UInt8) :=
+  proof.tree.syntacticOpenedLeaves.map fun (i, leaf) => (i, leaf.payload)
+
+theorem openedBindingPayloads_build (H : Hash) (entries : List SaltedLeaf256) (q : List Nat)
+    (hv : strictlyAscendingInBounds entries.length q = true) :
+    openedBindingPayloads (buildBlindedMultiproof256 H entries q) =
+      q.map (fun i => (i, (entries.getD i defaultSaltedLeaf256).payload)) := by
+  obtain ⟨hs, hr⟩ := Bool.and_eq_true_iff.mp hv
+  have hsort := (strictlyAscending_iff_pairwise q).1 hs
+  have hRange : ∀ i ∈ q, 0 ≤ i ∧ i < 0 + entries.length := fun i hi =>
+    ⟨Nat.zero_le _, by simpa using of_decide_eq_true (List.all_eq_true.mp hr i hi)⟩
+  have he := evalBlindedNode256_syntacticOpened _ _ _ _ _ (evalBlindedNode256_build H entries 0 q hsort hRange)
+  simp only [openedBindingPayloads, buildBlindedMultiproof256, he, List.map_map, Nat.sub_zero]
+  rfl
+
+def expectedBindingPayloads {Pin : Type} [ReceiptPin Pin] (bindings : List (BoundSlot Pin)) :
+    List (Nat × List UInt8) :=
+  bindings.zipIdx.map fun (b, i) => (i, bindingPayload b)
+
+/-- Opening i certifies binding i. Additional blinded leaves may follow the binding prefix. -/
+@[expose] def verifyNonEmptyBlindedMultiproof256 {Pin : Type} [ReceiptPin Pin] (H : Hash)
+    (bindings : List (BoundSlot Pin)) (proof : BlindedMultiproof256) (expectedRoot : Digest256) : Bool :=
+  !proof.queriedIndices.isEmpty && (openedBindingPayloads proof == expectedBindingPayloads (Pin := Pin) bindings) &&
+    verifyBlindedMultiproof256 H proof expectedRoot
+
+theorem unrelated_opening_rejected {Pin : Type} [ReceiptPin Pin] (H : Hash)
+    (bs : List (BoundSlot Pin)) (p : BlindedMultiproof256) (root : Digest256)
+    (h : openedBindingPayloads p ≠ expectedBindingPayloads bs) :
+    verifyNonEmptyBlindedMultiproof256 H bs p root = false := by
+  simp [verifyNonEmptyBlindedMultiproof256, beq_false_of_ne h]
+
+/-- A fixed proof cannot certify two different ordered realizations, even for a colliding hash. -/
+theorem receipt_bindings_unique {Pin : Type} [ReceiptPin Pin] {H : Hash}
+    {xs ys : List (BoundSlot Pin)} {proof : BlindedMultiproof256} {root : Digest256}
+    (hx : verifyNonEmptyBlindedMultiproof256 H xs proof root = true)
+    (hy : verifyNonEmptyBlindedMultiproof256 H ys proof root = true) : xs = ys := by
+  have identified (bs : List (BoundSlot Pin)) (hv : verifyNonEmptyBlindedMultiproof256 H bs proof root = true) :
+      openedBindingPayloads proof = expectedBindingPayloads bs :=
+    beq_iff_eq.mp (Bool.and_eq_true_iff.mp (Bool.and_eq_true_iff.mp hv).1).2
+  have payloads (bs : List (BoundSlot Pin)) :
+      (expectedBindingPayloads bs).map Prod.snd = bs.map bindingPayload := by
+    change (bs.zipIdx.map fun (b, i) => (i, bindingPayload b)).map Prod.snd = _
+    rw [List.map_map]
+    change bs.zipIdx.map (bindingPayload ∘ Prod.fst) = _
+    rw [← List.map_map, List.zipIdx_map_fst]
+  have eq := congrArg (List.map Prod.snd) ((identified xs hx).symm.trans (identified ys hy))
+  rw [payloads, payloads] at eq
+  exact (List.map_inj_right fun _ _ => bindingPayload_injective).mp eq
 
 /-- Compile multi-organ slot, gluing, and blinded multiproof checks into a `Reasons.Base`. -/
-@[expose] def buildDialecticalAuditBase {W Pin Fact Err : Type}
+@[expose] def buildDialecticalAuditBase {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256) : Base :=
@@ -148,8 +276,8 @@ preventing vacuous zero-opening `.blinded root` proofs from certifying a realiza
     else
       { name := gluingConflictAtom, text := "malformed slot graph or gluing overlap mismatch", source := "Slot.SupportSheaf" }
   let recObs : Observation :=
-    if verifyNonEmptyBlindedMultiproof256 H proof expectedRoot then
-      { name := receiptVerifiedAtom, text := "256-bit blinded multiproof valid", source := "Receipt.Merkle" }
+    if verifyNonEmptyBlindedMultiproof256 H bindings proof expectedRoot then
+      { name := receiptVerifiedAtom, text := "receipt opens the ordered slot bindings", source := "Receipt.Merkle" }
     else
       { name := receiptInvalidAtom, text := "256-bit blinded multiproof invalid", source := "Receipt.Merkle" }
   { observations := slotObs ++ [glueObs, recObs]
@@ -157,14 +285,14 @@ preventing vacuous zero-opening `.blinded root` proofs from certifying a realiza
     actions := [{ name := "commit_realization", because := realizationAdmissibleAtom }] }
 
 /-- Consistent `Reasons.State` paired with `buildDialecticalAuditBase`. -/
-@[expose] def buildDialecticalAuditState {W Pin Fact Err : Type}
+@[expose] def buildDialecticalAuditState {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256) : State :=
   let b := buildDialecticalAuditBase ks I w H bindings proof expectedRoot
   { base := b, kept := judge b }
 
-theorem buildDialecticalAuditState_consistent {W Pin Fact Err : Type}
+theorem buildDialecticalAuditState_consistent {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256) :
@@ -202,52 +330,13 @@ theorem slotNegativeAtoms_stratum_zero {Pin : Type} :
 
 /-- Syntactic stratification of a `Reasons.Program` by `stratum : String → Nat`: every positive
 premise has stratum `≤` the rule's conclusion, and every negated defeater has stratum `<` it. -/
-def IsAuditStratified (P : Program) (stratum : String → Nat) : Prop :=
-  ∀ r ∈ P.rules,
-    (∀ p ∈ r.pos, stratum p ≤ stratum r.concl) ∧
-    (∀ d ∈ r.neg, stratum d < stratum r.concl)
+abbrev IsAuditStratified := IsStratifiedBy
 
-private theorem auditStage_supported_of_lower_strata {P : Program} {stratum : String → Nat}
-    (hstrat : IsAuditStratified P stratum) {k : Nat}
-    (ihStrata : ∀ y, stratum y < k → y ∈ (wf P).2 → y ∈ (wf P).1) :
-    ∀ n x, stratum x ≤ k → x ∈ stage P (wf P).1 n → x ∈ (wf P).1
-  | 0, _, _, hx => by simp [stage] at hx
-  | n + 1, x, hxk, hx => by
-    rcases mem_T.1 hx with hfact | ⟨r, hr, hfire, rfl⟩
-    · exact facts_mem_wf_supported P hfact
-    · obtain ⟨hpos_le, hneg_lt⟩ := hstrat r hr
-      obtain ⟨hpos_in, hneg_out⟩ := fires_iff.1 hfire
-      have hfireU : fires (wf P).2 (gamma P (wf P).2) r = true := by
-        refine fires_iff.2 ⟨fun p hp => ?_, fun d hd hdU => ?_⟩
-        · have hp_le : stratum p ≤ k := Nat.le_trans (hpos_le p hp) hxk
-          have hp1 : p ∈ (wf P).1 :=
-            auditStage_supported_of_lower_strata hstrat ihStrata n p hp_le (hpos_in p hp)
-          exact (rounds_fix P p).2 hp1
-        · have hd_lt : stratum d < k := Nat.lt_of_lt_of_le (hneg_lt d hd) hxk
-          exact hneg_out d hd (ihStrata d hd_lt hdU)
-      have hT : r.concl ∈ T P (wf P).2 (gamma P (wf P).2) :=
-        mem_T.2 (Or.inr ⟨r, hr, hfireU, rfl⟩)
-      have hG : r.concl ∈ gamma P (wf P).2 :=
-        (gamma_fix P (wf P).2 r.concl).1 hT
-      exact (rounds_fix P r.concl).1 hG
-
-/-- Every `IsAuditStratified` program has a 2-valued total well-founded model (`IsTotalWF P`). -/
 theorem auditStratified_implies_totalWF {P : Program} {stratum : String → Nat}
-    (hstrat : IsAuditStratified P stratum) : IsTotalWF P := by
-  have h_le : ∀ k x, stratum x ≤ k → x ∈ (wf P).2 → x ∈ (wf P).1 := by
-    intro k
-    induction k with
-    | zero =>
-      intro x hxk hx2
-      exact auditStage_supported_of_lower_strata hstrat (fun _ hy => by omega) (bound P) x hxk hx2
-    | succ k ih =>
-      intro x hxk hx2
-      exact auditStage_supported_of_lower_strata hstrat (fun y hy => ih y (by omega)) (bound P) x hxk hx2
-  have hSame : Same (wf P).1 (wf P).2 := fun x =>
-    ⟨supported_possible P x, fun hx2 => h_le (stratum x) x (Nat.le_refl _) hx2⟩
-  exact checkTotalWF_sound ((checkSameSet_iff (wf P).1 (wf P).2).2 hSame)
+    (hstrat : IsAuditStratified P stratum) : IsTotalWF P :=
+  stratified_implies_totalWF hstrat
 
-private theorem auditRule_eq {W Pin Fact Err : Type}
+private theorem auditRule_eq {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256) :
@@ -258,7 +347,7 @@ private theorem auditRule_eq {W Pin Fact Err : Type}
   rw [List.append_nil]
 
 /-- Every `buildDialecticalAuditBase` program is syntactically stratified by `dialecticalStratum`. -/
-theorem dialecticalAudit_stratified {W Pin Fact Err : Type}
+theorem dialecticalAudit_stratified {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256) :
@@ -286,7 +375,7 @@ theorem dialecticalAudit_stratified {W Pin Fact Err : Type}
 /-- Because `buildDialecticalAuditBase` is stratified, its well-founded model is 2-valued (`IsTotalWF`),
 forms the **unique** Gelfond–Lifschitz stable model of the audit program, and is accepted by
 `UnifiedEquilibrium.unifiedEquilibriumJudge` at every grade. -/
-theorem dialecticalAudit_unique_equilibrium {W Pin Fact Err : Type}
+theorem dialecticalAudit_unique_equilibrium {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256) (grade : Nat) :
@@ -320,7 +409,7 @@ theorem buildSlotObservations_names_no_admissible {W Pin Fact Err : Type}
       · exact slotViolationAtom_ne_admissible idx b.iface.slotId hHead.symm
     · exact buildSlotObservations_names_no_admissible ks I w (idx + 1) rest hTail
 
-theorem admissible_not_in_audit_facts {W Pin Fact Err : Type}
+theorem admissible_not_in_audit_facts {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256) :
@@ -340,7 +429,7 @@ theorem admissible_not_in_audit_facts {W Pin Fact Err : Type}
 
 /-- Whenever any defeater atom `d ∈ (admitRealizationRule bindings).neg` is observed in
 `bAudit.program.facts`, `d` is `.supported` and `realizationAdmissibleAtom` is `.unsupported`. -/
-theorem defeat_observation_forces_admissible_unsupported {W Pin Fact Err : Type}
+theorem defeat_observation_forces_admissible_unsupported {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256)
@@ -567,14 +656,14 @@ theorem slotNegative_mem_shape {Pin : Type} :
     · exact ⟨idx, b.iface.slotId, rfl⟩
     · exact slotNegative_mem_shape (idx + 1) rest hdTail
 
-theorem all_checks_support_admissible {W Pin Fact Err : Type}
+theorem all_checks_support_admissible {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256)
     (hSlots : ∀ b ∈ bindings, checkCandidateLocal ks I w b.iface b.cand = true)
     (hGraph : slotGraphWellFormed (bindings.map (·.iface)) = true)
     (hGlue : allPairsGluingCompatible bindings = true)
-    (hRec : verifyNonEmptyBlindedMultiproof256 H proof expectedRoot = true) :
+    (hRec : verifyNonEmptyBlindedMultiproof256 H bindings proof expectedRoot = true) :
     status (buildDialecticalAuditBase ks I w H bindings proof expectedRoot)
       realizationAdmissibleAtom = .supported := by
   rw [supported_iff]
@@ -697,7 +786,7 @@ inductive DialecticalBlameCert where
 
 /-- Justification equivalence on `buildDialecticalAuditState`: `justify realizationAdmissibleAtom`
 succeeds iff `realizationAdmissibleAtom` is `.supported` in `buildDialecticalAuditBase`. -/
-theorem auditState_justify_admissible_iff {W Pin Fact Err : Type}
+theorem auditState_justify_admissible_iff {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256) :
@@ -714,7 +803,7 @@ Zero `Classical.choice`. Evaluates local slot contracts (`Kind` C4 lineage, `Int
 usability, Clairvoyant `Equiv.Cost` budget), slot-graph dependency closure (`slotGraphWellFormed`),
 pairwise gluing, non-empty 256-bit salted blinded Merkle receipt multiproof verification, and optional
 governance `Reasons.Base` justification (including cyclic defeat graphs via `traceUnsupportedRoot`). -/
-@[expose] def diagnoseDialecticalBlame {W Pin Fact Err : Type}
+@[expose] def diagnoseDialecticalBlame {W Pin Fact Err : Type} [ReceiptPin Pin]
     (ks : Obend.Kind.Kinds) (I : Obend.Intention W String Pin Fact Err) (w : W)
     (H : Hash) (bindings : List (BoundSlot Pin))
     (proof : BlindedMultiproof256) (expectedRoot : Digest256)
@@ -738,7 +827,7 @@ governance `Reasons.Base` justification (including cyclic defeat graphs via `tra
           gluingConflictAtom
           (traceUnsupportedRoot sAudit realizationAdmissibleAtom))
       | none =>
-        if verifyNonEmptyBlindedMultiproof256 H proof expectedRoot then
+        if verifyNonEmptyBlindedMultiproof256 H bindings proof expectedRoot then
           match policyTarget with
           | none =>
             .inl { supportedAtoms := sAudit.kept.1
@@ -776,13 +865,13 @@ theorem diagnoseDialecticalBlame_inl_inhabited :
     let cand : SlotCandidate String :=
       { candId := "c0", slotId := "s0", kindPin := ⟨"Codec", 1, []⟩,
         intentionPin := "codec@^1", implTerm := .nat 7 }
-    let proof : BlindedMultiproof256 :=
-      { treeSize := 1, queriedIndices := [0], tree := .openedLeaf 0 0#256 [0x42] }
-    let root := saltedTreeRoot256 cshakeMultiproofHash [⟨0#256, [0x42]⟩]
+    let leaves : List SaltedLeaf256 := [⟨0#256, bindingPayload (⟨iface, cand⟩ : BoundSlot String)⟩]
+    let proof := buildBlindedMultiproof256 cshakeMultiproofHash leaves [0]
+    let root := saltedTreeRoot256 cshakeMultiproofHash leaves
     ∃ cert, diagnoseDialecticalBlame ks I₀ () cshakeMultiproofHash
       [⟨iface, cand⟩] proof root = .inl cert := by
-  intro ks I₀ iface cand proof root
-  have hVer := verifyBlindedMultiproof256_inhabited cshakeMultiproofHash
+  intro ks I₀ iface cand leaves proof root
+  have hVer := verifyBlindedMultiproof256_complete cshakeMultiproofHash leaves [0] (by decide)
   have hAudOk : auditCandidateLocal ks I₀ () iface cand = none := by
     decide
   have hGraphOk : slotGraphWellFormed [iface] = true := by
@@ -791,9 +880,18 @@ theorem diagnoseDialecticalBlame_inl_inhabited :
       diagnoseDialecticalBlame ks I₀ () cshakeMultiproofHash [⟨iface, cand⟩] proof root =
         .inl ⟨(buildDialecticalAuditState ks I₀ () cshakeMultiproofHash [⟨iface, cand⟩] proof root).kept.1,
           1, totalDeclaredSlotBudget [⟨iface, cand⟩]⟩ := by
-    unfold diagnoseDialecticalBlame verifyNonEmptyBlindedMultiproof256
+    have hReceipt : verifyNonEmptyBlindedMultiproof256 cshakeMultiproofHash [⟨iface, cand⟩] proof root = true := by
+      unfold verifyNonEmptyBlindedMultiproof256
+      rw [show verifyBlindedMultiproof256 cshakeMultiproofHash proof root = true from hVer]
+      have he : openedBindingPayloads proof = expectedBindingPayloads [⟨iface, cand⟩] := by
+        rw [show proof = buildBlindedMultiproof256 cshakeMultiproofHash leaves [0] from rfl,
+          openedBindingPayloads_build _ _ _ (by decide)]
+        rfl
+      rw [he, beq_self_eq_true]
+      rfl
+    unfold diagnoseDialecticalBlame
     simp [findFirstFailingSlotAux, hAudOk, hGraphOk, findFirstGluingConflict, findIncompatiblePeer,
-      proof, root, hVer]
+      hReceipt]
   exact ⟨_, hEq⟩
 
 /-- Inhabitedness witness for `diagnoseDialecticalBlame` (`.inr` blame extraction branch on Clairvoyant
@@ -847,12 +945,12 @@ Whenever `diagnoseDialecticalBlame` returns `.inl cert`:
    usability, and Clairvoyant `Equiv.Cost.CostAtMost b.cand.implTerm b.iface.budget.grade`.
 2. `realizerGraphValid bindings = true` (pairwise-distinct `slotId`s, closed `peerDeps`, self-edges,
    and `allPairsGluingCompatible bindings = true`).
-3. `proof.queriedIndices ≠ []` and `verifyBlindedMultiproof256 H proof expectedRoot = true`.
+3. A nonempty, root-verified opening supplies exactly the indexed canonical payload of every binding.
 4. `realizationAdmissibleAtom` is `.supported` in `buildDialecticalAuditBase`, whose well-founded
    model is accepted as the unique GL equilibrium by `unifiedEquilibriumJudge`.
 5. `cert.slotCount = bindings.length`, `cert.totalDeclaredBudget = totalDeclaredSlotBudget bindings`,
    and any requested governance `policyTarget` is `.supported` in `policyBase`. -/
-theorem diagnoseDialecticalBlame_inl_sound {W Pin Fact Err : Type}
+theorem diagnoseDialecticalBlame_inl_sound {W Pin Fact Err : Type} [ReceiptPin Pin]
     {ks : Obend.Kind.Kinds} {I : Obend.Intention W String Pin Fact Err} {w : W}
     {H : Hash} {bindings : List (BoundSlot Pin)}
     {proof : BlindedMultiproof256} {expectedRoot : Digest256}
@@ -865,6 +963,7 @@ theorem diagnoseDialecticalBlame_inl_sound {W Pin Fact Err : Type}
     realizerGraphValid bindings = true ∧
     allPairsGluingCompatible bindings = true ∧
     proof.queriedIndices ≠ [] ∧
+    openedBindingPayloads proof = expectedBindingPayloads bindings ∧
     verifyBlindedMultiproof256 H proof expectedRoot = true ∧
     status bAudit realizationAdmissibleAtom = .supported ∧
     unifiedEquilibriumJudge.check 0 bAudit.program (wf bAudit.program).1 = .ok ∧
@@ -888,11 +987,11 @@ theorem diagnoseDialecticalBlame_inl_sound {W Pin Fact Err : Type}
           List.all_eq_true.2 fun b hb => (checkCandidateLocal_self_gluing_sound (hAllLocal b hb)).2
         have hFullGraph : realizerGraphValid bindings = true := by
           simp [realizerGraphValid, hGraph, hSelfAll, hAllGlue]
-        by_cases hRec : verifyNonEmptyBlindedMultiproof256 H proof expectedRoot = true
+        by_cases hRec : verifyNonEmptyBlindedMultiproof256 H bindings proof expectedRoot = true
         · simp only [hRec, ↓reduceIte] at h
-          have hRecParts : proof.queriedIndices ≠ [] ∧ verifyBlindedMultiproof256 H proof expectedRoot = true := by
+          have hRecParts : (proof.queriedIndices ≠ [] ∧ openedBindingPayloads proof = expectedBindingPayloads bindings) ∧ verifyBlindedMultiproof256 H proof expectedRoot = true := by
             unfold verifyNonEmptyBlindedMultiproof256 at hRec
-            simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff] at hRec
+            simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff, beq_iff_eq] at hRec
             exact hRec
           have hSupAdm := all_checks_support_admissible ks I w H bindings proof expectedRoot
             hAllLocal hGraph hAllGlue hRec
@@ -908,7 +1007,7 @@ theorem diagnoseDialecticalBlame_inl_sound {W Pin Fact Err : Type}
           | none =>
             simp only [PSum.inl.injEq] at h
             subst h
-            exact ⟨hSlotsAndCost, hFullGraph, hAllGlue, hRecParts.1, hRecParts.2, hSupAdm, hEqJudge,
+            exact ⟨hSlotsAndCost, hFullGraph, hAllGlue, hRecParts.1.1, hRecParts.1.2, hRecParts.2, hSupAdm, hEqJudge,
               rfl, rfl, fun _ ht => nomatch ht⟩
           | some t =>
             dsimp only at h
@@ -917,7 +1016,7 @@ theorem diagnoseDialecticalBlame_inl_sound {W Pin Fact Err : Type}
                 beq_iff_eq.2 hPol
               simp only [hBeq, ↓reduceIte, PSum.inl.injEq] at h
               subst h
-              refine ⟨hSlotsAndCost, hFullGraph, hAllGlue, hRecParts.1, hRecParts.2, hSupAdm, hEqJudge,
+              refine ⟨hSlotsAndCost, hFullGraph, hAllGlue, hRecParts.1.1, hRecParts.1.2, hRecParts.2, hSupAdm, hEqJudge,
                 rfl, rfl, fun t' ht' => ?_⟩
               cases ht'
               exact hPol
@@ -934,7 +1033,7 @@ a genuine contract violation (at exact index `bindings[slotIndex]? = some b`), m
 dependency graph, gluing conflict, invalid/empty 256-bit multiproof, or defeated/cyclic governance
 policy target, and in the first four cases `realizationAdmissibleAtom` is `.unsupported` in
 `buildDialecticalAuditBase` with its defeater atom `.supported`. -/
-theorem diagnoseDialecticalBlame_inr_sound {W Pin Fact Err : Type}
+theorem diagnoseDialecticalBlame_inr_sound {W Pin Fact Err : Type} [ReceiptPin Pin]
     {ks : Obend.Kind.Kinds} {I : Obend.Intention W String Pin Fact Err} {w : W}
     {H : Hash} {bindings : List (BoundSlot Pin)}
     {proof : BlindedMultiproof256} {expectedRoot : Digest256}
@@ -967,7 +1066,7 @@ theorem diagnoseDialecticalBlame_inr_sound {W Pin Fact Err : Type}
       status bAudit realizationAdmissibleAtom = .unsupported ∧
       blocker ≠ .alreadySupported
     | .invalidReceiptMultiproof _ _ defeatAtom blocker =>
-      verifyNonEmptyBlindedMultiproof256 H proof expectedRoot = false ∧
+      verifyNonEmptyBlindedMultiproof256 H bindings proof expectedRoot = false ∧
       status bAudit defeatAtom = .supported ∧
       status bAudit realizationAdmissibleAtom = .unsupported ∧
       blocker ≠ .alreadySupported
@@ -1005,7 +1104,7 @@ theorem diagnoseDialecticalBlame_inr_sound {W Pin Fact Err : Type}
       cases hEqSup
     · simp only [hBadGraph, Bool.false_eq_true, ↓reduceIte] at h
       cases hGlueOpt : findFirstGluingConflict bindings <;> rw [hGlueOpt] at h
-      · by_cases hRec : verifyNonEmptyBlindedMultiproof256 H proof expectedRoot = true
+      · by_cases hRec : verifyNonEmptyBlindedMultiproof256 H bindings proof expectedRoot = true
         · simp only [hRec, ↓reduceIte] at h
           cases policyTarget with
           | none => cases h
