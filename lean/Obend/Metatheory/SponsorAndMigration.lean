@@ -212,12 +212,6 @@ private theorem scoped_ifBool_inv {c wt wf : Term} (h : Scoped 0 (.ifBool c wt w
     List.map, List.all, id_eq, Bool.and_eq_true, and_true] at h
   exact ⟨(isClosedTerm_iff c).1 h.1, (isClosedTerm_iff wt).1 h.2.1, (isClosedTerm_iff wf).1 h.2.2⟩
 
-private theorem scoped_fix_inv {s i : Term} (h : Scoped 0 (.fix s i)) : Scoped 0 s ∧ Scoped 0 i := by
-  rw [← isClosedTerm_iff] at h
-  simp only [isClosedTerm, Obend.Core.TermTraverse.encode, Obend.Core.Traverse.Tree.all,
-    List.map, List.all, id_eq, Bool.and_eq_true, and_true] at h
-  exact ⟨(isClosedTerm_iff s).1 h.1, (isClosedTerm_iff i).1 h.2⟩
-
 /-- An `ImplementationRegime C` packages:
     - `lower`: partial compilation from closed `Core.Term` into carrier `C`,
     - `reify`: sharing-preserving decompilation back into `Core.Term`,
@@ -235,8 +229,11 @@ structure ImplementationRegime (C : Type) where
   lower_wf : ∀ (t : Term) (c : C), Scoped 0 t → lower t = some c → wellFormed c
   lower_reify_iequiv : ∀ (t : Term) (c : C),
     Scoped 0 t → lower t = some c → ∃ t', reify c = .ok t' ∧ IEquiv t' t
+  /-- Evidence needed to read a metered transition back into the source semantics.
+  This is a proof premise and is never consulted by the execution path. -/
+  readbackCovered : CompositeGrade → C → Prop := fun _ _ => True
   step_preserves_semantics : ∀ (budget : CompositeGrade) (c : C) (t₁ : Term),
-    wellFormed c → reify c = .ok t₁ →
+    wellFormed c → reify c = .ok t₁ → readbackCovered budget c →
     let res := stepMetered budget c
     wellFormed res.1 ∧ ∃ t₂, reify res.1 = .ok t₂ ∧ IEquiv t₂ t₁
 
@@ -314,7 +311,7 @@ private theorem stepCanonicalTerm_sound {t t' : Term} (hSc : Scoped 0 t)
     have hCl : isClosedTerm t = true := (isClosedTerm_iff t).2 hSc
     simp only [hCl, ite_true, Option.some.injEq] at hLow; subst hLow
     exact ⟨t, rfl, IEquiv.refl t⟩
-  step_preserves_semantics budget c t₁ hWf hReify := by
+  step_preserves_semantics budget c t₁ hWf hReify _ := by
     simp only [Except.ok.injEq] at hReify; subst hReify
     by_cases hc : 1 ≤ budget.cycles
     · simp only [hc, ite_true]
@@ -325,70 +322,22 @@ private theorem stepCanonicalTerm_sound {t t' : Term} (hSc : Scoped 0 t)
         exact ⟨hSc', c', rfl, (iequiv_of_ahead (Ahead.ofStepsRefl (.next hRed (.refl _)))).symm⟩
     · simp only [hc, ite_false]; exact ⟨hWf, c, rfl, IEquiv.refl c⟩
 
-/-- Step an initial closed `.fix` knot or closed `.binary .add (.nat a) (.nat b)` machine state. -/
+/-- One demand transition. Absorbing controls have no successor to charge. -/
 def stepMachineKnot (st : State) : Option State :=
-  match st.heap.toList, st.control, st.stack with
-  | [], .evaluate (.fix spec inh) [], [] =>
-      if isClosedTerm (.fix spec inh) then
-        some (Obend.Core.Machine.stepRaw (Obend.Core.Machine.initial (.fix spec inh)))
-      else none
-  | [], .evaluate (.binary .add (.nat a) (.nat b)) [], [] =>
-      some ⟨#[], .complete (.natural (a + b)), []⟩
-  | _, _, _ => none
+  match st.control with
+  | .evaluate .. | .returned .. | .enter .. => some (Obend.Core.Machine.stepRaw st)
+  | _ => none
 
-private theorem stepMachineKnot_preserves {st st' : State} {t₁ : Term}
-    (hKnot : stepMachineKnot st = some st')
-    (hReify : reifyMachineDag st = .ok t₁) :
-    ∃ t₂, reifyMachineDag st' = .ok t₂ ∧ IEquiv t₂ t₁ := by
-  rcases st with ⟨heap, ctrl, stk⟩
-  unfold stepMachineKnot at hKnot
-  cases hList : heap.toList with
-  | cons _ _ => simp [hList] at hKnot
-  | nil =>
-    have hEmpty : heap = #[] := Array.ext' hList
-    subst hEmpty
-    cases ctrl with
-    | evaluate tm env =>
-      cases tm with
-      | fix spec inh =>
-        cases env with
-        | cons _ _ => simp at hKnot
-        | nil =>
-          cases stk with
-          | cons _ _ => simp at hKnot
-          | nil =>
-            dsimp only at hKnot
-            by_cases hCl : isClosedTerm (.fix spec inh) = true
-            · simp only [hCl, ite_true, Option.some.injEq] at hKnot
-              subst hKnot
-              have hScFix : Scoped 0 (.fix spec inh) := (isClosedTerm_iff _).1 hCl
-              obtain ⟨hSpec, hInh⟩ := scoped_fix_inv hScFix
-              have hInit : reifyMachineDag (Obend.Core.Machine.initial (.fix spec inh)) =
-                  .ok (.fix spec inh) := reifyMachineDag_initial (.fix spec inh) hScFix
-              change reifyMachineDag (Obend.Core.Machine.initial (.fix spec inh)) = .ok t₁ at hReify
-              rw [hInit] at hReify; injection hReify with hEqT; subst hEqT
-              exact reifyMachineDag_fix_step_iequiv spec inh hSpec hInh
-            · simp [hCl] at hKnot
-      | binary op lhs rhs =>
-        cases op <;> try (simp at hKnot; done)
-        cases lhs <;> try (simp at hKnot; done)
-        cases rhs <;> try (simp at hKnot; done)
-        cases env <;> try (simp at hKnot; done)
-        cases stk <;> try (simp at hKnot; done)
-        rename_i a b
-        simp only [Option.some.injEq] at hKnot; subst hKnot
-        have hScAdd : Scoped 0 (.binary .add (.nat a) (.nat b)) := (isClosedTerm_iff _).1
-          (by simp [isClosedTerm, Obend.Core.TermTraverse.encode, Obend.Core.Traverse.Tree.all])
-        have hInit : reifyMachineDag (Obend.Core.Machine.initial (.binary .add (.nat a) (.nat b))) =
-            .ok (.binary .add (.nat a) (.nat b)) := reifyMachineDag_initial _ hScAdd
-        change reifyMachineDag (Obend.Core.Machine.initial (.binary .add (.nat a) (.nat b))) = .ok t₁ at hReify
-        rw [hInit] at hReify; injection hReify with hEqT; subst hEqT
-        have hRed : Step (.binary .add (.nat a) (.nat b)) (.nat (a + b)) :=
-          .primitive .add _ _ _ (.natural a) (.natural b) rfl
-        exact ⟨.nat (a + b), reifyMachineDag_complete_nat (a + b),
-          (iequiv_of_ahead (Ahead.ofStepsRefl (.next hRed (.refl _)))).symm⟩
-      | _ => simp at hKnot
-    | _ => simp at hKnot
+theorem stepMachineKnot_eq_raw {st next : State} (h : stepMachineKnot st = some next) :
+    next = Obend.Core.Machine.stepRaw st := by
+  cases hc : st.control <;> simp [stepMachineKnot, hc] at h <;> exact h.symm
+
+/-- Any actual tick taken by the bounded runner uses this same successor. -/
+theorem stepMachineKnot_of_tick {limits : Limits} {st next : State}
+    (h : Obend.Core.Machine.step limits st = .suspended .ticks next) :
+    stepMachineKnot st = some next := by
+  cases hc : st.control <;> simp only [Obend.Core.Machine.step, hc] at h <;> try contradiction
+  all_goals split at h <;> cases h <;> simp [stepMachineKnot, hc]
 
 /-- **Regime 2 (`machineHeapRegime`)**: lazy heap-sharing `Core.Machine.State` backed by
     DAG-sharing `reifyMachineDag` (recovering cyclic `.fix` heap knots!). -/
@@ -418,15 +367,24 @@ private theorem stepMachineKnot_preserves {st st' : State} {t₁ : Term}
     have hCl : isClosedTerm t = true := (isClosedTerm_iff t).2 hSc
     simp only [hCl, ite_true, Option.some.injEq] at hLow; subst hLow
     exact ⟨t, reifyMachineDag_initial t hSc, IEquiv.refl t⟩
-  step_preserves_semantics budget st t₁ hWf hReify := by
+  readbackCovered budget st := ∀ next, 1 ≤ budget.cycles → stepMachineKnot st = some next →
+    checkReifiedStep st next = true
+  step_preserves_semantics budget st t₁ hWf hReify covered := by
     by_cases hc : 1 ≤ budget.cycles
     · simp only [hc, ite_true]
       cases hKnot : stepMachineKnot st with
       | none => exact ⟨hWf, t₁, hReify, IEquiv.refl t₁⟩
       | some st' =>
-        obtain ⟨t₂, hR₂, hEqv⟩ := stepMachineKnot_preserves hKnot hReify
+        have hCheck := covered st' hc hKnot
+        obtain rfl := stepMachineKnot_eq_raw hKnot
+        obtain ⟨t₂, hR₂, hEqv⟩ := reifyMachineDag_step_iequiv hCheck hReify
         exact ⟨⟨t₂, hR₂⟩, t₂, hR₂, hEqv⟩
     · simp only [hc, ite_false]; exact ⟨hWf, t₁, hReify, IEquiv.refl t₁⟩
+
+theorem machineHeapRegime_charges_raw_step {budget : CompositeGrade} {st next : State}
+    (hc : 1 ≤ budget.cycles) (hs : stepMachineKnot st = some next) :
+    machineHeapRegime.stepMetered budget st = (Obend.Core.Machine.stepRaw st, oneCycleGrade) := by
+  simp [machineHeapRegime, hc, hs, stepMachineKnot_eq_raw hs]
 
 /-- 64-bit synchronous RTL combinational carrier (`RtlExpr` + optional latched `BitVec 64` word). -/
 structure RtlWordCarrier where
@@ -557,7 +515,7 @@ private theorem rtlWordWF_evaluates_exact {c : RtlWordCarrier} (hWf : RtlWordWF 
         simp only [hComp, Option.some.injEq] at hLow; subst hLow
         exact ⟨t, rfl, IEquiv.refl t⟩
     · simp [hG] at hLow
-  step_preserves_semantics budget c t₁ hWf hReify := by
+  step_preserves_semantics budget c t₁ hWf hReify _ := by
     dsimp only
     by_cases hc : 1 ≤ budget.cycles
     · simp only [hc, ite_true]
@@ -646,18 +604,24 @@ abbrev SponsoredCellWF {C : Type} (R : ImplementationRegime C) (cell : Sponsored
     spent := cell.spent + delta
     carrier := nextC }
 
-theorem stepSponsoredCell_preserves_wf {C : Type} (R : ImplementationRegime C)
-    (cell : SponsoredCell C) (t₁ : Term)
-    (hWf : SponsoredCellWF R cell) (hReify : R.reify cell.carrier = .ok t₁) :
-    let next := stepSponsoredCell R cell
-    SponsoredCellWF R next ∧ next.heldCaps = cell.heldCaps ∧
-    ∃ t₂, R.reify next.carrier = .ok t₂ ∧ IEquiv t₂ t₁ := by
+theorem stepSponsoredCell_spent_le_quota {C : Type} (R : ImplementationRegime C)
+    (cell : SponsoredCell C) (h : cell.spent ≤ cell.quota) :
+    (stepSponsoredCell R cell).spent ≤ cell.quota := by
   have hRemEx : 0 ≤ (remainingGrade cell.quota cell.spent).exergy := by
     simp [remainingGrade]; omega
   have hDelta := R.spent_le_budget (remainingGrade cell.quota cell.spent) cell.carrier hRemEx
+  exact spent_add_le_quota_of_le_remaining h hDelta
+
+theorem stepSponsoredCell_preserves_wf {C : Type} (R : ImplementationRegime C)
+    (cell : SponsoredCell C) (t₁ : Term)
+    (hWf : SponsoredCellWF R cell) (hReify : R.reify cell.carrier = .ok t₁)
+    (covered : R.readbackCovered (remainingGrade cell.quota cell.spent) cell.carrier) :
+    let next := stepSponsoredCell R cell
+    SponsoredCellWF R next ∧ next.heldCaps = cell.heldCaps ∧
+    ∃ t₂, R.reify next.carrier = .ok t₂ ∧ IEquiv t₂ t₁ := by
   obtain ⟨hNextWf, t₂, hR₂, hEqv⟩ := R.step_preserves_semantics
-    (remainingGrade cell.quota cell.spent) cell.carrier t₁ hWf.1 hReify
-  exact ⟨⟨hNextWf, spent_add_le_quota_of_le_remaining hWf.2 hDelta⟩, rfl, t₂, hR₂, hEqv⟩
+    (remainingGrade cell.quota cell.spent) cell.carrier t₁ hWf.1 hReify covered
+  exact ⟨⟨hNextWf, stepSponsoredCell_spent_le_quota R cell hWf.2⟩, rfl, t₂, hR₂, hEqv⟩
 
 /-- Multi-turn execution trace of a `SponsoredCell C`. -/
 inductive ValidSponsorTrace {C : Type} (R : ImplementationRegime C) :
@@ -667,18 +631,30 @@ inductive ValidSponsorTrace {C : Type} (R : ImplementationRegime C) :
       ValidSponsorTrace R cell n mid →
       ValidSponsorTrace R cell (n + 1) (stepSponsoredCell R mid)
 
+/-- Accounting and authority hold on every operational trace, including refusals. -/
+theorem validSponsorTrace_accounting {C : Type} (R : ImplementationRegime C)
+    {c₀ cₙ : SponsoredCell C} {n : Nat} (tr : ValidSponsorTrace R c₀ n cₙ)
+    (h : c₀.spent ≤ c₀.quota) :
+    cₙ.spent ≤ cₙ.quota ∧ cₙ.heldCaps = c₀.heldCaps ∧ cₙ.quota = c₀.quota := by
+  induction tr with
+  | zero => exact ⟨h, rfl, rfl⟩
+  | succ _ ih => exact ⟨stepSponsoredCell_spent_le_quota R _ ih.1, ih.2⟩
+
 theorem validSponsorTrace_preserves_invariants {C : Type} (R : ImplementationRegime C)
     {c₀ cₙ : SponsoredCell C} {n : Nat} {t₀ : Term}
     (hTr : ValidSponsorTrace R c₀ n cₙ)
-    (hWf₀ : SponsoredCellWF R c₀) (hR₀ : R.reify c₀.carrier = .ok t₀) :
+    (hWf₀ : SponsoredCellWF R c₀) (hR₀ : R.reify c₀.carrier = .ok t₀)
+    (covered : ∀ k mid, k < n → ValidSponsorTrace R c₀ k mid →
+      R.readbackCovered (remainingGrade mid.quota mid.spent) mid.carrier) :
     SponsoredCellWF R cₙ ∧ cₙ.heldCaps = c₀.heldCaps ∧ cₙ.quota = c₀.quota ∧
     ∃ tₙ, R.reify cₙ.carrier = .ok tₙ ∧ IEquiv tₙ t₀ := by
   induction hTr with
   | zero => exact ⟨hWf₀, rfl, rfl, t₀, hR₀, IEquiv.refl t₀⟩
-  | succ _ ih =>
-    obtain ⟨hWfM, hCapsM, hQuotaM, tM, hRM, hEqM⟩ := ih
+  | succ prior ih =>
+    obtain ⟨hWfM, hCapsM, hQuotaM, tM, hRM, hEqM⟩ :=
+      ih (fun k mid hk tr => covered k mid (by omega) tr)
     obtain ⟨hWfNext, hCapsNext, tNext, hRNext, hEqNext⟩ :=
-      stepSponsoredCell_preserves_wf R _ tM hWfM hRM
+      stepSponsoredCell_preserves_wf R _ tM hWfM hRM (covered _ _ (by omega) prior)
     exact ⟨hWfNext, hCapsNext.trans hCapsM, hQuotaM, tNext, hRNext, hEqNext.trans hEqM⟩
 
 /-- Arbitrary-depth reflective `SponsorTower` hierarchy: supervisors sub-delegate slices of their

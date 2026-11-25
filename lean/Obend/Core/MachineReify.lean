@@ -9,6 +9,8 @@ cells, `.update` frame-zipper splitting (`plugStackSplittingUpdates`), bidirecti
 public import Obend.Core.Machine
 public import Obend.Core.TermTraverse
 public import Obend.Equiv.Yields
+import all Obend.Law.Proofs.Claim
+import Obend.Law.Proofs.Run
 public section
 namespace Obend.Core.MachineReify
 open Obend.Core.Term Obend.Core.Machine Obend.Equiv
@@ -804,6 +806,82 @@ theorem reifyMachineDag_initial (t : Term) (hClosed : Scoped 0 t) :
   simp [reifyMachineDag, Machine.initial, controlDeps, collectReachableTopo, dedupAddrs, collectTopoAux,
     reifyMachineWithOrder, finishStackInScope, buildDagBindings, hclosedIn, forcingShared,
     reifyStackFrames, letChain, plug, bind, Except.bind, Functor.map, Except.map]
+/-- Pushing the argument frame of a closed application exactly preserves its readback. -/
+theorem reifyMachineDag_initial_app_step (f a : Term) (hf : Scoped 0 f) (ha : Scoped 0 a) :
+    reifyMachineDag (Machine.stepRaw (Machine.initial (.app f a))) = .ok (.app f a) := by
+  have hF := reifyTermUnder_closed 0 [] [] f hf
+  have hA := reifyTermUnder_closed 0 [] [] a ha
+  simp [Machine.initial, Machine.stepRaw, reifyMachineDag, controlDeps, frameDeps,
+    collectReachableTopo, dedupAddrs, collectTopoAux, reifyMachineWithOrder, buildDagBindings,
+    finishStackInScope, forcingShared, reifyStackFrames, reifyNonUpdateFrame, reifyTermInScope,
+    letChain, plug, SourceFrame.plug, hF, hA, pure, Except.pure, bind, Except.bind, Functor.map, Except.map]
+
+/-- A readback may agree literally or after one source step on either side. In particular
+introducing a sharing let can require a backward β step. -/
+private def neighbours (t : Term) : List Term := t :: (Obend.Law.step? t).toList
+
+private theorem neighbours_iequiv {a b : Term} (h : b ∈ neighbours a) : IEquiv a b := by
+  rcases List.mem_cons.mp h with rfl | hn
+  · exact IEquiv.refl _
+  · cases hs : Obend.Law.step? a with
+    | none => simp [hs] at hn
+    | some c =>
+      have he : b = c := by simpa [hs] using hn
+      subst he
+      exact iequiv_of_ahead (Ahead.ofStepsRefl (.next (Obend.Law.step?_sound _ hs) (.refl _)))
+
+def readbacksJoin (a b : Term) : Bool :=
+  (neighbours a).any fun x => (neighbours b).any (Obend.Law.termEq x)
+
+/-- Every source reduction has a witness at the reduced term. -/
+theorem readbacksJoin_of_step {a b : Term} (h : Step a b) : readbacksJoin a b = true := by
+  apply List.any_eq_true.mpr
+  refine ⟨b, List.mem_cons_of_mem _ (by simp [Obend.Law.step?_complete h]), ?_⟩
+  exact List.any_eq_true.mpr ⟨b, List.mem_cons_self, Obend.Law.termEq_refl _⟩
+
+theorem readbacksJoin_inhabited (n : Nat) : readbacksJoin (.done (.nat n)) (.nat n) = true :=
+  readbacksJoin_of_step (.done _)
+
+theorem readbacksJoin_sound {a b : Term} (h : readbacksJoin a b = true) : IEquiv a b := by
+  obtain ⟨x, hx, h'⟩ := List.any_eq_true.mp h
+  obtain ⟨y, hy, e⟩ := List.any_eq_true.mp h'
+  cases Obend.Law.termEq_sound e
+  exact (neighbours_iequiv hx).trans (neighbours_iequiv hy).symm
+
+/- The remaining successful-step obligation, in the namespace opened here, is
+
+   ∀ {source a b : Term} {st : State}, Scoped 0 source →
+     Obend.Core.Invariant.Reachable (Machine.initial source) st →
+     reifyMachineDag st = .ok a → reifyMachineDag (Machine.stepRaw st) = .ok b → IEquiv b a.
+
+   An outcome-aware regime additionally needs coverage of successful readback on its
+   represented successors and a separate case for refusal/blackhole. The closed hole below
+   rules out deriving that coverage from source scope and prior readback alone. -/
+
+/-- A dynamically witnessed bridge for actual raw steps, including administrative transitions. -/
+def checkReifiedStep (st : State) (next : State) : Bool :=
+  match reifyMachineDag st, reifyMachineDag next with
+  | .ok a, .ok b => readbacksJoin a b
+  | _, _ => false
+
+theorem reifyMachineDag_step_iequiv {st : State} {a : Term}
+    (h : checkReifiedStep st (Machine.stepRaw st) = true) (ha : reifyMachineDag st = .ok a) :
+    ∃ b, reifyMachineDag (Machine.stepRaw st) = .ok b ∧ IEquiv b a := by
+  unfold checkReifiedStep at h
+  rw [ha] at h
+  cases hb : reifyMachineDag (Machine.stepRaw st) with
+  | error e => simp [hb] at h
+  | ok b => exact ⟨b, rfl, (readbacksJoin_sound (by simpa [hb] using h)).symm⟩
+
+/-- Reifiability of a closed initial program does not imply reifiability after a raw step. -/
+theorem reifyMachineDag_hole_step (n : Nat) :
+    reifyMachineDag (Machine.initial (.hole n [])) = .ok (.hole n []) ∧
+    reifyMachineDag (Machine.stepRaw (Machine.initial (.hole n []))) =
+      .error (.machineRefused .unresolvedHole) := by
+  constructor
+  · exact reifyMachineDag_initial _ (by simp [Scoped, encode, Tree.Scoped, Tree.All])
+  · rfl
+
 theorem reifyMachineDag_fix_step_iequiv (spec inherited : Term)
     (hSpec : Scoped 0 spec) (hInh : Scoped 0 inherited) :
     ∃ t, reifyMachineDag (Machine.stepRaw (Machine.initial (.fix spec inherited))) = .ok t ∧

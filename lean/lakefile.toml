@@ -139,3 +139,8 @@ root = "LitmusCheck"
 name = "vault-segments"
 srcDir = "tests/vault"
 root = "Segments"
+
+[[lean_exe]]
+name = "dragonstyle-emit"
+srcDir = "tests/metasystem"
+root = "DragonStyleShardTest"

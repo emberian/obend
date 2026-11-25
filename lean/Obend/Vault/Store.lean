@@ -1176,6 +1176,23 @@ theorem judgeOtherLinks_filter (es : List Entry) (world : VaultStore) (pr : Prep
   intro e _ he b
   simp only [he, Bool.false_and, Bool.and_false, Bool.false_eq_true, ite_false]
 
+/-- Each cited page judges the writer by its backlink laws, in resolution order. -/
+def judgeOutgoingLinks (es res : List Entry) (world : VaultStore) (pr : Prepared) (over : List (String × Obend.Core.Data.Data))
+    (cited : List String) : Except String Unit := do
+  for x in cited do
+    if x != pr.p.name then
+      if let some e := es.find? (·.name == x) then
+        match lawsFor es e.name e.graph with
+        | .ok elaws =>
+          let theirsBy := byLaws elaws
+          -- in a turn over several pages (`over`), whether the page links back is read on the
+          -- turn's tip: `res` carries each page the turn writes at its new version
+          let gx := if over.isEmpty then e.graph else ((res.find? (·.name == x)).map (·.graph)).getD e.graph
+          if let some r := (if theirsBy.isEmpty then none
+              else judgeLinksIn (listedStore world (if (linkTargets gx).contains pr.p.id then [pr.p.name] else [])) e.name theirsBy pr.rq [pr.p.name]) then
+            throw (byRefusalText pr.p.name e.name elaws r pr.facts)
+        | .error _ => pure ()
+
 /-- **Judge a prepared write**: its laws on its old and new states, its rows, and the laws over links
 (this page's at the pages it links to, every linking page's at this page), read on the store its
 write turn describes with the pages `over` at the states given (the tip of a turn over several
@@ -1235,20 +1252,7 @@ pages; `[]` for a write alone). -/
         let listed := ((linkTargets G').filterMap fun q => (es.find? (·.id == q)).map (·.name))
         judgeLinksIn (listedStore world listed) p.name mineBy rq linkers) then
       throw (byRefusalText p.name p.name laws r facts)
-    for x in citedNames res G' do
-      if x != p.name then
-        if let some e := es.find? (·.name == x) then
-          match lawsFor es e.name e.graph with
-          | .ok elaws =>
-            let theirsBy := byLaws elaws
-            -- in a turn over several pages (`over`), whether the page links back is read on the
-            -- turn's tip: `res` carries each page the turn writes at its new version
-            let gx := if over.isEmpty then e.graph else ((res.find? (·.name == x)).map (·.graph)).getD e.graph
-            if let some r := (if theirsBy.isEmpty then none
-                else judgeLinksIn (listedStore world (if (linkTargets gx).contains p.id then [p.name] else [])) e.name theirsBy rq [p.name]) then
-              throw (byRefusalText p.name e.name elaws r facts)
-          | .error _ => pure ()
-    pure ()
+    judgeOutgoingLinks es res world pr over (citedNames res G')
   | .refused law reason =>
     throw (refusalText p.name laws law reason facts (occ.old o n) n
       ((scalarFields (settled G')).map (·.1)) ++

@@ -39,6 +39,7 @@ the base they share:
 -/
 public import Obend.Vault.Branch
 import all Obend.Vault.Branch
+public import Obend.Vault.IncrementalJudge
 public import Std.Data.HashMap
 public import Std.Data.HashSet
 public section
@@ -298,6 +299,486 @@ def findCoupledGroup (s : Store) (actor : String) (actorRef : Actor) :
       if keep.length ≥ 2 && keep.length < cand.length then
         findCoupledGroup s actor actorRef fuel keep
       else none
+
+private def pruneExternalStaleSlots (st : VaultStore) :
+    Nat → List (BTurn × Option IncrementalJudge.Slot) →
+      List (BTurn × Option IncrementalJudge.Slot)
+  | 0, items => items
+  | fuel + 1, items =>
+    let cells := items.flatMap (fun x => x.1.writes)
+    let keep := items.filter fun x =>
+      let extPins := x.1.turn.readPins.filter (fun p => !cells.contains p.cell) ++
+        x.1.turn.writeCells.map (fun d => ⟨d.cell, some d.preState⟩)
+      (Footprint.firstStale? st extPins).isNone
+    if keep.length == items.length then keep
+    else pruneExternalStaleSlots st fuel keep
+
+private theorem pruneExternalStaleSlots_fst (st : VaultStore) :
+    ∀ (n : Nat) (items : List (BTurn × Option IncrementalJudge.Slot)),
+      (pruneExternalStaleSlots st n items).map Prod.fst =
+        pruneExternalStale st n (items.map Prod.fst)
+  | 0, _ => rfl
+  | fuel + 1, items => by
+    simp only [pruneExternalStaleSlots, pruneExternalStale,
+      List.flatMap_map, List.filter_map, List.length_map, Function.comp_def]
+    cases h : ((items.filter fun x =>
+        let extPins := x.1.turn.readPins.filter
+            (fun p => !(items.flatMap (fun a => a.1.writes)).contains p.cell) ++
+          x.1.turn.writeCells.map (fun d => ⟨d.cell, some d.preState⟩)
+        (Footprint.firstStale? st extPins).isNone).length == items.length)
+    · simp only [Bool.false_eq_true, ↓reduceIte]
+      exact pruneExternalStaleSlots_fst st fuel _
+    · simp only [↓reduceIte]
+
+private theorem pruneExternalStaleSlots_mem (st : VaultStore) (n : Nat) :
+    ∀ {items : List (BTurn × Option IncrementalJudge.Slot)}
+      {x : BTurn × Option IncrementalJudge.Slot},
+      x ∈ pruneExternalStaleSlots st n items → x ∈ items := by
+  induction n with
+  | zero => intro _ _ hx; exact hx
+  | succ fuel ih =>
+    intro items x hx
+    unfold pruneExternalStaleSlots at hx
+    dsimp only at hx
+    split at hx
+    · exact (List.mem_filter.mp hx).1
+    · exact (List.mem_filter.mp (ih hx)).1
+
+private def prepareSingleText? (s : Store) (actorRef : Actor) (tw : String × PageWrite) :
+    Option Prepared :=
+  match prepareTexts s actorRef [tw] with
+  | .ok [pr] => some pr
+  | _ => none
+
+private def coupledKeepSpec (s : Store) (actorRef : Actor) (cand : List BTurn) : List BTurn :=
+  let texts := cand.filterMap turnSingleText?
+  let prs := texts.filterMap (prepareSingleText? s actorRef)
+  let res := turnEntries s.entries (prs.map fun pr => (pr.p, pr.G', []))
+  let over := tipOf prs
+  cand.filter fun t =>
+    match t.writes.head? >>= fun c => prs.find? (·.p.name == c) with
+    | some pr => (judgePrepared s.entries res pr over).toBool
+    | none => false
+
+private def CoupledSlotInv (s : Store) (actorRef : Actor)
+    (item : BTurn × Option IncrementalJudge.Slot) : Prop :=
+  item.2.map IncrementalJudge.Slot.prepared =
+    (turnSingleText? item.1).bind (prepareSingleText? s actorRef)
+
+private def initCoupledSlot (s : Store) (actorRef : Actor) (t : BTurn) :
+    BTurn × Option IncrementalJudge.Slot :=
+  (t, ((turnSingleText? t).bind (prepareSingleText? s actorRef)).map fun pr => ⟨pr, none⟩)
+
+private theorem initCoupledSlot_fst (s : Store) (actorRef : Actor) :
+    ∀ (cand : List BTurn), (cand.map (initCoupledSlot s actorRef)).map Prod.fst = cand
+  | [] => rfl
+  | _ :: rest => congrArg (_ :: ·) (initCoupledSlot_fst s actorRef rest)
+
+private theorem initCoupledSlot_inv (s : Store) (actorRef : Actor) (t : BTurn) :
+    CoupledSlotInv s actorRef (initCoupledSlot s actorRef t) := by
+  unfold CoupledSlotInv initCoupledSlot
+  cases (turnSingleText? t).bind (prepareSingleText? s actorRef) <;> rfl
+
+private def evalCoupledSlot (es res : List Entry) (over : IncrementalJudge.Tip)
+    (idx : Index.Buckets PageId Entry) (item : BTurn × Option IncrementalJudge.Slot) :
+    BTurn × Option (IncrementalJudge.Slot × Bool) :=
+  match item.2 with
+  | none => (item.1, none)
+  | some sl =>
+    match IncrementalJudge.validateSlot es res over idx sl with
+    | some cache => (item.1, some (⟨sl.prepared, some cache⟩, true))
+    | none => (item.1, some (sl, false))
+
+private theorem evalCoupledSlot_fst (es res : List Entry) (over : IncrementalJudge.Tip)
+    (idx : Index.Buckets PageId Entry) (item : BTurn × Option IncrementalJudge.Slot) :
+    (evalCoupledSlot es res over idx item).1 = item.1 := by
+  obtain ⟨_, opt⟩ := item
+  unfold evalCoupledSlot
+  cases opt with
+  | none => rfl
+  | some sl => dsimp only; cases IncrementalJudge.validateSlot es res over idx sl <;> rfl
+
+private theorem evalCoupledSlot_prepared (es res : List Entry) (over : IncrementalJudge.Tip)
+    (idx : Index.Buckets PageId Entry) (item : BTurn × Option IncrementalJudge.Slot) :
+    ((evalCoupledSlot es res over idx item).2.map Prod.fst).map IncrementalJudge.Slot.prepared =
+      item.2.map IncrementalJudge.Slot.prepared := by
+  obtain ⟨_, opt⟩ := item
+  unfold evalCoupledSlot
+  cases opt with
+  | none => rfl
+  | some sl => dsimp only; cases IncrementalJudge.validateSlot es res over idx sl <;> rfl
+
+private theorem evalCoupledSlot_verdict (es res : List Entry) (over : IncrementalJudge.Tip)
+    (item : BTurn × Option IncrementalJudge.Slot) :
+    (evalCoupledSlot es res over (entryLinkIndex es) item).2.map
+        (fun r => (r.1.prepared.p.name, r.2)) =
+      (item.2.map IncrementalJudge.Slot.prepared).map
+        (fun pr => (pr.p.name, (judgePrepared es res pr over).toBool)) := by
+  obtain ⟨_, opt⟩ := item
+  unfold evalCoupledSlot
+  cases opt with
+  | none => rfl
+  | some sl =>
+    have hv := IncrementalJudge.validateSlot_isSome_eq_judgePrepared es res over sl
+    dsimp only [Option.map]
+    cases h : IncrementalJudge.validateSlot es res over (entryLinkIndex es) sl
+    · rw [h] at hv; simp only [Option.isSome_none] at hv; simp [← hv]
+    · rw [h] at hv; simp only [Option.isSome_some] at hv; simp [← hv]
+
+private theorem items_prs_eq (s : Store) (actorRef : Actor) :
+    ∀ (items : List (BTurn × Option IncrementalJudge.Slot)),
+      (∀ x ∈ items, CoupledSlotInv s actorRef x) →
+      (items.filterMap fun x => x.2.map IncrementalJudge.Slot.prepared) =
+        ((items.map Prod.fst).filterMap turnSingleText?).filterMap (prepareSingleText? s actorRef)
+  | [], _ => rfl
+  | x :: xs, hinv => by
+    have hx : x.2.map IncrementalJudge.Slot.prepared =
+        (turnSingleText? x.1).bind (prepareSingleText? s actorRef) :=
+      hinv x (.head _)
+    have ih := items_prs_eq s actorRef xs (fun y hy => hinv y (.tail _ hy))
+    rw [List.filterMap_cons, hx, ih, List.map_cons, List.filterMap_cons]
+    cases turnSingleText? x.1 with
+    | none => rfl
+    | some tw => rw [List.filterMap_cons]; rfl
+
+private theorem evalCoupledSlots_verdicts (es res : List Entry) (over : IncrementalJudge.Tip) :
+    ∀ (items : List (BTurn × Option IncrementalJudge.Slot)),
+      ((items.map (evalCoupledSlot es res over (entryLinkIndex es))).filterMap fun y =>
+          y.2.map fun r => (r.1.prepared.p.name, r.2)) =
+        (items.filterMap fun x => x.2.map IncrementalJudge.Slot.prepared).map
+          (fun pr => (pr.p.name, (judgePrepared es res pr over).toBool))
+  | [] => rfl
+  | x :: xs => by
+    rw [List.map_cons, List.filterMap_cons, List.filterMap_cons,
+      evalCoupledSlot_verdict es res over x,
+      evalCoupledSlots_verdicts es res over xs]
+    cases x.2.map IncrementalJudge.Slot.prepared <;> rfl
+
+private theorem verdict_lookup_eq (es res : List Entry) (over : IncrementalJudge.Tip)
+    (prs : List Prepared) (t : BTurn) :
+    (match t.writes.head? >>= fun c =>
+        (prs.map fun pr => (pr.p.name, (judgePrepared es res pr over).toBool)).find? (·.1 == c) with
+      | some kv => kv.2
+      | none => false) =
+    (match t.writes.head? >>= fun c => prs.find? (·.p.name == c) with
+      | some pr => (judgePrepared es res pr over).toBool
+      | none => false) := by
+  cases t.writes.head? with
+  | none => rfl
+  | some c =>
+    change (match (prs.map fun pr => (pr.p.name, (judgePrepared es res pr over).toBool)).find? (·.1 == c) with
+        | some kv => kv.2 | none => false) =
+      (match prs.find? (·.p.name == c) with
+        | some pr => (judgePrepared es res pr over).toBool | none => false)
+    rw [List.find?_map]
+    have hcomp : ((fun kv : String × Bool => kv.1 == c) ∘
+        fun pr : Prepared => (pr.p.name, (judgePrepared es res pr over).toBool)) =
+        (fun pr : Prepared => pr.p.name == c) := by
+      funext pr; rfl
+    rw [hcomp]
+    cases prs.find? (·.p.name == c) <;> rfl
+
+private theorem filter_evalCoupledSlot_fst (es res : List Entry) (over : IncrementalJudge.Tip)
+    (idx : Index.Buckets PageId Entry) (P : BTurn → Bool) :
+    ∀ (items : List (BTurn × Option IncrementalJudge.Slot)),
+      (((items.map (evalCoupledSlot es res over idx)).filter (fun y => P y.1)).map
+          (fun y => (y.1, y.2.map Prod.fst))).map Prod.fst =
+        (items.map Prod.fst).filter P
+  | [] => rfl
+  | x :: xs => by
+    simp only [List.map_cons, List.filter_cons, evalCoupledSlot_fst]
+    cases P x.1 with
+    | false =>
+      simp only [Bool.false_eq_true, ↓reduceIte]
+      exact filter_evalCoupledSlot_fst es res over idx P xs
+    | true =>
+      simp only [↓reduceIte, List.map_cons, evalCoupledSlot_fst]
+      exact congrArg (x.1 :: ·) (filter_evalCoupledSlot_fst es res over idx P xs)
+
+private theorem filter_evalCoupledSlot_inv (s : Store) (actorRef : Actor)
+    (es res : List Entry) (over : IncrementalJudge.Tip)
+    (idx : Index.Buckets PageId Entry) (P : BTurn → Bool)
+    (items : List (BTurn × Option IncrementalJudge.Slot))
+    (hinv : ∀ x ∈ items, CoupledSlotInv s actorRef x) :
+    ∀ z ∈ ((items.map (evalCoupledSlot es res over idx)).filter (fun y => P y.1)).map
+        (fun y => (y.1, y.2.map Prod.fst)),
+      CoupledSlotInv s actorRef z := by
+  induction items with
+  | nil => intro _ hz; nomatch hz
+  | cons x xs ih =>
+    intro z hz
+    have ih' := ih (fun w hw => hinv w (.tail _ hw))
+    simp only [List.map_cons, List.filter_cons, evalCoupledSlot_fst] at hz
+    cases hp : P x.1 with
+    | false =>
+      simp only [hp, Bool.false_eq_true, ↓reduceIte] at hz
+      exact ih' z hz
+    | true =>
+      simp only [hp, ↓reduceIte, List.map_cons, List.mem_cons] at hz
+      rcases hz with rfl | hz
+      · unfold CoupledSlotInv
+        dsimp only
+        rw [evalCoupledSlot_fst, evalCoupledSlot_prepared]
+        exact hinv x (.head _)
+      · exact ih' z hz
+
+private def shrinkCoupledSlots (es : List Entry) (idx : Index.Buckets PageId Entry)
+    (items : List (BTurn × Option IncrementalJudge.Slot)) :
+    List (BTurn × Option IncrementalJudge.Slot) :=
+  let prs := items.filterMap fun x => x.2.map IncrementalJudge.Slot.prepared
+  let res := turnEntries es (prs.map fun pr => (pr.p, pr.G', []))
+  let over := tipOf prs
+  let evaluated := items.map (evalCoupledSlot es res over idx)
+  let verdicts := evaluated.filterMap fun y =>
+    y.2.map fun r => (r.1.prepared.p.name, r.2)
+  (evaluated.filter fun y =>
+    match y.1.writes.head? >>= fun c => verdicts.find? (·.1 == c) with
+    | some kv => kv.2
+    | none => false).map fun y => (y.1, y.2.map Prod.fst)
+
+private theorem shrinkCoupledSlots_fst (s : Store) (actorRef : Actor)
+    (items : List (BTurn × Option IncrementalJudge.Slot)) (cand : List BTurn)
+    (hcand : items.map Prod.fst = cand)
+    (hinv : ∀ x ∈ items, CoupledSlotInv s actorRef x) :
+    (shrinkCoupledSlots s.entries (entryLinkIndex s.entries) items).map Prod.fst =
+      coupledKeepSpec s actorRef cand := by
+  subst hcand
+  unfold shrinkCoupledSlots coupledKeepSpec
+  dsimp only
+  have hprs_eq := items_prs_eq s actorRef items hinv
+  rw [hprs_eq]
+  generalize hprs : ((items.map Prod.fst).filterMap turnSingleText?).filterMap
+    (prepareSingleText? s actorRef) = prs at hprs_eq ⊢
+  generalize turnEntries s.entries (prs.map fun pr => (pr.p, pr.G', [])) = res
+  generalize tipOf prs = over
+  rw [filter_evalCoupledSlot_fst s.entries res over (entryLinkIndex s.entries)
+    (fun t => match t.writes.head? >>= fun c =>
+        ((items.map (evalCoupledSlot s.entries res over (entryLinkIndex s.entries))).filterMap
+          fun y => y.2.map fun r => (r.1.prepared.p.name, r.2)).find? (·.1 == c) with
+      | some kv => kv.2
+      | none => false) items]
+  apply List.filter_congr
+  intro t _
+  rw [evalCoupledSlots_verdicts s.entries res over items, hprs_eq]
+  exact verdict_lookup_eq s.entries res over prs t
+
+private theorem shrinkCoupledSlots_inv (s : Store) (actorRef : Actor)
+    (es : List Entry) (idx : Index.Buckets PageId Entry)
+    (items : List (BTurn × Option IncrementalJudge.Slot))
+    (hinv : ∀ x ∈ items, CoupledSlotInv s actorRef x) :
+    ∀ z ∈ shrinkCoupledSlots es idx items, CoupledSlotInv s actorRef z := by
+  let prs := items.filterMap fun x => x.2.map IncrementalJudge.Slot.prepared
+  let res := turnEntries es (prs.map fun pr => (pr.p, pr.G', []))
+  let over := tipOf prs
+  let verdicts := (items.map (evalCoupledSlot es res over idx)).filterMap
+    fun y => y.2.map fun r => (r.1.prepared.p.name, r.2)
+  exact filter_evalCoupledSlot_inv s actorRef es res over idx
+    (fun t => match t.writes.head? >>= fun c => verdicts.find? (·.1 == c) with
+      | some kv => kv.2 | none => false) items hinv
+
+private def findCoupledGroupSlots (s : Store) (st : VaultStore)
+    (idx : Index.Buckets PageId Entry) (actor : String) (actorRef : Actor) :
+    Nat → List (BTurn × Option IncrementalJudge.Slot) → Option (BTurn × Store × List String)
+  | 0, _ => none
+  | _ + 1, [] => none
+  | _ + 1, [_] => none
+  | fuel + 1, items0 =>
+    let items := pruneExternalStaleSlots st items0.length items0
+    if items.length < 2 then none else
+    let texts := items.filterMap (fun x => turnSingleText? x.1)
+    if texts.length != items.length then none else
+    match s.writeTexts texts actorRef with
+    | .ok sAfter =>
+      let cand := items.map Prod.fst
+      (mkCoupledTurn cand sAfter actor actorRef).map fun bt =>
+        (bt, sAfter, cand.flatMap BTurn.writes)
+    | .error _ =>
+      let keep := shrinkCoupledSlots s.entries idx items
+      if keep.length ≥ 2 && keep.length < items.length then
+        findCoupledGroupSlots s st idx actor actorRef fuel keep
+      else none
+
+private theorem findCoupledGroupSlots_eq (s : Store) (actor : String) (actorRef : Actor) :
+    ∀ (fuel : Nat) (items0 : List (BTurn × Option IncrementalJudge.Slot)),
+      (∀ x ∈ items0, CoupledSlotInv s actorRef x) →
+      findCoupledGroupSlots s (vaultStates s) (entryLinkIndex s.entries) actor actorRef fuel items0 =
+        findCoupledGroup s actor actorRef fuel (items0.map Prod.fst)
+  | 0, _, _ => rfl
+  | _ + 1, [], _ => rfl
+  | _ + 1, [_], _ => rfl
+  | fuel + 1, x1 :: x2 :: xs, hinv0 => by
+    change (let items := pruneExternalStaleSlots (vaultStates s) (x1 :: x2 :: xs).length (x1 :: x2 :: xs)
+        if items.length < 2 then none else
+        if (items.filterMap (fun x => turnSingleText? x.1)).length != items.length then none else
+        match s.writeTexts (items.filterMap (fun x => turnSingleText? x.1)) actorRef with
+        | .ok sAfter =>
+          (mkCoupledTurn (items.map Prod.fst) sAfter actor actorRef).map fun bt =>
+            (bt, sAfter, (items.map Prod.fst).flatMap BTurn.writes)
+        | .error _ =>
+          let keep := shrinkCoupledSlots s.entries (entryLinkIndex s.entries) items
+          if keep.length ≥ 2 && keep.length < items.length then
+            findCoupledGroupSlots s (vaultStates s) (entryLinkIndex s.entries) actor actorRef fuel keep
+          else none) =
+      (let cand := pruneExternalStale (vaultStates s)
+          ((x1 :: x2 :: xs).map Prod.fst).length ((x1 :: x2 :: xs).map Prod.fst)
+        if cand.length < 2 then none else
+        if (cand.filterMap turnSingleText?).length != cand.length then none else
+        match s.writeTexts (cand.filterMap turnSingleText?) actorRef with
+        | .ok sAfter =>
+          (mkCoupledTurn cand sAfter actor actorRef).map fun bt =>
+            (bt, sAfter, cand.flatMap BTurn.writes)
+        | .error _ =>
+          if (coupledKeepSpec s actorRef cand).length ≥ 2 &&
+              (coupledKeepSpec s actorRef cand).length < cand.length then
+            findCoupledGroup s actor actorRef fuel (coupledKeepSpec s actorRef cand)
+          else none)
+    dsimp only
+    rw [List.length_map]
+    generalize hitems : pruneExternalStaleSlots (vaultStates s) (x1 :: x2 :: xs).length
+      (x1 :: x2 :: xs) = items
+    generalize hcand_def : pruneExternalStale (vaultStates s) (x1 :: x2 :: xs).length
+      ((x1 :: x2 :: xs).map Prod.fst) = cand
+    have hcand : items.map Prod.fst = cand := by
+      rw [← hitems, ← hcand_def]
+      exact pruneExternalStaleSlots_fst (vaultStates s) (x1 :: x2 :: xs).length (x1 :: x2 :: xs)
+    have hlen : items.length = cand.length := by
+      rw [← hcand, List.length_map]
+    have htexts : items.filterMap (fun x => turnSingleText? x.1) = cand.filterMap turnSingleText? := by
+      rw [← hcand, List.filterMap_map]
+      rfl
+    have hinv : ∀ x ∈ items, CoupledSlotInv s actorRef x := by
+      intro x hx
+      rw [← hitems] at hx
+      exact hinv0 x (pruneExternalStaleSlots_mem (vaultStates s) (x1 :: x2 :: xs).length hx)
+    rw [hlen, htexts]
+    by_cases hlt : cand.length < 2
+    · simp only [hlt, ↓reduceIte]
+    · simp only [hlt, ↓reduceIte]
+      by_cases hne : (cand.filterMap turnSingleText?).length != cand.length
+      · simp only [hne, ↓reduceIte]
+      · simp only [hne, ↓reduceIte]
+        cases s.writeTexts (cand.filterMap turnSingleText?) actorRef with
+        | ok sAfter =>
+          dsimp only
+          rw [hcand]
+        | error _ =>
+          dsimp only
+          have hk_eq := shrinkCoupledSlots_fst s actorRef items cand hcand hinv
+          have hk_inv := shrinkCoupledSlots_inv s actorRef s.entries (entryLinkIndex s.entries) items hinv
+          generalize shrinkCoupledSlots s.entries (entryLinkIndex s.entries) items = keepItems
+            at hk_eq hk_inv ⊢
+          have hk_len : keepItems.length = (coupledKeepSpec s actorRef cand).length := by
+            rw [← hk_eq, List.length_map]
+          rw [hk_len]
+          cases hgo : (decide ((coupledKeepSpec s actorRef cand).length ≥ 2) &&
+              decide ((coupledKeepSpec s actorRef cand).length < cand.length))
+          · simp only [Bool.false_eq_true, ↓reduceIte]
+          · simp only [↓reduceIte]
+            rw [← hk_eq]
+            exact findCoupledGroupSlots_eq s actor actorRef fuel keepItems hk_inv
+
+/-- Incremental coupled-group search: prepares single-page `Slot`s and builds `entryLinkIndex s.entries`
+once when candidate shrinking begins, retaining each surviving turn's `CachedJudgment` across
+shrinking rounds via `IncrementalJudge.validateSlot`. -/
+def findCoupledGroupIncremental (s : Store) (actor : String) (actorRef : Actor) :
+    Nat → List BTurn → Option (BTurn × Store × List String)
+  | 0, _ => none
+  | _ + 1, [] => none
+  | _ + 1, [_] => none
+  | fuel + 1, cand0 =>
+    let st := vaultStates s
+    let cand := pruneExternalStale st cand0.length cand0
+    if cand.length < 2 then none else
+    let texts := cand.filterMap turnSingleText?
+    if texts.length != cand.length then none else
+    match s.writeTexts texts actorRef with
+    | .ok sAfter =>
+      (mkCoupledTurn cand sAfter actor actorRef).map fun bt =>
+        (bt, sAfter, cand.flatMap BTurn.writes)
+    | .error _ =>
+      let idx := entryLinkIndex s.entries
+      let items := cand.map (initCoupledSlot s actorRef)
+      let keep := shrinkCoupledSlots s.entries idx items
+      if keep.length ≥ 2 && keep.length < cand.length then
+        findCoupledGroupSlots s st idx actor actorRef fuel keep
+      else none
+
+theorem findCoupledGroupIncremental_eq (s : Store) (actor : String) (actorRef : Actor)
+    (fuel : Nat) (cand0 : List BTurn) :
+    findCoupledGroupIncremental s actor actorRef fuel cand0 =
+      findCoupledGroup s actor actorRef fuel cand0 := by
+  cases fuel with
+  | zero => rfl
+  | succ fuel =>
+    cases cand0 with
+    | nil => rfl
+    | cons t1 rest =>
+      cases rest with
+      | nil => rfl
+      | cons t2 ts =>
+        change (let cand := pruneExternalStale (vaultStates s) (t1 :: t2 :: ts).length (t1 :: t2 :: ts)
+            if cand.length < 2 then none else
+            if (cand.filterMap turnSingleText?).length != cand.length then none else
+            match s.writeTexts (cand.filterMap turnSingleText?) actorRef with
+            | .ok sAfter =>
+              (mkCoupledTurn cand sAfter actor actorRef).map fun bt =>
+                (bt, sAfter, cand.flatMap BTurn.writes)
+            | .error _ =>
+              let keep := shrinkCoupledSlots s.entries (entryLinkIndex s.entries)
+                (cand.map (initCoupledSlot s actorRef))
+              if keep.length ≥ 2 && keep.length < cand.length then
+                findCoupledGroupSlots s (vaultStates s) (entryLinkIndex s.entries) actor actorRef fuel keep
+              else none) =
+          (let cand := pruneExternalStale (vaultStates s) (t1 :: t2 :: ts).length (t1 :: t2 :: ts)
+            if cand.length < 2 then none else
+            if (cand.filterMap turnSingleText?).length != cand.length then none else
+            match s.writeTexts (cand.filterMap turnSingleText?) actorRef with
+            | .ok sAfter =>
+              (mkCoupledTurn cand sAfter actor actorRef).map fun bt =>
+                (bt, sAfter, cand.flatMap BTurn.writes)
+            | .error _ =>
+              if (coupledKeepSpec s actorRef cand).length ≥ 2 &&
+                  (coupledKeepSpec s actorRef cand).length < cand.length then
+                findCoupledGroup s actor actorRef fuel (coupledKeepSpec s actorRef cand)
+              else none)
+        dsimp only
+        generalize pruneExternalStale (vaultStates s) (t1 :: t2 :: ts).length (t1 :: t2 :: ts) = cand
+        by_cases hlt : cand.length < 2
+        · simp only [hlt, ↓reduceIte]
+        · simp only [hlt, ↓reduceIte]
+          by_cases hne : (cand.filterMap turnSingleText?).length != cand.length
+          · simp only [hne, ↓reduceIte]
+          · simp only [hne, ↓reduceIte]
+            cases s.writeTexts (cand.filterMap turnSingleText?) actorRef with
+            | ok sAfter => rfl
+            | error _ =>
+              dsimp only
+              have hcand : (cand.map (initCoupledSlot s actorRef)).map Prod.fst = cand :=
+                initCoupledSlot_fst s actorRef cand
+              have hinv : ∀ x ∈ cand.map (initCoupledSlot s actorRef), CoupledSlotInv s actorRef x := by
+                intro x hx
+                obtain ⟨t, _, rfl⟩ := List.mem_map.mp hx
+                exact initCoupledSlot_inv s actorRef t
+              have hk_eq := shrinkCoupledSlots_fst s actorRef
+                (cand.map (initCoupledSlot s actorRef)) cand hcand hinv
+              have hk_inv := shrinkCoupledSlots_inv s actorRef s.entries (entryLinkIndex s.entries)
+                (cand.map (initCoupledSlot s actorRef)) hinv
+              generalize shrinkCoupledSlots s.entries (entryLinkIndex s.entries)
+                (cand.map (initCoupledSlot s actorRef)) = keepItems at hk_eq hk_inv ⊢
+              have hk_len : keepItems.length = (coupledKeepSpec s actorRef cand).length := by
+                rw [← hk_eq, List.length_map]
+              rw [hk_len]
+              cases hgo : (decide ((coupledKeepSpec s actorRef cand).length ≥ 2) &&
+                  decide ((coupledKeepSpec s actorRef cand).length < cand.length))
+              · simp only [Bool.false_eq_true, ↓reduceIte]
+              · simp only [↓reduceIte]
+                rw [← hk_eq]
+                exact findCoupledGroupSlots_eq s actor actorRef fuel keepItems hk_inv
+
+@[csimp]
+theorem findCoupledGroup_eq_incremental : @findCoupledGroup = @findCoupledGroupIncremental := by
+  funext s actor actorRef fuel cand0
+  exact (findCoupledGroupIncremental_eq s actor actorRef fuel cand0).symm
 
 def hasForwardReadPin : List BTurn → Bool
   | [] => false

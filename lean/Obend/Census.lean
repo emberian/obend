@@ -478,6 +478,7 @@ import Obend.Lower.Pancake
 import Obend.Lower.Pancake.BeltLatch
 import Obend.Lower.Pancake.ByteMemory
 import Obend.Lower.Pancake.CondSClk
+import Obend.Lower.Pancake.DragonStyleShard
 import Obend.Lower.Pancake.EmitPnk
 import Obend.Lower.Pancake.LcnfEmit
 import Obend.Lower.Pancake.LcnfFun
@@ -696,6 +697,7 @@ import Obend.Vault.FormCheckCache
 import Obend.Vault.FrustumMembrane
 import Obend.Vault.FsDurability
 import Obend.Vault.Hyperedge
+import Obend.Vault.IncrementalJudge
 import Obend.Vault.Index
 import Obend.Vault.IrreversibleOutbox
 import Obend.Vault.Json

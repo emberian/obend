@@ -2339,6 +2339,20 @@ module = "Obend.Vault.FsDurability"
 theorem = "segmented_replace_selected_image"
 description = "Pillai-Bornholt file/directory crash durability for hosted segmented logs (`repaired_append_crash_prefix`, `repaired_rollover_crash_prefix`, `repaired_replace_crash_safe`, `pruning_crash_safe`, `segmented_replace_selected_image`, `physicalImage_readAll`, `failed_sync_refuses_retry`)."
 
+[[apex]]
+id = "vault-incremental-judge-frame-and-coupled-merge"
+subsystem = "Vault"
+module = "Obend.Vault.Merge"
+theorem = "findCoupledGroupIncremental_eq"
+description = "Observation-framed incremental link-law judgment (`judgePrepared_frame`, `judgeIncremental_eq_judgeAll`) wired via `@[csimp]` into `Merge.findCoupledGroup` (`findCoupledGroupIncremental_eq`) to retain accepted `CachedJudgment` slots across shrinking candidate tips."
+
+[[apex]]
+id = "lower-pancake-dragonstyle-bounded-echo-shard"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.DragonStyleShard"
+theorem = "batch_execution_conserves"
+description = "Verified `dn_echo` Pancake byte-lane copy (`echo_refinesClkTight` at 1 loop tick/byte, `echo_entry_inhabited`, `echo_rejects`), 4-cell circular `FixedShard` FIFO refinement (`fixedBatch_refines`), TX backpressure (`tx_full_preserves_rx`), bounded-turn `batch_exec_refines`, and multi-wake RX/TX descriptor conservation (`wake_trace_ownership`)."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

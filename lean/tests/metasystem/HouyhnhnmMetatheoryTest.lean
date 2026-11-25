@@ -197,13 +197,66 @@ example : ValidHistoryRefactoring := demoRefactoring
 
 def safeAddTerm : Term := .binary .add (.nat 19) (.nat 23)
 
--- All 3 regimes (`Term`, `Machine`, `RTL`) genuinely step `19 + 23` to `42` and charge 1 cycle!
+-- Term and RTL use a coarser grain. The machine charges each demand transition.
 #guard match termCanonicalRegime.stepMetered ⟨0, 0, 0, 2, 0⟩ safeAddTerm with
   | (.nat 42, g) => g == oneCycleGrade
   | _ => false
-#guard match machineHeapRegime.stepMetered ⟨0, 0, 0, 2, 0⟩ (Obend.Core.Machine.initial safeAddTerm) with
-  | (st', g) =>
-      (match reifyMachineDag st' with | .ok (.nat 42) => true | _ => false) && g == oneCycleGrade
+#guard match machineHeapRegime.stepMetered oneCycleGrade (Obend.Core.Machine.initial safeAddTerm) with
+  | (⟨_, .evaluate (.nat 19) [], [.binaryLeft .add (.nat 23) []]⟩, g) => g == oneCycleGrade
+  | _ => false
+
+private def meteredResult (ticks : Nat) (st : State) : State × Nat :=
+  match ticks with
+  | 0 => (st, 0)
+  | k + 1 =>
+    let (next, grade) := machineHeapRegime.stepMetered oneCycleGrade st
+    let (last, spend) := meteredResult k next
+    (last, grade.cycles + spend)
+
+#guard match meteredResult 9 (Obend.Core.Machine.initial safeAddTerm) with
+  | (⟨_, .complete (.natural 42), []⟩, 6) => true
+  | _ => false
+#guard match meteredResult 10 (Obend.Core.Machine.initial (.app (.lam (.bound 0)) (.nat 7))) with
+  | (⟨_, .complete (.natural 7), []⟩, 8) => true
+  | _ => false
+#guard match meteredResult 2 (Obend.Core.Machine.initial (.perform (.nat 7))) with
+  | (⟨_, .yielded 0, []⟩, 1) => true
+  | _ => false
+
+#guard match meteredResult 1 (Obend.Core.Machine.initial (.perform (.nat 7))) with
+  | (st, 1) =>
+    match Obend.Core.Machine.resume (.nat 23) st with
+    | some next => match meteredResult 3 next with
+      | (⟨_, .complete (.natural 23), []⟩, 2) => true
+      | _ => false
+    | none => false
+  | _ => false
+
+-- Refusal is charged on entry. An absorbing refused state costs zero thereafter.
+#guard match meteredResult 3 (Obend.Core.Machine.initial (.hole 0 [])) with
+  | (⟨_, .refused .unresolvedHole, _⟩, 1) => true
+  | _ => false
+
+-- The update reached after allocating a fix knot is runnable even when the one-step
+-- readback certificate cannot join the two source terms.
+#guard
+  let st := Obend.Core.Machine.stepRaw
+    (Obend.Core.Machine.initial (.fix (.lam (.lam (.nat 5))) (.record [])))
+  let (next, spend) := machineHeapRegime.stepMetered oneCycleGrade st
+  !checkReifiedStep st next && spend == oneCycleGrade &&
+    (match next.stack with | [.update 0] => true | _ => false)
+
+#tooth Obend.Metatheory.SponsorAndMigration.stepMachineKnot_of_tick by
+  mutation Obend.Metatheory.SponsorAndMigration.stepMachineKnot := fun _ => none
+
+#print axioms validSponsorTrace_accounting
+#print axioms validSponsorTrace_preserves_invariants
+#print axioms machineHeapRegime_charges_raw_step
+#tooth Obend.Core.MachineReify.readbacksJoin_sound by
+  mutation Obend.Core.MachineReify.readbacksJoin := fun _ _ => true
+
+#print axioms reifyMachineDag_step_iequiv
+#print axioms stepMachineKnot_eq_raw
 #guard match rtlWordRegime.lower safeAddTerm with
   | some c =>
       let (c', g) := rtlWordRegime.stepMetered ⟨0, 0, 0, 2, 0⟩ c
