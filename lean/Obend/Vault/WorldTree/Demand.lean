@@ -1,6 +1,10 @@
 module
 public import Obend.Vault.WorldTree.ShardedWorld
 import all Obend.Vault.WorldTree.ShardedWorld
+import all Obend.Vault.Store
+import all Obend.Vault.Page
+import all Obend.Doc.Render
+import all Obend.Doc.Section
 public section
 
 namespace Obend.Vault.ChunkedWorld
@@ -188,5 +192,421 @@ theorem edit_manifest_eq_full (w : World) (read : String → Option ByteArray)
       some (manifestBytes { w with store := w.store.setPage p }) := by
   simp only [DemandWorld.edit, load_full w read hs _ (bucketOf_lt p.name)]
   exact congrArg some (applyEditDemand_root_eq_full w p)
+
+/-! ### Batch Cone Updates & Demand-Open Soundness -/
+
+/-- Replace each page whose name appears in `updates` with its updated record, preserving order. -/
+def applyPageUpdates (ps : List Page) (updates : List Page) : List Page :=
+  ps.map fun q => match updates.find? (·.name == q.name) with
+    | some u => u
+    | none => q
+
+/-- Full-world specification for applying a batch of page updates and advancing `turn`. -/
+def applyWorldUpdates (w : World) (updates : List Page) (turnDelta : Nat) : World :=
+  { w with store := { w.store with
+      pages := applyPageUpdates w.store.pages updates
+      turn := w.store.turn + turnDelta } }
+
+/-- Update one shard bucket payload with all matching page replacements from `updates`. -/
+def applyBucketUpdates (updates : List Page) (old : ShardPayload) : CachedBucket :=
+  let pages := old.1.map fun (i, q) =>
+    (i, match updates.find? (·.name == q.name) with | some u => u | none => q)
+  buildCachedBucket (pages, old.2) none
+
+def applyEditsDemandGo (updates : List Page) (oldBucket : Nat → Option ShardPayload) :
+    List Nat → Array (Option String) → Option (Array (Option String) × List (Nat × CachedBucket))
+  | [], digests => some (digests, [])
+  | b :: bs, digests => do
+    let old ← oldBucket b
+    let cb := applyBucketUpdates updates old
+    let (digests', rest) ← applyEditsDemandGo updates oldBucket bs
+      (digests.setIfInBounds b (cb.entry?.map Prod.fst))
+    return (digests', (b, cb) :: rest)
+
+/-- Apply a batch of page updates over ONLY the touched buckets, returning the next `DemandWorld`
+and updated `CachedBucket`s for the touched buckets. -/
+def applyEditsDemand (d : DemandWorld) (updates : List Page) (turnDelta : Nat)
+    (oldBucket : Nat → Option ShardPayload) : Option (DemandWorld × List (Nat × CachedBucket)) := do
+  let touched := (updates.map fun p => bucketOf p.name).eraseDups
+  let (digests', built) ← applyEditsDemandGo updates oldBucket touched d.digests
+  return ({ d with
+    metadata := { d.metadata with turn := d.metadata.turn + turnDelta }
+    digests := digests' }, built)
+
+private theorem find?_name_eq {updates : List Page} {q u : Page}
+    (h : updates.find? (fun x : Page => x.name == q.name) = some u) : u.name = q.name := by
+  simpa using List.find?_some h
+
+private theorem bucket_of_update (updates : List Page) (q : Page) :
+    bucketOf (match updates.find? (fun x : Page => x.name == q.name) with | some u => u | none => q).name =
+      bucketOf q.name := by
+  cases h : updates.find? (fun x : Page => x.name == q.name) with
+  | none => rfl
+  | some u => simp [find?_name_eq h]
+
+private theorem updates_partition (updates : List Page) (b k : Nat) (ps : List Page) :
+    bucketItems b (enumGo k (applyPageUpdates ps updates)) =
+    (bucketItems b (enumGo k ps)).map fun (i, q) =>
+      (i, match updates.find? (·.name == q.name) with | some u => u | none => q) := by
+  induction ps generalizing k with
+  | nil => simp [applyPageUpdates, enumGo, bucketItems]
+  | cons q qs ih =>
+    simp only [applyPageUpdates, List.map_cons, enumGo, bucketItems, List.filter_cons] at ih ⊢
+    rw [bucket_of_update]
+    by_cases hq : bucketOf q.name = b <;> simp [hq, ih (k + 1)]
+
+private theorem updates_untouched (updates : List Page) (b : Nat)
+    (hNot : b ∉ (updates.map fun p => bucketOf p.name).eraseDups) (xs : List (Nat × Page))
+    (hB : ∀ x ∈ xs, bucketOf x.2.name = b) :
+    xs.map (fun (i, q) => (i, match updates.find? (·.name == q.name) with | some u => u | none => q)) = xs := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+    have hxb : bucketOf x.2.name = b := hB x List.mem_cons_self
+    have hNone : updates.find? (·.name == x.2.name) = none := by
+      rw [List.find?_eq_none]
+      intro u hu heq
+      have hun : u.name = x.2.name := beq_iff_eq.mp heq
+      apply hNot
+      rw [List.mem_eraseDups, List.mem_map]
+      exact ⟨u, hu, by rw [hun, hxb]⟩
+    simp only [List.map_cons, hNone, ih (fun y hy => hB y (List.mem_cons_of_mem _ hy))]
+
+private theorem applyEditsDemandGo_spec (w : World) (updates : List Page)
+    (oldBucket : Nat → Option ShardPayload) :
+    ∀ (bs : List Nat) (digests : Array (Option String)),
+      bs.Nodup →
+      (∀ b ∈ bs, b < numBuckets ∧ oldBucket b = some (fullPayload w b)) →
+      (hsz : digests.size = numBuckets) →
+      ∃ (digests' : Array (Option String)) (built : List (Nat × CachedBucket)) (hsz' : digests'.size = numBuckets),
+        applyEditsDemandGo updates oldBucket bs digests = some (digests', built) ∧
+        ∀ (i : Nat) (hi : i < numBuckets),
+          digests'[i]'(by omega) =
+            if i ∈ bs then (applyBucketUpdates updates (fullPayload w i)).entry?.map Prod.fst
+            else digests[i]'(by omega)
+  | [], digests, _, _, hsz =>
+    ⟨digests, [], hsz, rfl, fun i hi => by simp⟩
+  | b :: bs, digests, hnd, hOld, hsz => by
+    obtain ⟨hbNotIn, hndRest⟩ := List.nodup_cons.mp hnd
+    obtain ⟨hbLt, hbOld⟩ := hOld b List.mem_cons_self
+    let cb := applyBucketUpdates updates (fullPayload w b)
+    let d1 := digests.setIfInBounds b (cb.entry?.map Prod.fst)
+    have hsz1 : d1.size = numBuckets := by simp [d1, hsz]
+    obtain ⟨digests', rest, hsz', hgo, hget⟩ := applyEditsDemandGo_spec w updates oldBucket bs d1 hndRest
+      (fun x hx => hOld x (List.mem_cons_of_mem _ hx)) hsz1
+    refine ⟨digests', (b, cb) :: rest, hsz', ?_, fun i hi => ?_⟩
+    · simp only [applyEditsDemandGo, hbOld, bind, Option.bind, pure]
+      change (applyEditsDemandGo updates oldBucket bs d1).bind _ = _
+      rw [hgo]; rfl
+    · rw [hget i hi]
+      by_cases hibs : i ∈ bs
+      · have hne : i ≠ b := fun he => hbNotIn (he ▸ hibs)
+        simp [hibs, hne]
+      · by_cases hib : i = b
+        · subst hib
+          have hltD : i < digests.size := by omega
+          simp only [hibs, ↓reduceIte, List.mem_cons, true_or, d1]
+          rw [Array.getElem_setIfInBounds hltD]
+          simp [cb]
+        · have hltD : i < digests.size := by omega
+          simp only [hibs, hib, List.mem_cons, or_self, ↓reduceIte, d1]
+          rw [Array.getElem_setIfInBounds hltD]
+          simp [Ne.symm hib]
+
+/-- Demand-updating ONLY the buckets touched by `updates` produces the exact same `DemandWorld`
+and canonical manifest bytes as applying `updates` to the full world. -/
+theorem applyEditsDemand_manifest_eq_full (w : World) (updates : List Page) (turnDelta : Nat)
+    (oldBucket : Nat → Option ShardPayload)
+    (hOld : ∀ b ∈ (updates.map fun p => bucketOf p.name).eraseDups, oldBucket b = some (fullPayload w b)) :
+    ∃ built,
+      applyEditsDemand (fullDirectory w) updates turnDelta oldBucket =
+        some (fullDirectory (applyWorldUpdates w updates turnDelta), built) ∧
+      ((applyEditsDemand (fullDirectory w) updates turnDelta oldBucket).map
+        (fun r => r.1.manifest.data.toList)) =
+        some (manifestBytes (applyWorldUpdates w updates turnDelta)) := by
+  let touched := (updates.map fun p => bucketOf p.name).eraseDups
+  have hnd : touched.Nodup := Index.eraseDups_nodup _
+  have hBnd : ∀ b ∈ touched, b < numBuckets ∧ oldBucket b = some (fullPayload w b) := by
+    intro b hb
+    refine ⟨?_, hOld b hb⟩
+    have hm := List.mem_eraseDups.mp hb
+    obtain ⟨p, _, rfl⟩ := List.mem_map.mp hm
+    exact bucketOf_lt p.name
+  have hsz : (fullDirectory w).digests.size = numBuckets := by simp [fullDirectory]
+  obtain ⟨digests', built, hsz', hgo, hget⟩ := applyEditsDemandGo_spec w updates oldBucket touched
+    (fullDirectory w).digests hnd hBnd hsz
+  let after := applyWorldUpdates w updates turnDelta
+  have hdigs : digests' = (fullDirectory after).digests := by
+    apply Array.ext (by simp [fullDirectory, hsz'])
+    intro i hi1 hi2
+    have hi : i < numBuckets := by simpa [fullDirectory] using hi2
+    rw [hget i hi]
+    simp only [fullDirectory, Array.getElem_map, Array.getElem_range]
+    by_cases hit : i ∈ touched
+    · simp only [hit, ↓reduceIte, applyBucketUpdates]
+      have hpart : fullPayload after i =
+          ((fullPayload w i).1.map fun (idx, q) =>
+            (idx, match updates.find? (·.name == q.name) with | some u => u | none => q),
+           (fullPayload w i).2) := by
+        simp only [fullPayload, after, applyWorldUpdates, enumList, updates_partition]
+      have hcb := congrArg (Option.map Prod.fst) (buildCachedBucket (fullPayload after i) none).entry_eq
+      rw [hpart] at hcb
+      simpa [Option.map_map, Function.comp_def, buildCachedBucket_payload, shardForBucket,
+        fullPayload, enumList, after, applyWorldUpdates, updates_partition] using hcb
+    · simp only [hit, ↓reduceIte, shardForBucket, enumList, after, applyWorldUpdates, updates_partition]
+      have hB : ∀ x ∈ bucketItems i (enumGo 0 w.store.pages), bucketOf x.2.name = i := by
+        intro x hx
+        exact beq_iff_eq.mp (List.mem_filter.mp hx).2
+      rw [updates_untouched updates i hit _ hB]
+  have hdir : ({ fullDirectory w with
+      metadata := { (fullDirectory w).metadata with turn := (fullDirectory w).metadata.turn + turnDelta }
+      digests := digests' } : DemandWorld) = fullDirectory after := by
+    have extDir {a b : DemandWorld} (hm : a.metadata = b.metadata) (hp : a.pages = b.pages)
+        (ht : a.tombs = b.tombs) (hd : a.digests = b.digests) : a = b := by
+      cases a; cases b; simp_all
+    apply extDir
+    · rfl
+    · simp [fullDirectory, after, applyWorldUpdates, applyPageUpdates]
+    · rfl
+    · exact hdigs
+  have hRes : applyEditsDemand (fullDirectory w) updates turnDelta oldBucket =
+      some (fullDirectory after, built) := by
+    unfold applyEditsDemand
+    dsimp only
+    change (applyEditsDemandGo updates oldBucket touched (fullDirectory w).digests).bind _ = _
+    rw [hgo]
+    simp [hdir]
+  refine ⟨built, hRes, ?_⟩
+  rw [hRes]
+  exact congrArg some (directory_manifest after)
+
+/-- Local cleanliness check for a single atom: only identity cites, no raw wikilink text,
+and no dangling-link candidates. -/
+def atomLocallyClean : Obend.Doc.Content → Bool
+  | .cite _ c => c.span == .identity
+  | .text t => !((t.startsWith "[[" || t.startsWith "![[") && t.endsWith "]]") && !danglingCandidate (.text t)
+  | _ => true
+
+/-- A page is locally clean when it has no refusal note, has a current version whose `seen`
+already matches its plain source rendering, has no open sections, and every atom is locally clean. -/
+def pageLocallyClean (p : Page) : Bool :=
+  match p.note, p.current with
+  | none, some G =>
+    p.seen == some (render G p.name p.who) &&
+    (sections G).isEmpty &&
+    G.atoms.all fun (_, c) => atomLocallyClean c
+  | _, _ => false
+
+theorem holds_cite_of_world_eq (H : Obend.Digest.HashBytes.Hash) {W₁ W₂ : Obend.Doc.World}
+    {c : Obend.Doc.Cite} (hW : W₁ c.page = W₂ c.page) :
+    ∀ f ∈ Obend.Doc.citeFacts c, Obend.Doc.holds H W₁ f = Obend.Doc.holds H W₂ f := by
+  intro f hf
+  unfold Obend.Doc.citeFacts at hf
+  cases hs : c.span <;> cases hm : c.mode <;> simp only [hs, hm, List.mem_cons, List.not_mem_nil, or_false] at hf
+  all_goals
+    rcases hf with rfl | rfl <;>
+      simp [Obend.Doc.holds, Obend.Doc.quoted, Obend.Doc.latestQuote, Obend.Doc.World.current, hW]
+
+theorem viewAtom_congr_of_cites (H : Obend.Digest.HashBytes.Hash) {W₁ W₂ : Obend.Doc.World}
+    {G : Obend.Doc.Graph} (hW : ∀ id, citesPage G id = true → W₁ id = W₂ id) :
+    Obend.Doc.viewAtom H W₁ G = Obend.Doc.viewAtom H W₂ G := by
+  funext a
+  unfold Obend.Doc.viewAtom
+  cases hl : G.label a with
+  | none => rfl
+  | some content =>
+    cases content with
+    | text _ | field _ _ | cell _ _ _ _ _ => rfl
+    | cite n c =>
+      have hmem : (a, Obend.Doc.Content.cite n c) ∈ G.atoms := lookup_atoms_mem hl
+      have hc : citesPage G c.page = true := List.any_eq_true.mpr ⟨(a, .cite n c), hmem, by simp⟩
+      have hFilt : ((Obend.Doc.citeFacts c).filter fun f => !Obend.Doc.holds H W₁ f) =
+          ((Obend.Doc.citeFacts c).filter fun f => !Obend.Doc.holds H W₂ f) := by
+        apply List.filter_congr
+        intro f hf
+        rw [holds_cite_of_world_eq H (hW c.page hc) f hf]
+      simp only [hFilt]
+
+/-- Frame invariance for `remarkInWorld`: a page whose cited target histories agree in `W₁` and
+`W₂` produces the exact same remarked page. -/
+theorem remarkInWorld_frame_of_not_cites (H : Obend.Digest.HashBytes.Hash)
+    {W₁ W₂ : Obend.Doc.World} (p : Page)
+    (hW : ∀ G, p.current = some G → ∀ id, citesPage G id = true → W₁ id = W₂ id) :
+    remarkInWorld H W₁ p = remarkInWorld H W₂ p := by
+  unfold remarkInWorld
+  by_cases hn : p.note.isSome = true
+  · simp [hn]
+  · simp only [hn, Bool.false_eq_true, ↓reduceIte]
+    cases hc : p.current with
+    | none => rfl
+    | some G =>
+      simp only [Option.map_some, viewAtom_congr_of_cites H (hW G hc)]
+
+/-- Frame invariance for `remarkPage` across two stores agreeing on all targets cited by `p`. -/
+theorem remarkPage_frame_of_not_cites (H : Obend.Digest.HashBytes.Hash) {s₁ s₂ : Store} (p : Page)
+    (hW : ∀ G, p.current = some G → ∀ id, citesPage G id = true → s₁.world id = s₂.world id) :
+    remarkPage H s₁ p = remarkPage H s₂ p := by
+  rw [← remarkInWorld_store H s₁ p, ← remarkInWorld_store H s₂ p]
+  exact remarkInWorld_frame_of_not_cites H p hW
+
+/-- Frame invariance for `citeReport` across two stores agreeing on all targets cited by `p`. -/
+theorem citeReport_frame_of_not_cites (H : Obend.Digest.HashBytes.Hash) {s₁ s₂ : Store} (p : Page)
+    (hW : ∀ G, p.current = some G → ∀ id, citesPage G id = true →
+      s₁.world id = s₂.world id ∧
+      (s₁.pages.find? (·.id == id)).map Page.name = (s₂.pages.find? (·.id == id)).map Page.name) :
+    citeReport H s₁ p = citeReport H s₂ p := by
+  unfold citeReport
+  cases hc : p.current with
+  | none => rfl
+  | some G =>
+    dsimp only
+    apply Obend.Doc.filterMap_congr'
+    intro pc _
+    cases pc with
+    | mark _ _ => rfl
+    | atom a txt =>
+      dsimp only
+      cases hl : G.label a with
+      | none => rfl
+      | some content =>
+        cases content with
+        | text _ | field _ _ | cell _ _ _ _ _ => rfl
+        | cite n c =>
+          dsimp only
+          have hmem : (a, Obend.Doc.Content.cite n c) ∈ G.atoms := lookup_atoms_mem hl
+          have hcp : citesPage G c.page = true := List.any_eq_true.mpr ⟨(a, .cite n c), hmem, by simp⟩
+          obtain ⟨hWorld, hName⟩ := hW G hc c.page hcp
+          have hName' : (Option.map (fun x => x.name) (s₁.pages.find? (·.id == c.page))) =
+              (Option.map (fun x => x.name) (s₂.pages.find? (·.id == c.page))) := hName
+          have hFilt : ((Obend.Doc.citeFacts c).filter fun f => !Obend.Doc.holds H s₁.world f) =
+              ((Obend.Doc.citeFacts c).filter fun f => !Obend.Doc.holds H s₂.world f) := by
+            apply List.filter_congr
+            intro f hf
+            rw [holds_cite_of_world_eq H hWorld f hf]
+          have hWords : ∀ f ∈ ((Obend.Doc.citeFacts c).filter fun f => !Obend.Doc.holds H s₂.world f),
+              factWords s₁ (((s₂.pages.find? (·.id == c.page)).map (·.name)).getD n) f =
+              factWords s₂ (((s₂.pages.find? (·.id == c.page)).map (·.name)).getD n) f := by
+            intro f hf
+            have hmf := (List.mem_filter.mp hf).1
+            unfold Obend.Doc.citeFacts at hmf
+            cases hs : c.span <;> cases hm : c.mode <;>
+              simp only [hs, hm, List.mem_cons, List.not_mem_nil, or_false] at hmf
+            all_goals
+              rcases hmf with rfl | rfl <;> simp [factWords, hWorld]
+          rw [hName', hFilt]
+          congr 1; congr 1; congr 1
+          by_cases he : ((Obend.Doc.citeFacts c).filter fun f => !Obend.Doc.holds H s₂.world f).isEmpty = true
+          · simp [he]
+          · simp only [he, Bool.false_eq_true, ↓reduceIte]
+            congr 1; exact List.map_congr_left hWords
+
+/-- A locally clean page whose cited page IDs are all present in `s.world` is already fixed by
+`fixDangling` and `remarkPage`, has zero failing cites in `citeReport`, and has zero open sections. -/
+theorem pageLocallyClean_settled_and_clean (H : Obend.Digest.HashBytes.Hash) (s : Store) (p : Page)
+    (hClean : pageLocallyClean p = true)
+    (hPres : ∀ G, p.current = some G → ∀ id, citesPage G id = true → (s.world id).isEmpty = false) :
+    fixDangling H s p = p ∧
+    remarkPage H s p = p ∧
+    ((citeReport H s p).filterMap fun (c, ok, why) =>
+      if ok then none else some (p.name ++ ": " ++ c ++ " is " ++ why)) = [] ∧
+    sectionReport p = [] := by
+  unfold pageLocallyClean at hClean
+  cases hnote : p.note with
+  | some _ => simp [hnote] at hClean
+  | none =>
+    cases hcur : p.current with
+    | none => simp [hnote, hcur] at hClean
+    | some G =>
+      simp only [hnote, hcur, Bool.and_eq_true, beq_iff_eq] at hClean
+      obtain ⟨⟨hseen, hsec⟩, hatoms⟩ := hClean
+      have hAtom : ∀ x ∈ G.atoms, atomLocallyClean x.2 = true := List.all_eq_true.mp hatoms
+      have hFix : fixDangling H s p = p := by
+        unfold fixDangling
+        simp only [hnote, hcur, Option.isSome_none, Bool.false_eq_true, ↓reduceIte]
+        have hinert : ∀ a, (G.label a).bind (danglingOf H s.entries) = none := by
+          intro a
+          cases hl : G.label a with
+          | none => rfl
+          | some c =>
+            simp only [Option.bind_some]
+            apply danglingOf_none_of_not_candidate
+            have ha := hAtom (a, c) (lookup_atoms_mem hl)
+            cases c with
+            | text t => simp only [atomLocallyClean, Bool.and_eq_true, Bool.not_eq_true'] at ha; exact ha.2
+            | cite _ _ | field _ _ | cell _ _ _ _ _ => rfl
+        rw [replaceAll_inert H G _ _ _ hinert]
+        rfl
+      have hView : Obend.Doc.viewAtom H s.world G = G.atomText := by
+        funext a
+        unfold Obend.Doc.viewAtom
+        cases hl : G.label a with
+        | none => rfl
+        | some c =>
+          cases c with
+          | text _ | field _ _ | cell _ _ _ _ _ => rfl
+          | cite n ct =>
+            have hmem : (a, Obend.Doc.Content.cite n ct) ∈ G.atoms := lookup_atoms_mem hl
+            have ha := hAtom (a, .cite n ct) hmem
+            have hsp : ct.span = .identity := beq_iff_eq.mp ha
+            have hcp : citesPage G ct.page = true := List.any_eq_true.mpr ⟨(a, .cite n ct), hmem, by simp⟩
+            have hpr := hPres G hcur ct.page hcp
+            have hnil : ((Obend.Doc.citeFacts ct).filter fun f => !Obend.Doc.holds H s.world f) = [] := by
+              simp [Obend.Doc.citeFacts, hsp, Obend.Doc.holds, hpr]
+            simp only [hnil]
+      have hRemark : remarkPage H s p = p := by
+        unfold remarkPage Page.view
+        simp only [hnote, hcur, Option.isSome_none, Bool.false_eq_true, ↓reduceIte,
+          Option.map_some, hView]
+        have hrend : renderWith G.atomText G p.name p.who = render G p.name p.who := rfl
+        rw [hrend, ← hseen]
+        cases p with
+        | mk nm pid hist sn auth nt kd =>
+          simp only at hnote; subst hnote; rfl
+      have hQuick : allCitesOkQuick H (indexedWorld (Index.ofList Page.id s.pages)) G = true := by
+        rw [indexedWorld_pages]
+        unfold allCitesOkQuick
+        rw [List.all_eq_true]
+        intro ⟨a, c⟩ hmem
+        have ha := hAtom (a, c) hmem
+        cases c with
+        | text t =>
+          simp only [atomLocallyClean, Bool.and_eq_true] at ha
+          exact ha.1
+        | cite n ct =>
+          have hsp : ct.span = .identity := beq_iff_eq.mp ha
+          have hcp : citesPage G ct.page = true := List.any_eq_true.mpr ⟨(a, .cite n ct), hmem, by simp⟩
+          have hpr := hPres G hcur ct.page hcp
+          simp [Obend.Doc.citeFacts, hsp, Obend.Doc.holds, hpr]
+        | field _ _ | cell _ _ _ _ _ => rfl
+      have hCite : ((citeReport H s p).filterMap fun (c, ok, why) =>
+          if ok then none else some (p.name ++ ": " ++ c ++ " is " ++ why)) = [] := by
+        rw [← citeReportIndexed_eq H s p]
+        exact citeReportIndexed_no_failures_of_quick H (Index.ofList Page.id s.pages) p G hcur hQuick
+      have hSec : sectionReport p = [] := by
+        unfold sectionReport
+        rw [hcur]
+        have hnil : sections G = [] := List.isEmpty_iff.mp hsec
+        simp [hnil]
+      exact ⟨hFix, hRemark, hCite, hSec⟩
+
+/-- When every page's file on disk matches its recorded `seen` text and every file belongs to a
+recorded page, both `forgetMissing` and `openVault` are exact no-ops. -/
+theorem reopen_unchanged_eq_full (H : Obend.Digest.HashBytes.Hash) (s : Store)
+    (V : List (String × String))
+    (hAll : ∀ p ∈ s.pages, ∃ md, V.lookup p.name = some md ∧ p.seen = some md)
+    (hCov : ∀ e ∈ V, s.pages.any (·.name == e.1) = true) :
+    forgetMissing s V = { store := s } ∧ openVault H s V = ⟨s, []⟩ := by
+  have hFg : forgetMissing s V = { store := s } := by
+    apply forgetMissing_unchanged s V
+    · intro p hp
+      obtain ⟨md, hmd, _⟩ := hAll p hp
+      simp [hmd]
+    · exact hCov
+  have hQuiet : quiet s V = true := by
+    simp only [quiet, Bool.and_eq_true, List.all_eq_true]
+    refine ⟨fun p hp => ?_, hCov⟩
+    obtain ⟨md, hmd, hsn⟩ := hAll p hp
+    simp [hmd, hsn]
+  exact ⟨hFg, by simp [openVault, hQuiet]⟩
 
 end Obend.Vault.ChunkedWorld

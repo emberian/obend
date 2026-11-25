@@ -232,6 +232,11 @@ private theorem emit_all {α β : Type} (xs : Array α) (emit : α → List β) 
       simp [List.flatMap_append, ih (Nat.le_of_lt hi), hi]
   simpa [List.take_of_length_le (show xs.toList.length ≤ xs.size from Nat.le_refl _)] using loop xs.size (Nat.le_refl _)
 
+/-- Reference body matcher over a list of ground atoms (`matchPatAtoms`). -/
+abbrev matchBody (atoms : List (Atom Term)) (ps : List PatAtom) (σ : Subst Term) :
+    List (Subst Term) :=
+  matchPatAtoms Term.const σ ps atoms
+
 /-- Every multi-atom body produces exactly the reference substitutions, with their original
 order and multiplicity. This includes partially bound and repeated variables and Skolem terms. -/
 theorem matchBodyColt_eq_spec (atoms : Array (Atom Term)) (ps : List PatAtom) (σ : Subst Term) :
@@ -278,6 +283,34 @@ theorem matchBodyColt_eq_spec (atoms : Array (Atom Term)) (ps : List PatAtom) (�
       have arg := @drop argumentKey k (fun _ _ hm => (match_keys hm).2 k hk)
       simp only [Option.toList_some, Colt.select, Array.toList_filter, Array.toList_range]
       rw [skip_filtered _ _ arg, skip_filtered _ _ rel]; exact emit_all atoms emit
+
+/-- Exact equality between COLT trie-indexed body evaluation and reference `matchBody`. -/
+theorem matchBodyColt_eq_matchBody (atoms : Array (Atom Term)) (ps : List PatAtom) (σ : Subst Term) :
+    (matchBodyColt atoms (openAtomTrie atoms).probe ps σ).toList = matchBody atoms.toList ps σ :=
+  matchBodyColt_eq_spec atoms ps σ
+
+/-- Soundness of COLT body matching: every emitted substitution extends `σ` and instantiates
+`ps` into atoms present in `atoms`. -/
+theorem matchBodyColt_sound (atoms : Array (Atom Term)) (ps : List PatAtom) (σ σ' : Subst Term)
+    (hm : σ' ∈ matchBodyColt atoms (openAtomTrie atoms).probe ps σ) :
+    ExtendsSubst σ σ' ∧
+      ∃ groundAtoms, evalPatAtoms Term.const σ' ps = some groundAtoms ∧
+        ∀ a ∈ groundAtoms, a ∈ atoms.toList := by
+  have hmem : σ' ∈ matchPatAtoms Term.const σ ps atoms.toList := by
+    rw [← matchBodyColt_eq_spec]; exact Array.mem_toList_iff.mpr hm
+  exact matchPatAtoms_sound Term.const σ σ' ps atoms.toList hmem
+
+/-- Completeness of COLT body matching: any substitution `τ` extending `σ` whose instantiation
+of `ps` lies in `atoms` is covered by an emitted substitution `σ'` extending `σ` and extended by `τ`. -/
+theorem matchBodyColt_complete (atoms : Array (Atom Term)) (ps : List PatAtom) (σ τ : Subst Term)
+    (hext : ExtendsSubst σ τ) (groundAtoms : List (Atom Term))
+    (hev : evalPatAtoms Term.const τ ps = some groundAtoms)
+    (hSub : ∀ a ∈ groundAtoms, a ∈ atoms.toList) :
+    ∃ σ' ∈ matchBodyColt atoms (openAtomTrie atoms).probe ps σ, ExtendsSubst σ' τ := by
+  obtain ⟨σ', hmem, hext'⟩ :=
+    matchPatAtoms_complete Term.const σ τ hext ps groundAtoms atoms.toList hev hSub
+  rw [← matchBodyColt_eq_spec] at hmem
+  exact ⟨σ', Array.mem_toList_iff.mp hmem, hext'⟩
 
 private theorem match_eq_exec (atoms : Array (Atom Term)) (body : List PatAtom) (σ : Subst Term) :
     matchBodyColt atoms (openAtomTrie atoms).probe body σ = matchPatAtomsExec Term.const σ body atoms :=

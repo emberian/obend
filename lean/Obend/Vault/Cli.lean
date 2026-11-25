@@ -300,14 +300,21 @@ def checkpointBytes (ck : Checkpoint) (base : Nat) : Bytes :=
 Log validation always receives the logical OBWM0001 manifest. -/
 private initialize previousIndexed : IO.Ref (Option (String × ByteArray)) ← IO.mkRef none
 
-private def observeTitle (dir : System.FilePath) (name : String) : IO (Option ChunkedWorld.FileStamp) := do
+private def observeTitleWithBase (dir : System.FilePath) (basePrefix : String) (name : String) :
+    IO (Option ChunkedWorld.FileStamp) := do
   if (name.splitOn "/").any (fun p => p.isEmpty || p.startsWith ".") then return none
   let path := dir / (name ++ ".md")
   try
-    let base ← IO.FS.realPath dir
     let resolved ← IO.FS.realPath path
-    unless resolved.toString.startsWith (base.toString ++ "/") do return none
+    unless resolved.toString.startsWith basePrefix do return none
     ChunkedWorld.observeFile resolved
+  catch e =>
+    if e matches .noFileOrDirectory .. then return none else throw e
+
+private def observeTitle (dir : System.FilePath) (name : String) : IO (Option ChunkedWorld.FileStamp) := do
+  try
+    let base ← IO.FS.realPath dir
+    observeTitleWithBase dir (base.toString ++ "/") name
   catch e =>
     if e matches .noFileOrDirectory .. then return none else throw e
 
@@ -414,8 +421,9 @@ def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := Obend.Vault.C
         let previous ← match ← previousIndexed.get with
           | some (k, bytes) => if k == key then ChunkedWorld.openIndex dir bytes else pure none
           | none => pure none
+        let basePrefix := (← IO.FS.realPath dir).toString ++ "/"
         let indexed ← ChunkedWorld.writeIndexedManifest dir logical
-          (fun i => pure (buckets[i]?.map (·.payload))) (observeTitle dir) previous
+          (fun i => pure (buckets[i]?.map (·.payload))) (observeTitleWithBase dir basePrefix) previous
         pure (indexed.getD logical)
       let header := checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, []⟩
         (if h.base then h.baseSize else 0)
@@ -1053,6 +1061,305 @@ def openDir (dir : System.FilePath) (verbose : Bool) : IO (Store × List (String
   let (w, V) ← openWorld dir verbose
   return (w.store, V)
 
+/-- Extract raw wikilink target page names from markdown text without reading other files. -/
+private def wikilinkTargetNames (md : String) : List String :=
+  (tokens md).filterMap fun
+    | .link cs => some (String.ofList (target false cs).1)
+    | .embed cs => some (String.ofList (target true cs).1)
+    | .text _ => none
+
+/-- Compute `changes` and `refusalsOf` lines for a small list of updated pages in store order. -/
+private def coneChangesAndRefusals (pairs : List (Page × Page)) : List String × List String :=
+  let typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
+  let cs := pairs.filterMap fun (p, p') =>
+    if p'.history.length > p.history.length then
+      some (p'.name ++ ": v" ++ toString p'.history.length ++ " written")
+    else if p'.note.isSome && (p'.note != p.note || typed p' != typed p) then
+      some (p'.name ++ ": " ++ p'.note.getD "")
+    else none
+  let rs := pairs.filterMap fun (p, p') =>
+    if p'.history.length > p.history.length then none
+    else if p'.note.isSome && (p'.note != p.note || typed p' != typed p) then
+      some (p'.name ++ ": " ++ p'.note.getD "")
+    else none
+  (cs, rs)
+
+/-- Read and verify one authenticated shard file from `.obend/world/shards/`. -/
+private def readVerifiedShard (dir : System.FilePath) (key : String) : IO (Option ByteArray) := do
+  if key.toSlice.contains '/' || key.toSlice.contains '\\' then return none
+  let path := ChunkedWorld.shardPath dir key
+  if !(← path.pathExists) then return none
+  let bytes ← Obend.Vault.Cost.readBinFile path
+  Obend.Vault.Cost.addCheckpoint bytes.size
+  return some bytes
+
+/-- Demand-driven `obend open` fastpath over the verified `OBWM0001` secondary index.
+Walks the working tree with a single `stat` per `.md` file; returns `some problemLines` when
+handled cleanly (zero shards loaded when unchanged, only the 1-hop cone when `1 ≤ k ≤ 32` existing
+non-kind pages changed), or `none` to fall back cleanly to full `openWorld` recovery. -/
+def openVaultDemand (dir : System.FilePath) (verbose : Bool) : IO (Option (List String)) := do
+  withVaultLock dir do
+    let readRes ← Obend.Vault.Cost.phase "read" do
+      unless ← (logPath dir).pathExists do return none
+      if ← (newLogPath dir).pathExists then return none
+      let ckPath := checkpointPath dir
+      if !(← ckPath.pathExists) then return none
+      let ckStat ← ckPath.metadata
+      let ckBs ← readArray ckPath
+      if ckBs.isEmpty then return none
+      Obend.Vault.Cost.addCheckpoint ckBs.size
+      let some nl := (List.range (min ckBs.size 200)).find? (fun i => ckBs.get! i == 10) | return none
+      let some txt := bytesText (ckBs.extract 0 nl).data.toList | return none
+      let (c, a, b, h, baseSz) ← match txt.splitOn " " with
+        | ["obend-checkpoint", "1", cStr, aStr, bStr, hStr, kStr] =>
+          match cStr.toNat?, aStr.toNat?, bStr.toNat?, hStr.toNat?, kStr.toNat? with
+          | some c, some a, some b, some h, some k => pure (c, a, b, h, k)
+          | _, _, _, _, _ => return none
+        | _ => return none
+      if c == 0 || baseSz != 0 then return none
+      let physical := ckBs.extract (nl + 1) ckBs.size
+      let (logical, some _) := ChunkedWorld.splitIndex physical | return none
+      let some dw := ChunkedWorld.openDemandWorld logical | return none
+      if dw.pages < 32 || !dw.metadata.environment.isEmpty then return none
+      let total ← SegmentLog.size logHash dir
+      if !(a ≤ b && b == total) then return none
+      let window ← SegmentLog.readRange logHash dir a total
+      let ck : Checkpoint := ⟨c, a, b, h, logical.data.toList⟩
+      let some _ := holdsAt logHash some (SegmentLog.localCheckpoint ck a) window | return none
+      let oldC ← match parseOneAt logHash none window 0 with
+        | .ok (lastRec, _) =>
+          if let .ok (.forget _) := decodeTurn lastRec.payload then return none
+          pure lastRec.receipt.newCommit
+        | .error _ => return none
+      let some idx ← ChunkedWorld.openIndex dir physical | return none
+      let some scan ← idx.scanSummary dir | return none
+      if scan.entries.size != dw.pages || !scan.nonPresentEdges.isEmpty then return none
+      let mut allClean := true
+      let mut anyNote := false
+      let mut kindOrdinals : Array Nat := #[]
+      for i in [:scan.entries.size] do
+        let e := scan.entries[i]!
+        if !e.hasSeen || e.isEnvPage || e.hasDangling then return none
+        if e.hasNote then
+          anyNote := true
+          if !e.hasHistory then return none
+        if !e.locallyClean then allClean := false
+        if e.isKindPage then kindOrdinals := kindOrdinals.push i
+      if !allClean then return none
+      let some (byTitle, candidates) ← ChunkedWorld.scanWorkingTree dir scan ckStat.modified | return none
+      if candidates.size > 32 then return none
+      let mut dirty : Array (Nat × ChunkedWorld.ScanEntry × String × Array Nat) := #[]
+      for (ordIdx, path) in candidates do
+        let entry := scan.entries[ordIdx]!
+        let bytes ← Obend.Vault.Cost.readBinFile path
+        let some (some row) ← idx.title? dir entry.title | return none
+        let unchanged := match row.stamp with
+          | some st => st.matchesBytes bytes
+          | none => false
+        unless unchanged do
+          let some md := String.fromUTF8? bytes | return none
+          if (md.splitOn "environment").length > 1 then return none
+          dirty := dirty.push (ordIdx, entry, md, row.targets)
+      return some (ck, total, oldC, logical, physical, dw, idx, scan, byTitle, anyNote, kindOrdinals, dirty)
+    let some (ck, total, oldC, logical, physical, dw, idx, scan, byTitle, anyNote, kindOrdinals, dirty) := readRes
+      | return none
+    let finishUnchanged : IO (Option (List String)) := do
+      let (nextAnchor, nextStop) ← Obend.Vault.Cost.phase "land" do
+        let b := encodeTurn (.reopened [] none)
+        let r : Record := ⟨⟨ck.anchor, oldC, oldC, dig logHash b⟩, b⟩
+        let bs := encodeRecord logHash r
+        appendRecord dir (ck.count + 1) bs
+        return (Hr logHash r.receipt, total + bs.length)
+      Obend.Vault.Cost.phase "write" do
+        ChunkedWorld.writeFileAtomicArray (ChunkedWorld.rootPath dir)
+          (ChunkedWorld.frameRootJson nextAnchor logical dw.metadata dw.digests.toList)
+        let header := checkpointBytes ⟨ck.count + 1, total, nextStop, nextAnchor, []⟩ 0
+        writeAtomicallyArray (checkpointPath dir) (⟨header.toArray⟩ ++ physical)
+        let key ← ChunkedWorld.canonKey dir
+        previousIndexed.set (some (key, physical))
+        forgetRecovery dir
+      if verbose then IO.println "nothing changed"
+      return some []
+    if dirty.isEmpty then
+      return ← finishUnchanged
+    if anyNote || kindOrdinals.size > 32 then return none
+    if dirty.any (fun (_, e, _, _) => e.isKindPage || !e.hasHistory) then return none
+    let dirtySorted := dirty.qsort fun a b => a.1 < b.1
+    -- Load ONLY the 1-hop cone: dirty pages, kind pages, outgoing targets (old + new), and incoming citers.
+    let coneRead ← Obend.Vault.Cost.phase "read" do
+      let n := scan.entries.size
+      let mut coneOrds : Std.HashSet Nat := {}
+      for (ordIdx, _, _, _) in dirtySorted do coneOrds := coneOrds.insert ordIdx
+      for ordIdx in kindOrdinals do coneOrds := coneOrds.insert ordIdx
+      let mut wantTargetIds : Std.HashSet Nat := {}
+      let mut needBaseNames : Array String := #[]
+      for (_, entry, md, oldTargets) in dirtySorted do
+        -- Old outgoing targets already loaded from verified title index
+        for tid in oldTargets do wantTargetIds := wantTargetIds.insert tid
+        -- New outgoing wikilink targets parsed from edited markdown
+        for tgt in wikilinkTargetNames md do
+          match byTitle[tgt]? with
+          | some oi => coneOrds := coneOrds.insert oi
+          | none => needBaseNames := needBaseNames.push tgt
+        -- Incoming 1-hop citers from verified reverse-link directory
+        let some backNames ← idx.backlinks dir entry.pageId | return none
+        for bn in backNames do
+          match byTitle[bn]? with
+          | some oi => coneOrds := coneOrds.insert oi
+          | none => return none
+      if !wantTargetIds.isEmpty || !needBaseNames.isEmpty then
+        let wantBase : Std.HashSet String := needBaseNames.foldl (·.insert ·) {}
+        let mut counts : Std.HashMap String Nat := {}
+        for i in [:n] do
+          let e := scan.entries[i]!
+          if wantTargetIds.contains e.pageId then
+            coneOrds := coneOrds.insert i
+          unless wantBase.isEmpty do
+            let bn := baseName e.title
+            if wantBase.contains bn then
+              let c := counts[bn]?.getD 0
+              if c < 2 then
+                coneOrds := coneOrds.insert i
+                counts := counts.insert bn (c + 1)
+      let mut bucketSet : Std.HashSet Nat := {}
+      for oi in coneOrds do
+        bucketSet := bucketSet.insert (ChunkedWorld.bucketOf scan.entries[oi]!.title)
+      if bucketSet.size > 48 then return none
+      let mut loadedBuckets : Std.HashMap Nat ChunkedWorld.ShardPayload := {}
+      for b in bucketSet do
+        let some pay ← dw.load (readVerifiedShard dir) b | return none
+        loadedBuckets := loadedBuckets.insert b pay
+      let mut conePagesArr : Array (Nat × Page) := #[]
+      for b in bucketSet do
+        let some (ps, _) := loadedBuckets[b]? | return none
+        for (ord, p) in ps do
+          if coneOrds.contains ord then
+            conePagesArr := conePagesArr.push (ord, p)
+      let conePages := (conePagesArr.qsort fun a b => a.1 < b.1).toList.map Prod.snd
+      return some (loadedBuckets, conePages)
+    let some (loadedBuckets, conePages) := coneRead | return none
+    -- Filter out any dirty candidate whose disk text already equals `p.seen`
+    let mut dirtyMap : Std.HashMap String String := {}
+    let mut oldDirtyMap : Std.HashMap String Page := {}
+    for p in conePages do
+      for (_, e, md, _) in dirtySorted do
+        if p.name == e.title && p.seen != some md then
+          dirtyMap := dirtyMap.insert p.name md
+          oldDirtyMap := oldDirtyMap.insert p.name p
+    if dirtyMap.isEmpty then
+      return ← finishUnchanged
+    let activeDirty := dirtySorted.filter fun (_, e, _, _) => dirtyMap.contains e.title
+    -- Judge & settle ONLY the affected cone
+    let judgeRes ← Obend.Vault.Cost.phase "judge" (Obend.Vault.Cost.compute fun _ => Id.run do
+      let coneStore : Store :=
+        { pages := conePages
+          members := dw.metadata.members
+          turn := dw.metadata.turn
+          tombs := []
+          environment := dw.metadata.environment
+          conflicts := dw.metadata.conflicts }
+      let coneV : List (String × String) :=
+        conePages.map fun p => (p.name, (dirtyMap[p.name]?).getD (p.seen.getD ""))
+      let res := openEntries coneStore.pages coneV
+      let pending : List Write := activeDirty.toList.map fun (_, e, md, _) => (e.title, md)
+      let (sAdm, refList) := match pending with
+        | [(n, md)] => admitOne H res coneStore n md
+        | _ => admitWrites H res coneStore pending []
+      if refList.length ≥ 2 then return none
+      let s1 : Store :=
+        { sAdm with pages := sAdm.pages.map fun p =>
+            if dirtyMap.contains p.name then fixDangling H sAdm p else p }
+      let mut coneIdMap : Std.HashMap Obend.Doc.PageId Page := {}
+      for p in s1.pages do coneIdMap := coneIdMap.insert p.id p
+      -- Collect any cite target outside coneIdMap and verify it is genuinely absent in the full store
+      let mut missingTargets : Std.HashSet Nat := {}
+      for p in s1.pages do
+        if dirtyMap.contains p.name then
+          if let some G := p.current then
+            for tid in citeTargets G do
+              unless coneIdMap.contains tid do missingTargets := missingTargets.insert tid
+      unless missingTargets.isEmpty do
+        for e in scan.entries do
+          if e.hasHistory && missingTargets.contains e.pageId then return none
+      let coneWorld : Obend.Doc.World := fun pid =>
+        match coneIdMap[pid]? with
+        | some p => p.history
+        | none => []
+      let mut updates : List Page := []
+      let mut pairs : List (Page × Page) := []
+      let mut writes : List (String × String) := []
+      let mut probLines : List String := []
+      for p in s1.pages do
+        if let some diskMd := dirtyMap[p.name]? then
+          let u := remarkInWorld H coneWorld p
+          updates := updates ++ [u]
+          if let some oldP := oldDirtyMap[u.name]? then
+            pairs := pairs ++ [(oldP, u)]
+          if let some t := u.seen then
+            if t != diskMd then writes := writes ++ [(u.name, t)]
+          let citeErrs := (citeReport H s1 u).filterMap fun (c, ok, why) =>
+            if ok then none else some (u.name ++ ": " ++ c ++ " is " ++ why)
+          probLines := probLines ++ citeErrs ++ (sectionReport u).map (u.name ++ ": " ++ ·)
+      let (cs, rs) := coneChangesAndRefusals pairs
+      return some (updates, writes, cs, rs, probLines, pending.length))
+    let some (updates, writes, cs, rs, probLines, turnDelta) := judgeRes | return none
+    -- Land the turn record and compute the next authenticated sharded manifest
+    let landRes ← Obend.Vault.Cost.phase "land" do
+      let some (nextDw, dirtyBuilt) := ChunkedWorld.applyEditsDemand dw updates turnDelta
+        (fun b => loadedBuckets[b]?) | return none
+      let nextLogical := nextDw.manifest
+      let newC := unbe (ChunkedWorld.logHashArray nextLogical)
+      let changedRec := (activeDirty.toList.map fun (_, e, md, _) => (e.title, md)).mergeSort
+        fun a b => decide (a.1 ≤ b.1)
+      let b := encodeTurn (.reopened changedRec none)
+      let r : Record := ⟨⟨ck.anchor, oldC, newC, dig logHash b⟩, b⟩
+      let bs := encodeRecord logHash r
+      appendRecord dir (ck.count + 1) bs
+      return some (nextDw, dirtyBuilt, nextLogical, Hr logHash r.receipt, total + bs.length)
+    let some (nextDw, dirtyBuilt, nextLogical, nextAnchor, nextStop) := landRes | return none
+    -- Write any re-rendered markdown files BEFORE observing stamps for the updated index
+    writeFiles dir writes
+    Obend.Vault.Cost.phase "write" do
+      let mut dirtyPayloadMap : Std.HashMap Nat ChunkedWorld.ShardPayload := {}
+      let mut obsoleteShards : Array String := #[]
+      for (b, cb) in dirtyBuilt do
+        dirtyPayloadMap := dirtyPayloadMap.insert b cb.payload
+        if let some (d, sb) := cb.entry? then
+          let key := ChunkedWorld.shardKey b d
+          let sf := ChunkedWorld.shardPath dir key
+          if !(← sf.pathExists) then
+            IO.FS.createDirAll (ChunkedWorld.shardsDir dir)
+            ChunkedWorld.writeFileAtomicArray sf sb
+        if let some (some oldD) := dw.digests[b]? then
+          if nextDw.digests[b]? != some (some oldD) then
+            obsoleteShards := obsoleteShards.push (ChunkedWorld.shardKey b oldD)
+      ChunkedWorld.writeFileAtomicArray (ChunkedWorld.rootPath dir)
+        (ChunkedWorld.frameRootJson nextAnchor nextLogical nextDw.metadata nextDw.digests.toList)
+      let basePrefix := (← IO.FS.realPath dir).toString ++ "/"
+      let loadBucket (b : Nat) : IO (Option ChunkedWorld.ShardPayload) :=
+        match dirtyPayloadMap[b]? with
+        | some pay => pure (some pay)
+        | none => match loadedBuckets[b]? with
+          | some pay => pure (some pay)
+          | none => nextDw.load (readVerifiedShard dir) b
+      let indexed ← ChunkedWorld.writeIndexedManifest dir nextLogical loadBucket
+        (observeTitleWithBase dir basePrefix) (some idx) (some scan)
+      let nextPhysical := indexed.getD nextLogical
+      let header := checkpointBytes ⟨ck.count + 1, total, nextStop, nextAnchor, []⟩ 0
+      writeAtomicallyArray (checkpointPath dir) (⟨header.toArray⟩ ++ nextPhysical)
+      let key ← ChunkedWorld.canonKey dir
+      previousIndexed.set (some (key, nextPhysical))
+      forgetRecovery dir
+      for oldKey in obsoleteShards do
+        try IO.FS.removeFile (ChunkedWorld.shardPath dir oldKey) catch _ => pure ()
+    if verbose then
+      if cs.isEmpty then IO.println "nothing changed"
+      for c in cs do unless rs.contains c do IO.println c
+    sayRefused rs
+    if verbose then
+      for (n, _) in writes do IO.println ("rendered " ++ n ++ ".md")
+    return some probLines
+
 /-- **Commit a command's turn** and write the files its store renders: each page whose file
 differs from the text the store holds for it, and each page that has no file. Returns the store, what
 the turn said and the files written, or the refusal (nothing logged, nothing written). -/
@@ -1518,6 +1825,9 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
   let (append, args) := bare "--append" args
   match args with
   | ["open"] => some do
+    if let some probs ← openVaultDemand dir true then
+      for l in probs do IO.println l
+      return 0
     let (s, _) ← openDir dir true
     for l in problems s do IO.println l
     return 0

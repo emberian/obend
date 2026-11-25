@@ -31,22 +31,23 @@ open Obend.SymbolicZk.Datalog (ProvenanceSemiringOps LawfulProvenanceSemiring Pr
 open Obend.SymbolicZk.SkolemChaseCore
 set_option autoImplicit false
 
-/-- Table of Core4 terms for a relational body. Equations name input rows. The two sides must
-share a free-slot interface in the same formal order. An incompatible or dangling equation
-rejects the batch. The output columns are input row and congruence class of its full application. -/
+/-- Table of Core4 terms for a relational body. Equations name input rows and support redundant-slot
+shrinking (`0 * x = 0`) and slot permutations (`x + y = y + x`) whenever one side's free slots are
+a subset of the other's. Disjoint-variable or dangling equations reject the batch. The output
+columns are input row and congruence class of its canonicalized slotted application. -/
 def coreCongruenceRelation (terms : Array Obend.Core.Term.Term)
     (equations : Array (Nat × Nat)) : Option Colt.Relation := do
   let (roots, graph) := (terms.mapM (fun t => Slotted.insertCore t)).run {}
   let eqs ← equations.mapM fun (lhs, rhs) => do
     let a ← roots[lhs]?
     let b ← roots[rhs]?
-    guard (a.slots == b.slots)
-    return (a.id, b.id)
-  let reps := graph.close eqs
+    guard (a.slots.all (b.slots.contains ·) || b.slots.all (a.slots.contains ·))
+    return (a, b)
+  let closure := graph.close eqs
   let mut applications : Std.HashMap (Slotted.Applied Nat) Nat := {}
   let mut classes := #[]
   for root in roots do
-    let key := { root with id := ← reps[root.id]? }
+    let key := closure.canonApplied root
     let c := applications[key]?.getD applications.size
     applications := applications.insert key c
     classes := classes.push c
