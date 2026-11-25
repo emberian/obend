@@ -13,6 +13,7 @@ lake env lean --run tests/dragonstyle/Tickets.lean "$dir/tickets.bin"
 clang --target=aarch64-linux-gnu -c "$dir/turn.arm8.S" -o "$dir/turn.arm8.o"
 readelf -h "$dir/turn.arm8.o" | grep -E 'Machine:.*AArch64'
 readelf -Ws "$dir/turn.arm8.o" | grep -E 'GLOBAL.*turnIntake$'
+readelf -Ws "$dir/turn.arm8.o" | grep -E 'GLOBAL.*parseFrame$'
 cc -std=c11 -O2 -Wall -Wextra -Werror -Wl,-z,noexecstack \
   -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc \
   tests/dragonstyle/powercut.c "$dir/turn.S" -o "$dir/powercut"

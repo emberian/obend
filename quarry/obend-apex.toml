@@ -2369,11 +2369,18 @@ id = "os-dragonstyle-durable-turn"
 subsystem = "OS"
 module = "Obend.OS.DragonStyleAppliance"
 theorem = "dragonstyle_appliance"
-description = "Every receipt indexes the original authorized payload and nullifier in the power-cut-recovered WAL, with at-most-once dispatch across retries."
+description = "Parameterized multi-epoch durable turn recovery over 512-byte ByteArray LBA sectors, volatile write cache, FLUSH barrier, and cSHAKE256-authenticated FUA superblock, composed with seL4 Microkit and .dev SMMU confinement."
 
 [[apex]]
 id = "os-sddf-ring-ownership"
 subsystem = "OS"
 module = "Obend.OS.SddfOwnership"
 theorem = "ring_ownership"
-description = "Unbounded RX, TX and storage queue histories conserve each fixed-pool slot across submission and completion."
+description = "Unbounded RX, TX and storage queue histories of arbitrary capacity N conserve each fixed-pool slot across submission and completion, paired with .dev SMMU stream confinement."
+
+[[apex]]
+id = "lower-pancake-turn-intake-trace"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.DurableTurn"
+theorem = "turnIntake_positive_trace"
+description = "Whole-function PanSem evaluation of CakeML-emitted parseFrame and turnIntake refines BorrowedTurn.parse over 0..4096-byte payloads and constrains every positive return to replay or full durable FFI commit order."

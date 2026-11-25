@@ -26,267 +26,211 @@ return len;
 }
 
 export fun parseFrame(1 src, 1 len) {
-if (len <+ 70) {
+if (len <+ 59) {
 return 0;
 } else {
-if (159 <+ len) {
-return 0;
-} else {
-if ((ld8 (src + 53)) != 32) {
-return 0;
-} else {
-if ((ld8 (src + 52)) != 58) {
-return 0;
-} else {
-if ((ld8 (src + 51)) != 104) {
-return 0;
-} else {
-if ((ld8 (src + 50)) != 116) {
-return 0;
-} else {
-if ((ld8 (src + 49)) != 103) {
-return 0;
-} else {
-if ((ld8 (src + 48)) != 110) {
-return 0;
-} else {
-if ((ld8 (src + 47)) != 101) {
-return 0;
-} else {
-if ((ld8 (src + 46)) != 76) {
-return 0;
-} else {
-if ((ld8 (src + 45)) != 45) {
-return 0;
-} else {
-if ((ld8 (src + 44)) != 116) {
-return 0;
-} else {
-if ((ld8 (src + 43)) != 110) {
-return 0;
-} else {
-if ((ld8 (src + 42)) != 101) {
-return 0;
-} else {
-if ((ld8 (src + 41)) != 116) {
-return 0;
-} else {
-if ((ld8 (src + 40)) != 110) {
-return 0;
-} else {
-if ((ld8 (src + 39)) != 111) {
-return 0;
-} else {
-if ((ld8 (src + 38)) != 67) {
-return 0;
-} else {
-if ((ld8 (src + 37)) != 10) {
-return 0;
-} else {
-if ((ld8 (src + 36)) != 13) {
-return 0;
-} else {
-if ((ld8 (src + 35)) != 101) {
-return 0;
-} else {
-if ((ld8 (src + 34)) != 99) {
-return 0;
-} else {
-if ((ld8 (src + 33)) != 110) {
-return 0;
-} else {
-if ((ld8 (src + 32)) != 97) {
-return 0;
-} else {
-if ((ld8 (src + 31)) != 105) {
-return 0;
-} else {
-if ((ld8 (src + 30)) != 108) {
-return 0;
-} else {
-if ((ld8 (src + 29)) != 112) {
-return 0;
-} else {
-if ((ld8 (src + 28)) != 112) {
-return 0;
-} else {
-if ((ld8 (src + 27)) != 97) {
-return 0;
-} else {
-if ((ld8 (src + 26)) != 32) {
-return 0;
-} else {
-if ((ld8 (src + 25)) != 58) {
-return 0;
-} else {
-if ((ld8 (src + 24)) != 116) {
-return 0;
-} else {
-if ((ld8 (src + 23)) != 115) {
-return 0;
-} else {
-if ((ld8 (src + 22)) != 111) {
-return 0;
-} else {
-if ((ld8 (src + 21)) != 72) {
-return 0;
-} else {
-if ((ld8 (src + 20)) != 10) {
-return 0;
-} else {
-if ((ld8 (src + 19)) != 13) {
-return 0;
-} else {
-if ((ld8 (src + 18)) != 49) {
-return 0;
-} else {
-if ((ld8 (src + 17)) != 46) {
-return 0;
-} else {
-if ((ld8 (src + 16)) != 49) {
-return 0;
-} else {
-if ((ld8 (src + 15)) != 47) {
-return 0;
-} else {
-if ((ld8 (src + 14)) != 80) {
-return 0;
-} else {
-if ((ld8 (src + 13)) != 84) {
-return 0;
-} else {
-if ((ld8 (src + 12)) != 84) {
-return 0;
-} else {
-if ((ld8 (src + 11)) != 72) {
-return 0;
-} else {
-if ((ld8 (src + 10)) != 32) {
-return 0;
-} else {
-if ((ld8 (src + 9)) != 110) {
-return 0;
-} else {
-if ((ld8 (src + 8)) != 114) {
-return 0;
-} else {
-if ((ld8 (src + 7)) != 117) {
-return 0;
-} else {
-if ((ld8 (src + 6)) != 116) {
-return 0;
-} else {
-if ((ld8 (src + 5)) != 47) {
-return 0;
-} else {
-if ((ld8 (src + 4)) != 32) {
+skip;
+}
+if (4158 <+ len) {
+return 0;
+} else {
+skip;
+}
+{
+var 1 w = 8463441415636209488;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (0 + k))) != (w & 255)) {
 return 0;
 } else {
-if ((ld8 (src + 3)) != 84) {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 3409317638883536498;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (8 + k))) != (w & 255)) {
 return 0;
-} else {
-if ((ld8 (src + 2)) != 83) {
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 8317946244784795185;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (16 + k))) != (w & 255)) {
+return 0;
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 7596570299435334260;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (24 + k))) != (w & 255)) {
 return 0;
 } else {
-if ((ld8 (src + 1)) != 79) {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 8017262814301482593;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (32 + k))) != (w & 255)) {
 return 0;
 } else {
-if ((ld8 (src + 0)) != 80) {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 7299259074152330350;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (40 + k))) != (w & 255)) {
 return 0;
 } else {
-if ((ld8 (src + 59)) != 10) {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 35435232651118;
+{
+var 1 cnt = 6;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (48 + k))) != (w & 255)) {
 return 0;
 } else {
-if ((ld8 (src + 58)) != 13) {
-return 0;
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 d = 0;
+{
+var 1 val = 0;
+while (d <+ 4) {
+{
+var 1 ch = (ld8 (src + (54 + d)));
+if (ch <+ 48) {
+break;
 } else {
-if ((ld8 (src + 57)) != 10) {
-return 0;
+skip;
+}
+if (57 <+ ch) {
+break;
 } else {
-if ((ld8 (src + 56)) != 13) {
+skip;
+}
+val = ((val * 10) + (ch - 48));
+d = (d + 1);
+};
+}
+if (d == 0) {
 return 0;
 } else {
-if ((ld8 (src + 54)) <+ 49) {
+skip;
+}
+if (1 <+ d) {
+if ((ld8 (src + 54)) == 48) {
 return 0;
 } else {
-if (57 <+ (ld8 (src + 54))) {
-return 0;
+skip;
+}
 } else {
-if ((ld8 (src + 55)) <+ 48) {
+skip;
+}
+if (4096 <+ val) {
 return 0;
 } else {
-if (57 <+ (ld8 (src + 55))) {
+skip;
+}
+{
+var 1 off = (58 + d);
+if (len != (off + val)) {
 return 0;
 } else {
-if ((len - 60) != ((((ld8 (src + 54)) - 48) * 10) + ((ld8 (src + 55)) - 48))) {
+skip;
+}
+{
+var 1 w = 168626701;
+{
+var 1 cnt = 4;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + ((54 + d) + k))) != (w & 255)) {
 return 0;
 } else {
-return 60;
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
+skip;
 }
+w = (w >>> 8);
+k = (k + 1);
 }
+};
+};
+};
+return off;
+};
+};
+};
 }
 
 export fun turnIntake(1 src, 1 len, 1 state, 1 scratch) {
@@ -300,38 +244,57 @@ skip;
 {
 var 1 width = (len - off);
 {
-var 1 copied = dn_echo((src + off), (scratch + 8), width, 99);
+var 1 copied = dn_echo((src + off), (scratch + 64), width, 4096);
 if (copied != width) {
 return 0;
 } else {
 skip;
 }
+st (scratch + 48), width;
 {
-var 1 count = (ld8 (state + 0));
+var 1 count = (lds 1 (state + 0));
 {
-var 1 lastId = 0;
+var 1 maxTurns = (lds 1 (state + 16));
+{
+var 1 budgetCap = (lds 1 (state + 24));
+{
+var 1 lastId = (lds 1 (state + 32));
 {
 var 1 spent = 0;
 {
 var 1 i = 0;
-if (8 <+ count) {
+if (maxTurns <+ count) {
 return 0;
 } else {
 skip;
 }
-if ((ld8 ((scratch + 8) + 0)) != (ld8 (state + 1))) {
+if ((lds 1 (scratch + 16)) != (lds 1 (state + 8))) {
 return 0;
 } else {
 skip;
 }
 while (i <+ count) {
 {
-var 1 entry = (state + (2 + (i * 100)));
-lastId = (ld8 (entry + 3));
-if ((ld8 ((scratch + 8) + 0)) == (ld8 (entry + 1))) {
-spent = (spent + (ld8 (entry + 4)));
-if ((ld8 ((scratch + 8) + 1)) == (ld8 (entry + 2))) {
-if (width != (ld8 (entry + 0))) {
+var 1 entry = (state + (40 + (i * 4136)));
+if (lastId <+ (lds 1 (entry + 24))) {
+lastId = (lds 1 (entry + 24));
+} else {
+skip;
+}
+if ((lds 1 (scratch + 16)) == (lds 1 (entry + 8))) {
+spent = (spent + (lds 1 (entry + 32)));
+if ((lds 1 (scratch + 24)) == (lds 1 (entry + 16))) {
+if ((lds 1 (scratch + 32)) != (lds 1 (entry + 24))) {
+return 0;
+} else {
+skip;
+}
+if ((lds 1 (scratch + 40)) != (lds 1 (entry + 32))) {
+return 0;
+} else {
+skip;
+}
+if (width != (lds 1 (entry + 0))) {
 return 0;
 } else {
 skip;
@@ -339,7 +302,7 @@ skip;
 {
 var 1 j = 0;
 while (j <+ width) {
-if ((ld8 ((scratch + 8) + j)) != (ld8 (entry + (1 + j)))) {
+if ((ld8 ((scratch + 64) + j)) != (ld8 (entry + (40 + j)))) {
 return 0;
 } else {
 skip;
@@ -347,15 +310,15 @@ skip;
 j = (j + 1);
 }
 };
-st8 (scratch + 1), (i + 1);
-st8 (scratch + 0), 255;
-@reply((scratch + 8), width, scratch, 8);
-if ((ld8 (scratch + 0)) != 0) {
+st (scratch + 8), ((lds 1 (scratch + 56)) + (i + 1));
+st (scratch + 0), 255;
+@reply((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
 return 0;
 } else {
 skip;
 }
-return (i + 1);
+return ((lds 1 (scratch + 56)) + (i + 1));
 } else {
 skip;
 }
@@ -365,72 +328,79 @@ skip;
 i = (i + 1);
 };
 }
-if (count == 8) {
+if (count >=+ maxTurns) {
 return 0;
 } else {
 skip;
 }
-if (lastId >=+ (ld8 ((scratch + 8) + 2))) {
+if (lastId >=+ (lds 1 (scratch + 32))) {
 return 0;
 } else {
 skip;
 }
-if ((ld8 ((scratch + 8) + 3)) == 0) {
+if ((lds 1 (scratch + 40)) == 0) {
 return 0;
 } else {
 skip;
 }
-if (20 <+ (spent + (ld8 ((scratch + 8) + 3)))) {
+if ((spent + (lds 1 (scratch + 40))) <+ spent) {
 return 0;
 } else {
 skip;
 }
-st8 (scratch + 1), (count + 1);
-st8 (scratch + 0), 255;
-@authorize((scratch + 8), width, scratch, 8);
-if ((ld8 (scratch + 0)) != 0) {
+if (budgetCap <+ (spent + (lds 1 (scratch + 40)))) {
 return 0;
 } else {
 skip;
 }
-st8 (scratch + 0), 255;
-@wal((scratch + 8), width, scratch, 8);
-if ((ld8 (scratch + 0)) != 0) {
+st (scratch + 8), ((lds 1 (scratch + 56)) + (count + 1));
+st (scratch + 0), 255;
+@authorize((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
 return 0;
 } else {
 skip;
 }
-st8 (scratch + 0), 255;
-@flush((scratch + 8), width, scratch, 8);
-if ((ld8 (scratch + 0)) != 0) {
+st (scratch + 0), 255;
+@wal((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
 return 0;
 } else {
 skip;
 }
-st8 (scratch + 0), 255;
-@fua((scratch + 8), width, scratch, 8);
-if ((ld8 (scratch + 0)) != 0) {
+st (scratch + 0), 255;
+@flush((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
 return 0;
 } else {
 skip;
 }
-st8 (scratch + 0), 255;
-@dispatch((scratch + 8), width, scratch, 8);
-if ((ld8 (scratch + 0)) != 0) {
+st (scratch + 0), 255;
+@fua((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
+return 0;
+} else {
+skip;
+}
+st (scratch + 0), 255;
+@dispatch((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
 return 0;
 } else {
 skip;
 }
 skip;
-st8 (scratch + 1), (count + 1);
-st8 (scratch + 0), 255;
-@reply((scratch + 8), width, scratch, 8);
-if ((ld8 (scratch + 0)) != 0) {
+st (scratch + 8), ((lds 1 (scratch + 56)) + (count + 1));
+st (scratch + 0), 255;
+@reply((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
 return 0;
 } else {
 skip;
 }
-return (count + 1);
+return ((lds 1 (scratch + 56)) + (count + 1));
+};
+};
 };
 };
 };
