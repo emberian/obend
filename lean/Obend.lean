@@ -49,6 +49,9 @@ public import Obend.Law
 public import Obend.Law.PointwiseRevise
 public import Obend.Law.AmendCli
 public import Obend.Doc
+public import Obend.Doc.Grove
+public import Obend.Doc.GroveEvaluation
+public import Obend.Doc.GroveLiveObject
 public import Obend.Doc.ReactiveNotebook
 public import Obend.Doc.WorkbookEngine
 public import Obend.Doc.SemanticKG
@@ -378,4 +381,6 @@ public import Obend.Vault.FsDurability
 public import Obend.Vault.IncrementalJudge
 public import Obend.Lower.Pancake.DragonStyleShard
 public import Obend.Core.HeapImage
+public import Obend.Vault.LiveObject
+public import Obend.Repair.CoalgebraicRepair
 public import Obend.Repair.UpgradeEnvelope

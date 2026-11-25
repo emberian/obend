@@ -279,6 +279,9 @@ import Obend.Digest.Kmac256
 import Obend.Doc
 import Obend.Doc.Backlinks
 import Obend.Doc.Graph
+import Obend.Doc.Grove
+import Obend.Doc.GroveEvaluation
+import Obend.Doc.GroveLiveObject
 import Obend.Doc.Merge
 import Obend.Doc.Patch
 import Obend.Doc.ReactiveNotebook
@@ -538,6 +541,7 @@ import Obend.Receipt.Merkle
 import Obend.Receipt.Negotiation
 import Obend.Repair.AlgConfig
 import Obend.Repair.CoalgConfig
+import Obend.Repair.CoalgebraicRepair
 import Obend.Repair.DeltaLensRenew
 import Obend.Repair.QuotAssembly
 import Obend.Run.Adapter
@@ -681,6 +685,7 @@ import Obend.Teeth.Lower.PancakeTeeth
 import Obend.Teeth.Spec.C4Teeth
 import Obend.Teeth.Spec.LawCompileTeeth
 import Obend.Teeth.Spec.TermWire
+import Obend.Teeth.GroveAndRepair
 import Obend.Teeth.Tactic.ToothChecks
 import Obend.Teeth.Vault
 import Obend.Vault.Affordance
@@ -702,6 +707,7 @@ import Obend.Vault.Index
 import Obend.Vault.IrreversibleOutbox
 import Obend.Vault.Json
 import Obend.Vault.Law
+import Obend.Vault.LiveObject
 import Obend.Vault.Log
 import Obend.Vault.Lsafe
 import Obend.Vault.Mandate
