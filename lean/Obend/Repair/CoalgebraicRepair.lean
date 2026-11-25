@@ -9,46 +9,6 @@ public section
 namespace Obend.Repair
 set_option autoImplicit false
 
-/-- The finite interaction schema has one nullary constructor and one unary
-constructor for each machine input. It uses the repair library's polynomial. -/
-abbrev PathPos {I : Type} : Option I → Type
-  | none => Empty
-  | some _ => Unit
-
-def pathConstruct {I : Type} : PAlg (Option I) PathPos (List I) where
-  op
-    | ⟨none, _⟩ => []
-    | ⟨some i, tail⟩ => i :: tail ()
-
-def pathFold {I X : Type} (a : PAlg (Option I) PathPos X) : List I → X
-  | [] => a.op ⟨none, Empty.elim⟩
-  | i :: rest => a.op ⟨some i, fun _ => pathFold a rest⟩
-
-/-- Constructor eta for traces, directly by induction, without function extensionality. -/
-theorem path_eta {I : Type} (path : List I) : pathFold pathConstruct path = path := by
-  induction path with
-  | nil => rfl
-  | cons i rest ih => exact congrArg (i :: ·) ih
-
-def pathInitial (I : Type) : InitPAlg (Option I) PathPos (List I) where
-  alg := pathConstruct
-  fold := pathFold
-  fold_beta a t := by
-    obtain ⟨_ | i, f⟩ := t
-    · apply congrArg a.op
-      apply congrArg (Sigma.mk none)
-      funext e; exact Empty.elim e
-    · rfl
-  fold_eta a h law path := by
-    induction path with
-    | nil =>
-      refine (law ⟨none, Empty.elim⟩).trans ?_
-      apply congrArg a.op
-      apply congrArg (Sigma.mk none)
-      funext e; exact Empty.elim e
-    | cons i rest ih =>
-      exact (law ⟨some i, fun _ => rest⟩).trans (congrArg (fun x => a.op ⟨some i, fun _ => x⟩) ih)
-
 /-- A Moore machine is the existing polynomial coalgebra with a constant input
 position type. Each history selects one observation in the final behavior. -/
 abbrev Moore (I O X : Type) := PCoalg O (fun _ => I) X
@@ -158,10 +118,49 @@ theorem relocatedMachineBisim (pre : Array Cell) :
       obtain ⟨heap, ctrl, stk⟩ := s
       cases ctrl <;> rfl
 
+/-- Connect `relocatedMachineBisim` directly through `coinductiveUpgradeTransport`:
+transports every behavior, full observation trace, and invariant safety floor across
+heap-prefix relocation. -/
+theorem relocatedMachineTransport (pre : Array Cell) (s : State)
+    {old new : State → Prop}
+    (floor : ∀ {u}, old u → new (liftContinuationState pre u)) :
+    (∀ inputs, behavior machineCoalgebra s inputs =
+      behavior machineCoalgebra (liftContinuationState pre s) inputs) ∧
+    (∀ inputs, observations machineCoalgebra s inputs =
+      observations machineCoalgebra (liftContinuationState pre s) inputs) ∧
+    (holds_forever machineCoalgebra old s →
+      holds_forever machineCoalgebra new (liftContinuationState pre s)) :=
+  coinductiveUpgradeTransport (relocatedMachineBisim pre) rfl
+    (fun {_ _} hv hu => hv ▸ floor hu)
+
 theorem relocatedTrace (pre : Array Cell) (s : State) (inputs : List MachineInput) :
     observations machineCoalgebra s inputs =
       observations machineCoalgebra (liftContinuationState pre s) inputs :=
-  (relocatedMachineBisim pre).trace inputs rfl
+  (relocatedMachineTransport pre s (old := fun _ => True) (new := fun _ => True)
+    (fun _ => trivial)).2.1 inputs
+
+/-- Safety-floor transport instantiated via `relocatedMachineTransport`: if a Core4 machine
+never reaches any `.refused` control state under any sequence of ticks and responses, its
+heap-prefix relocation preserves refusal-freedom forever. -/
+theorem relocated_no_refusal_forever (pre : Array Cell) (s : State)
+    (safe : holds_forever machineCoalgebra (fun u => ∀ r, u.control ≠ .refused r) s) :
+    holds_forever machineCoalgebra (fun v => ∀ r, v.control ≠ .refused r)
+      (liftContinuationState pre s) :=
+  (relocatedMachineTransport pre s (fun {u} hu r hc => by
+    have hobs : machineObservation u.control = machineObservation (liftContinuationState pre u).control :=
+      (relocatedMachineBisim pre).observe rfl
+    rw [hc] at hobs
+    cases hcu : u.control with
+    | refused r' =>
+      rw [hcu] at hobs
+      cases hobs
+      exact hu r hcu
+    | complete v =>
+      rw [hcu] at hobs
+      cases v <;> simp [machineObservation] at hobs
+    | evaluate _ _ | enter _ | blackhole _ | returned _ | yielded _ =>
+      rw [hcu] at hobs
+      simp [machineObservation] at hobs)).2.2 safe
 
 open Obend.Judge.Genealogy
 

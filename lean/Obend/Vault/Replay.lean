@@ -1252,26 +1252,44 @@ theorem fill_replays (w : World) (name received sent : String) :
                     sent := (w.sent.filter (·.1 != name)) ++ [(name, sent)] }, .quiet) :=
   ext_replays .core (e := fillExt) (List.Mem.head _) w (name, received, sent)
 
-/-- Construct a deployed checkpoint turn from a certified live machine state. -/
+/-- Construct a deployed checkpoint turn from a certified live machine state and its executable `StateCert`. -/
 def checkpointTurn {A types ty} (page : String) (atom parent : Nat) (name : String)
     (c : Obend.Doc.LiveObject.Checkpoint A types ty) : Turn :=
-  .ext "core4.checkpoint" (LiveObject.Write.encode ⟨page, atom, parent, name, c.state⟩)
+  .ext "core4.checkpoint" (LiveObject.Write.encode ⟨page, atom, parent, name, c.state, c.cert, c.verified⟩)
 
 theorem checkpoint_replays (w : World) {A types ty} (page : String) (atom parent : Nat)
     (name : String) (c : Obend.Doc.LiveObject.Checkpoint A types ty) :
-    let op : LiveObject.Write := ⟨page, atom, parent, name, c.state⟩
+    let op : LiveObject.Write := ⟨page, atom, parent, name, c.state, c.cert, c.verified⟩
     stepTurn w (checkpointTurn page atom parent name c) =
       liftStep ((op.land w.store).map fun s => { w with store := s }) :=
   ext_replays .core (e := liveObjectExt) (List.Mem.tail _ (List.Mem.head _)) w _
 
+/-- Any untrusted wire turn `.ext "core4.checkpoint" j` accepted by `stepTurn` must decode
+through `LiveObject.Write.decode` and carry a re-verified kernel `StateTyping` derivation
+(closing the erased-ghost typing bypass on external wire payloads). -/
+theorem liveObjectExt_step_typed {w w' : World} {o : Outcome} {j : Json}
+    (ok : stepTurn w (.ext "core4.checkpoint" j) = .ok (w', o)) :
+    ∃ op : LiveObject.Write, LiveObject.Write.decode j = .ok op ∧
+      Nonempty (Obend.Core.MachineTyping.StateTyping op.cert.assumptions op.cert.addressTypes
+        op.state op.cert.result) := by
+  change stepExt .core w "core4.checkpoint" j = .ok (w', o) at ok
+  unfold stepExt at ok
+  have hfind : LawfulTurnRegistry.core.find? "core4.checkpoint" = some liveObjectExt :=
+    LawfulTurnRegistry.core.find?_of_mem (e := liveObjectExt) (List.Mem.tail _ (List.Mem.head _))
+  rw [hfind] at ok
+  dsimp only [liveObjectExt] at ok
+  cases hdec : LiveObject.Write.decode j with
+  | error err => simp [hdec] at ok
+  | ok op => exact ⟨op, rfl, op.stateTyping⟩
+
 /-- Successful replay leaves the certified state readable at its page and atom.
-The proof goes through admission, page history, live-atom lookup and image decoding. -/
+The proof goes through wire verification, admission, page history, live-atom lookup and raw `ByteArray` decoding. -/
 theorem checkpoint_read_after_replay {w w' : World} {o : Outcome} {A types ty}
     {page : String} {atom parent : Nat} {name : String} (c : Obend.Doc.LiveObject.Checkpoint A types ty)
     (ok : stepTurn w (checkpointTurn page atom parent name c) = .ok (w', o)) :
     LiveObject.readAt w'.store page atom = some c.state := by
   rw [checkpoint_replays] at ok
-  let op : LiveObject.Write := ⟨page, atom, parent, name, c.state⟩
+  let op : LiveObject.Write := ⟨page, atom, parent, name, c.state, c.cert, c.verified⟩
   cases land : op.land w.store with
   | error msg => simp [op] at land; simp [land, Except.map, liftStep] at ok
   | ok s =>
@@ -1280,6 +1298,37 @@ theorem checkpoint_read_after_replay {w w' : World} {o : Outcome} {A types ty}
     simp [land, Except.map, liftStep] at ok
     obtain ⟨rfl, rfl⟩ := ok
     exact this
+
+/-- Multi-turn living object advancement: stepping two consecutive checkpoint turns on the
+same `(page, atom)` supersedes the living object cell in place across turns so the latest
+certified state is readable at `(page, atom)` while conserving world invariants. -/
+theorem checkpoint_advance_across_turns {w₀ w₁ w₂ : World} {o₁ o₂ : Outcome}
+    {A₁ types₁ ty₁ A₂ types₂ ty₂} {page : String} {atom parent : Nat} {name : String}
+    (c₁ : Obend.Doc.LiveObject.Checkpoint A₁ types₁ ty₁)
+    (c₂ : Obend.Doc.LiveObject.Checkpoint A₂ types₂ ty₂)
+    (h₁ : stepTurn w₀ (checkpointTurn page atom parent name c₁) = .ok (w₁, o₁))
+    (h₂ : stepTurn w₁ (checkpointTurn page atom parent name c₂) = .ok (w₂, o₂)) :
+    LiveObject.readAt w₁.store page atom = some c₁.state ∧
+    LiveObject.readAt w₂.store page atom = some c₂.state ∧
+    Conserves w₀ w₂ := by
+  refine ⟨checkpoint_read_after_replay c₁ h₁, checkpoint_read_after_replay c₂ h₂, ?_⟩
+  have hc₁ : Conserves w₀ w₁ := by
+    rw [checkpoint_replays] at h₁
+    cases hl : (⟨page, atom, parent, name, c₁.state, c₁.cert, c₁.verified⟩ : LiveObject.Write).land w₀.store with
+    | error _ => simp [hl, Except.map, liftStep] at h₁
+    | ok s =>
+      simp [hl, Except.map, liftStep] at h₁
+      obtain ⟨rfl, rfl⟩ := h₁
+      exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+  have hc₂ : Conserves w₁ w₂ := by
+    rw [checkpoint_replays] at h₂
+    cases hl : (⟨page, atom, parent, name, c₂.state, c₂.cert, c₂.verified⟩ : LiveObject.Write).land w₁.store with
+    | error _ => simp [hl, Except.map, liftStep] at h₂
+    | ok s =>
+      simp [hl, Except.map, liftStep] at h₂
+      obtain ⟨rfl, rfl⟩ := h₂
+      exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+  exact hc₁.trans hc₂
 
 open Obend.Core.Machine Obend.Core.MachineTyping Obend.Core.Check Obend.Core.Ty in
 /-- A durable world round-trip preserves the typed continuation resumed by a reply. -/

@@ -9,7 +9,7 @@ import Std.Data.TreeMap.Raw.Lemmas
 public section
 namespace Obend.Doc.Grove
 open Obend.Core.Term Obend.Core.Ty Obend.Core.Check Obend.Core.Machine
-open Obend.Tactic.DataRefinement
+open Obend.Core.Data Obend.Tactic.DataRefinement
 open Std (TreeMap)
 set_option autoImplicit false
 attribute [local instance] lexOrd
@@ -130,19 +130,65 @@ theorem index_parent (edges : List Edge) (v : Nat) :
     · simp [indexEdges, h, ih, (index_wf es).2]
     · simp [indexEdges, Std.TreeMap.Raw.getD_insert (index_wf es).2, h, ih, beq_eq_false_iff_ne.mpr h]
 
-/-- Vertices are immutable. Replacing a subtree allocates vertices and edits edges.
-The catalog certificate checks every leaf and application boundary before freezing. -/
+/-! ## Collaborative `Core.Term` Vertices, Typed Ports & Projection -/
+
+/-- Build a closed Core4 record row type from a field-type list. -/
+def recordRow : List (String × Ty) → Ty
+  | [] => .emptyRow
+  | (n, t) :: rest => .field n t (recordRow rest)
+
+/-- Immutable collaborative Grove vertices spanning Core4 constructors:
+leaves (with optional lambda-annotation tables), lexical variables, lambdas,
+applications, `let`-bindings, open-recursive `fix` & `mix`, `prototype`/`project`/`reflect`,
+n-ary `record`s & field `get`, scalar `binary` primitives, and `ifBool`. -/
 inductive Vertex where
-  | leaf (type : Ty) (term : Term)
+  | leaf (type : Ty) (term : Term) (anns : LiveObject.AnnTable := [])
+  | var (index : Nat) (type : Ty)
+  | lam (reuse : Reuse) (domain codomain : Ty)
   | app (reuse : Reuse) (quantity : Quantity) (domain range : Ty)
+  | letBind (boundTy bodyTy : Ty)
+  | fix (inherited target : Ty)
+  | mix (self inherited middle provided : Ty)
+  | prototype (specType targetType : Ty)
+  | projectProto (specType targetType : Ty)
+  | reflectProto (specType targetType : Ty)
+  | record (fields : List (String × Ty))
+  | get (row : Ty) (fieldName : String) (member : Ty)
+  | binary (primitive : Primitive)
+  | ifBool (branchTy : Ty)
 
 def Vertex.type : Vertex → Ty
-  | .leaf t _ => t
+  | .leaf t _ _ => t
+  | .var _ t => t
+  | .lam r dom cod => .arrow r .unrestricted dom cod
   | .app _ _ _ t => t
+  | .letBind _ bodyTy => bodyTy
+  | .fix _ target => target
+  | .mix self inh _ prov =>
+    .arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inh prov)
+  | .prototype s t => .prototype s t
+  | .projectProto _ t => t
+  | .reflectProto s _ => s
+  | .record fields => recordRow fields
+  | .get _ _ m => m
+  | .binary prim => (primitiveTypes prim).2
+  | .ifBool t => t
 
 def Vertex.Valid : Vertex → Prop
-  | .leaf ty term => PartialTyping {} [] term ty []
+  | .leaf ty term _ => PartialTyping {} [] term ty []
+  | .var _ _ => True
+  | .lam _ dom _ => dom.shareable = true
   | .app _ q dom _ => argumentAllowed {} q [] dom [] = true
+  | .letBind boundTy _ => boundTy.shareable = true
+  | .fix inh target => target.shareable = true ∧ inh.shareable = true
+  | .mix self inh mid _ => self.shareable = true ∧ inh.shareable = true ∧ mid.shareable = true
+  | .prototype s t => s.isComputation = false ∧ t.isComputation = false
+  | .projectProto _ _ => True
+  | .reflectProto _ _ => True
+  | .record fields => (fields.map Prod.fst).Nodup ∧ ∀ f ∈ fields, f.2.isComputation = false
+  | .get row name member => ∃ fuel, row.lookup [] fuel name = some member
+  | .binary _ => True
+  | .ifBool _ => True
 
 abbrev Catalog := TreeMap.Raw AtomId Vertex compare
 
@@ -178,6 +224,7 @@ inductive Conflict where
   | multiParent (vertex : AtomId) (incoming : List Edge)
   | mismatch (vertex : AtomId) (actual : Ty)
   | unknownVertex (vertex : AtomId)
+  | unboundVar (vertex : AtomId) (index : Nat)
   | cycle (vertex : AtomId)
   | deletedParentModifiedChild (cut edit : Edge)
   deriving Repr
@@ -188,42 +235,159 @@ structure ConflictHole where
   reason : Conflict
   deriving Repr
 
+/-- Marked collaborative AST over Core4 constructors, with localized conflict holes at any port. -/
 inductive Marked where
-  | code (term : Term)
+  | code (term : Term) (anns : LiveObject.AnnTable := [])
+  | var (index : Nat)
+  | lam (reuse : Reuse) (domain codomain : Ty) (body : Marked)
   | app (fn arg : Marked)
+  | letBind (boundTy bodyTy : Ty) (val body : Marked)
+  | fix (spec inherited : Marked)
+  | mix (lower upper : Marked)
+  | prototype (spec target : Marked)
+  | projectProto (target : Marked)
+  | reflectProto (target : Marked)
+  | record (fields : List (String × Marked))
+  | get (target : Marked) (fieldName : String)
+  | binary (primitive : Primitive) (left right : Marked)
+  | ifBool (cond whenTrue whenFalse : Marked)
   | hole (h : ConflictHole)
 
-/-- A covered root consists of the ordinary program and independently demandable
-conflicts. Even a cut below a now unreachable ancestor remains visible here. -/
+/-- A covered root consists of the projected program (with every reachable detached cut
+localized as a first-class conflict hole at its exact port) plus the complete list of
+detached delete-modify conflicts across all cuts for root audit and freezing. -/
 structure LiveRoot where
   program : Marked
   detached : List ConflictHole
 
-/-- Bounded structural projection. A simple path cannot use more edges than the
-live set contains. Revisiting a vertex identifies a cycle before descending. -/
-def project (nodes : Catalog) (idx : Adjacency) :
-    Nat → List AtomId → Port → Ty → Marked
-  | fuel, seen, p, expected =>
-    match idx.slots.getD p [] with
-    | [] => .hole ⟨p, expected, .empty⟩
-    | [e] =>
-      let v := e.target
-      match idx.parents.getD v [] with
-      | a :: b :: more => .hole ⟨p, expected, .multiParent v (a :: b :: more)⟩
-      | _ =>
-        match nodes.get? v with
-        | none => .hole ⟨p, expected, .unknownVertex v⟩
-        | some node =>
-          if node.type != expected then .hole ⟨p, expected, .mismatch v node.type⟩
-          else if seen.contains v then .hole ⟨p, expected, .cycle v⟩
-          else match node with
-          | .leaf _ t => .code t
-          | .app reuse q dom ran =>
-            match fuel with
-            | 0 => .hole ⟨p, expected, .cycle v⟩
-            | n + 1 => .app (project nodes idx n (v :: seen) (v, 0) (.arrow reuse q dom ran))
-                             (project nodes idx n (v :: seen) (v, 1) dom)
-    | a :: b :: more => .hole ⟨p, expected, .alternatives (a :: b :: more)⟩
+/-- Index detached conflict holes by the source port `h.port` where the severed edge lived. -/
+def indexCuts : List ConflictHole → TreeMap.Raw Port (List ConflictHole) compare
+  | [] => ∅
+  | h :: hs =>
+    let rest := indexCuts hs
+    rest.insert h.port (h :: rest.getD h.port [])
+
+private theorem indexCuts_wf (holes : List ConflictHole) : (indexCuts holes).WF := by
+  induction holes with
+  | nil => exact Std.TreeMap.Raw.WF.emptyc
+  | cons _ _ ih => exact ih.insert
+
+theorem indexCuts_port (holes : List ConflictHole) (p : Port) :
+    (indexCuts holes).getD p [] = holes.filter (fun h => h.port == p) := by
+  induction holes with
+  | nil => simp [indexCuts]
+  | cons h hs ih =>
+    by_cases hp : h.port = p
+    · simp [indexCuts, hp, ih, indexCuts_wf hs]
+    · simp [indexCuts, Std.TreeMap.Raw.getD_insert (indexCuts_wf hs), hp, ih, beq_eq_false_iff_ne.mpr hp]
+
+/-- Bounded structural projection over full Core4 vertices with lexical context tracking
+and localized detached-cut holes at their affected ports. -/
+def project (nodes : Catalog) (idx : Adjacency)
+    (cuts : TreeMap.Raw Port (List ConflictHole) compare := ∅) :
+    Nat → List AtomId → Context → Port → Ty → Marked
+  | fuel, seen, ctx, p, expected =>
+    match cuts.getD p [] with
+    | h :: _ => .hole { h with expected := expected }
+    | [] =>
+      match idx.slots.getD p [] with
+      | [] => .hole ⟨p, expected, .empty⟩
+      | [e] =>
+        let v := e.target
+        match idx.parents.getD v [] with
+        | a :: b :: more => .hole ⟨p, expected, .multiParent v (a :: b :: more)⟩
+        | _ =>
+          match nodes.get? v with
+          | none => .hole ⟨p, expected, .unknownVertex v⟩
+          | some node =>
+            if node.type != expected then .hole ⟨p, expected, .mismatch v node.type⟩
+            else if seen.contains v then .hole ⟨p, expected, .cycle v⟩
+            else match node with
+            | .leaf _ t anns => .code t anns
+            | .var i ty =>
+              match ctx[i]? with
+              | some b => if b.type == ty then .var i else .hole ⟨p, expected, .mismatch v b.type⟩
+              | none => .hole ⟨p, expected, .unboundVar v i⟩
+            | .lam reuse dom cod =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .lam reuse dom cod
+                  (project nodes idx cuts n (v :: seen) (⟨dom, .unrestricted⟩ :: ctx) (v, 0) cod)
+            | .app reuse q dom ran =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .app (project nodes idx cuts n (v :: seen) ctx (v, 0) (.arrow reuse q dom ran))
+                     (project nodes idx cuts n (v :: seen) ctx (v, 1) dom)
+            | .letBind boundTy bodyTy =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .letBind boundTy bodyTy
+                  (project nodes idx cuts n (v :: seen) ctx (v, 0) boundTy)
+                  (project nodes idx cuts n (v :: seen) (⟨boundTy, .unrestricted⟩ :: ctx) (v, 1) bodyTy)
+            | .fix inh target =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .fix
+                  (project nodes idx cuts n (v :: seen) ctx (v, 0)
+                    (.arrow .reusable .unrestricted target (.arrow .reusable .unrestricted inh target)))
+                  (project nodes idx cuts n (v :: seen) ctx (v, 1) inh)
+            | .mix self inh mid prov =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .mix
+                  (project nodes idx cuts n (v :: seen) ctx (v, 0)
+                    (.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inh mid)))
+                  (project nodes idx cuts n (v :: seen) ctx (v, 1)
+                    (.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted mid prov)))
+            | .prototype s t =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .prototype (project nodes idx cuts n (v :: seen) ctx (v, 0) s)
+                           (project nodes idx cuts n (v :: seen) ctx (v, 1) t)
+            | .projectProto s t =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .projectProto (project nodes idx cuts n (v :: seen) ctx (v, 0) (.prototype s t))
+            | .reflectProto s t =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .reflectProto (project nodes idx cuts n (v :: seen) ctx (v, 0) (.prototype s t))
+            | .record fields =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .record (fields.zipIdx.map fun (field, slot) =>
+                  (field.1, project nodes idx cuts n (v :: seen) ctx (v, slot) field.2))
+            | .get row fname _ =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .get (project nodes idx cuts n (v :: seen) ctx (v, 0) row) fname
+            | .binary prim =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                let inTy := (primitiveTypes prim).1
+                .binary prim (project nodes idx cuts n (v :: seen) ctx (v, 0) inTy)
+                             (project nodes idx cuts n (v :: seen) ctx (v, 1) inTy)
+            | .ifBool bTy =>
+              match fuel with
+              | 0 => .hole ⟨p, expected, .cycle v⟩
+              | n + 1 =>
+                .ifBool (project nodes idx cuts n (v :: seen) ctx (v, 0) .boolean)
+                        (project nodes idx cuts n (v :: seen) ctx (v, 1) bTy)
+                        (project nodes idx cuts n (v :: seen) ctx (v, 2) bTy)
+      | a :: b :: more => .hole ⟨p, expected, .alternatives (a :: b :: more)⟩
+
+/-! ## Transitive Reachability & Delete-Modify Coverage -/
 
 /-- The transitive descendant set, including the starting vertex. Each vertex's
 outgoing edges are expanded only on its first visit. -/
@@ -274,7 +438,6 @@ private theorem visit_keeps (children : TreeMap.Raw Nat (List Nat) compare) (n :
 private def unopened (edges : List Edge) (seen : Visited) :=
   (edges.filter fun e => !seen.contains e.port.1).length
 
-/-- Opening a fresh vertex moves exactly its outgoing edges to the worklist. -/
 private theorem opening_cost (edges : List Edge) (seen : Visited) (wf : seen.WF)
     (v : Nat) (fresh : seen.contains v = false) :
     ((edges.filter fun e => e.port.1 == v).length + unopened edges (seen.insert v ())) =
@@ -355,11 +518,34 @@ inductive EdgePath (edges : List Edge) (start : Nat) : Nat → Prop where
   | here : EdgePath edges start start
   | next {e : Edge} : EdgePath edges start e.port.1 → e ∈ edges → EdgePath edges start e.target
 
+theorem EdgePath.trans {edges : List Edge} {a b c : Nat}
+    (p : EdgePath edges a b) (q : EdgePath edges b c) : EdgePath edges a c := by
+  induction q with
+  | here => exact p
+  | next _ he ih => exact ih.next he
+
+theorem EdgePath.mono {e₁ e₂ : List Edge} (hsub : ∀ e ∈ e₁, e ∈ e₂) {a b : Nat}
+    (p : EdgePath e₁ a b) : EdgePath e₂ a b := by
+  induction p with
+  | here => exact .here
+  | next _ he ih => exact ih.next (hsub _ he)
+
 private theorem EdgePath.incoming {edges : List Edge} {start v : Nat} (path : EdgePath edges start v) :
     start = v ∨ ∃ e ∈ edges, e.target = v := by
   cases path with
   | here => exact .inl rfl
   | next _ he => exact .inr ⟨_, he, rfl⟩
+
+/-- Any path starting at `e0.target` has a simple-prefix subpath avoiding `e0` itself. -/
+private theorem edgePath_avoid_target {edges : List Edge} {start v : Nat} (e0 : Edge)
+    (ht : e0.target = start) (p : EdgePath edges start v) :
+    EdgePath (edges.filter (· != e0)) start v := by
+  induction p with
+  | here => exact .here
+  | @next e _ he ih =>
+    by_cases h : e = e0
+    · subst h; rw [ht]; exact .here
+    · exact ih.next (List.mem_filter.mpr ⟨he, bne_iff_ne.mpr h⟩)
 
 private theorem below_path {edges : List Edge} {start v : Nat} (path : EdgePath edges start v) :
     v ∈ below (childrenIndex edges) edges.length start := by
@@ -445,14 +631,37 @@ private def cutHoles (expected : Port → Ty) (edges : List Edge)
     (added ++ removed).map fun edit =>
       ⟨cut.1.port, expected cut.1.port, .deletedParentModifiedChild cut.1 edit⟩
 
-/-- Entry ports get their type from the document. Internal application slots get
-the domain or function type declared on their immutable parent vertex. -/
+/-- Entry ports get their type from the document. Internal vertex slots get
+the exact expected type declared by their immutable parent vertex constructor. -/
 def portType (nodes : Catalog) (entry : Port → Ty) (p : Port) : Ty :=
   match nodes.get? p.1, p.2 with
+  | some (.lam _ _ cod), 0 => cod
   | some (.app r q dom ran), 0 => .arrow r q dom ran
   | some (.app _ _ dom _), 1 => dom
+  | some (.letBind bTy _), 0 => bTy
+  | some (.letBind _ bodyTy), 1 => bodyTy
+  | some (.fix inh target), 0 =>
+    .arrow .reusable .unrestricted target (.arrow .reusable .unrestricted inh target)
+  | some (.fix inh _), 1 => inh
+  | some (.mix self inh mid _), 0 =>
+    .arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inh mid)
+  | some (.mix self _ mid prov), 1 =>
+    .arrow .reusable .unrestricted self (.arrow .reusable .unrestricted mid prov)
+  | some (.prototype s _), 0 => s
+  | some (.prototype _ t), 1 => t
+  | some (.projectProto s t), 0 => .prototype s t
+  | some (.reflectProto s t), 0 => .prototype s t
+  | some (.record fields), slot => (fields[slot]?.map Prod.snd).getD (entry p)
+  | some (.get row _ _), 0 => row
+  | some (.binary prim), 0 => (primitiveTypes prim).1
+  | some (.binary prim), 1 => (primitiveTypes prim).1
+  | some (.ifBool _), 0 => .boolean
+  | some (.ifBool t), 1 => t
+  | some (.ifBool t), 2 => t
   | _, _ => entry p
 
+/-- Project a document root, localizing every detached delete-modify cut at its exact
+source port `cut.1.port` inside `program` while also publishing all covered detached cuts. -/
 def liveRoot (nodes : Catalog) (expected : Port → Ty) (rootPort : Port)
     (g : StructurePatch) : LiveRoot :=
   let edges := liveEdges g
@@ -461,11 +670,12 @@ def liveRoot (nodes : Catalog) (expected : Port → Ty) (rootPort : Port)
   let children := childrenIndex edges
   let reachable := reachableFrom edges children idx rootPort
   let portTy := portType nodes expected
-  ⟨project nodes idx nodes.size [] rootPort (portTy rootPort),
-   g.removed.val.toList.flatMap (cutHoles portTy edges children reachable live)⟩
+  let detached := g.removed.val.toList.flatMap (cutHoles portTy edges children reachable live)
+  let cutIdx := indexCuts detached
+  ⟨project nodes idx cutIdx nodes.size [] [] rootPort (portTy rootPort), detached⟩
 
-/-- A new or withdrawn edge at any depth below a disconnected child is visible
-from the selected root, including when the child has incoming edges from other orphans. -/
+/-- Transitive delete-modify coverage: a new or withdrawn edge at ANY depth (`EdgePath`)
+below a disconnected child is surfaced in `(liveRoot ...).detached`. -/
 theorem DeleteModifyCover (nodes : Catalog) (expected : Port → Ty)
     (rootPort : Port) (g : StructurePatch) (cut : Cut) (edit : Edge)
     (deleted : cut ∈ g.removed.val.toList)
@@ -488,6 +698,37 @@ theorem DeleteModifyCover (nodes : Catalog) (expected : Port → Ty)
   · apply List.mem_append_right _ (List.mem_filter.mpr ⟨known, ?_⟩)
     simp [region, edgeIndex_contains, other, gone]
 
+/-- Localization guarantee: whenever a detached delete-modify conflict covers port `p`,
+projecting port `p` under `indexCuts (liveRoot ...).detached` produces a localized
+`.hole` at port `p` (never discarding unrelated branches of the program!). -/
+theorem DeleteModifyLocalized (nodes : Catalog) (expected : Port → Ty)
+    (rootPort : Port) (g : StructurePatch) (cut : Cut) (edit : Edge)
+    (deleted : cut ∈ g.removed.val.toList)
+    (changed : (edit ∈ liveEdges g ∧ edit ∉ cut.2) ∨ (edit ∈ cut.2 ∧ edit ≠ cut.1 ∧ edit ∉ liveEdges g))
+    (inside : EdgePath (liveEdges g) cut.1.target edit.port.1)
+    (detached : ¬ RootPath (liveEdges g) rootPort cut.1.target)
+    (fuel : Nat) (seen : List AtomId) (ctx : Context) (ty : Ty) :
+    ∃ h, h ∈ (liveRoot nodes expected rootPort g).detached ∧
+      h.port = cut.1.port ∧
+      project nodes (indexEdges (liveEdges g)) (indexCuts (liveRoot nodes expected rootPort g).detached)
+        fuel seen ctx cut.1.port ty = .hole { h with expected := ty } := by
+  have hmem := DeleteModifyCover nodes expected rootPort g cut edit deleted changed inside detached
+  have hne : ((liveRoot nodes expected rootPort g).detached.filter (fun x => x.port == cut.1.port)) ≠ [] := by
+    intro hemp
+    have : ⟨cut.1.port, portType nodes expected cut.1.port, .deletedParentModifiedChild cut.1 edit⟩ ∈
+        (liveRoot nodes expected rootPort g).detached.filter (fun x => x.port == cut.1.port) :=
+      List.mem_filter.mpr ⟨hmem, beq_self_eq_true _⟩
+    rw [hemp] at this; cases this
+  cases hfilt : (liveRoot nodes expected rootPort g).detached.filter (fun x => x.port == cut.1.port) with
+  | nil => exact absurd hfilt hne
+  | cons h rest =>
+    have hh : h ∈ (liveRoot nodes expected rootPort g).detached ∧ h.port = cut.1.port := by
+      have hm := List.mem_filter.mp (hfilt ▸ List.mem_cons_self ..)
+      exact ⟨hm.1, beq_iff_eq.mp hm.2⟩
+    refine ⟨h, hh.1, hh.2, ?_⟩
+    unfold project
+    rw [indexCuts_port, hfilt]
+
 private theorem mem_live (g : StructurePatch) (e : Edge) :
     e ∈ liveEdges g ↔ e ∈ g.inserted.val.toList ∧ ∀ cut ∈ g.removed.val.toList, cut.1 ≠ e := by
   simp [liveEdges, edgeIndex_contains, Array.mem_toList_iff]
@@ -499,14 +740,15 @@ private theorem mem_live (g : StructurePatch) (e : Edge) :
     obtain ⟨i, ⟨v, slot⟩, dst⟩ := e
     exact no i v slot dst context member rfl
 
-/-- Both delivery orders surface a simultaneous delete and previously unseen child
-insertion. In the base the cut was the child's only incoming edge. -/
+/-- Transitive concurrent delete-insert coverage: BOTH delivery orders surface a simultaneous
+ancestor edge deletion and a previously unseen descendant insertion at ANY depth
+(`EdgePath (liveEdges base) edge.target edit.port.1`, multi-hop!). -/
 theorem concurrent_delete_insert (nodes : Catalog) (expected : Port → Ty)
     (rootPort : Port) (base : StructurePatch) (edge edit : Edge)
     (parentLive : edge ∈ liveEdges base)
     (onlyParent : ∀ other ∈ liveEdges base, other.target = edge.target → other = edge)
     (fresh : edit ∉ base.inserted.val.toList) (neverDeleted : ∀ cut ∈ base.removed.val.toList, cut.1 ≠ edit)
-    (childEdit : edit.port.1 = edge.target) (noLoop : edit.target ≠ edge.target) :
+    (descendant : EdgePath (liveEdges base) edge.target edit.port.1) (noLoop : edit.target ≠ edge.target) :
     let d := remove base edge
     let p := insert edit
     let h : ConflictHole := ⟨edge.port, portType nodes expected edge.port, .deletedParentModifiedChild edge edit⟩
@@ -530,7 +772,23 @@ theorem concurrent_delete_insert (nodes : Catalog) (expected : Port → Ty)
       rcases member with rfl | hm
       · intro eq; exact fresh (eq ▸ ((mem_live base edge).mp parentLive).1)
       · exact neverDeleted cut (by simpa using hm)
-  · rw [childEdit]; exact .here
+  · have hsub : ∀ e ∈ (liveEdges base).filter (· != edge),
+        e ∈ liveEdges (apply (remove base edge) (apply (insert edit) base)) := by
+      intro e he
+      obtain ⟨heBase, hne⟩ := List.mem_filter.mp he
+      have hne' : e ≠ edge := bne_iff_ne.mp hne
+      obtain ⟨hins, hnotdel⟩ := (mem_live base e).mp heBase
+      rw [mem_live]
+      refine ⟨?_, ?_⟩
+      · simp only [apply, remove, insert, union_mem]
+        exact Or.inr (Or.inr hins)
+      · intro cut hc
+        simp only [apply, remove, insert, union_mem] at hc
+        simp [singleton, SortedArraySet.empty] at hc
+        rcases hc with rfl | hbase
+        · exact Ne.symm hne'
+        · exact hnotdel cut (by simpa using hbase)
+    exact EdgePath.mono hsub (edgePath_avoid_target edge rfl descendant)
   · rintro ⟨first, hf, _, path⟩
     have orphan : ∀ e ∈ liveEdges (apply (remove base edge) (apply (insert edit) base)), e.target ≠ edge.target := by
       intro e he eq
@@ -547,35 +805,163 @@ theorem concurrent_delete_insert (nodes : Catalog) (expected : Port → Ty)
     · exact orphan first hf eq
     · exact orphan last hl eq
 
-/-- Typing for a projection with holes. A hole inhabits its recorded expected type. -/
-inductive HasType : Marked → Ty → Prop where
-  | code {t ty} : PartialTyping {} [] t ty [] → HasType (.code t) ty
-  | hole (h : ConflictHole) : HasType (.hole h) h.expected
-  | app {f a r q dom ran} : HasType f (.arrow r q dom ran) → HasType a dom →
-    argumentAllowed {} q [] dom [] = true → HasType (.app f a) ran
+/-! ## Static Typing & Frame Invariance for Full Core4 Projection -/
+
+mutual
+/-- Typing for projected Grove trees with localized conflict holes across all Core4 constructors. -/
+inductive HasType : Context → Marked → Ty → Prop where
+  | code {ctx t anns ty} : PartialTyping {} [] t ty [] → HasType ctx (.code t anns) ty
+  | var {ctx i b ty} : ctx[i]? = some b → b.type = ty → HasType ctx (.var i) ty
+  | hole {ctx} (h : ConflictHole) : HasType ctx (.hole h) h.expected
+  | lam {ctx r dom cod body} :
+      dom.shareable = true →
+      HasType (⟨dom, .unrestricted⟩ :: ctx) body cod →
+      HasType ctx (.lam r dom cod body) (.arrow r .unrestricted dom cod)
+  | app {ctx f a r q dom ran} :
+      HasType ctx f (.arrow r q dom ran) → HasType ctx a dom →
+      argumentAllowed {} q [] dom [] = true → HasType ctx (.app f a) ran
+  | letBind {ctx bTy bodyTy val body} :
+      bTy.shareable = true →
+      HasType ctx val bTy →
+      HasType (⟨bTy, .unrestricted⟩ :: ctx) body bodyTy →
+      HasType ctx (.letBind bTy bodyTy val body) bodyTy
+  | fix {ctx inh target spec inhTerm} :
+      target.shareable = true → inh.shareable = true →
+      HasType ctx spec (.arrow .reusable .unrestricted target (.arrow .reusable .unrestricted inh target)) →
+      HasType ctx inhTerm inh →
+      HasType ctx (.fix spec inhTerm) target
+  | mix {ctx self inh mid prov lo hi} :
+      self.shareable = true → inh.shareable = true → mid.shareable = true →
+      HasType ctx lo (.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inh mid)) →
+      HasType ctx hi (.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted mid prov)) →
+      HasType ctx (.mix lo hi) (.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inh prov))
+  | prototype {ctx s t sp tg} :
+      s.isComputation = false → t.isComputation = false →
+      HasType ctx sp s → HasType ctx tg t →
+      HasType ctx (.prototype sp tg) (.prototype s t)
+  | projectProto {ctx s t tg} :
+      HasType ctx tg (.prototype s t) → HasType ctx (.projectProto tg) t
+  | reflectProto {ctx s t tg} :
+      HasType ctx tg (.prototype s t) → HasType ctx (.reflectProto tg) s
+  | record {ctx fields row} :
+      (fields.map Prod.fst).Nodup →
+      HasFieldTypes ctx fields row →
+      HasType ctx (.record fields) row
+  | get {ctx row name member tg} :
+      (∃ fuel, row.lookup [] fuel name = some member) →
+      HasType ctx tg row →
+      HasType ctx (.get tg name) member
+  | binary {ctx prim l r} :
+      HasType ctx l (primitiveTypes prim).1 →
+      HasType ctx r (primitiveTypes prim).1 →
+      HasType ctx (.binary prim l r) (primitiveTypes prim).2
+  | ifBool {ctx ty c wt wf} :
+      HasType ctx c .boolean → HasType ctx wt ty → HasType ctx wf ty →
+      HasType ctx (.ifBool c wt wf) ty
+
+inductive HasFieldTypes : Context → List (String × Marked) → Ty → Prop where
+  | nil {ctx} : HasFieldTypes ctx [] .emptyRow
+  | cons {ctx name m rest ty row} :
+      ty.isComputation = false →
+      HasType ctx m ty → HasFieldTypes ctx rest row →
+      HasFieldTypes ctx ((name, m) :: rest) (.field name ty row)
+end
+
+private theorem zipIdx_map_fst (fields : List (String × Ty)) (f : Nat → Ty → Marked) (k : Nat) :
+    ((fields.zipIdx k).map fun (field, slot) => (field.1, f slot field.2)).map Prod.fst =
+      fields.map Prod.fst := by
+  induction fields generalizing k with
+  | nil => rfl
+  | cons hd tl ih =>
+    simp only [List.zipIdx_cons, List.map_cons]
+    exact congrArg (hd.1 :: ·) (ih (k + 1))
+
+private theorem project_fields_typed {ctx : Context} {f : Nat → Ty → Marked}
+    (ih : ∀ (slot : Nat) (fty : Ty), HasType ctx (f slot fty) fty) :
+    ∀ (fields : List (String × Ty)) (k : Nat),
+      (∀ fld ∈ fields, fld.2.isComputation = false) →
+      HasFieldTypes ctx ((fields.zipIdx k).map fun (field, slot) => (field.1, f slot field.2))
+        (recordRow fields)
+  | [], _, _ => .nil
+  | (fname, fty) :: rest, k, hpure => by
+    simp only [List.zipIdx_cons, List.map_cons, recordRow]
+    exact .cons (hpure (fname, fty) (List.mem_cons_self ..)) (ih k fty)
+      (project_fields_typed ih rest (k + 1) (fun fld hfld => hpure fld (List.mem_cons_of_mem _ hfld)))
 
 theorem project_typed (nodes : Catalog) (valid : nodes.Valid) (idx : Adjacency)
-    (fuel : Nat) (seen : List Nat) (p : Port) (ty : Ty) :
-    HasType (project nodes idx fuel seen p ty) ty := by
-  induction fuel generalizing seen p ty with
-  | zero | succ _ ih =>
+    (cuts : TreeMap.Raw Port (List ConflictHole) compare)
+    (fuel : Nat) (seen : List Nat) (ctx : Context) (p : Port) (ty : Ty) :
+    HasType ctx (project nodes idx cuts fuel seen ctx p ty) ty := by
+  induction fuel generalizing seen ctx p ty with
+  | zero =>
     unfold project
-    split <;> try exact .hole _
-    dsimp only
-    split <;> try exact .hole _
-    split <;> try exact .hole _
-    split <;> try exact .hole _
-    rename_i node lookup agrees
-    split <;> try exact .hole _
-    have eq : node.type = ty := by simpa using agrees
-    subst ty
-    have checked := valid _ _ lookup
-    cases node with
-    | leaf _ _ => exact .code checked
-    | app r q dom ran => first | exact .hole _ | exact .app (ih ..) (ih ..) checked
+    split
+    · exact .hole _
+    · split <;> try exact .hole _
+      dsimp only
+      split <;> try exact .hole _
+      split <;> try exact .hole _
+      split <;> try exact .hole _
+      rename_i node lookup agrees
+      split <;> try exact .hole _
+      have eq : node.type = ty := by simpa using agrees
+      subst ty
+      have checked := valid _ _ lookup
+      cases node with
+      | leaf _ _ _ => exact .code checked
+      | var i t =>
+        dsimp only
+        split
+        · rename_i b hb
+          split
+          · rename_i hbt; exact .var hb (by dsimp [Vertex.type]; simpa using hbt)
+          · exact .hole _
+        · exact .hole _
+      | _ => exact .hole _
+  | succ n ih =>
+    unfold project
+    split
+    · exact .hole _
+    · split <;> try exact .hole _
+      dsimp only
+      split <;> try exact .hole _
+      split <;> try exact .hole _
+      split <;> try exact .hole _
+      rename_i node lookup agrees
+      split <;> try exact .hole _
+      have eq : node.type = ty := by simpa using agrees
+      subst ty
+      have checked := valid _ _ lookup
+      cases node with
+      | leaf _ _ _ => exact .code checked
+      | var i t =>
+        dsimp only
+        split
+        · rename_i b hb
+          split
+          · rename_i hbt; exact .var hb (by dsimp [Vertex.type]; simpa using hbt)
+          · exact .hole _
+        · exact .hole _
+      | lam r dom cod => exact .lam checked (ih ..)
+      | app r q dom ran => exact .app (ih ..) (ih ..) checked
+      | letBind bTy bodyTy => exact .letBind checked (ih ..) (ih ..)
+      | fix inh target => exact .fix checked.1 checked.2 (ih ..) (ih ..)
+      | mix self inh mid prov => exact .mix checked.1 checked.2.1 checked.2.2 (ih ..) (ih ..)
+      | prototype s t => exact .prototype checked.1 checked.2 (ih ..) (ih ..)
+      | projectProto s t => exact .projectProto (ih ..)
+      | reflectProto s t => exact .reflectProto (ih ..)
+      | record fields =>
+        dsimp [Vertex.type]
+        exact .record
+          (by rw [zipIdx_map_fst fields (fun slot fty => project nodes idx cuts n (_ :: seen) ctx (_, slot) fty) 0]; exact checked.1)
+          (project_fields_typed (ctx := ctx) (f := fun slot fty => project nodes idx cuts n (_ :: seen) ctx (_, slot) fty)
+            (fun slot fty => ih _ _ _ _) fields 0 checked.2)
+      | get row fname member => exact .get checked (ih ..)
+      | binary prim => exact .binary (ih ..) (ih ..)
+      | ifBool bTy => exact .ifBool (ih ..) (ih ..) (ih ..)
 
-/-- Only edges incident on the queried region contribute to either local index.
-The incoming half is essential for detecting a splice from a different parent. -/
+/-- Only edges incident on the queried region (and cut holes anchored inside it) contribute
+to projection. The incoming half is essential for detecting a splice from a different parent. -/
 private theorem live_sorted (g : StructurePatch) : SortedList (liveEdges g) :=
   List.Pairwise.filter _ g.inserted.property
 
@@ -588,35 +974,237 @@ private theorem filter_frame (a b : StructurePatch) (test : Edge → Bool)
   by_cases h : test e = true <;> simp_all
 
 theorem project_frame (nodes : Catalog) (a b : StructurePatch)
+    (cutsA cutsB : TreeMap.Raw Port (List ConflictHole) compare)
     (region : Nat → Prop)
     (incident : ∀ e : Edge, region e.port.1 ∨ region e.target →
       (e ∈ liveEdges a ↔ e ∈ liveEdges b))
     (closed : ∀ e ∈ liveEdges a, region e.port.1 → region e.target)
-    (fuel : Nat) (seen : List Nat) (p : Port) (ty : Ty) (hp : region p.1) :
-    project nodes (indexEdges (liveEdges a)) fuel seen p ty =
-    project nodes (indexEdges (liveEdges b)) fuel seen p ty := by
-  induction fuel generalizing seen p ty with
-  | zero | succ _ ih =>
+    (cutsSame : ∀ p : Port, region p.1 → cutsA.getD p [] = cutsB.getD p [])
+    (fuel : Nat) (seen : List Nat) (ctx : Context) (p : Port) (ty : Ty) (hp : region p.1) :
+    project nodes (indexEdges (liveEdges a)) cutsA fuel seen ctx p ty =
+    project nodes (indexEdges (liveEdges b)) cutsB fuel seen ctx p ty := by
+  induction fuel generalizing seen ctx p ty with
+  | zero =>
     unfold project
-    rw [index_slot, index_slot]
-    have slots := filter_frame a b (fun e => e.port == p) (by
-      intro e he; exact incident e (.inl (by rwa [show e.port = p from beq_iff_eq.mp he])))
-    change (liveEdges a).filter _ = (liveEdges b).filter _ at slots
-    rw [← slots]
-    split <;> try rfl
-    rename_i e alone
-    have he := List.mem_filter.mp (show e ∈ (liveEdges a).filter (fun e => e.port == p) by
-      rw [alone]; exact .head _)
-    have hv := closed e he.1 (by rwa [show e.port = p from beq_iff_eq.mp he.2])
-    dsimp only
-    rw [index_parent, index_parent]
-    have parents := filter_frame a b (fun edge => edge.target == e.target) (by
-      intro edge h; exact incident edge (.inr (by rwa [show edge.target = e.target from beq_iff_eq.mp h])))
-    change (liveEdges a).filter _ = (liveEdges b).filter _ at parents
-    rw [← parents]
-    all_goals
-      have left := fun t => ih (e.target :: seen) (e.target, 0) t hv
-      have right := fun t => ih (e.target :: seen) (e.target, 1) t hv
-      simp only [left, right]
+    rw [cutsSame p hp]
+    split
+    · rfl
+    · rw [index_slot, index_slot]
+      have slots := filter_frame a b (fun e => e.port == p) (by
+        intro e he; exact incident e (.inl (by rwa [show e.port = p from beq_iff_eq.mp he])))
+      change (liveEdges a).filter _ = (liveEdges b).filter _ at slots
+      rw [← slots]
+      split <;> try rfl
+      rename_i e alone
+      have he := List.mem_filter.mp (show e ∈ (liveEdges a).filter (fun e => e.port == p) by
+        rw [alone]; exact .head _)
+      have hv := closed e he.1 (by rwa [show e.port = p from beq_iff_eq.mp he.2])
+      dsimp only
+      rw [index_parent, index_parent]
+      have parents := filter_frame a b (fun edge => edge.target == e.target) (by
+        intro edge h; exact incident edge (.inr (by rwa [show edge.target = e.target from beq_iff_eq.mp h])))
+      change (liveEdges a).filter _ = (liveEdges b).filter _ at parents
+      rw [← parents]
+  | succ n ih =>
+    unfold project
+    rw [cutsSame p hp]
+    split
+    · rfl
+    · rw [index_slot, index_slot]
+      have slots := filter_frame a b (fun e => e.port == p) (by
+        intro e he; exact incident e (.inl (by rwa [show e.port = p from beq_iff_eq.mp he])))
+      change (liveEdges a).filter _ = (liveEdges b).filter _ at slots
+      rw [← slots]
+      split <;> try rfl
+      rename_i e alone
+      have he := List.mem_filter.mp (show e ∈ (liveEdges a).filter (fun e => e.port == p) by
+        rw [alone]; exact .head _)
+      have hv := closed e he.1 (by rwa [show e.port = p from beq_iff_eq.mp he.2])
+      dsimp only
+      rw [index_parent, index_parent]
+      have parents := filter_frame a b (fun edge => edge.target == e.target) (by
+        intro edge h; exact incident edge (.inr (by rwa [show edge.target = e.target from beq_iff_eq.mp h])))
+      change (liveEdges a).filter _ = (liveEdges b).filter _ at parents
+      rw [← parents]
+      have hrec : ∀ (ctx' : Context) (slot : Nat) (t' : Ty),
+          project nodes (indexEdges (liveEdges a)) cutsA n (e.target :: seen) ctx' (e.target, slot) t' =
+          project nodes (indexEdges (liveEdges b)) cutsB n (e.target :: seen) ctx' (e.target, slot) t' :=
+        fun ctx' slot t' => ih (e.target :: seen) ctx' (e.target, slot) t' hv
+      simp only [hrec]
+
+/-! ## StructurePatch ↔ `Obend.Doc.Graph` Bridge (Lossless Round-Trip & Reachability) -/
+
+private def edgeToData (e : Edge) : Data :=
+  .record [("uid", .natural e.1), ("src", .natural e.2.1.1),
+    ("slot", .natural e.2.1.2), ("dst", .natural e.2.2)]
+
+private def dataToEdge? : Data → Option Edge
+  | .record [("uid", .natural u), ("src", .natural s), ("slot", .natural sl), ("dst", .natural d)] =>
+    some (u, (s, sl), d)
+  | _ => none
+
+private theorem dataToEdge?_edgeToData (e : Edge) : dataToEdge? (edgeToData e) = some e := rfl
+
+private def edgeListToData : List Edge → Data
+  | [] => .variant "nil" (.record [])
+  | e :: es => .variant "cons" (.record [("h", edgeToData e), ("t", edgeListToData es)])
+
+private def dataToEdgeList? : Data → Option (List Edge)
+  | .variant "nil" (.record []) => some []
+  | .variant "cons" (.record [("h", h), ("t", t)]) => do
+    pure ((← dataToEdge? h) :: (← dataToEdgeList? t))
+  | _ => none
+
+private theorem dataToEdgeList?_edgeListToData : ∀ es : List Edge,
+    dataToEdgeList? (edgeListToData es) = some es
+  | [] => rfl
+  | e :: es => by simp [edgeListToData, dataToEdgeList?, dataToEdge?_edgeToData, dataToEdgeList?_edgeListToData es]
+
+private def cutToData (c : Cut) : Data :=
+  .record [("edge", edgeToData c.1), ("snap", edgeListToData c.2)]
+
+private def dataToCut? : Data → Option Cut
+  | .record [("edge", e), ("snap", s)] => do
+    pure (← dataToEdge? e, ← dataToEdgeList? s)
+  | _ => none
+
+private theorem dataToCut?_cutToData (c : Cut) : dataToCut? (cutToData c) = some c := by
+  simp [cutToData, dataToCut?, dataToEdge?_edgeToData, dataToEdgeList?_edgeListToData]
+
+private def insertAll {A : Type} [StrictLinearOrder A] : List A → SortedArraySet A
+  | [] => SortedArraySet.empty
+  | x :: xs => SortedArraySet.union (singleton x) (insertAll xs)
+
+private theorem insertAll_mem {A : Type} [StrictLinearOrder A] (xs : List A) (x : A) :
+    x ∈ (insertAll xs).val.toList ↔ x ∈ xs := by
+  induction xs with
+  | nil => simp [insertAll, SortedArraySet.empty]
+  | cons y ys ih =>
+    rw [insertAll, union_mem]
+    simp [singleton, ih]
+
+private theorem insertAll_of_sorted {A : Type} [StrictLinearOrder A] (s : SortedArraySet A) :
+    insertAll s.val.toList = s := by
+  apply SortedArraySet.eq_iff_toSpec.mpr
+  apply FinSetSpec.ext_iff.mpr
+  intro x
+  have h1 : (insertAll s.val.toList).toSpec.mem x = true ↔ x ∈ (insertAll s.val.toList).val.toList :=
+    memB_iff
+  have h2 : s.toSpec.mem x = true ↔ x ∈ s.val.toList := memB_iff
+  rw [Bool.eq_iff_iff, h1, h2]
+  exact insertAll_mem s.val.toList x
+
+/-- Materialize a Grove `StructurePatch` as a genuine `Obend.Doc.Graph`:
+- Each inserted edge `e` is stored as a `.cell` atom (`grove.edge/1`) at odd ID `2 * i + 1`
+  and tombstoned in `G.dead` iff `e` has been cut in `g.removed`.
+- Each cut `(e, snap)` is stored as a tombstoned `.cell` atom (`grove.cut/1`) at even ID `2 * i + 2`.
+- `G.edges` carries the exact structural order edges `(e.port.1, e.target)` of `liveEdges g`. -/
+def toDocGraph (g : StructurePatch) : Graph :=
+  let deadIdx := edgeIndex (g.removed.val.toList.map Prod.fst)
+  let insList := g.inserted.val.toList.zipIdx
+  let remList := g.removed.val.toList.zipIdx
+  let insAtoms : List (AtomId × Content) := insList.map fun (e, i) =>
+    (2 * i + 1, .cell ("grove.edge/" ++ toString e.1) .obendCode (.variant "grove.edge/1" (edgeToData e)) [] none)
+  let remAtoms : List (AtomId × Content) := remList.map fun (c, i) =>
+    (2 * i + 2, .cell ("grove.cut/" ++ toString c.1.1) .obendCode (.variant "grove.cut/1" (cutToData c)) [] none)
+  let insDead : List AtomId := insList.filterMap fun (e, i) =>
+    if deadIdx.contains e then some (2 * i + 1) else none
+  let remDead : List AtomId := remList.map fun (_, i) => 2 * i + 2
+  { atoms := insAtoms ++ remAtoms
+    dead := insDead ++ remDead
+    edges := (liveEdges g).map fun e => (e.port.1, e.target) }
+
+/-- Reconstruct a Grove `StructurePatch` from its `Obend.Doc.Graph` representation. -/
+def ofDocGraph (G : Graph) : Option StructurePatch := do
+  let rec go : List (AtomId × Content) → List Edge → List Cut → Option (List Edge × List Cut)
+    | [], ins, rem => some (ins.reverse, rem.reverse)
+    | (_, .cell _ .obendCode (.variant "grove.edge/1" d) _ _) :: rest, ins, rem => do
+      let e ← dataToEdge? d
+      go rest (e :: ins) rem
+    | (_, .cell _ .obendCode (.variant "grove.cut/1" d) _ _) :: rest, ins, rem => do
+      let c ← dataToCut? d
+      go rest ins (c :: rem)
+    | _ :: rest, ins, rem => go rest ins rem
+  let (ins, rem) ← go G.atoms [] []
+  some ⟨insertAll ins, insertAll rem⟩
+
+private theorem ofDocGraph_go_ins (es : List (Edge × Nat)) (tail : List (AtomId × Content))
+    (ins : List Edge) (rem : List Cut) :
+    ofDocGraph.go
+      ((es.map fun (e, i) =>
+        (2 * i + 1, Content.cell ("grove.edge/" ++ toString e.1) .obendCode
+          (.variant "grove.edge/1" (edgeToData e)) [] none)) ++ tail) ins rem =
+      ofDocGraph.go tail ((es.map Prod.fst).reverse ++ ins) rem := by
+  induction es generalizing ins with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨e, i⟩ := hd
+    simp only [List.map_cons, List.cons_append, ofDocGraph.go, dataToEdge?_edgeToData,
+      bind, Option.bind, List.reverse_cons, List.append_assoc]
+    exact ih (e :: ins)
+
+private theorem ofDocGraph_go_rem (cs : List (Cut × Nat)) (ins : List Edge) (rem : List Cut) :
+    ofDocGraph.go
+      (cs.map fun (c, i) =>
+        (2 * i + 2, Content.cell ("grove.cut/" ++ toString c.1.1) .obendCode
+          (.variant "grove.cut/1" (cutToData c)) [] none)) ins rem =
+      some (ins.reverse, rem.reverse ++ cs.map Prod.fst) := by
+  induction cs generalizing rem with
+  | nil => simp [ofDocGraph.go]
+  | cons hd tl ih =>
+    obtain ⟨c, i⟩ := hd
+    simp only [List.map_cons, ofDocGraph.go, dataToCut?_cutToData, bind, Option.bind]
+    rw [ih (c :: rem)]
+    simp [List.reverse_cons, List.append_assoc]
+
+private theorem zipIdx_map_fst_eq {α : Type} (xs : List α) (k : Nat) :
+    (xs.zipIdx k).map Prod.fst = xs := by
+  induction xs generalizing k with
+  | nil => rfl
+  | cons hd tl ih =>
+    simp only [List.zipIdx_cons, List.map_cons]
+    exact congrArg (hd :: ·) (ih (k + 1))
+
+/-- Lossless round-trip: translating a `StructurePatch` to `Obend.Doc.Graph` and reading it
+back yields the exact canonical `StructurePatch`. -/
+theorem ofDocGraph_toDocGraph (g : StructurePatch) :
+    ofDocGraph (toDocGraph g) = some g := by
+  unfold ofDocGraph toDocGraph
+  dsimp only
+  rw [ofDocGraph_go_ins, ofDocGraph_go_rem]
+  simp only [List.append_nil, List.reverse_reverse, List.reverse_nil, List.nil_append,
+    zipIdx_map_fst_eq, bind, Option.bind, insertAll_of_sorted]
+
+/-- Direct order-edge correspondence: `(toDocGraph g).edge u v = true` iff `liveEdges g` has
+a live edge from vertex `u` to vertex `v`. -/
+theorem toDocGraph_edge_iff (g : StructurePatch) (u v : AtomId) :
+    (toDocGraph g).edge u v = true ↔ ∃ e ∈ liveEdges g, e.port.1 = u ∧ e.target = v := by
+  simp only [Graph.edge, toDocGraph, List.contains_iff_mem, List.mem_map, Prod.mk.injEq]
+
+/-- Transitive reachability equivalence: `Obend.Doc.Graph.Before` on `toDocGraph g` is
+identically nonempty `EdgePath` reachability over `liveEdges g`. -/
+theorem toDocGraph_before_iff (g : StructurePatch) (u v : AtomId) :
+    (toDocGraph g).Before u v ↔ ∃ e ∈ liveEdges g, e.port.1 = u ∧ EdgePath (liveEdges g) e.target v := by
+  constructor
+  · intro hb
+    induction hb with
+    | edge h =>
+      obtain ⟨e, he, hu, hv⟩ := (toDocGraph_edge_iff g _ _).mp h
+      exact ⟨e, he, hu, hv ▸ .here⟩
+    | trans h _ ih =>
+      obtain ⟨e₁, he₁, hu₁, hv₁⟩ := (toDocGraph_edge_iff g _ _).mp h
+      obtain ⟨e₂, he₂, hu₂, hp₂⟩ := ih
+      have hstep : EdgePath (liveEdges g) e₁.target e₂.target := by
+        have hstart : EdgePath (liveEdges g) e₁.target e₂.port.1 := by
+          rw [hv₁, ← hu₂]; exact EdgePath.here
+        exact hstart.next he₂
+      exact ⟨e₁, he₁, hu₁, EdgePath.trans hstep hp₂⟩
+  · rintro ⟨e, he, hu, hp⟩
+    have hfirst : (toDocGraph g).Before u e.target :=
+      .edge ((toDocGraph_edge_iff g u e.target).mpr ⟨e, he, hu, rfl⟩)
+    induction hp with
+    | here => exact hfirst
+    | next _ he' ih =>
+      exact ih.tail ((toDocGraph_edge_iff g _ _).mpr ⟨_, he', rfl, rfl⟩)
 
 end Obend.Doc.Grove
