@@ -128,3 +128,8 @@ root = "Rdna2"
 name = "obend-litmus-check"
 srcDir = "tools/litmuscheck"
 root = "LitmusCheck"
+
+[[lean_exe]]
+name = "obend-demand-bench"
+srcDir = "tools/bench"
+root = "DemandBench"

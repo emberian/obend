@@ -10,6 +10,8 @@ Stage 3 of the 4-stage Verifiable Semantic Knowledge Graph (`Obend.SemanticKG`):
 6. **Evidenced Ocap Query Guard (`evidenced_kg_query_guard_sound`) & Choice-Free Core BCQ Quotient Lift (`core_quotient_bcq_lift_sound`)**
 -/
 public import Obend.SemanticKG.Databank
+public import Obend.SemanticKG.ColtJoin
+public import Obend.SemanticKG.SlottedEGraph
 public import Obend.SemanticKG.SpanParse
 public import Obend.SymbolicZk.SemiringDatalog
 public import Obend.SymbolicZk.SkolemChaseCore
@@ -28,6 +30,27 @@ open Obend.SymbolicZk
 open Obend.SymbolicZk.Datalog (ProvenanceSemiringOps LawfulProvenanceSemiring ProvenanceHom)
 open Obend.SymbolicZk.SkolemChaseCore
 set_option autoImplicit false
+
+/-- Table of Core4 terms for a relational body. Equations name input rows. The two sides must
+share a free-slot interface in the same formal order. An incompatible or dangling equation
+rejects the batch. The output columns are input row and congruence class of its full application. -/
+def coreCongruenceRelation (terms : Array Obend.Core.Term.Term)
+    (equations : Array (Nat × Nat)) : Option Colt.Relation := do
+  let (roots, graph) := (terms.mapM (fun t => Slotted.insertCore t)).run {}
+  let eqs ← equations.mapM fun (lhs, rhs) => do
+    let a ← roots[lhs]?
+    let b ← roots[rhs]?
+    guard (a.slots == b.slots)
+    return (a.id, b.id)
+  let reps := graph.close eqs
+  let mut applications : Std.HashMap (Slotted.Applied Nat) Nat := {}
+  let mut classes := #[]
+  for root in roots do
+    let key := { root with id := ← reps[root.id]? }
+    let c := applications[key]?.getD applications.size
+    applications := applications.insert key c
+    classes := classes.push c
+  return ⟨[Array.range terms.size, classes], terms.size⟩
 
 /-! ## §1. 4-Point Goldilocks Provenance Semiring (`ProvVec d`, `ProvVec4`) -/
 structure ProvVec (d : Nat) where

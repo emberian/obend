@@ -51,7 +51,7 @@ def usage : String :=
   "       obend identity | parse FILE.obend | capture PACKAGE_SPEC NEW_DIR [--objective-edition-1]\n" ++
   "             | elaborate CAPTURE PREFIX [ARGS] [PROJECTIONS] [LIMITS] [application|definition] | preview REQUEST NEW_DIR | batch JOBS OUT\n" ++
   "       obend check-core FILE.json | obend run-core FILE.json [--ticks N] [--heap N] [--stack N]\n" ++
-  "       obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN… | member list\n" ++
+  "       obend open [DIR] | page TITLE | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN… | member list\n" ++
   "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]\n" ++
   "             | create --from KIND PAGE   [-C DIR]\n" ++
   "       obend reasons observe NAME (--line FILE:N | TEXT) | assume NAME | withdraw NAME | explain NAME CONCL --if P… [--unless D…]\n" ++

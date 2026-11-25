@@ -14,6 +14,8 @@ import all Obend.Vault.Replay
         a file of its name revives it), unless a kind's laws govern the page, which is then written
         back; a new file carrying a deleted page's text is that page renamed (`Store.forgetMissing`).
         Twice in a row, the second changes nothing.
+    obend page TITLE
+        print the recorded page as JSON. A sharded checkpoint opens only its title bucket.
     obend status [PAGE]
         open, then every page (or PAGE) with its version, each cite and whether it holds, its sections,
         and, where a kind page names an `environment:`, the backticked names it cites that the
@@ -129,6 +131,7 @@ tests/decisions/Environment.lean`): the open reads it and the page's backticked 
 it (`new.unresolved`, `new.unresolvedInserted`); a named file that is not there stops the command.
 -/
 public import Obend.Vault.Replay
+import Obend.Vault.WorldTree.IndexedManifest
 public import Obend.Vault.FormCheck
 public import Obend.Vault.Cost
 public import Obend.Vault.Log
@@ -293,6 +296,21 @@ def checkpointBytes (ck : Checkpoint) (base : Nat) : Bytes :=
   textBytes ("obend-checkpoint 1 " ++ toString ck.count ++ " " ++ toString ck.start ++ " " ++
     toString ck.stop ++ " " ++ toString ck.anchor ++ " " ++ toString base ++ "\n") ++ ck.world
 
+/-- The immediately preceding physical checkpoint, for updating its optional derived indexes.
+Log validation always receives the logical OBWM0001 manifest. -/
+private initialize previousIndexed : IO.Ref (Option (String × ByteArray)) ← IO.mkRef none
+
+private def observeTitle (dir : System.FilePath) (name : String) : IO (Option ChunkedWorld.FileStamp) := do
+  if (name.splitOn "/").any (fun p => p.isEmpty || p.startsWith ".") then return none
+  let path := dir / (name ++ ".md")
+  try
+    let base ← IO.FS.realPath dir
+    let resolved ← IO.FS.realPath path
+    unless resolved.toString.startsWith (base.toString ++ "/") do return none
+    ChunkedWorld.observeFile resolved
+  catch e =>
+    if e matches .noFileOrDirectory .. then return none else throw e
+
 def readCheckpoint (dir : System.FilePath) : IO (Option (Checkpoint × Option Nat)) := do
   let bs ← readArray (checkpointPath dir)
   if bs.isEmpty then return none
@@ -305,7 +323,12 @@ def readCheckpoint (dir : System.FilePath) : IO (Option (Checkpoint × Option Na
     | _ => (none, none)
   let some (c, a, b, h) := fields | return none
   match c.toNat?, a.toNat?, b.toNat?, h.toNat? with
-  | some c, some a, some b, some h => return some (⟨c, a, b, h, (bs.extract (nl + 1) bs.size).data.toList⟩, base)
+  | some c, some a, some b, some h =>
+    let physical := bs.extract (nl + 1) bs.size
+    let (logical, index) := ChunkedWorld.splitIndex physical
+    let key ← ChunkedWorld.canonKey dir
+    previousIndexed.set (index.map fun _ => (key, physical))
+    return some (⟨c, a, b, h, logical.data.toList⟩, base)
   | _, _, _, _ => return none
 
 /-- Write a file whole or not at all: beside it, then renamed over it. -/
@@ -384,8 +407,20 @@ def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := Obend.Vault.C
       IO.eprintln "checkpoint not written: the world's bytes do not decode to the world (the log stays the truth)"
       return
     | some (active, needPrune) =>
-      writeAtomically (checkpointPath dir)
-        (checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, mList⟩ (if h.base then h.baseSize else 0))
+      let logical : ByteArray := ⟨mList.toArray⟩
+      let key ← ChunkedWorld.canonKey dir
+      let physical ← do
+        let some buckets ← ChunkedWorld.getCachedBuckets dir | pure logical
+        let previous ← match ← previousIndexed.get with
+          | some (k, bytes) => if k == key then ChunkedWorld.openIndex dir bytes else pure none
+          | none => pure none
+        let indexed ← ChunkedWorld.writeIndexedManifest dir logical
+          (fun i => pure (buckets[i]?.map (·.payload))) (observeTitle dir) previous
+        pure (indexed.getD logical)
+      let header := checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, []⟩
+        (if h.base then h.baseSize else 0)
+      writeAtomicallyArray (checkpointPath dir) (⟨header.toArray⟩ ++ physical)
+      previousIndexed.set (some (key, physical))
       if needPrune then
         ChunkedWorld.pruneObsoleteShards dir active
 
@@ -629,24 +664,39 @@ def readWorld (dir : System.FilePath) : IO Replay.World := withVaultLock dir do
     if let some w ← legacyWorld dir then return w
   return (← recoverLog dir).head.world
 
-/-- Demand-load `NonStoreMeta` (`members`, `grants`, `outstanding`, `reasons`, etc.) without opening
-any of the `128` shard files when the log ends at a valid sharded checkpoint (`ChunkedWorld.metaOnly_sound`). -/
-def readMetaWorld (dir : System.FilePath) : IO Replay.World := do
+/-- Run a read against the latest log-authenticated checkpoint, reusing a recovered in-process
+world if available and replaying when the checkpoint is missing, stale, or unreadable. -/
+private def atCheckpoint {α : Type} (dir : System.FilePath) (fromWorld : Replay.World → α)
+    (fromManifest : ByteArray → IO (Option α)) : IO α := do
   let fast ← withVaultLock dir do
     let key ← vaultKey dir
     let stamp ← logStamp dir
     if let some (_, _, r) := (← recoveries.get).find? (fun (k, n, _) => k == key && n == stamp) then
-      return some r.head.world
+      return some (fromWorld r.head.world)
     let some (ck, _) ← readCheckpoint dir | return none
     let total ← SegmentLog.size logHash dir
     if !(ck.start ≤ ck.stop && ck.stop == total) then return none
     let window ← SegmentLog.readRange logHash dir ck.start total
-    match holdsAt logHash some (SegmentLog.localCheckpoint ck ck.start) window with
-    | none => return none
-    | some wb => return ChunkedWorld.loadManifestMetaOnly ⟨wb.toArray⟩
+    let some wb := holdsAt logHash some (SegmentLog.localCheckpoint ck ck.start) window | return none
+    fromManifest ⟨wb.toArray⟩
   match fast with
-  | some w => return w
-  | none => readWorld dir
+  | some answer => return answer
+  | none => return fromWorld (← readWorld dir)
+
+/-- Demand-load metadata without opening any page shards. -/
+def readMetaWorld (dir : System.FilePath) : IO Replay.World :=
+  atCheckpoint dir id (fun manifest => pure (ChunkedWorld.loadManifestMetaOnly manifest))
+
+/-- Read a recorded page in the same snapshot as the log head. A missing authenticated bucket
+or page is distinguishable from a corrupt bucket, which falls back to recovery. -/
+def readPage (dir : System.FilePath) (name : String) : IO (Option Page) :=
+  atCheckpoint dir (fun w => w.store.page? name) fun bytes => do
+    let some w := ChunkedWorld.openDemandWorld bytes | return none
+    w.getPage (fun key => do
+      if key.toSlice.contains '/' || key.toSlice.contains '\\' then return none
+      let path := ChunkedWorld.shardPath dir key
+      if !(← path.pathExists) then return none
+      return some (← Obend.Vault.Cost.readBinFile path)) name
 
 def loadStore (dir : System.FilePath) : IO Store := return (← readWorld dir).store
 
@@ -1470,6 +1520,10 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
   | ["open"] => some do
     let (s, _) ← openDir dir true
     for l in problems s do IO.println l
+    return 0
+  | ["page", title] => some do
+    let some p ← readPage dir title | fail (title ++ ": no such recorded page")
+    IO.println (pageJson p).compress
     return 0
   | ["status"] | ["status", _] => some do
     let (s, _) ← openDir dir false

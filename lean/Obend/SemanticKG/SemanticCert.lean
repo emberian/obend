@@ -8,7 +8,10 @@ Stage 4 of `Obend.SemanticKG`:
 -/
 public import Obend.SemanticKG.Databank
 public import Obend.SemanticKG.SpanParse
-public import Obend.SemanticKG.HypergraphChase
+public import Obend.SemanticKG.ObjectWire
+import all Obend.Judge.Class
+import all Obend.SemanticKG.ObjectWire
+import all Obend.SemanticKG.ColtJoin
 public import Obend.Judge.Class
 public import Obend.Crypto.DualSpine
 public import Lean.Data.Json
@@ -249,6 +252,19 @@ theorem semantic_positive_cert_sound
     hDer, hWne, ⟨hLeads, hSubR, hAcc'⟩,
     verifyMaskedAjtaiOpening_sound pp beta rcpt.ajtaiComm rcpt.ajtaiWitness rcpt.ajtaiMask hAjtai⟩
 
+private theorem singleton_positive (root : VpaJson.SpanRoot) (g : GrammarSpec)
+    (pp : Obend.Crypto.AjtaiParams) (pol : KgQueryPolicy) (rights : UInt64)
+    (op : EdbSpanOpening) (target : Datalog.GroundTuple) (comm witness mask : List Int)
+    (ho : verifyEdbSpanOpening root g op = true)
+    (hd : verifyPosLineageDag #[op] #[] #[.edbLeaf 0 target ProvenanceSemiringOps.one]
+      target ProvenanceSemiringOps.one = true)
+    (ha : verifyMaskedAjtaiOpening pp 0 comm witness mask = true)
+    (hg : checkKgQueryGuard pol rights rights (fun _ => .unbound3) = true) :
+    verifyPositiveReceipt root g #[] pp 0 pol rights rights (fun _ => .unbound3)
+      ⟨#[op], #[.edbLeaf 0 target ProvenanceSemiringOps.one], target, ProvenanceSemiringOps.one,
+        comm, witness, mask⟩ = true := by
+  simp [verifyPositiveReceipt, hg, hd, ha, ho]
+
 /-- Non-vacuity witness for `verifyPositiveReceipt` (zero Keccak kernel evaluation). -/
 theorem verifyPositiveReceipt_inhabited (predSym : UInt32) (rights : UInt64) :
     let raw := "{\"p\":\"rel\",\"a\":\"x\"}".toByteArray
@@ -308,9 +324,7 @@ theorem verifyPositiveReceipt_inhabited (predSym : UInt32) (rights : UInt64) :
     checkKgQueryGuard_inhabited ⟨[]⟩ rights
   refine ⟨⟨#[op], #[.edbLeaf 0 target ProvenanceSemiringOps.one], target, ProvenanceSemiringOps.one,
     comm, wZero, wZero⟩, op, hOpOk, hDagOk, hAjtaiOk, ?_⟩
-  simp only [verifyPositiveReceipt, hGuardOk, hDagOk, hAjtaiOk, Bool.true_and, Bool.and_true,
-    Array.all_eq_true_iff_forall_mem]
-  intro x hx; exact (by simpa using hx : x = op) ▸ hOpOk
+  exact singleton_positive _ g pp queryPol rights op target comm wZero wZero hOpOk hDagOk hAjtaiOk hGuardOk
 
 /-! ## §2. Computable `SortedKTable Bool` WF & `WhyNotSemanticReceipt` (Modes A & B) -/
 private def checkSortedKTableBoolWFGo (es : Array (Datalog.GroundTuple × Bool)) (i : Nat) : Bool :=
@@ -393,11 +407,43 @@ theorem modelsRules_of_allRulesSatisfied {rules : List TgdRule} {M : FactSet}
       simp only [frontierSubst, hExtract]
       rw [SkolemChaseCore.lookupSubst_zip_of_extract r.frontierVars σ tTuple hExtract x hx]; exact hdσ
     rw [hextFront x d hZip, hextστ x d hdσ]
+/-- Ground the requested TGDs over a finite atom dictionary. Missing EDB atoms and unrepresentable
+Skolem heads reject the dictionary. Atom IDs are positions in this same dictionary. -/
+def groundWhyNotProgram (g : GrammarSpec) (chunks : Array DocChunkEntry) (rules : Array TgdRule)
+    (atoms : Array (Atom Term)) : Option Ranked.ArithProgram := do
+  guard (WfRuleSet rules.toList)
+  let mut clauses : Array Ranked.ArithRule := #[]
+  for chunk in chunks do
+    let facts ← (extractSpanBoundAtoms g chunk).toOption
+    for fact in facts do
+      let head ← atoms.idxOf? (spanAtomToBaseChaseAtom fact)
+      clauses := clauses.push ⟨head, #[], #[]⟩
+  let probe := openAtomTrie atoms
+  for rule in rules do
+    for σ in matchBodyColt atoms probe.probe rule.body [] do
+      let body ← evalPatAtoms Term.const σ rule.body
+      let pos ← body.toArray.mapM atoms.idxOf?
+      let frontier ← extractFrontierTuple rule.frontierVars σ
+      let heads ← instantiateRuleHead rule frontier
+      for fact in heads do
+        let head ← atoms.idxOf? fact
+        clauses := clauses.push ⟨head, pos, #[]⟩
+  return ⟨atoms.size, clauses⟩
+
+private def wfsModel (atoms : Array (Atom Term)) (bits : Array Bool) : Array (Atom Term) :=
+  (atoms.zip bits).filterMap fun (a, b) => if b then some a else none
+
+private def containsExtractedFacts (g : GrammarSpec) (db : SemanticDatabank)
+    (model : Array (Atom Term)) : Bool :=
+  db.chunks.all fun c => match extractSpanBoundAtoms g c with
+    | .ok facts => facts.all fun a => model.contains (spanAtomToBaseChaseAtom a)
+    | .error _ => false
+
 inductive WhyNotMode where
   | guardedCoreGap (tbl : SymInternTable) (M : Datalog.SortedKTable Bool)
       (targetTuple : Datalog.GroundTuple) (gapCert : Datalog.GapCert)
-  | wfsNegationBlocker (arithProg : Ranked.ArithProgram) (tBits uBits : Array Bool)
-      (wfsCert : Ranked.ArrayCert) (targetAtomId : Nat) (definiteFalse : Bool)
+  | wfsNegationBlocker (atoms : Array (Atom Term)) (tBits uBits : Array Bool)
+      (wfsCert : Ranked.ArrayCert) (definiteFalse : Bool)
 structure WhyNotSemanticReceipt where
   db   : SemanticDatabank
   mode : WhyNotMode
@@ -417,11 +463,15 @@ def verifyWhyNotReceipt (expectedDbRoot : DatabankRoot256) (g : GrammarSpec)
     checkDatabankExtractedInTable g rcpt.db tbl M && tbl.WF && checkSortedKTableBoolWF M &&
     tableSymsInBounds tbl M && tgdRules.all IsGuardedRule && checkGuardedSaturationFast tbl M tgdRules &&
     (internAtom tbl targetAtom == some targetTuple) && Datalog.verifyGapCert M targetTuple gapCert
-  | .wfsNegationBlocker arithProg tBits uBits wfsCert targetAtomId definiteFalse =>
-    rcpt.db.chunks.all (fun chunk => match extractSpanBoundAtoms g chunk with | .ok _ => true | .error _ => false) &&
-    Ranked.WFProgram arithProg && checkVgrsFixpointLinear arithProg tBits uBits wfsCert &&
-    decide (targetAtomId < arithProg.numAtoms) && (!Ranked.bit tBits targetAtomId) &&
-    (!definiteFalse || !Ranked.bit uBits targetAtomId)
+  | .wfsNegationBlocker atoms tBits uBits cert definiteFalse =>
+    match groundWhyNotProgram g rcpt.db.chunks tgdRules atoms, atoms.idxOf? targetAtom with
+    | some p, some i =>
+      let model := wfsModel atoms tBits
+      Ranked.WFProgram p && checkVgrsFixpointLinear p tBits uBits cert &&
+      !Ranked.bit tBits i && (!definiteFalse || !Ranked.bit uBits i) &&
+      tgdRules.all WfRule && containsExtractedFacts g rcpt.db model &&
+      allRulesSatisfiedExec tgdRules model && !model.contains targetAtom
+    | _, _ => false
 def WhyNotConclusion (g : GrammarSpec) (tgdRules : Array TgdRule)
     (targetAtom : Atom Term) (rcpt : WhyNotSemanticReceipt) : Prop :=
   match rcpt.mode with
@@ -431,10 +481,15 @@ def WhyNotConclusion (g : GrammarSpec) (tgdRules : Array TgdRule)
     allRulesSatisfied tgdRules.toList (decodeSortedFactSet tbl M) = true ∧
     ModelsRules Term.const tgdRules.toList (decodeSortedFactSet tbl M) ∧
     targetAtom ∉ decodeSortedFactSet tbl M
-  | .wfsNegationBlocker arithProg _ _ _ targetAtomId definiteFalse =>
-    (∀ chunk ∈ rcpt.db.chunks, ∃ atoms, extractSpanBoundAtoms g chunk = .ok atoms) ∧
-    Ranked.atomName targetAtomId ∉ (Obend.Reasons.wf (Ranked.toReasonsProgram arithProg)).1 ∧
-    (definiteFalse = true → Ranked.atomName targetAtomId ∉ (Obend.Reasons.wf (Ranked.toReasonsProgram arithProg)).2)
+  | .wfsNegationBlocker atoms tBits _ _ definiteFalse =>
+    let model := (wfsModel atoms tBits).toList
+    (∀ c ∈ rcpt.db.chunks, ∃ facts, extractSpanBoundAtoms g c = .ok facts ∧
+      ∀ a ∈ facts, spanAtomToBaseChaseAtom a ∈ model) ∧
+    ModelsRules Term.const tgdRules.toList model ∧ targetAtom ∉ model ∧
+    ∃ p i, groundWhyNotProgram g rcpt.db.chunks tgdRules atoms = some p ∧
+      atoms.idxOf? targetAtom = some i ∧
+      Ranked.atomName i ∉ (Obend.Reasons.wf (Ranked.toReasonsProgram p)).1 ∧
+      (definiteFalse = true → Ranked.atomName i ∉ (Obend.Reasons.wf (Ranked.toReasonsProgram p)).2)
 private theorem wfDatabankBounds_of_wfDatabank {db : SemanticDatabank}
     (h : WfDatabank db = true) : WfDatabankBounds db = true := by
   simp only [WfDatabank, WfDatabankBounds, Bool.and_eq_true, Array.all_eq_true_iff_forall_mem] at h ⊢
@@ -478,23 +533,42 @@ theorem semantic_whynot_cert_sound
       simp only [Bool.and_eq_true, beq_iff_eq] at haOk
       refine (checkAtomInTableFast_eq_true_iff hTbl hMWf (spanAtomToBaseChaseAtom a)).mp ?_
       simp [checkAtomInTableFast, internAtom_of_decodeTuple hTbl haOk.2, haOk.1, ProvenanceSemiringOps.zero]
-  | wfsNegationBlocker arithProg tBits uBits wfsCert targetAtomId definiteFalse =>
+  | wfsNegationBlocker atoms tBits uBits cert definiteFalse =>
     rw [hM] at hMode
-    simp only [Bool.and_eq_true, Array.all_eq_true_iff_forall_mem, decide_eq_true_eq,
-      Bool.not_eq_true', Bool.or_eq_true] at hMode
-    obtain ⟨⟨⟨⟨⟨hChunks, hWfP⟩, hVgrs⟩, _⟩, hTFalse⟩, hUOpt⟩ := hMode
-    have hSizes : tBits.size = arithProg.numAtoms ∧ uBits.size = arithProg.numAtoms := by
-      unfold checkVgrsFixpointLinear Ranked.checkRankedWFS at hVgrs
-      simp only [Bool.and_eq_true, beq_iff_eq] at hVgrs
-      obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨_, htSz⟩, huSz⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩ := hVgrs; exact ⟨htSz, huSz⟩
-    have hSame := (checkVgrsFixpointLinear_iff_wfs arithProg tBits uBits hWfP hSizes.1 hSizes.2).mp ⟨wfsCert, hVgrs⟩
-    refine ⟨fun chunk hChunk => ?_, fun hIn => ?_, fun hDef hInU => ?_⟩
-    · have hC := hChunks chunk hChunk
-      cases hEx : extractSpanBoundAtoms g chunk with | error _ => rw [hEx] at hC; cases hC | ok atoms => exact ⟨atoms, rfl⟩
-    · have hBit := (Ranked.mem_decodeBits tBits targetAtomId).mp ((hSame.1 _).mpr hIn); rw [hTFalse] at hBit; cases hBit
-    · rcases hUOpt with hDefF | hUFalse
-      · rw [hDef] at hDefF; cases hDefF
-      · have hBit := (Ranked.mem_decodeBits uBits targetAtomId).mp ((hSame.2 _).mpr hInU); rw [hUFalse] at hBit; cases hBit
+    cases hp : groundWhyNotProgram g rcpt.db.chunks tgdRules atoms with
+    | none => simp [hp] at hMode
+    | some p =>
+      cases hi : atoms.idxOf? targetAtom with
+      | none => simp [hp, hi] at hMode
+      | some i =>
+        simp only [hp, hi, Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_true] at hMode
+        obtain ⟨⟨⟨⟨⟨⟨⟨hWf, hFix⟩, hT⟩, hU⟩, hR⟩, hFacts⟩, hSat⟩, hMiss⟩ := hMode
+        have hSizes : tBits.size = p.numAtoms ∧ uBits.size = p.numAtoms := by
+          unfold checkVgrsFixpointLinear Ranked.checkRankedWFS at hFix
+          simp only [Bool.and_eq_true, beq_iff_eq] at hFix
+          obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨_, ht⟩, hu⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩ := hFix
+          exact ⟨ht, hu⟩
+        have hSame := (checkVgrsFixpointLinear_iff_wfs p tBits uBits hWf hSizes.1 hSizes.2).mp ⟨cert, hFix⟩
+        rw [allRulesSatisfiedExec_eq_spec] at hSat
+        refine ⟨?_, modelsRules_of_allRulesSatisfied (by simpa using hR) hSat, ?_,
+          p, i, hp, hi, ?_, ?_⟩
+        · intro c hc
+          have h := Array.all_eq_true_iff_forall_mem.mp hFacts c hc
+          cases he : extractSpanBoundAtoms g c with
+          | error _ => simp [he] at h
+          | ok facts =>
+            refine ⟨facts, rfl, fun a ha => ?_⟩
+            simp only [he, Array.all_eq_true_iff_forall_mem] at h
+            simpa using h a ha
+        · simpa using hMiss
+        · intro hm
+          have ht := (Ranked.mem_decodeBits _ _).mp ((hSame.1 _).mpr hm)
+          simp [hT] at ht
+        · intro hd hm
+          have hu := (Ranked.mem_decodeBits _ _).mp ((hSame.2 _).mpr hm)
+          rcases hU with hf | hf <;> simp_all
+
+deriving instance DecidableEq for Ranked.ArithProgram
 
 /-- Non-vacuity witness for `verifyWhyNotReceipt` in BOTH Mode A and Mode B. -/
 theorem verifyWhyNotReceipt_inhabited (worldRoot : DatabankRoot256) :
@@ -522,12 +596,23 @@ theorem verifyWhyNotReceipt_inhabited (worldRoot : DatabankRoot256) :
     simp [verifyWhyNotReceipt, hWfDb, checkDatabankExtractedInTable, db, hTbl', hMWfB, hBnd', hG', hSat', hInt, hGap]
   · let p : Ranked.ArithProgram := ⟨1, #[]⟩
     let cert : Ranked.ArrayCert := ⟨#[0], #[0], #[0], #[0], #[0], #[]⟩
-    refine ⟨⟨db, .wfsNegationBlocker p #[false] #[false] cert 0 true⟩, ?_⟩
+    refine ⟨⟨db, .wfsNegationBlocker #[targetAtom] #[false] #[false] cert true⟩, ?_⟩
     have hWfP : Ranked.WFProgram p = true := by simp [Ranked.WFProgram, p]
     have hVgrs : checkVgrsFixpointLinear p #[false] #[false] cert = true := by
       simp [checkVgrsFixpointLinear, Ranked.checkRankedWFS, p, cert, Ranked.WFProgram,
         Ranked.checkClosure, Ranked.bit, Array.range_eq_range']
-    simp [verifyWhyNotReceipt, hWfDb, db, hWfP, hVgrs, Ranked.bit, p]
+    have hGround : groundWhyNotProgram g #[] #[r] #[targetAtom] = some p := by
+      simp only [groundWhyNotProgram, openAtomTrie, funext (Colt.probe_eq_select _ _)]
+      decide +kernel
+    have hIdx : (#[targetAtom] : Array (Atom Term)).idxOf? targetAtom = some 0 := by decide +kernel
+    have hRest : (#[r].all WfRule && containsExtractedFacts g db (wfsModel #[targetAtom] #[false]) &&
+        allRulesSatisfiedExec #[r] (wfsModel #[targetAtom] #[false]) &&
+        !(wfsModel #[targetAtom] #[false]).contains targetAtom) = true := by
+      simp only [containsExtractedFacts, db, Array.all_empty, Bool.and_true]
+      decide +kernel
+    simp only [verifyWhyNotReceipt, hWfDb, beq_self_eq_true, Bool.and_self, Bool.true_and,
+      show db.chunks = #[] from rfl, hGround, hIdx, hWfP, hVgrs]
+    exact hRest
 
 /-! ## §3. Non-Tautological `semanticKgJudge` & `"semantic-kg@1"` `Obend.Judge.Format` -/
 def ExtractedEdbFacts (g : GrammarSpec) (db : SemanticDatabank) (I : FactSet) : Prop :=
@@ -537,16 +622,6 @@ def ExtractedEdbFacts (g : GrammarSpec) (db : SemanticDatabank) (I : FactSet) : 
       ∃ atoms, chunkAtomLists[i]? = some atoms ∧
         extractSpanBoundAtoms g (db.chunks[i]'hi) = .ok atoms) ∧
     I = chunkAtomLists.flatMap (fun arr => arr.toList.map spanAtomToBaseChaseAtom)
-structure SemanticKgObj where
-  db             : SemanticDatabank
-  expectedDbRoot : DatabankRoot256
-  grammar        : GrammarSpec
-  tgdRules       : Array TgdRule
-  targetAtom     : Atom Term
-  queryPolicy    : KgQueryPolicy
-  rights         : UInt64
-  mask           : UInt64
-  env            : Nat → Obend.Polis.KleenePred3
 inductive SemanticKgCert where
   | chaseProof (fuel : Nat)
   | countermodel (tbl : SymInternTable) (M : Datalog.SortedKTable Bool)
@@ -978,7 +1053,7 @@ theorem semanticKgFragment_inhabited (worldRoot : DatabankRoot256) (rights : UIn
     let db : SemanticDatabank := ⟨worldRoot, #[]⟩
     let r : TgdRule := ⟨1, [0], [], [⟨0, [.var 0]⟩], [⟨1, [.var 0]⟩]⟩
     let o : SemanticKgObj := ⟨db, databankCommit256 db, ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩,
-      #[r], ⟨1, [.const 0]⟩, ⟨⟨[]⟩, rights, .const true⟩, rights, rights, fun _ => .unbound3⟩
+      #[r], ⟨1, [.const 0]⟩, ⟨⟨[]⟩, rights, .const true⟩, rights, rights, #[]⟩
     SemanticKgFragment o := by
   intro db r o
   have hGuard := checkKgQueryGuard_inhabited ⟨[]⟩ rights
@@ -996,7 +1071,8 @@ theorem semanticKgFragment_inhabited (worldRoot : DatabankRoot256) (rights : UIn
 /-! ### JSON Wire Codecs & `"semantic-kg@1"` `Obend.Judge.Format` Registration -/
 private def decodeAtomJson (j : Json) : Except String (Atom Term) := do
   let rel ← j.getObjValAs? Nat "rel"; let argsArr ← (← j.getObjVal? "args").getArr?
-  pure { rel, args := argsArr.toList.map (fun x => Term.const (x.getNat?.toOption.getD 0)) }
+  let args ← argsArr.toList.mapM fun x => return Term.const (← x.getNat?)
+  pure { rel, args }
 private def decodePatAtomJson (j : Json) : Except String PatAtom := do
   let rel ← j.getObjValAs? Nat "rel"
   let args ← (← (← j.getObjVal? "args").getArr?).toList.mapM fun x => do
@@ -1013,16 +1089,72 @@ private def decodeTgdRuleJson (j : Json) : Except String TgdRule := do
 private def decodeGroundTupleJson (j : Json) : Except String Datalog.GroundTuple := do
   let rel ← j.getObjValAs? Nat "rel"; let args ← (← (← j.getObjVal? "args").getArr?).mapM (·.getNat?)
   pure { rel, args }
-def decodeSemanticKgObj (s : String) : Except String SemanticKgObj := do
+private def boundedField (j : Json) (key : String) (bits : Nat) : Except String Nat := do
+  let n ← j.getObjValAs? Nat key
+  if n ≥ 2^bits then throw s!"{key} exceeds {bits} bits"
+  pure n
+
+private def optionalArray (j : Json) (key : String) : Except String (Array Json) :=
+  match j.getObjVal? key with
+  | .ok x => x.getArr?
+  | .error _ => .ok #[]
+
+private def hexField (j : Json) (key : String) : Except String ByteArray := do
+  let value ← j.getObjValAs? String key
+  let some bytes := Obend.Codec.Hex.hexByteArrayStrict? value.toUTF8
+    | throw s!"{key} requires lowercase hex bytes"
+  return bytes
+
+private def decodeChunk (j : Json) : Except String DocChunkEntry := do
+  return ⟨← boundedField j "docId" 64, ← boundedField j "byteOffset" 64, ← hexField j "rawBytes",
+    BitVec.ofNat 256 (← boundedField j "chunkDigest256" 256)⟩
+
+private def decodeSpanRule (j : Json) : Except String SpanRuleSpec := do
+  let some pattern := SymbolicRegex.decRE (← hexField j "slicePattern") | throw "invalid slicePattern"
+  let some ban := SymbolicRegex.decRE (← hexField j "banDelimiter") | throw "invalid banDelimiter"
+  return ⟨← hexField j "predTag", (← boundedField j "predSym" 32).toUInt32,
+    ← j.getObjValAs? Nat "arity", pattern, ban⟩
+
+private def decodeBinding (j : Json) : Except String (Nat × Obend.Polis.KleenePred3) := do
+  let i ← j.getObjValAs? Nat "id"
+  match ← j.getObjVal? "value" with
+  | .null => return (i, .unbound3)
+  | .bool b => return (i, if b then .true3 else .false3)
+  | _ => throw "binding value requires true, false or null"
+
+deriving instance Lean.FromJson for Obend.Polis.Caveat
+
+private def decodeKgJson (s : String) : Except String SemanticKgObj := do
   let j ← Json.parse s
-  let wRoot ← j.getObjValAs? Nat "worldLogRoot256"; let eRoot ← j.getObjValAs? Nat "expectedDbRoot"
+  let wRoot ← boundedField j "worldLogRoot256" 256
+  let eRoot ← boundedField j "expectedDbRoot" 256
+  let chunks ← (← optionalArray j "chunks").mapM decodeChunk
+  let entries ← (← optionalArray j "entityDict").mapM fun e => do
+    return (← hexField e "raw", (← boundedField e "id" 32).toUInt32)
+  let spanRules ← (← optionalArray j "spanRules").mapM decodeSpanRule
+  let accept ← match j.getObjVal? "structuralAccept" with
+    | .ok x => x.getBool? | .error _ => pure true
   let rules ← (← (← j.getObjVal? "tgdRules").getArr?).mapM decodeTgdRuleJson
   let tgt ← decodeAtomJson (← j.getObjVal? "targetAtom")
-  let need ← j.getObjValAs? Nat "needRights"; let cav ← j.getObjValAs? Bool "caveatConst"
-  let rights ← j.getObjValAs? Nat "rights"; let mask ← j.getObjValAs? Nat "mask"
-  pure ⟨⟨BitVec.ofNat 256 wRoot, #[]⟩, BitVec.ofNat 256 eRoot, ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩,
-    rules, tgt, ⟨⟨[]⟩, UInt64.ofNat need, .const cav⟩, UInt64.ofNat rights, UInt64.ofNat mask, fun _ => .unbound3⟩
+  let query ← (← optionalArray j "query").mapM decodePatAtomJson
+  let need ← boundedField j "needRights" 64
+  let cav ← match j.getObjVal? "caveat" with
+    | .ok x => Lean.fromJson? x
+    | .error _ => pure (Obend.Polis.Caveat.const (← j.getObjValAs? Bool "caveatConst"))
+  let rights ← boundedField j "rights" 64
+  let mask ← boundedField j "mask" 64
+  let bindings ← (← optionalArray j "bindings").mapM decodeBinding
+  pure ⟨⟨BitVec.ofNat 256 wRoot, chunks⟩, BitVec.ofNat 256 eRoot,
+    ⟨{ wellMatchedJsonVpa with acc := fun _ => accept }, ⟨entries⟩, spanRules⟩, rules, tgt,
+    ⟨⟨query.toList⟩, need.toUInt64, cav⟩, rights.toUInt64, mask.toUInt64, bindings⟩
+
+def decodeSemanticKgObj := decodeKgWith decodeKgJson
+
+theorem decode_encode_semanticKgObj (o : SemanticKgObj) :
+    decodeSemanticKgObj (encodeSemanticKgObj o) = .ok o := decodeKgWith_encode _ o
+
 def decodeSemanticKgCert (s : String) : Except String SemanticKgCert := do
+  if let some fuel := s.toNat? then return .chaseProof fuel
   let j ← Json.parse s; let kind ← j.getObjValAs? String "kind"
   if kind == "chaseProof" then pure (.chaseProof (← j.getObjValAs? Nat "fuel"))
   else if kind == "countermodel" then
@@ -1051,7 +1183,7 @@ def explainSemanticKg (grade : Nat) (objWire certWire : String) : String :=
   | .ok o, .ok c => match checkSemanticKg grade o c with
     | .ok => "accepted" | .uncovered => "uncovered within grade" | .refused k _ => k.describe
 def badSemanticKgObj : SemanticKgObj :=
-  ⟨⟨0, #[]⟩, 0, ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩, #[], ⟨0, [.skolem 0 0 []]⟩, ⟨⟨[]⟩, 0, .const true⟩, 0, 0, fun _ => .unbound3⟩
+  ⟨⟨0, #[]⟩, 0, ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩, #[], ⟨0, [.skolem 0 0 []]⟩, ⟨⟨[]⟩, 0, .const true⟩, 0, 0, #[]⟩
 def badSemanticKgCert : SemanticKgCert := .chaseProof 0
 theorem badSemanticKg_refused (r : Nat) :
     semanticKgJudge.check r badSemanticKgObj badSemanticKgCert = .refused .nonBaseTargetAtom [] := by
@@ -1068,6 +1200,37 @@ theorem badSemanticKg_refused (r : Nat) :
   judge := semanticKgJudge; decodeObj := decodeSemanticKgObj; decodeCert := decodeSemanticKgCert
   trust := .kernel; regime := .decidable; bad := (badSemanticKgObj, badSemanticKgCert); badGrade := 0
   bad_refused := ⟨.nonBaseTargetAtom, [], badSemanticKg_refused 0⟩; explain := explainSemanticKg
+
+private theorem check_edb_single (o : SemanticKgObj)
+    (hPre : checkSemanticKgObjPreconditions o = .ok [o.targetAtom]) :
+    semanticKgJudge.check 0 o (.chaseProof 0) = .ok := by
+  change (match checkSemanticKgStep o (.chaseProof 0) 0 with
+    | some v => v | none => .uncovered) = .ok
+  simp [checkSemanticKgStep, hPre, runBoundedChaseExec]
+
+/-- A singleton database answers its extracted fact at grade zero under the object guards. -/
+theorem check_single_extraction (o : SemanticKgObj) (c : DocChunkEntry) (a : SpanBoundAtom)
+    (hc : o.db.chunks = #[c]) (hr : o.tgdRules = #[])
+    (hroot : o.expectedDbRoot = databankCommit256 o.db) (hw : WfDatabank o.db = true)
+    (hb : isBaseAtom o.targetAtom = true)
+    (hg : checkKgQueryGuard o.queryPolicy o.rights o.mask o.env = true)
+    (he : extractSpanBoundAtoms o.grammar c = .ok #[a]) (ha : spanAtomToBaseChaseAtom a = o.targetAtom) :
+    semanticKgJudge.check 0 o (.chaseProof 0) = .ok := by
+  apply check_edb_single
+  have h0 : 0 < (#[c] : Array _).size := Nat.zero_lt_succ 0
+  have h1 : ¬1 < (#[c] : Array _).size := Nat.lt_irrefl 1
+  have hp : extractAllChunksGo o.grammar #[c] 0 [] = .ok [#[a]] := by
+    rw [extractAllChunksGo, dite_eq_left h0]
+    change (match extractSpanBoundAtoms o.grammar c with
+      | .ok xs => extractAllChunksGo o.grammar #[c] 1 ([] ++ [xs])
+      | .error _ => .error 0) = _
+    rw [he]
+    change extractAllChunksGo o.grammar #[c] 1 [#[a]] = _
+    rw [extractAllChunksGo, dite_eq_right h1]
+  have hguarded : findUnguardedRuleGo #[] 0 = none := by rw [findUnguardedRuleGo]; rfl
+  have hrule : WfRuleSet [] = true := rfl
+  simp [checkSemanticKgObjPreconditions, hr, hb, hg, hrule, hguarded, hw, hroot, hc, hp, ha]
+
 
 end Obend.SemanticKG
 end

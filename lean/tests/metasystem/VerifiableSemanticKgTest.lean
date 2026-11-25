@@ -665,7 +665,7 @@ example :
       queryPolicy := ⟨⟨[]⟩, 0x01, .const true⟩
       rights := 0x03
       mask := 0x01
-      env := fun _ => .unbound3
+      bindings := #[]
     }
     let oDenied : SemanticKgObj := { oRefuted with mask := 0x00 }
     let cmCert : SemanticKgCert := .countermodel ⟨#[.const 5]⟩ ⟨#[]⟩ ⟨1, #[0]⟩ .emptyTable
