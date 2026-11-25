@@ -2,6 +2,7 @@ module
 import all Obend.Vault.Log
 import all Obend.Vault.WorldTree
 public import Obend.Vault.Log
+public import Obend.Vault.LiveObject
 public import Obend.Vault.Json
 public import Obend.Ledger.Commit
 public import Obend.Vault.Form
@@ -34,6 +35,7 @@ replay of the log step the same bytes the same way. The turns:
 * `opened`: an open, with the files it read (`readingOf`: each file's text where it differs from the
   text the world last saw, else none; `open_replays`: the record replays as the open of exactly those
   files) and the environment it read, when that changed;
+* `core4.checkpoint` stores a complete heap image in a fresh executable cell of a judged page version;
 * `member`, `wrote` (the owner's post), `posted` (a member's), `selected`, `recited`, `merged` (another
   replica's world, as read, merged by `Obend.Vault.Merge.mergeVault`), `resolved` (a merge conflict
   the store keeps, `Store.conflicts`, resolved by `Merge.resolveIn`); each is the store function its
@@ -945,10 +947,33 @@ def fillExt : LawfulTurnExt where
     cases h
     rfl
 
+/-- A heap checkpoint enters page history through the same judged write as other cells. -/
+def liveObjectExt : LawfulTurnExt where
+  tag := "core4.checkpoint"
+  Op := LiveObject.Write
+  encode := LiveObject.Write.encode
+  decode := LiveObject.Write.decode
+  step w op := (op.land w.store).map fun s => { w with store := s }
+  footprint op := [op.page]
+  roundtrip := LiveObject.Write.decode_encode
+  conserves := by
+    intro w op w' ok
+    cases h : op.land w.store with
+    | error e => simp [h, Except.map] at ok
+    | ok s => simp [h, Except.map] at ok; cases ok; exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+  frame := by
+    intro w op w' ok n other
+    cases h : op.land w.store with
+    | error e => simp [h, Except.map] at ok
+    | ok s =>
+      simp [h, Except.map] at ok
+      cases ok
+      exact LiveObject.Write.land_frame h (by simpa using other)
+
 /-- **The registry the deployed machine steps**: the extensions this tree registers. -/
 def LawfulTurnRegistry.core : LawfulTurnRegistry where
-  entries := [fillExt]
-  nodup := by simp
+  entries := [fillExt, liveObjectExt]
+  nodup := by decide
 
 /-- **The step of a turn**: the store function its command calls, or a refusal (a refused turn is
 never logged). -/
@@ -1225,7 +1250,54 @@ theorem fill_replays (w : World) (name received sent : String) :
     stepTurn w (.ext "fill" (Json.arr #[Json.str name, Json.str received, Json.str sent])) =
       .ok ({ w with received := (w.received.filter (·.1 != name)) ++ [(name, received)],
                     sent := (w.sent.filter (·.1 != name)) ++ [(name, sent)] }, .quiet) :=
-  ext_replays .core (e := fillExt) (List.mem_singleton.mpr rfl) w (name, received, sent)
+  ext_replays .core (e := fillExt) (List.Mem.head _) w (name, received, sent)
+
+/-- Construct a deployed checkpoint turn from a certified live machine state. -/
+def checkpointTurn {A types ty} (page : String) (atom parent : Nat) (name : String)
+    (c : Obend.Doc.LiveObject.Checkpoint A types ty) : Turn :=
+  .ext "core4.checkpoint" (LiveObject.Write.encode ⟨page, atom, parent, name, c.state⟩)
+
+theorem checkpoint_replays (w : World) {A types ty} (page : String) (atom parent : Nat)
+    (name : String) (c : Obend.Doc.LiveObject.Checkpoint A types ty) :
+    let op : LiveObject.Write := ⟨page, atom, parent, name, c.state⟩
+    stepTurn w (checkpointTurn page atom parent name c) =
+      liftStep ((op.land w.store).map fun s => { w with store := s }) :=
+  ext_replays .core (e := liveObjectExt) (List.Mem.tail _ (List.Mem.head _)) w _
+
+/-- Successful replay leaves the certified state readable at its page and atom.
+The proof goes through admission, page history, live-atom lookup and image decoding. -/
+theorem checkpoint_read_after_replay {w w' : World} {o : Outcome} {A types ty}
+    {page : String} {atom parent : Nat} {name : String} (c : Obend.Doc.LiveObject.Checkpoint A types ty)
+    (ok : stepTurn w (checkpointTurn page atom parent name c) = .ok (w', o)) :
+    LiveObject.readAt w'.store page atom = some c.state := by
+  rw [checkpoint_replays] at ok
+  let op : LiveObject.Write := ⟨page, atom, parent, name, c.state⟩
+  cases land : op.land w.store with
+  | error msg => simp [op] at land; simp [land, Except.map, liftStep] at ok
+  | ok s =>
+    have := LiveObject.readAt_land land
+    simp [op] at land
+    simp [land, Except.map, liftStep] at ok
+    obtain ⟨rfl, rfl⟩ := ok
+    exact this
+
+open Obend.Core.Machine Obend.Core.MachineTyping Obend.Core.Check Obend.Core.Ty in
+/-- A durable world round-trip preserves the typed continuation resumed by a reply. -/
+theorem checkpoint_resume_after_restore {w w' : World} {o : Outcome} {A types P R T}
+    {page : String} {atom parent plan : Nat} {name : String}
+    (c : Obend.Doc.LiveObject.Checkpoint A types (.computation P R T))
+    (ok : stepTurn w (checkpointTurn page atom parent name c) = .ok (w', o))
+    (yielded : c.state.control = .yielded plan) {reply : Obend.Core.Term.Term} {uses : Uses}
+    (checked : PartialTyping A [] reply R uses) :
+    ∃ next, ((ChunkedWorld.decodeShardedWorld (ChunkedWorld.encodeShardedWorld w')).toOption.bind
+        (fun world => (LiveObject.readAt world.store page atom).bind (resume reply))) = some next ∧
+      Nonempty (StateTyping A types next (.computation P R T)) := by
+  have resumed : resume reply c.state = some {c.state with control := .evaluate reply []} := by
+    simp [resume, yielded]
+  obtain ⟨typed⟩ := c.typed
+  exact ⟨_, by rw [ChunkedWorld.decodeShardedWorld_encodeShardedWorld];
+               simpa only [Except.toOption, Option.bind_some, checkpoint_read_after_replay c ok] using resumed,
+    Obend.Core.Proofs.Preservation.typed_resume_preserved typed yielded checked resumed⟩
 
 /-- The refusal's premise is inhabited: under a registry without extensions every tag is refused. -/
 theorem unregistered_tag_refused_empty (w : World) (tag : String) (op : Json) :
@@ -1580,7 +1652,7 @@ one the replay of its log makes (`state_eq_replay_log`), and the checks a comman
 from those records by the checker (`Form.checksOf`); no file the vault reads stands for one. -/
 theorem checks_replayed {S : Session} (h : Reachable S) :
     ∀ r ∈ S.world.checked, r ∈ (replay deployed genesis S.log).checked :=
-  fun r hr => state_eq_replay_log h ▸ hr
+  fun _ hr => state_eq_replay_log h ▸ hr
 
 /-- **A capture's checks are the capture's**: the turn that captures a form keeps the records of the
 checks of the judgments a fill of it makes at the store it was captured from (`Form.checksAt`), in
@@ -3421,7 +3493,7 @@ theorem rehydrate_ok_inv {Hb : Bytes → BitVec 256} {key : ByteArray} {epoch : 
           | nil =>
             simp only [hr, Except.ok.injEq, Prod.mk.injEq] at h
             obtain ⟨rfl, rfl⟩ := h
-            exact ⟨hs', by simp only [hd], by simp only [hr]⟩
+            exact ⟨hs', rfl, rfl⟩
 
 theorem rehydrate_dehydrate_roundtrip (Hb : Bytes → BitVec 256) (key : ByteArray)
     (epoch : UInt64) (nonce : Nat) (srcEnv : CustodyEnv) (v : TVal)
@@ -3566,8 +3638,7 @@ example : sampleRoundtripCheck = true := by
     dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot,
     rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields,
     takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData,
-    DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?,
-    dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
+    DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?] <;> decide
 
 /-- Constructive two-capability transfer with a real authority context and distinct live slots. -/
 theorem transfer_inhabited :

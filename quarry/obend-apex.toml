@@ -173,6 +173,27 @@ description = "Clarke coalgebraic delta-lens `RepairableSheaf` transports `Slot`
 # ==============================================================================
 
 [[apex]]
+id = "doc-grove-demand-locality"
+subsystem = "Doc"
+module = "Obend.Doc.GroveEvaluation"
+theorem = "evaluate_disjoint"
+description = "Incoming and outgoing edge agreement on a closed region preserves its Core4 execution after concurrent edits."
+
+[[apex]]
+id = "doc-grove-delete-modify-cover"
+subsystem = "Doc"
+module = "Obend.Doc.Grove"
+theorem = "DeleteModifyCover"
+description = "A concurrent child edit under a disconnected parent edge remains visible as a typed conflict at the document root."
+
+[[apex]]
+id = "vault-live-object-resume"
+subsystem = "Vault"
+module = "Obend.Vault.Replay"
+theorem = "checkpoint_resume_after_restore"
+description = "A judged checkpoint turn and a sharded world round-trip preserve the typed continuation resumed by a response."
+
+[[apex]]
 id = "vault-replay-reading-reconstruction"
 subsystem = "Vault"
 module = "Obend.Vault.Replay"
@@ -542,6 +563,13 @@ description = "Ordered-monoid graded Hoare triples satisfy frame preservation an
 # ==============================================================================
 # 10. `Repair` — Ornamented Polynomial Algebras, Paco Coinduction & QuotAssembly
 # ==============================================================================
+
+[[apex]]
+id = "repair-interactive-epoch-floor"
+subsystem = "Repair"
+module = "Obend.Repair.CoalgebraicRepair"
+theorem = "upgraded_floors_forever"
+description = "Historical replay transports the home floor, then the strengthened epoch gate preserves both the home floor and the migration cap across all later inputs."
 
 [[apex]]
 id = "repair-alg-config-coherence"
