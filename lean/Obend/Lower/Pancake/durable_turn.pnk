@@ -1,0 +1,411 @@
+export fun dn_echo(1 src, 1 dst, 1 len, 1 cap) {
+if (len < 0) {
+return 4294967295;
+} else {
+if (cap < 0) {
+return 4294967295;
+} else {
+if (4096 <+ cap) {
+return 4294967295;
+} else {
+if (cap <+ len) {
+return 4294967295;
+} else {
+{
+var 1 i = 0;
+while (i <+ len) {
+st8 (dst + i), (ld8 (src + i));
+i = (i + 1);
+}
+};
+return len;
+}
+}
+}
+}
+}
+
+export fun parseFrame(1 src, 1 len) {
+if (len <+ 59) {
+return 0;
+} else {
+skip;
+}
+if (4158 <+ len) {
+return 0;
+} else {
+skip;
+}
+{
+var 1 w = 8463441415636209488;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (0 + k))) != (w & 255)) {
+return 0;
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 3409317638883536498;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (8 + k))) != (w & 255)) {
+return 0;
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 8317946244784795185;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (16 + k))) != (w & 255)) {
+return 0;
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 7596570299435334260;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (24 + k))) != (w & 255)) {
+return 0;
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 8017262814301482593;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (32 + k))) != (w & 255)) {
+return 0;
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 7299259074152330350;
+{
+var 1 cnt = 8;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (40 + k))) != (w & 255)) {
+return 0;
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 w = 35435232651118;
+{
+var 1 cnt = 6;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + (48 + k))) != (w & 255)) {
+return 0;
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+{
+var 1 d = 0;
+{
+var 1 val = 0;
+while (d <+ 4) {
+{
+var 1 ch = (ld8 (src + (54 + d)));
+if (ch <+ 48) {
+break;
+} else {
+skip;
+}
+if (57 <+ ch) {
+break;
+} else {
+skip;
+}
+val = ((val * 10) + (ch - 48));
+d = (d + 1);
+};
+}
+if (d == 0) {
+return 0;
+} else {
+skip;
+}
+if (1 <+ d) {
+if ((ld8 (src + 54)) == 48) {
+return 0;
+} else {
+skip;
+}
+} else {
+skip;
+}
+if (4096 <+ val) {
+return 0;
+} else {
+skip;
+}
+{
+var 1 off = (58 + d);
+if (len != (off + val)) {
+return 0;
+} else {
+skip;
+}
+{
+var 1 w = 168626701;
+{
+var 1 cnt = 4;
+{
+var 1 k = 0;
+while (k <+ cnt) {
+if ((ld8 (src + ((54 + d) + k))) != (w & 255)) {
+return 0;
+} else {
+skip;
+}
+w = (w >>> 8);
+k = (k + 1);
+}
+};
+};
+};
+return off;
+};
+};
+};
+}
+
+export fun turnIntake(1 src, 1 len, 1 state, 1 scratch) {
+{
+var 1 off = parseFrame(src, len);
+if (off == 0) {
+return 0;
+} else {
+skip;
+}
+{
+var 1 width = (len - off);
+{
+var 1 copied = dn_echo((src + off), (scratch + 64), width, 4096);
+if (copied != width) {
+return 0;
+} else {
+skip;
+}
+st (scratch + 48), width;
+{
+var 1 count = (lds 1 (state + 0));
+{
+var 1 maxTurns = (lds 1 (state + 16));
+{
+var 1 budgetCap = (lds 1 (state + 24));
+{
+var 1 lastId = (lds 1 (state + 32));
+{
+var 1 spent = 0;
+{
+var 1 i = 0;
+if (maxTurns <+ count) {
+return 0;
+} else {
+skip;
+}
+if ((lds 1 (scratch + 16)) != (lds 1 (state + 8))) {
+return 0;
+} else {
+skip;
+}
+while (i <+ count) {
+{
+var 1 entry = (state + (40 + (i * 4136)));
+if (lastId <+ (lds 1 (entry + 24))) {
+lastId = (lds 1 (entry + 24));
+} else {
+skip;
+}
+if ((lds 1 (scratch + 16)) == (lds 1 (entry + 8))) {
+spent = (spent + (lds 1 (entry + 32)));
+if ((lds 1 (scratch + 24)) == (lds 1 (entry + 16))) {
+if ((lds 1 (scratch + 32)) != (lds 1 (entry + 24))) {
+return 0;
+} else {
+skip;
+}
+if ((lds 1 (scratch + 40)) != (lds 1 (entry + 32))) {
+return 0;
+} else {
+skip;
+}
+if (width != (lds 1 (entry + 0))) {
+return 0;
+} else {
+skip;
+}
+{
+var 1 j = 0;
+while (j <+ width) {
+if ((ld8 ((scratch + 64) + j)) != (ld8 (entry + (40 + j)))) {
+return 0;
+} else {
+skip;
+}
+j = (j + 1);
+}
+};
+st (scratch + 8), ((lds 1 (scratch + 56)) + (i + 1));
+st (scratch + 0), 255;
+@reply((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
+return 0;
+} else {
+skip;
+}
+return ((lds 1 (scratch + 56)) + (i + 1));
+} else {
+skip;
+}
+} else {
+skip;
+}
+i = (i + 1);
+};
+}
+if (count >=+ maxTurns) {
+return 0;
+} else {
+skip;
+}
+if (lastId >=+ (lds 1 (scratch + 32))) {
+return 0;
+} else {
+skip;
+}
+if ((lds 1 (scratch + 40)) == 0) {
+return 0;
+} else {
+skip;
+}
+if ((spent + (lds 1 (scratch + 40))) <+ spent) {
+return 0;
+} else {
+skip;
+}
+if (budgetCap <+ (spent + (lds 1 (scratch + 40)))) {
+return 0;
+} else {
+skip;
+}
+st (scratch + 8), ((lds 1 (scratch + 56)) + (count + 1));
+st (scratch + 0), 255;
+@authorize((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
+return 0;
+} else {
+skip;
+}
+st (scratch + 0), 255;
+@wal((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
+return 0;
+} else {
+skip;
+}
+st (scratch + 0), 255;
+@flush((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
+return 0;
+} else {
+skip;
+}
+st (scratch + 0), 255;
+@fua((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
+return 0;
+} else {
+skip;
+}
+st (scratch + 0), 255;
+@dispatch((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
+return 0;
+} else {
+skip;
+}
+skip;
+st (scratch + 8), ((lds 1 (scratch + 56)) + (count + 1));
+st (scratch + 0), 255;
+@reply((scratch + 64), width, scratch, 64);
+if ((lds 1 (scratch + 0)) != 0) {
+return 0;
+} else {
+skip;
+}
+return ((lds 1 (scratch + 56)) + (count + 1));
+};
+};
+};
+};
+};
+};
+};
+};
+};
+}

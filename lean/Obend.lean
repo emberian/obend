@@ -383,7 +383,13 @@ public import Obend.Trailblaze.StageBInstances
 public import Obend.Vault.CertifiedPartialView
 public import Obend.Vault.FsDurability
 public import Obend.Vault.IncrementalJudge
+public import Obend.Lower.Pancake.BorrowedTurn
 public import Obend.Lower.Pancake.DragonStyleShard
+public import Obend.Lower.Pancake.DurableTurn
+public import Obend.Lower.Pancake.FfiTrace
+public import Obend.OS.DragonStyleAppliance
+public import Obend.OS.NvmeDurablePersist
+public import Obend.OS.SddfOwnership
 public import Obend.Core.HeapImage
 public import Obend.Vault.LiveObject
 public import Obend.Vault.WorldTree.Demand

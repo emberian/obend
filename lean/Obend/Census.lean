@@ -479,10 +479,13 @@ import Obend.Lower.Judge
 import Obend.Lower.LCNF
 import Obend.Lower.Pancake
 import Obend.Lower.Pancake.BeltLatch
+import Obend.Lower.Pancake.BorrowedTurn
 import Obend.Lower.Pancake.ByteMemory
 import Obend.Lower.Pancake.CondSClk
 import Obend.Lower.Pancake.DragonStyleShard
+import Obend.Lower.Pancake.DurableTurn
 import Obend.Lower.Pancake.EmitPnk
+import Obend.Lower.Pancake.FfiTrace
 import Obend.Lower.Pancake.LcnfEmit
 import Obend.Lower.Pancake.LcnfFun
 import Obend.Lower.Pancake.MacaroonVerifier
@@ -508,6 +511,9 @@ import Obend.Metatheory.LiveEvolutionAndLink
 import Obend.Metatheory.PinsAndQuiescence
 import Obend.Metatheory.SponsorAndMigration
 import Obend.Metatheory.StratifiedCut
+import Obend.OS.DragonStyleAppliance
+import Obend.OS.NvmeDurablePersist
+import Obend.OS.SddfOwnership
 import Obend.OS.Sel4MicrokitKernel
 import Obend.OS.Sel4MicrokitKernelCore
 import Obend.OS.SmmuRadixTables
@@ -689,7 +695,11 @@ import Obend.Teeth.Lower.PancakeTeeth
 import Obend.Teeth.Spec.C4Teeth
 import Obend.Teeth.Spec.LawCompileTeeth
 import Obend.Teeth.Spec.TermWire
+import Obend.Teeth.CertifiedPartialViewTeeth
 import Obend.Teeth.GroveAndRepair
+import Obend.Teeth.HeapImageAndUpgradeTeeth
+import Obend.Teeth.SemidirectGspTeeth
+import Obend.Teeth.ZkCapFoldTeeth
 import Obend.Teeth.Tactic.ToothChecks
 import Obend.Teeth.Vault
 import Obend.Vault.Affordance
