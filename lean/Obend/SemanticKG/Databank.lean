@@ -128,11 +128,60 @@ def worldAnchorDigest256 (w : Obend.Vault.ChunkedWorld.World) (manifest : ByteAr
   let logDigest := Obend.Vault.ChunkedWorld.logHashArray manifest
   hashOfHashBytes256 deployed (worldLinkDomainTag ++ be 8 w.minted ++ be 8 logDigest.length ++ logDigest)
 
-/-- Build a `SemanticDatabank` directly from a `ChunkedWorld.World`, its manifest bytes, and document chunks. -/
-def databankFromWorld (w : Obend.Vault.ChunkedWorld.World) (manifest : ByteArray)
-    (chunks : Array DocChunkEntry) : SemanticDatabank where
-  worldLogRoot256 := worldAnchorDigest256 w manifest
-  chunks := chunks
+/-- A zero-based version and half-open byte range in a committed vault page. -/
+structure PageChunkRange where
+  pageId : Obend.Doc.PageId
+  version : Nat
+  start : Nat
+  length : Nat
+  deriving DecidableEq
+
+private def openPageRange (lookup : Obend.Doc.PageId → Option Obend.Vault.Page)
+    (r : PageChunkRange) : Option DocChunkEntry := do
+  let p ← lookup r.pageId
+  let graph ← p.history[r.version]?
+  let bytes := (Obend.Vault.render graph p.name p.who).toUTF8
+  guard (r.start + r.length ≤ bytes.size)
+  let chunk := mkDocChunk r.pageId r.start (bytes.extract r.start (r.start + r.length))
+  guard (WfDocChunkBounds chunk)
+  return chunk
+
+/-- Open every requested range against the same checkpoint. A missing version or truncated range
+rejects the entire batch. The manifest and chunk payloads are derived from the supplied world. -/
+def databankFromWorld (w : Obend.Vault.ChunkedWorld.World) (ranges : Array PageChunkRange) :
+    Option SemanticDatabank :=
+  let pages := Obend.Vault.Index.ofList Obend.Vault.Page.id w.store.pages
+  let opened := ranges.map (openPageRange (Obend.Vault.Index.first pages))
+  if opened.all Option.isSome && decide (ranges.size < 2^64) then
+    some ⟨worldAnchorDigest256 w (Obend.Vault.ChunkedWorld.encodeWorldIncremental w none).1,
+      opened.filterMap id⟩
+  else none
+
+theorem databankFromWorld_openings {w : Obend.Vault.ChunkedWorld.World}
+    {ranges : Array PageChunkRange} {db : SemanticDatabank}
+    (h : databankFromWorld w ranges = some db) :
+    db.worldLogRoot256 =
+        worldAnchorDigest256 w (Obend.Vault.ChunkedWorld.encodeWorldIncremental w none).1 ∧
+    ∀ c ∈ db.chunks, ∃ r ∈ ranges, ∃ p g,
+      w.store.pages.find? (fun p => p.id == r.pageId) = some p ∧
+      p.history[r.version]? = some g ∧
+      let bytes := (Obend.Vault.render g p.name p.who).toUTF8
+      r.start + r.length ≤ bytes.size ∧
+      c = mkDocChunk r.pageId r.start (bytes.extract r.start (r.start + r.length)) := by
+  unfold databankFromWorld at h
+  dsimp only at h
+  split at h <;> simp only [Option.some.injEq, reduceCtorEq] at h
+  subst db
+  refine ⟨rfl, fun c hc => ?_⟩
+  obtain ⟨oc, hmem, heq⟩ := Array.mem_filterMap.mp hc
+  obtain ⟨r, hr, ho⟩ := Array.mem_map.mp hmem
+  change oc = some c at heq
+  rw [heq] at ho
+  unfold openPageRange at ho
+  simp only [Obend.Vault.Index.first_ofList, Option.bind_eq_bind,
+    Option.bind_eq_some_iff] at ho
+  obtain ⟨p, hp, g, hg, _, hb, _, _, hchunk⟩ := ho
+  exact ⟨r, hr, p, g, hp, hg, by simpa [guard] using hb, (Option.some.inj hchunk).symm⟩
 
 /-- `worldAnchorDigest256` refines `ChunkedWorld.logHash` via `ChunkedWorld.logHashArray_eq`. -/
 theorem worldAnchorDigest256_eq_logHash (w : Obend.Vault.ChunkedWorld.World) (manifest : ByteArray) :

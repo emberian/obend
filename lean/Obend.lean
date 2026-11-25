@@ -356,10 +356,14 @@ public import Obend.Polis.SecureHardwareEnv
 public import Obend.Core.GradedCoreWeldDefs
 public import Obend.Core.GradedCoreWeld
 public import Obend.Core.GradedSessionMetatheory
+public import Obend.SemanticKG.ColtJoin
 public import Obend.SemanticKG.Databank
+public import Obend.SemanticKG.ObjectWire
+public import Obend.SemanticKG.SlottedEGraph
 public import Obend.SemanticKG.SpanParse
 public import Obend.SemanticKG.HypergraphChase
 public import Obend.SemanticKG.SemanticCert
+public import Obend.SemanticKG.WireQuery
 public import Obend.OS.Sel4MicrokitKernelCore
 public import Obend.OS.Sel4MicrokitKernel
 public import Obend.OS.SmmuRadixTables
@@ -382,5 +386,8 @@ public import Obend.Vault.IncrementalJudge
 public import Obend.Lower.Pancake.DragonStyleShard
 public import Obend.Core.HeapImage
 public import Obend.Vault.LiveObject
+public import Obend.Vault.WorldTree.Demand
+public import Obend.Vault.WorldTree.IndexedManifest
+public import Obend.Codec.HexString
 public import Obend.Repair.CoalgebraicRepair
 public import Obend.Repair.UpgradeEnvelope

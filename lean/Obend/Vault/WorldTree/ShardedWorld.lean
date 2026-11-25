@@ -86,43 +86,12 @@ deriving DecidableEq
 /-- The log's digest: cSHAKE256 customized `obend-log`. -/
 def logHash (b : Bytes) : Bytes :=
   Obend.Digest.Cshake256.cshake256Bytes "obend-log".toUTF8.toList b
-def appendByteArray.go (b : ByteArray) (i : Nat) (acc : ByteArray) : ByteArray :=
-  if h : i < b.size then appendByteArray.go b (i + 1) (acc.push (b[i]'h)) else acc
-termination_by b.size - i
-def appendByteArray (a b : ByteArray) : ByteArray := appendByteArray.go b 0 a
-theorem appendByteArray_go_eq (b : ByteArray) (i : Nat) (acc : ByteArray) :
-    (appendByteArray.go b i acc).data.toList = acc.data.toList ++ b.data.toList.drop i := by
-  have hs : b.data.toList.length = b.size := Array.length_toList
-  rw [appendByteArray.go]
-  by_cases h : i < b.size
-  · have hl : i < b.data.toList.length := by omega
-    rw [dite_eq_left_of_eq_true (eq_true h), appendByteArray_go_eq b (i + 1), List.drop_eq_getElem_cons hl]
-    have hg : b.data.toList[i]'hl = b[i]'h := rfl
-    rw [hg, push_data]
-    simp [List.append_assoc]
-  · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]
-    simp
-termination_by b.size - i
+/-- Append native buffers directly using Lean's verified array primitive. -/
+def appendByteArray (a b : ByteArray) : ByteArray := a ++ b
+
 theorem appendByteArray_data (a b : ByteArray) :
     (appendByteArray a b).data.toList = a.data.toList ++ b.data.toList := by
-  simpa [appendByteArray] using appendByteArray_go_eq b 0 a
-def appendByteArrayFast (a b : ByteArray) : ByteArray := a ++ b
-@[csimp]
-theorem appendByteArray_eq_fast : @appendByteArray = @appendByteArrayFast := by
-  funext a b
-  cases h1 : appendByteArray a b with
-  | mk d1 =>
-    cases h2 : appendByteArrayFast a b with
-    | mk d2 =>
-      have hl1 : d1.toList = a.data.toList ++ b.data.toList := by
-        rw [← appendByteArray_data a b, h1]
-      have hl2 : d2.toList = a.data.toList ++ b.data.toList := by
-        have : (appendByteArrayFast a b).data.toList = a.data.toList ++ b.data.toList := by
-          unfold appendByteArrayFast
-          rw [ByteArray.data_append, Array.toList_append]
-        rwa [h2] at this
-      congr 1
-      exact Array.toList_inj.1 (hl1.trans hl2.symm)
+  simp [appendByteArray, ByteArray.data_append]
 /-- Precomputed cSHAKE256 customization block for `"obend-log"`. -/
 def logPrefix : ByteArray :=
   pushList ByteArray.empty (customizationPrefix "obend-log".toUTF8.toList)
@@ -643,9 +612,38 @@ def cBytes : FastCodec Bytes where
       · have hgt : ¬ (n ≤ (b.data.toList.drop o).length) := by simp [hs]; omega
         simp only [hgt, h, ↓reduceIte]
 
+/-- Length-framed native byte slices. Only the logical codec projects to a byte list. -/
 def cByteArray : FastCodec ByteArray :=
-  cMap (fun b => b.data.toList) (fun xs => some ⟨xs.toArray⟩)
+  let spec := cMap (fun (b : ByteArray) => b.data.toList) (fun xs => some ⟨xs.toArray⟩)
     (by intro b; cases b; simp) cBytes
+  { spec with
+    push := fun acc bytes => appendByteArray (pushNat acc bytes.size) bytes
+    readAt := fun b off => match readNatAt b off with
+      | none => none
+      | some (n, pos) => if pos + n ≤ b.size then some (b.extract pos (pos + n), pos + n) else none
+    push_eq := by
+      intro acc bytes
+      rw [appendByteArray_data, pushNat_eq, List.append_assoc]
+      rfl
+    readAt_eq := by
+      intro b off
+      rw [spec.readAt_eq]
+      simp only [spec, cMap, rawMap, cBytes]
+      cases hr : readNatAt b off with
+      | none => rfl
+      | some pair =>
+        obtain ⟨n, pos⟩ := pair
+        by_cases h : pos + n ≤ b.size
+        · have hs : (b.extract pos (pos+n)).data.toList =
+              (b.data.toList.drop pos).take n := by
+            rw [ByteArray.data_extract, Array.toList_extract]
+            simp [List.extract]
+          have he : (⟨((b.data.toList.drop pos).take n).toArray⟩ : ByteArray) = b.extract pos (pos+n) :=
+            ByteArray.ext (Array.toList_inj.mp (by simpa using hs.symm))
+          simp only [h, ↓reduceIte, readBytesLoop_eq b pos (pos+n) #[] h, List.nil_append,
+            Nat.add_sub_cancel_left, he, Option.map_some]
+        · simp only [h, ↓reduceIte] }
+
 
 def cChar : FastCodec Char :=
   cMap Char.toNat (fun n => some (Char.ofNat n))
@@ -3288,10 +3286,11 @@ def crBytes : CanonReader cBytes where
       · simp [hle] at h
 
 def crByteArray : CanonReader cByteArray :=
-  crMapInj (fun (b : ByteArray) => b.data.toList) (fun (xs : Bytes) => some (⟨xs.toArray⟩ : ByteArray))
+  let cr := crMapInj (fun (b : ByteArray) => b.data.toList) (fun (xs : Bytes) => some (⟨xs.toArray⟩ : ByteArray))
     (by intro b; cases b; simp)
     (by intro xs b h; injection h with hb; subst hb; simp)
     crBytes
+  ⟨cr.decC, cr.readC, cr.readC_eq, cr.sound⟩
 
 def crChar : CanonReader cChar := crMapCheck _ _ _ crNat
 

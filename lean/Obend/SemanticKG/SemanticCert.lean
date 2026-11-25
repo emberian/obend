@@ -8,7 +8,10 @@ Stage 4 of `Obend.SemanticKG`:
 -/
 public import Obend.SemanticKG.Databank
 public import Obend.SemanticKG.SpanParse
-public import Obend.SemanticKG.HypergraphChase
+public import Obend.SemanticKG.ObjectWire
+import all Obend.Judge.Class
+import all Obend.SemanticKG.ObjectWire
+import all Obend.SemanticKG.ColtJoin
 public import Obend.Judge.Class
 public import Obend.Crypto.DualSpine
 public import Lean.Data.Json
@@ -262,6 +265,19 @@ private theorem verifyEdbSpanOpening_intro
   simp only [verifyEdbSpanOpening, idx, beq_self_eq_true, merkle, red, span, decide_eq_true lo,
     decide_eq_true hi, extract, Array.contains_iff_mem.mpr mem, bne_iff_ne.mpr nz, Bool.and_self]
 
+private theorem singleton_positive (root : VpaJson.SpanRoot) (g : GrammarSpec)
+    (pp : Obend.Crypto.AjtaiParams) (pol : KgQueryPolicy) (rights : UInt64)
+    (op : EdbSpanOpening) (target : Datalog.GroundTuple) (comm witness mask : List Int)
+    (ho : verifyEdbSpanOpening root g op = true)
+    (hd : verifyPosLineageDag #[op] #[] #[.edbLeaf 0 target ProvenanceSemiringOps.one]
+      target ProvenanceSemiringOps.one = true)
+    (ha : verifyMaskedAjtaiOpening pp 0 comm witness mask = true)
+    (hg : checkKgQueryGuard pol rights rights (fun _ => .unbound3) = true) :
+    verifyPositiveReceipt root g #[] pp 0 pol rights rights (fun _ => .unbound3)
+      ⟨#[op], #[.edbLeaf 0 target ProvenanceSemiringOps.one], target, ProvenanceSemiringOps.one,
+        comm, witness, mask⟩ = true := by
+  simp [verifyPositiveReceipt, hg, hd, ha, ho]
+
 /-- Non-vacuity witness for `verifyPositiveReceipt` (zero Keccak kernel evaluation). -/
 theorem verifyPositiveReceipt_inhabited (predSym : UInt32) (rights : UInt64) :
     let raw := "{\"p\":\"rel\",\"a\":\"x\"}".toByteArray
@@ -318,9 +334,7 @@ theorem verifyPositiveReceipt_inhabited (predSym : UInt32) (rights : UInt64) :
     checkKgQueryGuard_inhabited ⟨[]⟩ rights
   refine ⟨⟨#[op], #[.edbLeaf 0 target ProvenanceSemiringOps.one], target, ProvenanceSemiringOps.one,
     comm, wZero, wZero⟩, op, hOpOk, hDagOk, hAjtaiOk, ?_⟩
-  simp only [verifyPositiveReceipt, hGuardOk, hDagOk, hAjtaiOk, Bool.true_and, Bool.and_true,
-    Array.all_eq_true_iff_forall_mem]
-  intro x hx; exact (by simpa using hx : x = op) ▸ hOpOk
+  exact singleton_positive _ g pp queryPol rights op target comm wZero wZero hOpOk hDagOk hAjtaiOk hGuardOk
 
 /-! ## §2. Computable `SortedKTable Bool` WF & `WhyNotSemanticReceipt` (Modes A & B) -/
 private def checkSortedKTableBoolWFGo (es : Array (Datalog.GroundTuple × Bool)) (i : Nat) : Bool :=
@@ -403,11 +417,369 @@ theorem modelsRules_of_allRulesSatisfied {rules : List TgdRule} {M : FactSet}
       simp only [frontierSubst, hExtract]
       rw [SkolemChaseCore.lookupSubst_zip_of_extract r.frontierVars σ tTuple hExtract x hx]; exact hdσ
     rw [hextFront x d hZip, hextστ x d hdσ]
+private def nodupAtomsList : List (Atom Term) → Bool
+  | [] => true
+  | a :: rest => (!rest.contains a) && nodupAtomsList rest
+
+private theorem nodupAtomsList_iff : ∀ xs : List (Atom Term), nodupAtomsList xs = true ↔ xs.Nodup
+  | [] => by simp [nodupAtomsList]
+  | x :: xs => by
+    have hnot : xs.contains x = false ↔ x ∉ xs := by cases h : xs.contains x <;> simp_all
+    simp only [nodupAtomsList, Bool.and_eq_true, Bool.not_eq_true', hnot, nodupAtomsList_iff xs, List.nodup_cons]
+
+private def groundChunkFactsGo (atoms : Array (Atom Term)) :
+    List SpanBoundAtom → Array Ranked.ArithRule → Option (Array Ranked.ArithRule)
+  | [], acc => some acc
+  | fact :: rest, acc => do
+    let head ← atoms.idxOf? (spanAtomToBaseChaseAtom fact)
+    groundChunkFactsGo atoms rest (acc.push ⟨head, #[], #[]⟩)
+
+private def groundChunksGo (g : GrammarSpec) (atoms : Array (Atom Term)) :
+    List DocChunkEntry → Array Ranked.ArithRule → Option (Array Ranked.ArithRule)
+  | [], acc => some acc
+  | chunk :: rest, acc => do
+    let facts ← (extractSpanBoundAtoms g chunk).toOption
+    let acc' ← groundChunkFactsGo atoms facts.toList acc
+    groundChunksGo g atoms rest acc'
+
+private def mapIdxOf? (atoms : Array (Atom Term)) : List (Atom Term) → Array Nat → Option (Array Nat)
+  | [], acc => some acc
+  | a :: rest, acc => do
+    let idx ← atoms.idxOf? a
+    mapIdxOf? atoms rest (acc.push idx)
+
+private def groundHeadsGo (atoms : Array (Atom Term)) (pos : Array Nat) :
+    List (Atom Term) → Array Ranked.ArithRule → Option (Array Ranked.ArithRule)
+  | [], acc => some acc
+  | fact :: rest, acc => do
+    let head ← atoms.idxOf? fact
+    groundHeadsGo atoms pos rest (acc.push ⟨head, pos, #[]⟩)
+
+private def groundRuleSubstsGo (atoms : Array (Atom Term)) (rule : TgdRule) :
+    List (Subst Term) → Array Ranked.ArithRule → Option (Array Ranked.ArithRule)
+  | [], acc => some acc
+  | σ :: rest, acc => do
+    let body ← evalPatAtoms Term.const σ rule.body
+    let pos ← mapIdxOf? atoms body #[]
+    let frontier ← extractFrontierTuple rule.frontierVars σ
+    let heads ← instantiateRuleHead rule frontier
+    let acc' ← groundHeadsGo atoms pos heads acc
+    groundRuleSubstsGo atoms rule rest acc'
+
+private def groundRulesGo (atoms : Array (Atom Term)) (probe : List Nat → Colt.Rows) :
+    List TgdRule → Array Ranked.ArithRule → Option (Array Ranked.ArithRule)
+  | [], acc => some acc
+  | rule :: rest, acc => do
+    let acc' ← groundRuleSubstsGo atoms rule (matchBodyColt atoms probe rule.body []).toList acc
+    groundRulesGo atoms probe rest acc'
+
+/-- Ground the requested TGDs over a duplicate-free finite atom dictionary using COLT body matching.
+Missing EDB atoms and unrepresentable Skolem heads reject the dictionary. Atom IDs are positions
+in this same dictionary. -/
+def groundWhyNotProgram (g : GrammarSpec) (chunks : Array DocChunkEntry) (rules : Array TgdRule)
+    (atoms : Array (Atom Term)) : Option Ranked.ArithProgram := do
+  guard (WfRuleSet rules.toList)
+  guard (nodupAtomsList atoms.toList)
+  let acc₁ ← groundChunksGo g atoms chunks.toList #[]
+  let probe := openAtomTrie atoms
+  let clauses ← groundRulesGo atoms probe.probe rules.toList acc₁
+  return ⟨atoms.size, clauses⟩
+
+private def wfsModel (atoms : Array (Atom Term)) (bits : Array Bool) : Array (Atom Term) :=
+  (atoms.zip bits).filterMap fun (a, b) => if b then some a else none
+
+private theorem idxOf?_some_getElem {α : Type} [BEq α] [LawfulBEq α]
+    {xs : Array α} {a : α} {i : Nat} (h : xs.idxOf? a = some i) :
+    ∃ hi : i < xs.size, xs[i]'hi = a := by
+  have hl : xs.toList.idxOf? a = some i := by
+    rw [← List.idxOf?_toArray, Array.toArray_toList]; exact h
+  obtain ⟨hi, hget, _⟩ := List.idxOf?_eq_some_iff.mp hl
+  exact ⟨by simpa using hi, by simpa [Array.getElem_toList] using hget⟩
+
+private theorem idxOf?_of_nodup_getElem {α : Type} [BEq α] [LawfulBEq α]
+    {xs : Array α} (hNd : xs.toList.Nodup) {i : Nat} (hi : i < xs.size) :
+    xs.idxOf? (xs[i]'hi) = some i := by
+  have hconv : ∀ (x : α), xs.idxOf? x = xs.toList.idxOf? x := fun x => by
+    rw [← Array.toArray_toList (xs := xs), List.idxOf?_toArray]
+  rw [hconv]
+  have hiL : i < xs.toList.length := by simpa using hi
+  refine List.idxOf?_eq_some_iff.mpr ⟨hiL, by simp, fun j hj heq => ?_⟩
+  have hne := (List.pairwise_iff_getElem.mp hNd) j i (Nat.lt_trans hj hiL) hiL hj
+  exact hne (by simpa [Array.getElem_toList] using heq)
+
+private theorem mem_wfsModel_iff {atoms : Array (Atom Term)} {bits : Array Bool}
+    (hSz : bits.size = atoms.size) (a : Atom Term) :
+    a ∈ (wfsModel atoms bits).toList ↔
+      ∃ (j : Nat) (hj : j < atoms.size), atoms[j]'hj = a ∧ Ranked.bit bits j = true := by
+  unfold wfsModel
+  rw [Array.toList_filterMap, List.mem_filterMap]
+  constructor
+  · rintro ⟨⟨a', b⟩, hMem, hIf⟩
+    cases b with
+    | false => cases hIf
+    | true =>
+      injection hIf with ha; subst ha
+      rw [Array.toList_zip] at hMem
+      obtain ⟨j, hj, hget⟩ := List.mem_iff_getElem.mp hMem
+      simp only [List.length_zip, Array.length_toList, hSz, Nat.min_self] at hj
+      simp only [List.getElem_zip, Array.getElem_toList, Prod.mk.injEq] at hget
+      refine ⟨j, hj, hget.1, ?_⟩
+      simp [Ranked.bit, show j < bits.size by omega, hget.2]
+  · rintro ⟨j, hj, hEq, hBit⟩
+    have hjb : j < bits.size := by omega
+    have hbTrue : bits[j]'hjb = true := by simpa [Ranked.bit, hjb] using hBit
+    refine ⟨(a, true), ?_, rfl⟩
+    rw [Array.toList_zip]
+    refine List.mem_iff_getElem.mpr ⟨j, by simp [hSz, hj], ?_⟩
+    simp [List.getElem_zip, Array.getElem_toList, hEq, hbTrue]
+
+private theorem mem_wfsModel_of_idxOf? {atoms : Array (Atom Term)} {bits : Array Bool}
+    (hSz : bits.size = atoms.size) (hNd : atoms.toList.Nodup)
+    {a : Atom Term} {j : Nat} (hIdx : atoms.idxOf? a = some j) :
+    a ∈ (wfsModel atoms bits).toList ↔ Ranked.bit bits j = true := by
+  rw [mem_wfsModel_iff hSz]
+  obtain ⟨hj, hget⟩ := idxOf?_some_getElem hIdx
+  constructor
+  · rintro ⟨k, hk, hka, hbit⟩
+    have hkj : k = j := by
+      have hkIdx := idxOf?_of_nodup_getElem hNd hk
+      rw [hka, hIdx] at hkIdx
+      exact (Option.some.inj hkIdx).symm
+    exact hkj ▸ hbit
+  · intro hbit
+    exact ⟨j, hj, hget, hbit⟩
+
+private theorem groundChunkFactsGo_sound (atoms : Array (Atom Term)) :
+    ∀ (facts : List SpanBoundAtom) (acc res : Array Ranked.ArithRule),
+      groundChunkFactsGo atoms facts acc = some res →
+      (∀ r ∈ acc, r ∈ res) ∧
+      ∀ fact ∈ facts, ∃ head, atoms.idxOf? (spanAtomToBaseChaseAtom fact) = some head ∧
+        ⟨head, #[], #[]⟩ ∈ res
+  | [], acc, res, h => by
+    injection h with hr; subst hr; exact ⟨fun _ h => h, fun _ h => nomatch h⟩
+  | fact :: rest, acc, res, h => by
+    unfold groundChunkFactsGo at h
+    cases hIdx : atoms.idxOf? (spanAtomToBaseChaseAtom fact) with
+    | none => simp [hIdx] at h
+    | some head =>
+      simp only [hIdx, bind, Option.bind] at h
+      obtain ⟨hMono, hRest⟩ := groundChunkFactsGo_sound atoms rest _ res h
+      refine ⟨fun r hr => hMono r (Array.mem_push.mpr (Or.inl hr)), fun f hf => ?_⟩
+      rcases List.mem_cons.mp hf with rfl | hfRest
+      · exact ⟨head, hIdx, hMono _ (Array.mem_push.mpr (Or.inr rfl))⟩
+      · exact hRest f hfRest
+
+private theorem groundChunksGo_sound (g : GrammarSpec) (atoms : Array (Atom Term)) :
+    ∀ (chunks : List DocChunkEntry) (acc res : Array Ranked.ArithRule),
+      groundChunksGo g atoms chunks acc = some res →
+      (∀ r ∈ acc, r ∈ res) ∧
+      ∀ chunk ∈ chunks, ∃ facts, extractSpanBoundAtoms g chunk = .ok facts ∧
+        ∀ fact ∈ facts, ∃ head, atoms.idxOf? (spanAtomToBaseChaseAtom fact) = some head ∧
+          ⟨head, #[], #[]⟩ ∈ res
+  | [], acc, res, h => by
+    injection h with hr; subst hr; exact ⟨fun _ h => h, fun _ h => nomatch h⟩
+  | chunk :: rest, acc, res, h => by
+    unfold groundChunksGo at h
+    cases hEx : extractSpanBoundAtoms g chunk with
+    | error _ => simp [hEx, Except.toOption] at h
+    | ok facts =>
+      simp only [hEx, Except.toOption, bind, Option.bind] at h
+      cases hF : groundChunkFactsGo atoms facts.toList acc with
+      | none => simp [hF] at h
+      | some acc' =>
+        simp only [hF] at h
+        obtain ⟨hMono1, hCur⟩ := groundChunkFactsGo_sound atoms facts.toList acc acc' hF
+        obtain ⟨hMono2, hRest⟩ := groundChunksGo_sound g atoms rest acc' res h
+        refine ⟨fun r hr => hMono2 r (hMono1 r hr), fun c hc => ?_⟩
+        rcases List.mem_cons.mp hc with rfl | hcRest
+        · refine ⟨facts, hEx, fun fact hfact => ?_⟩
+          obtain ⟨head, hIdx, hMem⟩ := hCur fact (Array.mem_toList_iff.mpr hfact)
+          exact ⟨head, hIdx, hMono2 _ hMem⟩
+        · exact hRest c hcRest
+
+private theorem mapIdxOf?_sound (atoms : Array (Atom Term)) :
+    ∀ (bs : List (Atom Term)) (acc res : Array Nat),
+      mapIdxOf? atoms bs acc = some res →
+      ∀ idx ∈ res, idx ∈ acc ∨ ∃ a ∈ bs, atoms.idxOf? a = some idx
+  | [], acc, res, h => by
+    injection h with hr; subst hr; exact fun _ hi => Or.inl hi
+  | b :: rest, acc, res, h => by
+    unfold mapIdxOf? at h
+    cases hIdx : atoms.idxOf? b with
+    | none => simp [hIdx] at h
+    | some k =>
+      simp only [hIdx, bind, Option.bind] at h
+      intro idx hMem
+      rcases mapIdxOf?_sound atoms rest (acc.push k) res h idx hMem with hAcc | ⟨a, ha, haIdx⟩
+      · rcases Array.mem_push.mp hAcc with hOld | rfl
+        · exact Or.inl hOld
+        · exact Or.inr ⟨b, .head _, hIdx⟩
+      · exact Or.inr ⟨a, .tail _ ha, haIdx⟩
+
+private theorem groundHeadsGo_sound (atoms : Array (Atom Term)) (pos : Array Nat) :
+    ∀ (heads : List (Atom Term)) (acc res : Array Ranked.ArithRule),
+      groundHeadsGo atoms pos heads acc = some res →
+      (∀ r ∈ acc, r ∈ res) ∧
+      ∀ fact ∈ heads, ∃ head, atoms.idxOf? fact = some head ∧ ⟨head, pos, #[]⟩ ∈ res
+  | [], acc, res, h => by
+    injection h with hr; subst hr; exact ⟨fun _ h => h, fun _ h => nomatch h⟩
+  | fact :: rest, acc, res, h => by
+    unfold groundHeadsGo at h
+    cases hIdx : atoms.idxOf? fact with
+    | none => simp [hIdx] at h
+    | some head =>
+      simp only [hIdx, bind, Option.bind] at h
+      obtain ⟨hMono, hRest⟩ := groundHeadsGo_sound atoms pos rest _ res h
+      refine ⟨fun r hr => hMono r (Array.mem_push.mpr (Or.inl hr)), fun f hf => ?_⟩
+      rcases List.mem_cons.mp hf with rfl | hfRest
+      · exact ⟨head, hIdx, hMono _ (Array.mem_push.mpr (Or.inr rfl))⟩
+      · exact hRest f hfRest
+
+private theorem groundRuleSubstsGo_sound (atoms : Array (Atom Term)) (rule : TgdRule) :
+    ∀ (substs : List (Subst Term)) (acc res : Array Ranked.ArithRule),
+      groundRuleSubstsGo atoms rule substs acc = some res →
+      (∀ r ∈ acc, r ∈ res) ∧
+      ∀ σ ∈ substs,
+        ∃ body pos frontier heads,
+          evalPatAtoms Term.const σ rule.body = some body ∧
+          (∀ idx ∈ pos, ∃ a ∈ body, atoms.idxOf? a = some idx) ∧
+          extractFrontierTuple rule.frontierVars σ = some frontier ∧
+          instantiateRuleHead rule frontier = some heads ∧
+          ∀ fact ∈ heads, ∃ head, atoms.idxOf? fact = some head ∧ ⟨head, pos, #[]⟩ ∈ res
+  | [], acc, res, h => by
+    injection h with hr; subst hr; exact ⟨fun _ h => h, fun _ h => nomatch h⟩
+  | σ :: rest, acc, res, h => by
+    unfold groundRuleSubstsGo at h
+    cases hBody : evalPatAtoms Term.const σ rule.body with
+    | none => simp [hBody] at h
+    | some body =>
+      simp only [hBody, bind, Option.bind] at h
+      cases hPos : mapIdxOf? atoms body #[] with
+      | none => simp [hPos] at h
+      | some pos =>
+        simp only [hPos] at h
+        cases hFront : extractFrontierTuple rule.frontierVars σ with
+        | none => simp [hFront] at h
+        | some frontier =>
+          simp only [hFront] at h
+          cases hHeads : instantiateRuleHead rule frontier with
+          | none => simp [hHeads] at h
+          | some heads =>
+            simp only [hHeads] at h
+            cases hG : groundHeadsGo atoms pos heads acc with
+            | none => simp [hG] at h
+            | some acc' =>
+              simp only [hG] at h
+              obtain ⟨hMono1, hCur⟩ := groundHeadsGo_sound atoms pos heads acc acc' hG
+              obtain ⟨hMono2, hRest⟩ := groundRuleSubstsGo_sound atoms rule rest acc' res h
+              refine ⟨fun r hr => hMono2 r (hMono1 r hr), fun τ hτ => ?_⟩
+              rcases List.mem_cons.mp hτ with rfl | hτRest
+              · refine ⟨body, pos, frontier, heads, hBody, ?_, hFront, hHeads, ?_⟩
+                · intro idx hIdx
+                  rcases mapIdxOf?_sound atoms body #[] pos hPos idx hIdx with hEmp | hFound
+                  · simp at hEmp
+                  · exact hFound
+                · intro fact hfact
+                  obtain ⟨head, hHeadIdx, hMem⟩ := hCur fact hfact
+                  exact ⟨head, hHeadIdx, hMono2 _ hMem⟩
+              · exact hRest τ hτRest
+
+private theorem groundRulesGo_sound (atoms : Array (Atom Term)) (probe : List Nat → Colt.Rows) :
+    ∀ (rules : List TgdRule) (acc res : Array Ranked.ArithRule),
+      groundRulesGo atoms probe rules acc = some res →
+      (∀ r ∈ acc, r ∈ res) ∧
+      ∀ rule ∈ rules, ∀ σ ∈ (matchBodyColt atoms probe rule.body []).toList,
+        ∃ body pos frontier heads,
+          evalPatAtoms Term.const σ rule.body = some body ∧
+          (∀ idx ∈ pos, ∃ a ∈ body, atoms.idxOf? a = some idx) ∧
+          extractFrontierTuple rule.frontierVars σ = some frontier ∧
+          instantiateRuleHead rule frontier = some heads ∧
+          ∀ fact ∈ heads, ∃ head, atoms.idxOf? fact = some head ∧ ⟨head, pos, #[]⟩ ∈ res
+  | [], acc, res, h => by
+    injection h with hr; subst hr; exact ⟨fun _ h => h, fun _ h => nomatch h⟩
+  | rule :: rest, acc, res, h => by
+    unfold groundRulesGo at h
+    cases hS : groundRuleSubstsGo atoms rule (matchBodyColt atoms probe rule.body []).toList acc with
+    | none => simp [hS] at h
+    | some acc' =>
+      simp only [hS, bind, Option.bind] at h
+      obtain ⟨hMono1, hCur⟩ := groundRuleSubstsGo_sound atoms rule _ acc acc' hS
+      obtain ⟨hMono2, hRest⟩ := groundRulesGo_sound atoms probe rest acc' res h
+      refine ⟨fun r hr => hMono2 r (hMono1 r hr), fun r hr σ hσ => ?_⟩
+      rcases List.mem_cons.mp hr with rfl | hrRest
+      · obtain ⟨body, pos, frontier, heads, hBody, hPos, hFront, hHeads, hFacts⟩ := hCur σ hσ
+        exact ⟨body, pos, frontier, heads, hBody, hPos, hFront, hHeads, fun fact hfact =>
+          let ⟨head, hIdx, hMem⟩ := hFacts fact hfact
+          ⟨head, hIdx, hMono2 _ hMem⟩⟩
+      · exact hRest r hrRest σ hσ
+
+/-- Direct semantic bridge from `groundWhyNotProgram` to extracted EDB facts and COLT-grounded
+TGD rules via `matchBodyColt_eq_matchBody`. -/
+theorem groundWhyNotProgram_sound {g : GrammarSpec} {chunks : Array DocChunkEntry}
+    {rules : Array TgdRule} {atoms : Array (Atom Term)} {p : Ranked.ArithProgram}
+    (h : groundWhyNotProgram g chunks rules atoms = some p) :
+    WfRuleSet rules.toList = true ∧
+    atoms.toList.Nodup ∧
+    p.numAtoms = atoms.size ∧
+    (∀ chunk ∈ chunks, ∃ facts, extractSpanBoundAtoms g chunk = .ok facts ∧
+      ∀ fact ∈ facts, ∃ head, atoms.idxOf? (spanAtomToBaseChaseAtom fact) = some head ∧
+        ⟨head, #[], #[]⟩ ∈ p.rules) ∧
+    (∀ rule ∈ rules.toList, ∀ σ ∈ matchBody atoms.toList rule.body [],
+      ∃ body pos frontier heads,
+        evalPatAtoms Term.const σ rule.body = some body ∧
+        (∀ idx ∈ pos, ∃ a ∈ body, atoms.idxOf? a = some idx) ∧
+        extractFrontierTuple rule.frontierVars σ = some frontier ∧
+        instantiateRuleHead rule frontier = some heads ∧
+        ∀ fact ∈ heads, ∃ head, atoms.idxOf? fact = some head ∧ ⟨head, pos, #[]⟩ ∈ p.rules) := by
+  unfold groundWhyNotProgram at h
+  cases hWf : WfRuleSet rules.toList with
+  | false =>
+    simp only [hWf, Bool.false_eq_true, guard, ↓reduceIte, failure, Alternative.failure, bind, Option.bind] at h
+    cases h
+  | true =>
+    cases hNd : nodupAtomsList atoms.toList with
+    | false =>
+      simp only [hWf, hNd, Bool.false_eq_true, guard, ↓reduceIte, failure, Alternative.failure, pure, bind, Option.bind] at h
+      cases h
+    | true =>
+      simp only [hWf, hNd, guard, ↓reduceIte, pure, bind, Option.bind] at h
+      cases hC : groundChunksGo g atoms chunks.toList #[] with
+      | none => simp [hC] at h
+      | some acc₁ =>
+        simp only [hC] at h
+        cases hR : groundRulesGo atoms (openAtomTrie atoms).probe rules.toList acc₁ with
+        | none => simp [hR] at h
+        | some clauses =>
+          simp only [hR, Option.some.injEq] at h
+          subst p
+          obtain ⟨_, hChunks⟩ := groundChunksGo_sound g atoms chunks.toList #[] acc₁ hC
+          obtain ⟨hMono, hRules⟩ := groundRulesGo_sound atoms (openAtomTrie atoms).probe rules.toList acc₁ clauses hR
+          refine ⟨rfl, (nodupAtomsList_iff _).mp hNd, rfl, ?_, ?_⟩
+          · intro chunk hChunk
+            obtain ⟨facts, hEx, hFacts⟩ := hChunks chunk (Array.mem_toList_iff.mpr hChunk)
+            refine ⟨facts, hEx, fun fact hfact => ?_⟩
+            obtain ⟨head, hIdx, hMem⟩ := hFacts fact hfact
+            exact ⟨head, hIdx, hMono _ hMem⟩
+          · intro rule hRule σ hσ
+            rw [← matchBodyColt_eq_matchBody atoms rule.body []] at hσ
+            exact hRules rule hRule σ hσ
+
+/-- Constructive inhabitedness witnesses for `groundWhyNotProgram` and its grounding stages. -/
+private example :
+    groundChunkFactsGo #[] [] #[] = some #[] ∧
+    groundChunksGo ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩ #[] [] #[] = some #[] ∧
+    mapIdxOf? #[] [] #[] = some #[] ∧
+    groundHeadsGo #[] #[] [] #[] = some #[] ∧
+    groundRuleSubstsGo #[] ⟨0, [], [], [], []⟩ [] #[] = some #[] ∧
+    groundRulesGo #[] (openAtomTrie #[]).probe [] #[] = some #[] ∧
+    groundWhyNotProgram ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩ #[] #[] #[] = some ⟨0, #[]⟩ :=
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+
 inductive WhyNotMode where
   | guardedCoreGap (tbl : SymInternTable) (M : Datalog.SortedKTable Bool)
       (targetTuple : Datalog.GroundTuple) (gapCert : Datalog.GapCert)
-  | wfsNegationBlocker (arithProg : Ranked.ArithProgram) (tBits uBits : Array Bool)
-      (wfsCert : Ranked.ArrayCert) (targetAtomId : Nat) (definiteFalse : Bool)
+  | wfsNegationBlocker (atoms : Array (Atom Term)) (tBits uBits : Array Bool)
+      (wfsCert : Ranked.ArrayCert) (definiteFalse : Bool)
 structure WhyNotSemanticReceipt where
   db   : SemanticDatabank
   mode : WhyNotMode
@@ -427,11 +799,12 @@ def verifyWhyNotReceipt (expectedDbRoot : DatabankRoot256) (g : GrammarSpec)
     checkDatabankExtractedInTable g rcpt.db tbl M && tbl.WF && checkSortedKTableBoolWF M &&
     tableSymsInBounds tbl M && tgdRules.all IsGuardedRule && checkGuardedSaturationFast tbl M tgdRules &&
     (internAtom tbl targetAtom == some targetTuple) && Datalog.verifyGapCert M targetTuple gapCert
-  | .wfsNegationBlocker arithProg tBits uBits wfsCert targetAtomId definiteFalse =>
-    rcpt.db.chunks.all (fun chunk => match extractSpanBoundAtoms g chunk with | .ok _ => true | .error _ => false) &&
-    Ranked.WFProgram arithProg && checkVgrsFixpointLinear arithProg tBits uBits wfsCert &&
-    decide (targetAtomId < arithProg.numAtoms) && (!Ranked.bit tBits targetAtomId) &&
-    (!definiteFalse || !Ranked.bit uBits targetAtomId)
+  | .wfsNegationBlocker atoms tBits uBits cert definiteFalse =>
+    match groundWhyNotProgram g rcpt.db.chunks tgdRules atoms, atoms.idxOf? targetAtom with
+    | some p, some i =>
+      Ranked.WFProgram p && checkVgrsFixpointLinear p tBits uBits cert &&
+      !Ranked.bit tBits i && (!definiteFalse || !Ranked.bit uBits i)
+    | _, _ => false
 def WhyNotConclusion (g : GrammarSpec) (tgdRules : Array TgdRule)
     (targetAtom : Atom Term) (rcpt : WhyNotSemanticReceipt) : Prop :=
   match rcpt.mode with
@@ -441,14 +814,28 @@ def WhyNotConclusion (g : GrammarSpec) (tgdRules : Array TgdRule)
     allRulesSatisfied tgdRules.toList (decodeSortedFactSet tbl M) = true ∧
     ModelsRules Term.const tgdRules.toList (decodeSortedFactSet tbl M) ∧
     targetAtom ∉ decodeSortedFactSet tbl M
-  | .wfsNegationBlocker arithProg _ _ _ targetAtomId definiteFalse =>
-    (∀ chunk ∈ rcpt.db.chunks, ∃ atoms, extractSpanBoundAtoms g chunk = .ok atoms) ∧
-    Ranked.atomName targetAtomId ∉ (Obend.Reasons.wf (Ranked.toReasonsProgram arithProg)).1 ∧
-    (definiteFalse = true → Ranked.atomName targetAtomId ∉ (Obend.Reasons.wf (Ranked.toReasonsProgram arithProg)).2)
+  | .wfsNegationBlocker atoms tBits _ _ definiteFalse =>
+    let model := (wfsModel atoms tBits).toList
+    (∀ c ∈ rcpt.db.chunks, ∃ facts, extractSpanBoundAtoms g c = .ok facts ∧
+      ∀ a ∈ facts, spanAtomToBaseChaseAtom a ∈ model) ∧
+    ModelsRules Term.const tgdRules.toList model ∧ targetAtom ∉ model ∧
+    ∃ p i, groundWhyNotProgram g rcpt.db.chunks tgdRules atoms = some p ∧
+      atoms.idxOf? targetAtom = some i ∧
+      Ranked.atomName i ∉ (Obend.Reasons.wf (Ranked.toReasonsProgram p)).1 ∧
+      (definiteFalse = true → Ranked.atomName i ∉ (Obend.Reasons.wf (Ranked.toReasonsProgram p)).2)
 private theorem wfDatabankBounds_of_wfDatabank {db : SemanticDatabank}
     (h : WfDatabank db = true) : WfDatabankBounds db = true := by
   simp only [WfDatabank, WfDatabankBounds, Bool.and_eq_true, Array.all_eq_true_iff_forall_mem] at h ⊢
   exact ⟨h.1, fun c hc => (Bool.and_eq_true_iff.mp (h.2 c hc)).1⟩
+
+private theorem closure_head_true {p : Ranked.ArithProgram} {uBits tBits : Array Bool}
+    (hClos : Ranked.checkClosure p uBits tBits = true) {head : Nat} {pos : Array Nat}
+    (hRule : ⟨head, pos, #[]⟩ ∈ p.rules) (hPos : ∀ b ∈ pos, Ranked.bit tBits b = true) :
+    Ranked.bit tBits head = true := by
+  have hR := (Array.all_eq_true_iff_forall_mem.mp hClos) ⟨head, pos, #[]⟩ hRule
+  have hFire : Ranked.firesFast ⟨head, pos, #[]⟩ uBits tBits = true := by
+    simp [Ranked.firesFast, hPos]
+  simpa [hFire] using hR
 
 /-- **Stage-4 Why-Not Receipt Master Soundness Theorem (`semantic_whynot_cert_sound`)**. -/
 theorem semantic_whynot_cert_sound
@@ -488,23 +875,93 @@ theorem semantic_whynot_cert_sound
       simp only [Bool.and_eq_true, beq_iff_eq] at haOk
       refine (checkAtomInTableFast_eq_true_iff hTbl hMWf (spanAtomToBaseChaseAtom a)).mp ?_
       simp [checkAtomInTableFast, internAtom_of_decodeTuple hTbl haOk.2, haOk.1, ProvenanceSemiringOps.zero]
-  | wfsNegationBlocker arithProg tBits uBits wfsCert targetAtomId definiteFalse =>
+  | wfsNegationBlocker atoms tBits uBits cert definiteFalse =>
     rw [hM] at hMode
-    simp only [Bool.and_eq_true, Array.all_eq_true_iff_forall_mem, decide_eq_true_eq,
-      Bool.not_eq_true', Bool.or_eq_true] at hMode
-    obtain ⟨⟨⟨⟨⟨hChunks, hWfP⟩, hVgrs⟩, _⟩, hTFalse⟩, hUOpt⟩ := hMode
-    have hSizes : tBits.size = arithProg.numAtoms ∧ uBits.size = arithProg.numAtoms := by
-      unfold checkVgrsFixpointLinear Ranked.checkRankedWFS at hVgrs
-      simp only [Bool.and_eq_true, beq_iff_eq] at hVgrs
-      obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨_, htSz⟩, huSz⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩ := hVgrs; exact ⟨htSz, huSz⟩
-    have hSame := (checkVgrsFixpointLinear_iff_wfs arithProg tBits uBits hWfP hSizes.1 hSizes.2).mp ⟨wfsCert, hVgrs⟩
-    refine ⟨fun chunk hChunk => ?_, fun hIn => ?_, fun hDef hInU => ?_⟩
-    · have hC := hChunks chunk hChunk
-      cases hEx : extractSpanBoundAtoms g chunk with | error _ => rw [hEx] at hC; cases hC | ok atoms => exact ⟨atoms, rfl⟩
-    · have hBit := (Ranked.mem_decodeBits tBits targetAtomId).mp ((hSame.1 _).mpr hIn); rw [hTFalse] at hBit; cases hBit
-    · rcases hUOpt with hDefF | hUFalse
-      · rw [hDef] at hDefF; cases hDefF
-      · have hBit := (Ranked.mem_decodeBits uBits targetAtomId).mp ((hSame.2 _).mpr hInU); rw [hUFalse] at hBit; cases hBit
+    cases hp : groundWhyNotProgram g rcpt.db.chunks tgdRules atoms with
+    | none => simp [hp] at hMode
+    | some p =>
+      cases hi : atoms.idxOf? targetAtom with
+      | none => simp [hp, hi] at hMode
+      | some i =>
+        simp only [hp, hi, Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_true] at hMode
+        obtain ⟨⟨⟨hWf, hFix⟩, hT⟩, hU⟩ := hMode
+        have hCheck : tBits.size = p.numAtoms ∧ uBits.size = p.numAtoms ∧
+            Ranked.checkClosure p uBits tBits = true := by
+          unfold checkVgrsFixpointLinear Ranked.checkRankedWFS at hFix
+          simp only [Bool.and_eq_true, beq_iff_eq] at hFix
+          obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨_, ht⟩, hu⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, hClos⟩ := hFix
+          exact ⟨ht, hu, hClos⟩
+        obtain ⟨hTSz, hUSz, hClos⟩ := hCheck
+        have hSame := (checkVgrsFixpointLinear_iff_wfs p tBits uBits hWf hTSz hUSz).mp ⟨cert, hFix⟩
+        obtain ⟨_, hNd, hNum, hChunks, hRules⟩ := groundWhyNotProgram_sound hp
+        have hBitsSz : tBits.size = atoms.size := hTSz.trans hNum
+        refine ⟨?_, ?_, ?_, p, i, hp, hi, ?_, ?_⟩
+        · intro c hc
+          obtain ⟨facts, hEx, hFacts⟩ := hChunks c hc
+          refine ⟨facts, hEx, fun a ha => ?_⟩
+          obtain ⟨head, hIdx, hRuleMem⟩ := hFacts a ha
+          have hBit : Ranked.bit tBits head = true :=
+            closure_head_true hClos hRuleMem (fun _ hb => by simp at hb)
+          exact (mem_wfsModel_of_idxOf? hBitsSz hNd hIdx).mpr hBit
+        · intro r hrMem τ bodyAtoms hevBody hBodySub
+          have hSubAtoms : ∀ a ∈ bodyAtoms, a ∈ atoms.toList := fun a ha => by
+            obtain ⟨j, hj, hget, _⟩ := (mem_wfsModel_iff hBitsSz a).mp (hBodySub a ha)
+            exact hget ▸ Array.getElem_mem_toList hj
+          obtain ⟨σ, hσMem, hExtστ⟩ :=
+            SkolemChaseCore.matchPatAtoms_complete Term.const [] τ (ExtendsSubst.nil τ)
+              r.body bodyAtoms atoms.toList hevBody hSubAtoms
+          obtain ⟨body', pos, frontier, heads, hBody', hPos, hFront, hHeads, hRuleHeads⟩ :=
+            hRules r hrMem σ hσMem
+          have hBodyEq : body' = bodyAtoms := by
+            have h1 := SkolemChaseCore.evalPatAtoms_ext Term.const hExtστ r.body body' hBody'
+            rw [hevBody] at h1
+            exact (Option.some.inj h1).symm
+          subst hBodyEq
+          have hPosTrue : ∀ b ∈ pos, Ranked.bit tBits b = true := fun b hb => by
+            obtain ⟨a, haBody, haIdx⟩ := hPos b hb
+            exact (mem_wfsModel_of_idxOf? hBitsSz hNd haIdx).mp (hBodySub a haBody)
+          let τ' := buildHeadSubst r.frontierVars frontier r.existVars (fun y => Term.skolem r.id y frontier)
+          refine ⟨τ', heads, fun x hx => ?_, hHeads, fun fact hfact => ?_⟩
+          · have hZip := SkolemChaseCore.lookupSubst_zip_of_extract r.frontierVars σ frontier hFront x hx
+            have hσSome : ∃ d, lookupSubst σ x = some d := by
+              have hEx : ∀ (vs : List VarId) (fr : List Term),
+                  extractFrontierTuple vs σ = some fr → x ∈ vs → ∃ d, lookupSubst σ x = some d := by
+                intro vs
+                induction vs with
+                | nil => intro _ _ h; cases h
+                | cons v vs ih =>
+                  intro fr hF hMem
+                  unfold extractFrontierTuple at hF
+                  cases hv : lookupSubst σ v with
+                  | none => simp [hv] at hF
+                  | some dv =>
+                    rw [hv] at hF
+                    cases hvs : extractFrontierTuple vs σ with
+                    | none => simp [hvs] at hF
+                    | some dvs =>
+                      rcases List.mem_cons.mp hMem with rfl | hRest
+                      · exact ⟨dv, hv⟩
+                      · exact ih dvs hvs hRest
+              exact hEx r.frontierVars frontier hFront hx
+            obtain ⟨d, hd⟩ := hσSome
+            have hLeft : lookupSubst (r.frontierVars.zip frontier) x = some d := hZip.trans hd
+            have hτ' : lookupSubst τ' x = some d :=
+              SkolemChaseCore.lookupSubst_append_left (r.frontierVars.zip frontier) _ x d hLeft
+            rw [hτ', hExtστ x d hd]
+          · obtain ⟨head, hHeadIdx, hRuleMem⟩ := hRuleHeads fact hfact
+            have hBit : Ranked.bit tBits head = true := closure_head_true hClos hRuleMem hPosTrue
+            exact (mem_wfsModel_of_idxOf? hBitsSz hNd hHeadIdx).mpr hBit
+        · intro hMem
+          have hBit := (mem_wfsModel_of_idxOf? hBitsSz hNd hi).mp hMem
+          simp [hT] at hBit
+        · intro hm
+          have ht := (Ranked.mem_decodeBits _ _).mp ((hSame.1 _).mpr hm)
+          simp [hT] at ht
+        · intro hd hm
+          have hu := (Ranked.mem_decodeBits _ _).mp ((hSame.2 _).mpr hm)
+          rcases hU with hf | hf <;> simp_all
+
+deriving instance DecidableEq for Ranked.ArithProgram
 
 /-- Non-vacuity witness for `verifyWhyNotReceipt` in BOTH Mode A and Mode B. -/
 theorem verifyWhyNotReceipt_inhabited (worldRoot : DatabankRoot256) :
@@ -532,12 +989,18 @@ theorem verifyWhyNotReceipt_inhabited (worldRoot : DatabankRoot256) :
     simp [verifyWhyNotReceipt, hWfDb, checkDatabankExtractedInTable, db, hTbl', hMWfB, hBnd', hG', hSat', hInt, hGap]
   · let p : Ranked.ArithProgram := ⟨1, #[]⟩
     let cert : Ranked.ArrayCert := ⟨#[0], #[0], #[0], #[0], #[0], #[]⟩
-    refine ⟨⟨db, .wfsNegationBlocker p #[false] #[false] cert 0 true⟩, ?_⟩
+    refine ⟨⟨db, .wfsNegationBlocker #[targetAtom] #[false] #[false] cert true⟩, ?_⟩
     have hWfP : Ranked.WFProgram p = true := by simp [Ranked.WFProgram, p]
     have hVgrs : checkVgrsFixpointLinear p #[false] #[false] cert = true := by
       simp [checkVgrsFixpointLinear, Ranked.checkRankedWFS, p, cert, Ranked.WFProgram,
         Ranked.checkClosure, Ranked.bit, Array.range_eq_range']
-    simp [verifyWhyNotReceipt, hWfDb, db, hWfP, hVgrs, Ranked.bit, p]
+    have hGround : groundWhyNotProgram g #[] #[r] #[targetAtom] = some p := by
+      simp only [groundWhyNotProgram, openAtomTrie, funext (Colt.probe_eq_select _ _)]
+      decide +kernel
+    have hIdx : (#[targetAtom] : Array (Atom Term)).idxOf? targetAtom = some 0 := by decide +kernel
+    simp only [verifyWhyNotReceipt, hWfDb, beq_self_eq_true, Bool.and_self, Bool.true_and,
+      show db.chunks = #[] from rfl, hGround, hIdx, hWfP, hVgrs]
+    decide +kernel
 
 /-! ## §3. Non-Tautological `semanticKgJudge` & `"semantic-kg@1"` `Obend.Judge.Format` -/
 def ExtractedEdbFacts (g : GrammarSpec) (db : SemanticDatabank) (I : FactSet) : Prop :=
@@ -547,16 +1010,6 @@ def ExtractedEdbFacts (g : GrammarSpec) (db : SemanticDatabank) (I : FactSet) : 
       ∃ atoms, chunkAtomLists[i]? = some atoms ∧
         extractSpanBoundAtoms g (db.chunks[i]'hi) = .ok atoms) ∧
     I = chunkAtomLists.flatMap (fun arr => arr.toList.map spanAtomToBaseChaseAtom)
-structure SemanticKgObj where
-  db             : SemanticDatabank
-  expectedDbRoot : DatabankRoot256
-  grammar        : GrammarSpec
-  tgdRules       : Array TgdRule
-  targetAtom     : Atom Term
-  queryPolicy    : KgQueryPolicy
-  rights         : UInt64
-  mask           : UInt64
-  env            : Nat → Obend.Polis.KleenePred3
 inductive SemanticKgCert where
   | chaseProof (fuel : Nat)
   | countermodel (tbl : SymInternTable) (M : Datalog.SortedKTable Bool)
@@ -988,7 +1441,7 @@ theorem semanticKgFragment_inhabited (worldRoot : DatabankRoot256) (rights : UIn
     let db : SemanticDatabank := ⟨worldRoot, #[]⟩
     let r : TgdRule := ⟨1, [0], [], [⟨0, [.var 0]⟩], [⟨1, [.var 0]⟩]⟩
     let o : SemanticKgObj := ⟨db, databankCommit256 db, ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩,
-      #[r], ⟨1, [.const 0]⟩, ⟨⟨[]⟩, rights, .const true⟩, rights, rights, fun _ => .unbound3⟩
+      #[r], ⟨1, [.const 0]⟩, ⟨⟨[]⟩, rights, .const true⟩, rights, rights, #[]⟩
     SemanticKgFragment o := by
   intro db r o
   have hGuard := checkKgQueryGuard_inhabited ⟨[]⟩ rights
@@ -1006,7 +1459,8 @@ theorem semanticKgFragment_inhabited (worldRoot : DatabankRoot256) (rights : UIn
 /-! ### JSON Wire Codecs & `"semantic-kg@1"` `Obend.Judge.Format` Registration -/
 private def decodeAtomJson (j : Json) : Except String (Atom Term) := do
   let rel ← j.getObjValAs? Nat "rel"; let argsArr ← (← j.getObjVal? "args").getArr?
-  pure { rel, args := argsArr.toList.map (fun x => Term.const (x.getNat?.toOption.getD 0)) }
+  let args ← argsArr.toList.mapM fun x => return Term.const (← x.getNat?)
+  pure { rel, args }
 private def decodePatAtomJson (j : Json) : Except String PatAtom := do
   let rel ← j.getObjValAs? Nat "rel"
   let args ← (← (← j.getObjVal? "args").getArr?).toList.mapM fun x => do
@@ -1023,16 +1477,72 @@ private def decodeTgdRuleJson (j : Json) : Except String TgdRule := do
 private def decodeGroundTupleJson (j : Json) : Except String Datalog.GroundTuple := do
   let rel ← j.getObjValAs? Nat "rel"; let args ← (← (← j.getObjVal? "args").getArr?).mapM (·.getNat?)
   pure { rel, args }
-def decodeSemanticKgObj (s : String) : Except String SemanticKgObj := do
+private def boundedField (j : Json) (key : String) (bits : Nat) : Except String Nat := do
+  let n ← j.getObjValAs? Nat key
+  if n ≥ 2^bits then throw s!"{key} exceeds {bits} bits"
+  pure n
+
+private def optionalArray (j : Json) (key : String) : Except String (Array Json) :=
+  match j.getObjVal? key with
+  | .ok x => x.getArr?
+  | .error _ => .ok #[]
+
+private def hexField (j : Json) (key : String) : Except String ByteArray := do
+  let value ← j.getObjValAs? String key
+  let some bytes := Obend.Codec.Hex.hexByteArrayStrict? value.toUTF8
+    | throw s!"{key} requires lowercase hex bytes"
+  return bytes
+
+private def decodeChunk (j : Json) : Except String DocChunkEntry := do
+  return ⟨← boundedField j "docId" 64, ← boundedField j "byteOffset" 64, ← hexField j "rawBytes",
+    BitVec.ofNat 256 (← boundedField j "chunkDigest256" 256)⟩
+
+private def decodeSpanRule (j : Json) : Except String SpanRuleSpec := do
+  let some pattern := SymbolicRegex.decRE (← hexField j "slicePattern") | throw "invalid slicePattern"
+  let some ban := SymbolicRegex.decRE (← hexField j "banDelimiter") | throw "invalid banDelimiter"
+  return ⟨← hexField j "predTag", (← boundedField j "predSym" 32).toUInt32,
+    ← j.getObjValAs? Nat "arity", pattern, ban⟩
+
+private def decodeBinding (j : Json) : Except String (Nat × Obend.Polis.KleenePred3) := do
+  let i ← j.getObjValAs? Nat "id"
+  match ← j.getObjVal? "value" with
+  | .null => return (i, .unbound3)
+  | .bool b => return (i, if b then .true3 else .false3)
+  | _ => throw "binding value requires true, false or null"
+
+deriving instance Lean.FromJson for Obend.Polis.Caveat
+
+private def decodeKgJson (s : String) : Except String SemanticKgObj := do
   let j ← Json.parse s
-  let wRoot ← j.getObjValAs? Nat "worldLogRoot256"; let eRoot ← j.getObjValAs? Nat "expectedDbRoot"
+  let wRoot ← boundedField j "worldLogRoot256" 256
+  let eRoot ← boundedField j "expectedDbRoot" 256
+  let chunks ← (← optionalArray j "chunks").mapM decodeChunk
+  let entries ← (← optionalArray j "entityDict").mapM fun e => do
+    return (← hexField e "raw", (← boundedField e "id" 32).toUInt32)
+  let spanRules ← (← optionalArray j "spanRules").mapM decodeSpanRule
+  let accept ← match j.getObjVal? "structuralAccept" with
+    | .ok x => x.getBool? | .error _ => pure true
   let rules ← (← (← j.getObjVal? "tgdRules").getArr?).mapM decodeTgdRuleJson
   let tgt ← decodeAtomJson (← j.getObjVal? "targetAtom")
-  let need ← j.getObjValAs? Nat "needRights"; let cav ← j.getObjValAs? Bool "caveatConst"
-  let rights ← j.getObjValAs? Nat "rights"; let mask ← j.getObjValAs? Nat "mask"
-  pure ⟨⟨BitVec.ofNat 256 wRoot, #[]⟩, BitVec.ofNat 256 eRoot, ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩,
-    rules, tgt, ⟨⟨[]⟩, UInt64.ofNat need, .const cav⟩, UInt64.ofNat rights, UInt64.ofNat mask, fun _ => .unbound3⟩
+  let query ← (← optionalArray j "query").mapM decodePatAtomJson
+  let need ← boundedField j "needRights" 64
+  let cav ← match j.getObjVal? "caveat" with
+    | .ok x => Lean.fromJson? x
+    | .error _ => pure (Obend.Polis.Caveat.const (← j.getObjValAs? Bool "caveatConst"))
+  let rights ← boundedField j "rights" 64
+  let mask ← boundedField j "mask" 64
+  let bindings ← (← optionalArray j "bindings").mapM decodeBinding
+  pure ⟨⟨BitVec.ofNat 256 wRoot, chunks⟩, BitVec.ofNat 256 eRoot,
+    ⟨{ wellMatchedJsonVpa with acc := fun _ => accept }, ⟨entries⟩, spanRules⟩, rules, tgt,
+    ⟨⟨query.toList⟩, need.toUInt64, cav⟩, rights.toUInt64, mask.toUInt64, bindings⟩
+
+def decodeSemanticKgObj := decodeKgWith decodeKgJson
+
+theorem decode_encode_semanticKgObj (o : SemanticKgObj) :
+    decodeSemanticKgObj (encodeSemanticKgObj o) = .ok o := decodeKgWith_encode _ o
+
 def decodeSemanticKgCert (s : String) : Except String SemanticKgCert := do
+  if let some fuel := s.toNat? then return .chaseProof fuel
   let j ← Json.parse s; let kind ← j.getObjValAs? String "kind"
   if kind == "chaseProof" then pure (.chaseProof (← j.getObjValAs? Nat "fuel"))
   else if kind == "countermodel" then
@@ -1061,7 +1571,7 @@ def explainSemanticKg (grade : Nat) (objWire certWire : String) : String :=
   | .ok o, .ok c => match checkSemanticKg grade o c with
     | .ok => "accepted" | .uncovered => "uncovered within grade" | .refused k _ => k.describe
 def badSemanticKgObj : SemanticKgObj :=
-  ⟨⟨0, #[]⟩, 0, ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩, #[], ⟨0, [.skolem 0 0 []]⟩, ⟨⟨[]⟩, 0, .const true⟩, 0, 0, fun _ => .unbound3⟩
+  ⟨⟨0, #[]⟩, 0, ⟨wellMatchedJsonVpa, ⟨#[]⟩, #[]⟩, #[], ⟨0, [.skolem 0 0 []]⟩, ⟨⟨[]⟩, 0, .const true⟩, 0, 0, #[]⟩
 def badSemanticKgCert : SemanticKgCert := .chaseProof 0
 theorem badSemanticKg_refused (r : Nat) :
     semanticKgJudge.check r badSemanticKgObj badSemanticKgCert = .refused .nonBaseTargetAtom [] := by
@@ -1078,6 +1588,37 @@ theorem badSemanticKg_refused (r : Nat) :
   judge := semanticKgJudge; decodeObj := decodeSemanticKgObj; decodeCert := decodeSemanticKgCert
   trust := .kernel; regime := .decidable; bad := (badSemanticKgObj, badSemanticKgCert); badGrade := 0
   bad_refused := ⟨.nonBaseTargetAtom, [], badSemanticKg_refused 0⟩; explain := explainSemanticKg
+
+private theorem check_edb_single (o : SemanticKgObj)
+    (hPre : checkSemanticKgObjPreconditions o = .ok [o.targetAtom]) :
+    semanticKgJudge.check 0 o (.chaseProof 0) = .ok := by
+  change (match checkSemanticKgStep o (.chaseProof 0) 0 with
+    | some v => v | none => .uncovered) = .ok
+  simp [checkSemanticKgStep, hPre, runBoundedChaseExec]
+
+/-- A singleton database answers its extracted fact at grade zero under the object guards. -/
+theorem check_single_extraction (o : SemanticKgObj) (c : DocChunkEntry) (a : SpanBoundAtom)
+    (hc : o.db.chunks = #[c]) (hr : o.tgdRules = #[])
+    (hroot : o.expectedDbRoot = databankCommit256 o.db) (hw : WfDatabank o.db = true)
+    (hb : isBaseAtom o.targetAtom = true)
+    (hg : checkKgQueryGuard o.queryPolicy o.rights o.mask o.env = true)
+    (he : extractSpanBoundAtoms o.grammar c = .ok #[a]) (ha : spanAtomToBaseChaseAtom a = o.targetAtom) :
+    semanticKgJudge.check 0 o (.chaseProof 0) = .ok := by
+  apply check_edb_single
+  have h0 : 0 < (#[c] : Array _).size := Nat.zero_lt_succ 0
+  have h1 : ¬1 < (#[c] : Array _).size := Nat.lt_irrefl 1
+  have hp : extractAllChunksGo o.grammar #[c] 0 [] = .ok [#[a]] := by
+    rw [extractAllChunksGo, dite_eq_left h0]
+    change (match extractSpanBoundAtoms o.grammar c with
+      | .ok xs => extractAllChunksGo o.grammar #[c] 1 ([] ++ [xs])
+      | .error _ => .error 0) = _
+    rw [he]
+    change extractAllChunksGo o.grammar #[c] 1 [#[a]] = _
+    rw [extractAllChunksGo, dite_eq_right h1]
+  have hguarded : findUnguardedRuleGo #[] 0 = none := by rw [findUnguardedRuleGo]; rfl
+  have hrule : WfRuleSet [] = true := rfl
+  simp [checkSemanticKgObjPreconditions, hr, hb, hg, hrule, hguarded, hw, hroot, hc, hp, ha]
+
 
 end Obend.SemanticKG
 end

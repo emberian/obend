@@ -24,7 +24,7 @@ verified multi-turn stateful world evolution:
 public import Obend.SemanticKG.Databank
 public import Obend.SemanticKG.SpanParse
 public import Obend.SemanticKG.HypergraphChase
-public import Obend.SemanticKG.SemanticCert
+public import Obend.SemanticKG.WireQuery
 import all Obend.SemanticKG.Databank
 import all Obend.Polis.EvidencedOcap
 

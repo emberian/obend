@@ -565,10 +565,14 @@ import Obend.Run.Runner
 import Obend.Run.Shared
 import Obend.Run.Spec
 import Obend.Run.Ticks
+import Obend.SemanticKG.ColtJoin
 import Obend.SemanticKG.Databank
 import Obend.SemanticKG.HypergraphChase
+import Obend.SemanticKG.ObjectWire
 import Obend.SemanticKG.SemanticCert
+import Obend.SemanticKG.SlottedEGraph
 import Obend.SemanticKG.SpanParse
+import Obend.SemanticKG.WireQuery
 import Obend.Slot
 import Obend.Slot.Budget
 import Obend.Slot.Core4
@@ -723,8 +727,11 @@ import Obend.Vault.SwarmLedgerSeams
 import Obend.Vault.TransclusionAndMirror
 import Obend.Vault.Transport
 import Obend.Vault.UnifiedDeos
+import Obend.Vault.WorldTree.Demand
+import Obend.Vault.WorldTree.IndexedManifest
 import Obend.Vault.WorldTree.ShardedWorld
 import Obend.Vault.WorldTree
+import Obend.Codec.HexString
 import Obend.Core.EquiRecursiveSubstitution
 import Obend.Core.Proofs.Forcing.Completeness
 import Obend.Core.Proofs.Forcing.ForwardSim

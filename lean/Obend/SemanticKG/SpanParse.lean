@@ -647,7 +647,7 @@ theorem span_parse_sound_and_unforgeable
 /-- Constructive inhabitedness witness for `parseSingleObjectSpan`, `parseObjectSpanList`, and
     `extractSpanBoundAtoms` (proving non-vacuity of all Stage-2 soundness premises without evaluating
     Keccak-f[1600] in the kernel). -/
-theorem extractSpanBoundAtoms_inhabited (predSym : UInt32) :
+theorem extractSpanBoundAtoms_singleton (predSym : UInt32) :
     let raw := "{\"p\":\"rel\",\"a\":\"x\"}".toByteArray
     let doc := mkDocChunk 1 0 raw
     let g : GrammarSpec := {
@@ -660,10 +660,10 @@ theorem extractSpanBoundAtoms_inhabited (predSym : UInt32) :
         banDelimiter := .ff
       }]
     }
-    (∃ a, parseSingleObjectSpan g doc 0 raw.size = .ok a) ∧
-    (∃ as, parseObjectSpanList g doc [(0, raw.size)] = .ok as) ∧
-    (∃ atoms, atoms.size = 1 ∧ extractSpanBoundAtoms g doc = .ok atoms) := by
-  intro raw doc g
+    let a : SpanBoundAtom := ⟨predSym, #[7], 1, 0, 19, computeSpanSliceDigest 1 0 19 (raw.extract 0 19)⟩
+    parseSingleObjectSpan g doc 0 raw.size = .ok a ∧
+    parseObjectSpanList g doc [(0, raw.size)] = .ok [a] ∧ extractSpanBoundAtoms g doc = .ok #[a] := by
+  intro raw doc g a
   have hWfDoc : WfDocChunk doc = true :=
     wfDocChunk_mkDocChunk (by decide) (by decide) (by decide)
   have hDict : WfEntityDict ⟨#[("x".toByteArray, 7)]⟩ = true := by decide +kernel
@@ -702,15 +702,7 @@ theorem extractSpanBoundAtoms_inhabited (predSym : UInt32) :
     decide +kernel
   have hRes : resolveEntityArgs ⟨#[("x".toByteArray, 7)]⟩ 0 ["x".toByteArray] = .ok [7] := by
     simp [resolveEntityArgs, hLookX, bind, Except.bind]
-  have hSingle : ∃ a, parseSingleObjectSpan g doc 0 19 = .ok a := by
-    refine ⟨{
-      predSym := predSym
-      args := #[7]
-      docId := 1
-      byteStart := 0
-      byteLen := 19
-      sliceDigest := computeSpanSliceDigest 1 0 19 (doc.rawBytes.extract 0 19)
-    }, ?_⟩
+  have ha : parseSingleObjectSpan g doc 0 19 = .ok a := by
     unfold parseSingleObjectSpan
     rw [hBnd, Bool.not_true, ite_eq_right (by decide), hStr, ite_eq_right (by decide)]
     dsimp only
@@ -737,14 +729,32 @@ theorem extractSpanBoundAtoms_inhabited (predSym : UInt32) :
         hPat, Bool.not_true, ite_eq_right (by decide),
         hBan, Bool.not_true, ite_eq_right (by decide), hGeDict, hRes]
     rfl
-  obtain ⟨a, ha⟩ := hSingle
-  refine ⟨⟨a, hSz ▸ ha⟩, ⟨[a], ?_⟩, ⟨#[a], rfl, ?_⟩⟩
+  refine ⟨hSz ▸ ha, ?_, ?_⟩
   · rw [hSz]; simp [parseObjectSpanList, ha, bind, Except.bind]
   · unfold extractSpanBoundAtoms
     have hGeDict : g.entityDict = ⟨#[("x".toByteArray, 7)]⟩ := rfl
     have hGeVpa : g.structuralVpa = wellMatchedJsonVpa := rfl
     rw [hGeDict, hGeVpa]
     simp [hWfDoc, hDict, hJson, hVpa, hScan, parseObjectSpanList, ha, bind, Except.bind]
+
+theorem extractSpanBoundAtoms_inhabited (predSym : UInt32) :
+    let raw := "{\"p\":\"rel\",\"a\":\"x\"}".toByteArray
+    let doc := mkDocChunk 1 0 raw
+    let g : GrammarSpec := {
+      entityDict := ⟨#[("x".toByteArray, 7)]⟩
+      rules := #[{
+        predTag := "rel".toByteArray
+        predSym := predSym
+        arity := 1
+        slicePattern := tt
+        banDelimiter := .ff
+      }]
+    }
+    (∃ a, parseSingleObjectSpan g doc 0 raw.size = .ok a) ∧
+    (∃ as, parseObjectSpanList g doc [(0, raw.size)] = .ok as) ∧
+    (∃ atoms, atoms.size = 1 ∧ extractSpanBoundAtoms g doc = .ok atoms) := by
+  obtain ⟨hp, hl, he⟩ := extractSpanBoundAtoms_singleton predSym
+  exact ⟨⟨_, hp⟩, ⟨_, hl⟩, ⟨_, rfl, he⟩⟩
 
 private theorem checkSortedDisjointSpansFrom_hi (docLen : Nat) :
     ∀ (xs : List (Nat × Nat)) (m : Nat),

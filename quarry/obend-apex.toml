@@ -52,6 +52,7 @@ entry_points = [
   "lean/tools/emitgpu/EmitGpu.lean",
   "lean/tools/rdna2/Rdna2.lean",
   "lean/tools/litmuscheck/LitmusCheck.lean",
+  "lean/tools/bench/DemandBench.lean",
   "lean/tools/journal/Main.lean",
 ]
 

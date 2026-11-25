@@ -144,3 +144,8 @@ root = "Segments"
 name = "dragonstyle-emit"
 srcDir = "tests/metasystem"
 root = "DragonStyleShardTest"
+
+[[lean_exe]]
+name = "obend-demand-bench"
+srcDir = "tools/bench"
+root = "DemandBench"
