@@ -4876,6 +4876,58 @@ theorem foldChain_emptyRevoked_oneHop
   rw [hAtt, emptyRevoked_contains_false, emptyRevoked_contains_false]
   simp only [Bool.not_false, Bool.and_self, ↓reduceIte, Pure.pure]
 
+
+private theorem stepPolisSession_st
+    (st : PolisSessionState deosCapPCA.Code) (turn : ConcretePolisTurn)
+    (hf : decide (turn.inputCode ∈ st.revokedCodes) = false)
+    (hb : decide (turnMandateCost turn ≤ st.mandateBudget) = true)
+    (ht : checkMemAfterHorizon st.lastTimestamp turn.onlineMem = true)
+    (hm : checkSessionMemory st turn = true)
+    (hk : refusePolisTurn turn = none) :
+    stepPolisSession st turn =
+      some ⟨turn.inputCode :: st.revokedCodes, st.mandateBudget - turnMandateCost turn,
+            advanceMemHorizon st.lastTimestamp turn.onlineMem,
+            st.ramLog ++ turn.onlineMem.toArray, turn.ramPostRoot⟩ := by
+  unfold stepPolisSession refusePolisSessionStep
+  rw [hf, hb, ht, hm, hk]
+  rfl
+
+private theorem stepPolisSession_mk
+    (rev : List deosCapPCA.Code) (bud ts : Nat) (log : Array MemOp) (root : ByteArray)
+    (turn : ConcretePolisTurn)
+    (hf : decide (turn.inputCode ∈ rev) = false)
+    (hb : decide (turnMandateCost turn ≤ bud) = true)
+    (ht : checkMemAfterHorizon ts turn.onlineMem = true)
+    (hm : checkSessionMemory ⟨rev, bud, ts, log, root⟩ turn = true)
+    (hk : refusePolisTurn turn = none) :
+    stepPolisSession ⟨rev, bud, ts, log, root⟩ turn =
+      some ⟨turn.inputCode :: rev, bud - turnMandateCost turn,
+            advanceMemHorizon ts turn.onlineMem, log ++ turn.onlineMem.toArray, turn.ramPostRoot⟩ := by
+  unfold stepPolisSession refusePolisSessionStep
+  rw [hf, hb, ht, hm, hk]
+  rfl
+
+private theorem checkPinnedSessionAuthority_mk
+    (ps : PolisSessionState deosCapPCA.Code) (cs : CathedralTraceState) (rem : Nat)
+    (turn : StageBSevenOrganTurn) (b : Obend.Polis.Block)
+    (hNewRev : turn.newRevocations = [])
+    (hHops : turn.biscuitHops = #[b])
+    (hEnv : b.caveat.eval turn.biscuitEnv = .true3)
+    (hRootEnv : canonicalStageBBiscuitRoot.caveat.eval turn.biscuitEnv = .true3)
+    (hBud : rem ≤ canonicalStageBMandate.budget)
+    (hInv : Obend.Vault.Mandate.checkInvocation canonicalStageBMandate turn.vaultInvocation = true)
+    (hSub1 : Obend.Polis.subMask b.rights canonicalStageBBiscuitRoot.rights = true)
+    (hSub2 : Obend.Polis.subMask turn.requiredRights b.rights = true) :
+    checkPinnedSessionAuthority
+      { polisState := ps, cathedralState := cs, remVaultBudget := rem } turn = true := by
+  unfold checkPinnedSessionAuthority sessionRevocations
+  rw [hNewRev, List.foldl_nil, decide_eq_true hBud, hInv, hHops,
+      foldChain_emptyRevoked_oneHop _ _ _ hSub1]
+  simp only [Bool.true_and, hRootEnv, hEnv]
+  unfold Obend.Polis.authorize Obend.Polis.KleenePred3.and3
+  rw [hSub2]
+  rfl
+
 /-- Compose two authenticated fixture turns across a pinned budget. The concrete RAM and
     DECO acceptance premises are exercised by the compiled Stage-B test; this theorem
     proves their state, authority, and budget composition without evaluating hashes. -/
@@ -4920,22 +4972,23 @@ theorem runStageBCathedralTrace_two_turn_inhabited
   let c₂ : CathedralTraceState :=
     { weightsRoot := 0x55556666, lastEpoch := 2, usedFlops := 13500000, remFlopsBudget := 6500000, remHiddenOpsBudget := 2, decoLedger := ledger₂ }
   have hPol₁ : stepPolisSession sampleInitSessionState sampleValidPolisTurn = some p₁ := by
-    have hb : decide (turnMandateCost sampleValidPolisTurn ≤ sampleInitSessionState.mandateBudget) = true := by decide
-    have ht : checkMemAfterHorizon sampleInitSessionState.lastTimestamp sampleValidPolisTurn.onlineMem = true := by decide
-    have hk : refusePolisTurn sampleValidPolisTurn = none := by rfl
-    have hm : checkSessionMemory sampleInitSessionState sampleValidPolisTurn = true := hMem₁
-    simp only [stepPolisSession, refusePolisSessionStep, hb, ht, hm, hk,
-      Bool.not_true, Bool.false_eq_true, ↓reduceIte]
-    rfl
-  have hPol₂ : stepPolisSession p₁ sampleSecondPolisTurn = some p₂ := by
-    have hf : decide (sampleSecondPolisTurn.inputCode ∈ p₁.revokedCodes) = false := by decide
-    have hb : decide (turnMandateCost sampleSecondPolisTurn ≤ p₁.mandateBudget) = true := by decide
-    have ht : checkMemAfterHorizon p₁.lastTimestamp sampleSecondPolisTurn.onlineMem = true := by decide
-    have hk : refusePolisTurn sampleSecondPolisTurn = none := by rfl
-    have hm : checkSessionMemory p₁ sampleSecondPolisTurn = true := hMem₂
-    simp only [stepPolisSession, refusePolisSessionStep, hf, hb, ht, hm, hk,
-      Bool.not_true, Bool.false_eq_true, ↓reduceIte]
-    rfl
+    have hRaw := stepPolisSession_st sampleInitSessionState sampleValidPolisTurn
+      (by decide) (by decide) (by decide) hMem₁ rfl
+    have hLog : sampleInitSessionState.ramLog ++ sampleValidPolisTurn.onlineMem.toArray =
+        sampleValidPolisTurn.onlineMem.toArray := by
+      change #[] ++ sampleValidPolisTurn.onlineMem.toArray = sampleValidPolisTurn.onlineMem.toArray
+      exact Array.empty_append
+    rw [hLog] at hRaw
+    exact hRaw
+  have hPol₂ : stepPolisSession p₁ sampleSecondPolisTurn = some p₂ :=
+    stepPolisSession_mk
+      (sampleValidPolisTurn.inputCode :: sampleInitSessionState.revokedCodes)
+      (sampleInitSessionState.mandateBudget - turnMandateCost sampleValidPolisTurn)
+      (advanceMemHorizon sampleInitSessionState.lastTimestamp sampleValidPolisTurn.onlineMem)
+      sampleValidPolisTurn.onlineMem.toArray
+      sampleValidPolisTurn.ramPostRoot
+      sampleSecondPolisTurn
+      (by decide) (by decide) (by decide) hMem₂ rfl
   have hCath₁ : stepCathedralTrace sampleInitTraceState sampleCathedralTurn = some c₁ := by
     have hNext₁ : sampleCathedralTurn.clusterCtx.step.nextWeightsRoot = 0x33334444 := by decide
     have hEp₁ : sampleCathedralTurn.fpgaReceipt.epoch = 1 := by decide
@@ -4965,29 +5018,29 @@ theorem runStageBCathedralTrace_two_turn_inhabited
     simp only [c₁, Bool.and_self, ↓reduceIte, hLedger₂, Option.map_some, hNext₂, hEp₂, hFl₂, hRemFl₂, hRemHid₂]
     rfl
   have hVB₁ : sampleStageBSevenOrganTurn1.vaultInvocation.cost ≤ initVaultBudget := by
-    change 10 ≤ initVaultBudget
-    omega
+    change 10 ≤ initVaultBudget; omega
   have hVB₂ : sampleStageBSevenOrganTurn2.vaultInvocation.cost ≤ initVaultBudget - 10 := by
-    change 15 ≤ initVaultBudget - 10
-    omega
+    change 15 ≤ initVaultBudget - 10; omega
+  have hInv₁ : Obend.Vault.Mandate.checkInvocation canonicalStageBMandate canonicalStageBInvocation = true := by
+    simp [canonicalStageBMandate, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
+      Obend.Vault.Mandate.authorizedBy, Obend.Vault.Mandate.Caveat.any]
+  have hInv₂ : Obend.Vault.Mandate.checkInvocation canonicalStageBMandate
+      { canonicalStageBInvocation with epoch := 2, cost := 15 } = true := by
+    simp [canonicalStageBMandate, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
+      Obend.Vault.Mandate.authorizedBy, Obend.Vault.Mandate.Caveat.any]
   have hPin₁ : checkPinnedSessionAuthority
-      { sampleStageBInitState with remVaultBudget := initVaultBudget } sampleStageBSevenOrganTurn1 = true := by
-    unfold checkPinnedSessionAuthority sessionRevocations sampleStageBSevenOrganTurn1 sampleStageBInitState
-    dsimp only [List.foldl_nil]
-    rw [foldChain_emptyRevoked_oneHop _ _ _ (by dsimp only [c₁]; decide)]
-    simp [canonicalStageBMandate, hPinnedBudget, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
-      Obend.Vault.Mandate.Caveat.any, Obend.Polis.authorize, Obend.Polis.subMask,
-      canonicalStageBBiscuitRoot, Obend.Polis.Caveat.eval, Obend.Polis.KleenePred3.and3] <;> decide
+      { sampleStageBInitState with remVaultBudget := initVaultBudget } sampleStageBSevenOrganTurn1 = true :=
+    checkPinnedSessionAuthority_mk sampleInitSessionState sampleInitTraceState initVaultBudget
+      sampleStageBSevenOrganTurn1
+      { rights := 0x07, caveat := .const true, holder := ByteArray.mk #[0xBB], channel := ByteArray.mk #[0x03] }
+      rfl rfl rfl rfl (by change initVaultBudget ≤ 100; exact hPinnedBudget) hInv₁ (by decide) (by decide)
   have hPin₂ : checkPinnedSessionAuthority
       { polisState := p₁, cathedralState := c₁, remVaultBudget := initVaultBudget - 10 }
-      sampleStageBSevenOrganTurn2 = true := by
-    unfold checkPinnedSessionAuthority sessionRevocations sampleStageBSevenOrganTurn2
-    dsimp only [List.foldl_nil]
-    rw [foldChain_emptyRevoked_oneHop _ _ _ (by dsimp only [c₁]; decide)]
-    have hb : initVaultBudget - 10 ≤ 100 := by omega
-    simp [canonicalStageBMandate, hb, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
-      Obend.Vault.Mandate.Caveat.any, Obend.Polis.authorize, Obend.Polis.subMask,
-      canonicalStageBBiscuitRoot, Obend.Polis.Caveat.eval, Obend.Polis.KleenePred3.and3] <;> decide
+      sampleStageBSevenOrganTurn2 = true :=
+    checkPinnedSessionAuthority_mk p₁ c₁ (initVaultBudget - 10)
+      sampleStageBSevenOrganTurn2
+      { rights := 0x07, caveat := .const true, holder := ByteArray.mk #[0xCC], channel := ByteArray.mk #[0x04] }
+      rfl rfl rfl rfl (by change initVaultBudget - 10 ≤ 100; omega) hInv₂ (by decide) (by decide)
   have hStep₁ :
       stepStageBCathedral
         { sampleStageBInitState with remVaultBudget := initVaultBudget }
@@ -5005,19 +5058,12 @@ theorem runStageBCathedralTrace_two_turn_inhabited
   have hSub : (initVaultBudget - 10) - 15 = initVaultBudget - 25 := by omega
   refine ⟨{ polisState := p₂, cathedralState := c₂, remVaultBudget := (initVaultBudget - 10) - 15 },
           ?_, hSub, rfl, rfl⟩
-  change
-    (match stepStageBCathedral
-             { sampleStageBInitState with remVaultBudget := initVaultBudget }
-             sampleStageBSevenOrganTurn1 with
-     | none => none
-     | some st' =>
-       match stepStageBCathedral st' sampleStageBSevenOrganTurn2 with
-       | none => none
-       | some st'' => some st'') =
-      some { polisState := p₂, cathedralState := c₂, remVaultBudget := (initVaultBudget - 10) - 15 }
+  unfold runStageBCathedralTrace
   rw [hStep₁]
   dsimp only
+  unfold runStageBCathedralTrace
   rw [hStep₂]
+  rfl
 
 end Obend.Trailblaze.StageB
 

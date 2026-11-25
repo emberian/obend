@@ -57,9 +57,9 @@ structure Cnf where
 
 @[expose] def Sat (σ : Nat → Bool) (c : Clause) : Prop := ∃ l ∈ c, litTrue σ l = true
 
-@[expose] def Models (σ : Nat → Bool) (F : Cnf) : Prop := ∀ c ∈ F.clauses, Sat σ c
+def Models (σ : Nat → Bool) (F : Cnf) : Prop := ∀ c ∈ F.clauses, Sat σ c
 
-@[expose] def Unsat (F : Cnf) : Prop := ∀ σ, ¬ Models σ F
+@[expose] def Unsat (F : Cnf) : Prop := ∀ σ, ¬ (∀ c ∈ F.clauses, Sat σ c)
 
 theorem litTrue_neg (σ : Nat → Bool) {l : Int} (h : l ≠ 0) : litTrue σ (-l) = !litTrue σ l := by
   unfold litTrue
@@ -73,7 +73,7 @@ theorem litTrue_neg (σ : Nat → Bool) {l : Int} (h : l ≠ 0) : litTrue σ (-l
 inductive Step where
   | add (id : Nat) (clause : Clause) (hints : List Int)
   | del (ids : List Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- A certificate: a refutation, or a model (a list of true literals) refuting unsatisfiability. -/
 inductive Cert where
