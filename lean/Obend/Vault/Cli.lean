@@ -120,8 +120,9 @@ the page's laws), so no command overwrites a file the person changed. Every chan
 turn appended to `DIR/.obend/log` before any file is written (`commitTurn`); the world a command
 starts from is the replay of the log, through `DIR/.obend/checkpoint` where it holds (`recoverLog`); a
 torn tail is dropped by name and a turn whose files did not land is redone (`recoverForWrite`). The
-log is appended with a flush and no fsync (Lean's `IO` has none). Recovery covers process interruption;
-power loss may reorder persisted blocks and selector updates, and is outside this durability guarantee.
+segmented log syncs each block and settles directory changes before retiring a generation;
+checkpoint publication syncs shard, manifest, and checkpoint files and settles their directories
+before pruning obsolete shards, while interrupted rendered-file writes are redone from the log.
 `-C DIR` before or after a command runs it in DIR. A kind page's line `environment: PATH` (PATH
 relative to the vault) names the census's list of the library's names,
 `.lake/build/census/environment.txt` (`lake build Obend.Census`, or `lake env lean
@@ -308,16 +309,12 @@ def readCheckpoint (dir : System.FilePath) : IO (Option (Checkpoint × Option Na
   | some c, some a, some b, some h => return some (⟨c, a, b, h, (bs.extract (nl + 1) bs.size).data.toList⟩, base)
   | _, _, _, _ => return none
 
-/-- Write a file whole or not at all: beside it, then renamed over it. -/
-def writeAtomically (f : System.FilePath) (bs : Bytes) : IO Unit := do
-  let tmp := f.withExtension "tmp"
-  Obend.Vault.Cost.writeBinFile tmp ⟨bs.toArray⟩
-  IO.FS.rename tmp f
+/-- Write a file whole and durably: synced beside it, renamed over it, and its parent directory settled. -/
+def writeAtomically (f : System.FilePath) (bs : Bytes) : IO Unit :=
+  Obend.Vault.SegmentLog.writeAtomicSynced f ⟨bs.toArray⟩
 
-def writeAtomicallyArray (f : System.FilePath) (bs : ByteArray) : IO Unit := do
-  let tmp := f.withExtension "tmp"
-  Obend.Vault.Cost.writeBinFile tmp bs
-  IO.FS.rename tmp f
+def writeAtomicallyArray (f : System.FilePath) (bs : ByteArray) : IO Unit :=
+  Obend.Vault.SegmentLog.writeAtomicSynced f bs
 
 /-- What a process holds of a vault's log: the world (the replay of the log), the receipt digest of
 the last record, how many records there are, the log's length and where its last record starts. -/
@@ -743,8 +740,10 @@ def compactLog (dir : System.FilePath) (h : Head) : IO Head := do
     SegmentLog.replace logHash dir rb
     if ← (newLogPath dir).pathExists then IO.FS.removeFile (newLogPath dir)
     forgetRecovery dir
-    if ← (checkpointPath dir).pathExists then IO.FS.removeFile (checkpointPath dir)
-    if ← (ChunkedWorld.rootPath dir).pathExists then IO.FS.removeFile (ChunkedWorld.rootPath dir)
+    if ← (checkpointPath dir).pathExists then
+      Obend.Vault.SegmentLog.settleDir (dir / ".obend") (IO.FS.removeFile (checkpointPath dir))
+    if ← (ChunkedWorld.rootPath dir).pathExists then
+      Obend.Vault.SegmentLog.settleDir (ChunkedWorld.worldDir dir) (IO.FS.removeFile (ChunkedWorld.rootPath dir))
     ChunkedWorld.pruneObsoleteShards dir []
     return { world := h.world, prev := h.prev, count := 1, size := rb.size, lastStart := 0, base := true,
              baseSize := rb.size }

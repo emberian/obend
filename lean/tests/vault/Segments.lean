@@ -14,6 +14,24 @@ def expect (b : Bool) (msg : String) : IO Unit :=
   unless b do throw (IO.userError msg)
 
 def main (args : List String) : IO Unit := do
+  -- Subprocess entry points for PowerCutBarriers.py (sync fault and warm reopen).
+  match args with
+  | ["replace", dir, value] =>
+    replace hashBytes dir value.toUTF8
+    IO.println "ack"
+    return
+  | ["append", dir, value] =>
+    append hashBytes dir value.toUTF8
+    IO.println "ack"
+    return
+  | ["atomic", path, value] =>
+    writeAtomicSynced path value.toUTF8
+    IO.println "ack"
+    return
+  | ["read", dir] =>
+    IO.println (String.fromUTF8! (← readAll hashBytes dir))
+    return
+  | _ => pure ()
   let some name := args.head? | throw (IO.userError "pass a fresh fixture directory")
   let dir : System.FilePath := name
   if ← dir.pathExists then throw (IO.userError "fixture directory must not already exist")
@@ -99,6 +117,11 @@ def main (args : List String) : IO Unit := do
   let refused ← try let _ ← index hashBytes dir; pure false catch _ => pure true
   expect refused "corrupted index accepted"
   IO.FS.writeFile (selector dir) txt
+  let atomicTarget := dir / "nested" / "checkpoint"
+  writeAtomicSynced atomicTarget "v1".toUTF8
+  expect ((← IO.FS.readFile atomicTarget) == "v1") "atomic synced initial write"
+  writeAtomicSynced atomicTarget "v2".toUTF8
+  expect ((← IO.FS.readFile atomicTarget) == "v2") "atomic synced overwrite"
   IO.println s!"segmented bytes: boundary reads, append, truncation, interrupted rollover, orphan replacement, index checksum; tail read {cost.read} bytes"
 
 -- The executable framing refines the specification for arbitrary records and windows.

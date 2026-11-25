@@ -1167,7 +1167,7 @@ The logical log is unchanged: the same records, checksums and receipt chain. Its
 64 KiB files, with every file except the last full. The index is the byte address itself: division
 selects a segment and remainder selects its byte. A checksummed index names the active segment.
 Rollover clears the next block before publishing its index, then writes its payload; the preceding
-segment is flushed first. An interrupted append leaves exactly a prefix, including a torn record.
+segment is synced first. A power cut during an append preserves acknowledged bytes and may tear the pending tail.
 
 `.obend/log` selects a generation atomically. Migration and compaction publish a complete new generation;
 ordinary appends retain the generation and advance its active index only at segment boundaries. Old monolithic logs are read for migration.
@@ -1407,43 +1407,117 @@ def readRange (Hb : Bytes → Bytes) (dir : System.FilePath) (start stop : Nat) 
 def readAll (Hb : Bytes → Bytes) (dir : System.FilePath) : IO ByteArray := do
   readRange Hb dir 0 (← size Hb dir)
 
-/-- Publish a checksummed index with an atomic rename. -/
-def publish (Hb : Bytes → Bytes) (dir : System.FilePath) (idx : Index) : IO Unit := do
-  let tmp := dir / ".obend" / "log.index-new"
-  Obend.Vault.Cost.writeFile tmp (indexText Hb idx)
-  IO.FS.rename tmp (selector dir)
+@[extern "obend_vault_fsync_file"]
+private opaque fsyncFile (h : @& IO.FS.Handle) : IO Unit
+@[extern "obend_vault_open_dir"]
+private opaque openDir (path : @& String) : IO UInt32
+@[extern "obend_vault_fsync_dir"]
+private opaque fsyncDir (fd : UInt32) : IO Unit
+@[extern "obend_vault_close_dir"]
+private opaque closeDir (fd : UInt32) : IO Unit
 
-/-- Prepare a boundary block before making it reachable. A prior interrupted truncation may have
-left an orphan here: empty and flush it while it is still unselected, then publish the index.
-A crash before publication sees the old prefix; after publication sees an empty next block. -/
-def prepareBoundary (Hb : Bytes → Bytes) (dir : System.FilePath) (idx : Index)
+def settleDir {α : Type} (dir : System.FilePath) (action : IO α) : IO α := do
+  let fd ← openDir dir.toString
+  try
+    let result ← action
+    fsyncDir fd
+    return result
+  finally closeDir fd
+
+def writeTempSynced (path : System.FilePath) (bs : ByteArray) : IO Unit := do
+  -- An interrupted rename can leave both names bound to the selected inode.
+  -- Detach a stale temp name before writing any bytes to its replacement.
+  let h ← try IO.FS.Handle.mk path .writeNew catch e =>
+    match e with
+    | .alreadyExists .. => do
+      IO.FS.removeFile path
+      IO.FS.Handle.mk path .writeNew
+    | _ => throw e
+  Obend.Vault.Cost.write h bs
+  fsyncFile h
+
+/-- Write `bs` to a sibling `.tmp` inode, sync its data, rename it onto `f`, and settle `f`'s
+parent directory so both the file's contents and its final directory entry are durable on return. -/
+def writeAtomicSynced (f : System.FilePath) (bs : ByteArray) : IO Unit := do
+  if let some p := f.parent then
+    unless p.toString.isEmpty do IO.FS.createDirAll p
+  let tmp := System.FilePath.mk (f.toString ++ ".tmp")
+  let parent := match f.parent with
+    | some p => if p.toString.isEmpty then System.FilePath.mk "." else p
+    | none => System.FilePath.mk "."
+  settleDir parent do
+    writeTempSynced tmp bs
+    IO.FS.rename tmp f
+
+/-- Arm before mutation: even an EIO followed by process death cannot be
+mistaken for a clean warm retry. A fresh Linux boot has discarded the dirty
+page cache. Other hosts require explicit recovery of an interrupted writer. -/
+private def withTrustedWrite {α : Type} (dir : System.FilePath) (act : IO α) : IO α := do
+  let osDir := dir / ".obend"
+  IO.FS.createDirAll osDir
+  let mut name := "log-writer-pending"
+  if System.Platform.isLinux then
+    let boot := (← IO.FS.readFile "/proc/sys/kernel/random/boot_id").trimAscii.toString
+    unless boot.length == 36 && boot.toList.all (fun c => c.isAlphanum || c == '-') do
+      throw (IO.userError "cannot identify the current storage recovery epoch")
+    name := name ++ "-" ++ boot
+  let pending := osDir / name
+  try IO.FS.createDir pending
+  catch e =>
+    match e with
+    | .alreadyExists .. =>
+      throw (IO.userError s!"vault writer is active or interrupted; storage recovery required ({pending})")
+    | _ => throw e
+  let result ← act
+  -- A failed operation deliberately leaves the live namespace interlock armed.
+  IO.FS.removeDir pending
+  return result
+
+/-- The selector's data and its final name are both durable on return. -/
+private def publishLocked (Hb : Bytes → Bytes) (dir : System.FilePath) (idx : Index) : IO Unit := do
+  let tmp := dir / ".obend" / "log.index-new"
+  settleDir (dir / ".obend") do
+    writeTempSynced tmp (indexText Hb idx).toUTF8
+    IO.FS.rename tmp (selector dir)
+
+/-- An orphan's old contents must be unreachable before advancing the selector. -/
+private def prepareBoundaryLocked (Hb : Bytes → Bytes) (dir : System.FilePath) (idx : Index)
     (bi : Nat) (publishing : Bool) : IO IO.FS.Handle := do
-  let h ← IO.FS.Handle.mk (block dir idx.generation bi) .write
-  h.flush
-  if publishing && bi > idx.active then publish Hb dir ⟨idx.generation, bi⟩
+  let h ← settleDir (root dir / toString idx.generation) do
+    let h ← IO.FS.Handle.mk (block dir idx.generation bi) .write
+    fsyncFile h
+    return h
+  if publishing && bi > idx.active then publishLocked Hb dir ⟨idx.generation, bi⟩
   return h
 
 /-- Append at a known logical end. Boundary blocks are cleared before publication, then written;
-a crash at publication is the full predecessor. Blocks are flushed before proceeding. `publishing = false`
+a crash at publication is the full predecessor. Blocks are synced before proceeding. `publishing = false`
 builds an unselected generation for migration or compaction. -/
-def appendAt (Hb : Bytes → Bytes) (dir : System.FilePath) (idx : Index) (start : Nat)
+private def appendAtLocked (Hb : Bytes → Bytes) (dir : System.FilePath) (idx : Index) (start : Nat)
     (b : ByteArray) (publishing : Bool) : IO Unit := do
   let mut off := 0
   while off < b.size do
     let pos := start + off
     let bi := pos / capacity
     let len := min (capacity - pos % capacity) (b.size - off)
-    let h ← if pos % capacity == 0 then prepareBoundary Hb dir idx bi publishing
-      else IO.FS.Handle.mk (block dir idx.generation bi) .append
+    let h ← if pos % capacity != 0 then IO.FS.Handle.mk (block dir idx.generation bi) .append
+      else if publishing then prepareBoundaryLocked Hb dir idx bi true
+      else IO.FS.Handle.mk (block dir idx.generation bi) .write
     Obend.Vault.Cost.write h (b.extract off (off + len))
-    h.flush
+    fsyncFile h
     off := off + len
 
-def fresh (dir : System.FilePath) : IO Nat := do
+private def buildGeneration {α : Type} (dir : System.FilePath) (fill : Nat → IO α) : IO α := do
   let mut g ← IO.monoNanosNow
   while ← (root dir / toString g).pathExists do g := g + 1
-  IO.FS.createDirAll (root dir / toString g)
-  return g
+  let generation := root dir / toString g
+  settleDir dir do
+    IO.FS.createDirAll (dir / ".obend")
+    settleDir (dir / ".obend") do
+      IO.FS.createDirAll (root dir)
+      settleDir (root dir) do
+        IO.FS.createDir generation
+        settleDir generation (fill g)
 
 def lastBlock (size : Nat) : Nat := (size - 1) / capacity
 
@@ -1451,42 +1525,66 @@ def lastBlock (size : Nat) : Nat := (size - 1) / capacity
 def ensure (Hb : Bytes → Bytes) (dir : System.FilePath) : IO Index := do
   if let some idx ← index Hb dir then return idx
   let b ← if ← (selector dir).pathExists then Obend.Vault.Cost.readBinFile (selector dir) else pure .empty
-  let g ← fresh dir
-  let idx : Index := ⟨g, lastBlock b.size⟩
-  appendAt Hb dir idx 0 b false
-  publish Hb dir idx
-  return idx
+  withTrustedWrite dir do
+    let idx ← buildGeneration dir fun g => do
+      let idx : Index := ⟨g, lastBlock b.size⟩
+      appendAtLocked Hb dir idx 0 b false
+      return idx
+    publishLocked Hb dir idx
+    return idx
 
 def append (Hb : Bytes → Bytes) (dir : System.FilePath) (b : ByteArray) : IO Unit := do
   let idx ← ensure Hb dir
-  appendAt Hb dir idx (← sizeOf dir idx) b true
+  withTrustedWrite dir do
+    appendAtLocked Hb dir idx (← sizeOf dir idx) b true
 
 /-- Atomic replacement, used by compaction. The previously selected generation is removed only
 after publication; an interrupted publication therefore preserves a complete log. -/
 def replace (Hb : Bytes → Bytes) (dir : System.FilePath) (b : ByteArray) : IO Unit := do
   let old ← index Hb dir
-  let g ← fresh dir
-  let idx : Index := ⟨g, lastBlock b.size⟩
-  appendAt Hb dir idx 0 b false
-  publish Hb dir idx
-  if let some previous := old then
-    IO.FS.removeDirAll (root dir / toString previous.generation)
+  withTrustedWrite dir do
+    let idx ← buildGeneration dir fun g => do
+      let idx : Index := ⟨g, lastBlock b.size⟩
+      appendAtLocked Hb dir idx 0 b false
+      return idx
+    publishLocked Hb dir idx
+    if let some previous := old then
+      IO.FS.removeDirAll (root dir / toString previous.generation)
 
 /-- Remove a rejected tail. Publish the retained last block before deleting later files; an
 interrupted truncation can leave only rejected bytes or orphan files, never lose prefix bytes. -/
 def truncate (Hb : Bytes → Bytes) (dir : System.FilePath) (stop : Nat) : IO Unit := do
   let idx ← ensure Hb dir
-  let keep := (stop + capacity - 1) / capacity
-  publish Hb dir ⟨idx.generation, lastBlock stop⟩
-  if keep > 0 && stop % capacity != 0 then
-    let f := block dir idx.generation (keep - 1)
-    let b ← Obend.Vault.Cost.readBinFile f
-    let tmp := f.withExtension "tmp"
-    Obend.Vault.Cost.writeBinFile tmp (b.extract 0 (stop % capacity))
-    IO.FS.rename tmp f
-  for j in [keep : idx.active + 1] do
-    let f := block dir idx.generation j
-    if ← f.pathExists then IO.FS.removeFile f
+  withTrustedWrite dir do
+    let keep := (stop + capacity - 1) / capacity
+    publishLocked Hb dir ⟨idx.generation, lastBlock stop⟩
+    if keep > 0 && stop % capacity != 0 then
+      let f := block dir idx.generation (keep - 1)
+      let b ← Obend.Vault.Cost.readBinFile f
+      let tmp := f.withExtension "tmp"
+      settleDir (root dir / toString idx.generation) do
+        writeTempSynced tmp (b.extract 0 (stop % capacity))
+        IO.FS.rename tmp f
+    settleDir (root dir / toString idx.generation) do
+      for j in [keep : idx.active + 1] do
+        let f := block dir idx.generation j
+        if ← f.pathExists then IO.FS.removeFile f
+
+-- Low-level callers (including the interrupted-rollover fixture) use the same interlock.
+def publish (Hb : Bytes → Bytes) (dir : System.FilePath) (idx : Index) : IO Unit :=
+  withTrustedWrite dir (publishLocked Hb dir idx)
+
+def prepareBoundary (Hb : Bytes → Bytes) (dir : System.FilePath) (idx : Index)
+    (bi : Nat) (publishing : Bool) : IO IO.FS.Handle :=
+  withTrustedWrite dir (prepareBoundaryLocked Hb dir idx bi publishing)
+
+def appendAt (Hb : Bytes → Bytes) (dir : System.FilePath) (idx : Index) (start : Nat)
+    (b : ByteArray) (publishing : Bool) : IO Unit :=
+  withTrustedWrite dir do
+    if publishing then appendAtLocked Hb dir idx start b true
+    else settleDir (root dir / toString idx.generation) (appendAtLocked Hb dir idx start b false)
+
+def fresh (dir : System.FilePath) : IO Nat := withTrustedWrite dir (buildGeneration dir pure)
 
 end Obend.Vault.SegmentLog
 

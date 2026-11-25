@@ -2332,6 +2332,13 @@ module = "Obend.Repair.UpgradeEnvelope"
 theorem = "relinkLogAcrossEpochs_sound"
 description = "Hofmann-Pierce-Wagner symmetric complemented edit lenses, Thor M1 lazy per-bucket upgrades (`lazyUpgrade_obs_eq_eagerUpgrade`), Genealogy-gated epoch log relinking with LobCost accounting, and lifted yielded Core4 continuations (`liftYieldedContinuation_commutes`)."
 
+[[apex]]
+id = "vault-fs-durability-segmented-replace-and-crash-prefix"
+subsystem = "Vault"
+module = "Obend.Vault.FsDurability"
+theorem = "segmented_replace_selected_image"
+description = "Pillai-Bornholt file/directory crash durability for hosted segmented logs (`repaired_append_crash_prefix`, `repaired_rollover_crash_prefix`, `repaired_replace_crash_safe`, `pruning_crash_safe`, `segmented_replace_selected_image`, `physicalImage_readAll`, `failed_sync_refuses_retry`)."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

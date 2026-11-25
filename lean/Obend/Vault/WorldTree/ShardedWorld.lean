@@ -2672,16 +2672,13 @@ def manifestAndCommit (w : World) (prev : Option (Array CachedBucket) := none) :
   let (mb, buckets) := encodeWorldIncremental w prev
   (mb.data.toList, unbe (logHashArray mb), buckets)
 
-def writeFileAtomicArray (f : System.FilePath) (bs : ByteArray) : IO Unit := do
-  if let some parent := f.parent then IO.FS.createDirAll parent
-  let tmp := System.FilePath.mk (f.toString ++ ".tmp")
-  Obend.Vault.Cost.writeBinFile tmp bs
-  IO.FS.rename tmp f
+def writeFileAtomicArray (f : System.FilePath) (bs : ByteArray) : IO Unit :=
+  Obend.Vault.SegmentLog.writeAtomicSynced f bs
 
-/-- Atomically write ONLY missing/dirty non-empty shard files under `.obend/world/shards/<key>.json`,
-then atomically publish `.obend/world/root.json`. Reuses `(mb, buckets)` in `O(1)` when
-`commitWorldManifest` already encoded this turn's world (`ByteArray.decEq` hit on `knownMb?`).
-Returns `(activeShardFiles, needPrune)`. -/
+/-- Durably write ONLY missing/dirty non-empty shard files under `.obend/world/shards/<key>.json`,
+settling `.obend` and `.obend/world` before durably publishing `.obend/world/root.json`. Reuses
+`(mb, buckets)` in `O(1)` when `commitWorldManifest` already encoded this turn's world
+(`ByteArray.decEq` hit on `knownMb?`). Returns `(activeShardFiles, needPrune)`. -/
 def writeShardedWorld (dir : System.FilePath) (anchor : Nat) (w : World)
     (knownMb? : Option ByteArray := none) : IO (Option (List String × Bool)) := do
   let cached? ← getCachedEntry dir
@@ -2698,6 +2695,9 @@ def writeShardedWorld (dir : System.FilePath) (anchor : Nat) (w : World)
         encodeWorldIncremental w (prevEntry?.map (·.2))
       setCachedBuckets dir mb buckets
       pure (mb, buckets, prevEntry?.isSome)
+  if !(← (dir / ".obend").isDir) then
+    IO.FS.createDirAll dir
+    Obend.Vault.SegmentLog.settleDir dir (IO.FS.createDirAll (dir / ".obend"))
   let mut active : List String := []
   let mut wroteAny := false
   let mut hasAnyNonEmpty := false
@@ -2709,22 +2709,28 @@ def writeShardedWorld (dir : System.FilePath) (anchor : Nat) (w : World)
         active := (key ++ ".json") :: active
         let sf := shardPath dir key
         if !(← sf.pathExists) then
-          IO.FS.createDirAll (shardsDir dir)
+          if !wroteAny then
+            Obend.Vault.SegmentLog.settleDir (dir / ".obend") do
+              IO.FS.createDirAll (worldDir dir)
+              Obend.Vault.SegmentLog.settleDir (worldDir dir) (IO.FS.createDirAll (shardsDir dir))
           writeFileAtomicArray sf bs
           wroteAny := true
+  if !wroteAny && (!hadPrev || !(← (worldDir dir).isDir)) then
+    Obend.Vault.SegmentLog.settleDir (dir / ".obend") (IO.FS.createDirAll (worldDir dir))
   let digests := (List.range numBuckets).map fun b => (buckets[b]?.bind (·.entry?)).map (·.1)
   writeFileAtomicArray (rootPath dir) (frameRootJson anchor mb (metaOf w) digests)
   return some (active, wroteAny || !hadPrev || !hasAnyNonEmpty)
 
 /-- Remove unreferenced shard `.json` files AFTER both `root.json` and `.obend/checkpoint` have been
-atomically published, keeping steady-state shard count bounded to non-empty buckets (`≤ 128`). -/
+durably published, settling `.obend/world/shards` so unlinks cannot reorder across later epochs. -/
 def pruneObsoleteShards (dir : System.FilePath) (active : List String) : IO Unit := do
   let sd := shardsDir dir
   if !(← sd.isDir) then return
   let keep := Std.TreeSet.ofList active compare
-  for e in ← sd.readDir do
-    if e.fileName.endsWith ".json" && !keep.contains e.fileName then
-      try IO.FS.removeFile e.path catch _ => pure ()
+  Obend.Vault.SegmentLog.settleDir sd do
+    for e in ← sd.readDir do
+      if e.fileName.endsWith ".json" && !keep.contains e.fileName then
+        try IO.FS.removeFile e.path catch _ => pure ()
 
 /-! ### Canonical Single-Pass Shard Reader (Zero Cold-Load Re-Serialization) & Bucketed Store Lookup -/
 

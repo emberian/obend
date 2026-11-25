@@ -694,6 +694,7 @@ import Obend.Vault.Form
 import Obend.Vault.FormCheck
 import Obend.Vault.FormCheckCache
 import Obend.Vault.FrustumMembrane
+import Obend.Vault.FsDurability
 import Obend.Vault.Hyperedge
 import Obend.Vault.Index
 import Obend.Vault.IrreversibleOutbox

@@ -2,6 +2,10 @@ name = "obend"
 version = "0.0.1"
 defaultTargets = ["Obend"]
 
+[[require]]
+name = "vaultsync"
+path = "c"
+
 # Three-way build split (2026-11-01; apps and tests moved to tier 2 on 2026-11-04; compiled native
 # runner `obend-test` and `Teeth.Extracted` split added 2026-11-12). `lake build` builds tier 1, the
 # library: every definition and proof under `Obend/` except `Obend/Apps/`, `Obend/Teeth/` and
@@ -24,6 +28,7 @@ globs = [
   "Obend.Vault.+", "Obend.FFI", "Obend.FFI.*",
   "Obend.Polis.+", "Obend.Metatheory.+", "Obend.SymbolicZk.+", "Obend.ClusterGov.+", "Obend.Codec.+", "Obend.OS.+", "Obend.Geometry.+", "Obend.SemanticKG.+",
 ]
+moreLinkObjs = ["vaultsync/vaultSyncO"]
 
 # Lane Lower (2026-11-01): the first Lean programs `obend lower` reads (`tests/lower/Programs.lean`, plain
 # Lean importing only `Init`). Built on demand: `lake build LowerPrograms` before `obend lower`.
@@ -128,3 +133,9 @@ root = "Rdna2"
 name = "obend-litmus-check"
 srcDir = "tools/litmuscheck"
 root = "LitmusCheck"
+
+# Hosted segment and atomic-checkpoint barrier tests exercise the same native fsync object as the CLI.
+[[lean_exe]]
+name = "vault-segments"
+srcDir = "tests/vault"
+root = "Segments"
