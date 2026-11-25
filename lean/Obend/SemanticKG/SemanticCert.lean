@@ -249,6 +249,19 @@ theorem semantic_positive_cert_sound
     hDer, hWne, ⟨hLeads, hSubR, hAcc'⟩,
     verifyMaskedAjtaiOpening_sound pp beta rcpt.ajtaiComm rcpt.ajtaiWitness rcpt.ajtaiMask hAjtai⟩
 
+private theorem verifyEdbSpanOpening_intro
+    {root : VpaJson.SpanRoot} {g : GrammarSpec} {op : EdbSpanOpening}
+    (idx : op.merkleProof.index = op.chunkIdx)
+    (merkle : verifyDatabankChunkInclusion root op.chunk op.merkleProof = true)
+    (red : checkRedactionDelimiterConfined op.chunk.rawBytes op.redactionPol = true)
+    (span : op.redactionPol.disclosedSpans.toList.contains op.disclosedSpan = true)
+    (lo : op.disclosedSpan.1 ≤ op.atom.byteStart) (hi : op.atom.byteStart + op.atom.byteLen ≤ op.disclosedSpan.2)
+    (parsed : ∃ atoms, extractSpanBoundAtoms g op.chunk = .ok atoms ∧ op.atom ∈ atoms)
+    (nz : op.baseWeight ≠ ProvenanceSemiringOps.zero) : verifyEdbSpanOpening root g op = true := by
+  obtain ⟨atoms, extract, mem⟩ := parsed
+  simp only [verifyEdbSpanOpening, idx, beq_self_eq_true, merkle, red, span, decide_eq_true lo,
+    decide_eq_true hi, extract, Array.contains_iff_mem.mpr mem, bne_iff_ne.mpr nz, Bool.and_self]
+
 /-- Non-vacuity witness for `verifyPositiveReceipt` (zero Keccak kernel evaluation). -/
 theorem verifyPositiveReceipt_inhabited (predSym : UInt32) (rights : UInt64) :
     let raw := "{\"p\":\"rel\",\"a\":\"x\"}".toByteArray
@@ -291,11 +304,8 @@ theorem verifyPositiveReceipt_inhabited (predSym : UInt32) (rights : UInt64) :
   have hSpMem : redPol.disclosedSpans.toList.contains (0, 19) = true := by decide
   have hEx' : extractSpanBoundAtoms g doc = .ok atoms := hEx
   have hOpOk : verifyEdbSpanOpening (databankChunkMerkleRoot db) g op = true := by
-    have hPrfIdx : (databankChunkMerkleProof db 0).index = 0 := rfl
-    have hStart0 : decide (0 ≤ a.byteStart) = true := by simp
-    have hEnd19 : decide (a.byteStart + a.byteLen ≤ 19) = true := decide_eq_true hInBounds
-    simp only [verifyEdbSpanOpening, op, hPrfIdx, beq_self_eq_true, hMerkle, hRedConf, hSpMem,
-      hStart0, hEnd19, hEx', Array.contains_iff_mem.mpr haMem, bne_iff_ne.mpr hOneNeZero, Bool.and_self]
+    exact verifyEdbSpanOpening_intro (op := op) rfl hMerkle hRedConf hSpMem
+      (Nat.zero_le _) hInBounds ⟨atoms, hEx', haMem⟩ hOneNeZero
   have hDagOk : verifyPosLineageDag #[op] #[] #[.edbLeaf 0 target ProvenanceSemiringOps.one]
       target ProvenanceSemiringOps.one = true := by
     simp [verifyPosLineageDag, verifyPosLineageNode, bne_iff_ne.mpr hOneNeZero, op, target,
