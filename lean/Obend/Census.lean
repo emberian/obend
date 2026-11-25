@@ -478,6 +478,7 @@ import Obend.Lower.Pancake
 import Obend.Lower.Pancake.BeltLatch
 import Obend.Lower.Pancake.ByteMemory
 import Obend.Lower.Pancake.CondSClk
+import Obend.Lower.Pancake.DurableTurn
 import Obend.Lower.Pancake.EmitPnk
 import Obend.Lower.Pancake.LcnfEmit
 import Obend.Lower.Pancake.LcnfFun
@@ -504,6 +505,7 @@ import Obend.Metatheory.LiveEvolutionAndLink
 import Obend.Metatheory.PinsAndQuiescence
 import Obend.Metatheory.SponsorAndMigration
 import Obend.Metatheory.StratifiedCut
+import Obend.OS.DragonStyleAppliance
 import Obend.OS.Sel4MicrokitKernel
 import Obend.OS.Sel4MicrokitKernelCore
 import Obend.OS.SmmuRadixTables

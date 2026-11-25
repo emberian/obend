@@ -47,6 +47,7 @@ entry_points = [
   "lean/Obend/FFI.lean",
   "lean/Obend/FFI/Bridge.lean",
   "lean/tools/emitsv/EmitSv.lean",
+  "lean/tests/dragonstyle/Emit.lean",
   "lean/tools/emitcam/EmitCam.lean",
   "lean/tools/emithvm/EmitHvm.lean",
   "lean/tools/emitgpu/EmitGpu.lean",
@@ -2362,3 +2363,17 @@ target_module = "Obend.Vault.IrreversibleOutbox"
 target_theorem = "firmament_sel4_copy_before_verify_and_irreversible_outbox_safe"
 wave = "Wave 5"
 description = "`seL4` Microkit PDs mandatory copy-before-verify SPSC ring isolation + 3-class `IrreversibleEffectSettlement` gated on `Simplex` finalized QCs."
+
+[[apex]]
+id = "os-dragonstyle-durable-turn"
+subsystem = "OS"
+module = "Obend.OS.DragonStyleAppliance"
+theorem = "dragonstyle_appliance"
+description = "Every receipt indexes the original authorized payload and nullifier in the power-cut-recovered WAL, with at-most-once dispatch across retries."
+
+[[apex]]
+id = "os-sddf-ring-ownership"
+subsystem = "OS"
+module = "Obend.OS.SddfOwnership"
+theorem = "ring_ownership"
+description = "Unbounded RX, TX and storage queue histories conserve each fixed-pool slot across submission and completion."
