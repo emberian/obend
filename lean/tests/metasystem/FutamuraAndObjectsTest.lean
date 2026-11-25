@@ -316,6 +316,31 @@ example :
 #print axioms extractReadMembers_conservative
 #print axioms extractReadMembers_mutation_invariant
 #print axioms candidate_supports_conservative
+private def slotChain (n : Nat) : Composition :=
+  ⟨{ name := "base", metadata := .record [], fields :=
+    [("a", .get (.bound 1) "b"), ("b", .get (.bound 1) "c"),
+     ("c", .get (.bound 1) "d"), ("d", .nat n)], flat := true }, [], []⟩
+
+-- The real object changes at distance three. The original emitted artifact remains valid
+-- at its own view, and both the stale input and a replacement payload lose admission.
+#guard slotReadCone (slotChain 0) "a" == ["a", "b", "c", "d"]
+#guard match emittedMember (slotChain 0) "a" with
+  | none => false
+  | some d =>
+    let usable (n : Nat) (x : LeafDef) := specSlot.usable (holdsAt (viewOf 0 "obj" (slotChain n)))
+      (.slotBook "obj" "a" (slotChain 0) x)
+    usable 0 d && !(usable 1 d) && !(usable 0 {d with code := .nat 99}) &&
+      !(usable 0 {d with reads := []}) && !(usable 0 {d with member := "b"})
+#guard match Obend.Law.run 50 (.get (slotChain 0).object "a"),
+    Obend.Law.run 50 (.get (slotChain 1).object "a") with
+  | some (.nat 0), some (.nat 1) => true
+  | _, _ => false
+
+#tooth Obend.Leaf.slotBook_forged_def_rejected by
+  mutation Obend.Leaf.Candidate.judge := fun _ => true
+
+#print axioms slotBook_usable_member_eq
+#print axioms slotBook_forged_def_rejected
 #print axioms slotBook_moved_pin_blocks
 #print axioms transportSlot_usable_of_disjoint_overlay
 #print axioms symUnfold_linkComposition_of_not_mem

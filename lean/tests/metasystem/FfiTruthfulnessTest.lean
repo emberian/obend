@@ -17,6 +17,7 @@ Verifies that:
 public import Obend.FFI.Bridge
 public import Obend.Tactic.Tooth
 import all Obend.FFI.Bridge
+import all Obend.Vault.Hyperedge
 
 @[expose] public section
 

@@ -15,16 +15,13 @@ public import Obend.Vault.Cost
 public import Obend.Digest.Cshake256.Fast
 public import Obend.Reasons
 public import Obend.Codec.Hex
-
+public import Obend.Doc.WorkbookEngine
 public section
-
 /-
 # Obend.Vault.ChunkedWorld — Merkleized Sharded World Checkpoints
-
 Splits `Replay.World`'s `store.pages` and `store.tombs` deterministically into `128` hash buckets
 by page name, stored as content-addressed JSON shard files `.obend/world/shards/<digest>.json`
 together with an authenticated root manifest `.obend/world/root.json`.
-
 * **Universal round-trip (`decodeShardedWorld_encodeShardedWorld`)**: for every `w : World`,
   `decodeShardedWorld (encodeShardedWorld w) = .ok w`, with every shard authenticated by
   cSHAKE256 (`logHash`) and exact `store.pages` / `store.tombs` list order preserved.
@@ -36,11 +33,8 @@ together with an authenticated root manifest `.obend/world/root.json`.
   verified per-bucket `DecodeCache.Entry` results in-process and supporting demand-loading of
   metadata or individual page buckets where safe.
 -/
-
 namespace Obend.Vault.ChunkedWorld
-
 set_option autoImplicit false
-
 open Lean (Json toJson)
 open Obend.Doc Obend.Vault Obend.Vault.Json Obend.Vault.Log
 open Obend.Ledger Obend.Ledger.Json
@@ -56,9 +50,7 @@ open Obend.Digest.Cshake256.Fast (pushList push_data pushList_data empty_data sp
 open Obend.Codec.Hex (hexNibbleByte decodeHexNibbleByte? byteToHex bytesToHex bytesToHexAscii bytesToHexAscii_cons
   hexAsciiToBytes? hexCharsToBytes? hexCharsToBytes?_bytesToHex hexAsciiToBytes?_bytesToHexAscii
   hexAsciiToBytes?_of_odd)
-
 /-! ## 1. The World State & Fast ByteArray cSHAKE256 -/
-
 deriving instance DecidableEq for Page
 deriving instance DecidableEq for PageWrite
 deriving instance DecidableEq for PageConflict
@@ -66,7 +58,6 @@ deriving instance DecidableEq for Store
 deriving instance DecidableEq for Journal
 deriving instance DecidableEq for Obend.Vault.Form.Cell
 deriving instance DecidableEq for Obend.Vault.Form.Form
-
 /-- The world beside a vault: the store of its pages and members (with the merges' open conflicts),
 the register's journal, the forms it issued, the receipt chain of the proposals it judged, the
 forms it received and the proposals it sent, transport state, retention contracts, declared forks
@@ -89,18 +80,16 @@ structure World where
   checked : List Form.CheckRecord := []
   /-- Member authority attributions for declared forks (`obend fork DIR --for MEMBER`). -/
   forkMembers : List (String × String) := []
+  /-- Live session workbook snapshot stepped via `Replay.workbookExt`. -/
+  workbook : Option Obend.Doc.WorkbookEngine.Workbook := none
 deriving DecidableEq
-
 /-- The log's digest: cSHAKE256 customized `obend-log`. -/
 def logHash (b : Bytes) : Bytes :=
   Obend.Digest.Cshake256.cshake256Bytes "obend-log".toUTF8.toList b
-
 def appendByteArray.go (b : ByteArray) (i : Nat) (acc : ByteArray) : ByteArray :=
   if h : i < b.size then appendByteArray.go b (i + 1) (acc.push (b[i]'h)) else acc
 termination_by b.size - i
-
 def appendByteArray (a b : ByteArray) : ByteArray := appendByteArray.go b 0 a
-
 theorem appendByteArray_go_eq (b : ByteArray) (i : Nat) (acc : ByteArray) :
     (appendByteArray.go b i acc).data.toList = acc.data.toList ++ b.data.toList.drop i := by
   have hs : b.data.toList.length = b.size := Array.length_toList
@@ -114,13 +103,10 @@ theorem appendByteArray_go_eq (b : ByteArray) (i : Nat) (acc : ByteArray) :
   · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]
     simp
 termination_by b.size - i
-
 theorem appendByteArray_data (a b : ByteArray) :
     (appendByteArray a b).data.toList = a.data.toList ++ b.data.toList := by
   simpa [appendByteArray] using appendByteArray_go_eq b 0 a
-
 def appendByteArrayFast (a b : ByteArray) : ByteArray := a ++ b
-
 @[csimp]
 theorem appendByteArray_eq_fast : @appendByteArray = @appendByteArrayFast := by
   funext a b
@@ -137,25 +123,20 @@ theorem appendByteArray_eq_fast : @appendByteArray = @appendByteArrayFast := by
         rwa [h2] at this
       congr 1
       exact Array.toList_inj.1 (hl1.trans hl2.symm)
-
 /-- Precomputed cSHAKE256 customization block for `"obend-log"`. -/
 def logPrefix : ByteArray :=
   pushList ByteArray.empty (customizationPrefix "obend-log".toUTF8.toList)
-
 /-- Hash a `ByteArray` directly without converting through `List UInt8`. -/
 def logHashArray (b : ByteArray) : Bytes :=
   if "obend-log".toUTF8.toList = [] then spongeBytes b 0x1f
   else spongeBytes (appendByteArray logPrefix b) 0x04
-
 theorem logHashArray_eq (b : ByteArray) : logHashArray b = logHash b.data.toList := by
   unfold logHashArray logPrefix logHash Obend.Digest.Cshake256.cshake256Bytes
   by_cases h : "obend-log".toUTF8.toList = []
   · simp only [h, ite_true, sponge_fast_eq]
   · simp only [h, ite_false, sponge_fast_eq, appendByteArray_data, pushList_data,
       empty_data, List.nil_append]
-
 /-! ## 2. Verified Prefix-Free Binary Codec with Linear `ByteArray` Fast Path -/
-
 /-- Byte-level codec paired with its linear `ByteArray` writer (`push`) and offset reader (`readAt`). -/
 structure RawCodec (α : Type) where
   enc : α → Bytes
@@ -165,34 +146,27 @@ structure RawCodec (α : Type) where
   push_eq : ∀ (acc : ByteArray) (a : α), (push acc a).data.toList = acc.data.toList ++ enc a
   readAt_eq : ∀ (b : ByteArray) (off : Nat),
     dec (b.data.toList.drop off) = (readAt b off).map (fun p => (p.1, b.data.toList.drop p.2))
-
 /-- A `RawCodec` whose `dec` universally left-inverts `enc` on every suffix. -/
 structure FastCodec (α : Type) extends RawCodec α where
   roundtrip : ∀ (a : α) (rest : Bytes), dec (enc a ++ rest) = some (a, rest)
-
 def FastCodec.encodeArray {α : Type} (c : FastCodec α) (a : α) : ByteArray :=
   c.push ByteArray.empty a
-
 theorem FastCodec.encodeArray_eq {α : Type} (c : FastCodec α) (a : α) :
     (c.encodeArray a).data.toList = c.enc a := by
   simp [FastCodec.encodeArray, c.push_eq]
-
 def FastCodec.decodeExact {α : Type} (c : FastCodec α) (bs : Bytes) : Option α :=
   match c.dec bs with
   | some (a, []) => some a
   | _ => none
-
 def FastCodec.decodeExactArray {α : Type} (c : FastCodec α) (b : ByteArray) : Option α :=
   match c.readAt b 0 with
   | some (a, off) => if b.size ≤ off then some a else none
   | none => none
-
 theorem FastCodec.decodeExact_enc {α : Type} (c : FastCodec α) (a : α) :
     c.decodeExact (c.enc a) = some a := by
   have h := c.roundtrip a []
   rw [List.append_nil] at h
   simp [FastCodec.decodeExact, h]
-
 theorem FastCodec.decodeExactArray_eq {α : Type} (c : FastCodec α) (b : ByteArray) :
     c.decodeExactArray b = c.decodeExact b.data.toList := by
   have hr := c.readAt_eq b 0
@@ -214,9 +188,7 @@ theorem FastCodec.decodeExactArray_eq {α : Type} (c : FastCodec α) (b : ByteAr
       cases hd : b.data.toList.drop off with
       | nil => exact absurd hd hne
       | cons _ _ => rfl
-
 /-! ### Primitive & Combinator Codecs -/
-
 def rawFail {α : Type} : RawCodec α where
   enc _ := []
   dec _ := none
@@ -224,7 +196,6 @@ def rawFail {α : Type} : RawCodec α where
   readAt _ _ := none
   push_eq _ _ := by simp
   readAt_eq _ _ := rfl
-
 def cUnit : FastCodec Unit where
   enc _ := []
   dec bs := some ((), bs)
@@ -233,11 +204,9 @@ def cUnit : FastCodec Unit where
   roundtrip _ _ := rfl
   push_eq _ _ := by simp
   readAt_eq _ _ := rfl
-
 theorem push_u8_data (acc : ByteArray) (x : UInt8) :
     (acc.push x).data.toList = acc.data.toList ++ [x] := by
   simp
-
 def cUInt8 : FastCodec UInt8 where
   enc x := [x]
   dec
@@ -255,7 +224,6 @@ def cUInt8 : FastCodec UInt8 where
       rfl
     · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]
       rfl
-
 def rawMap {α β : Type} (to : α → β) (of : β → Option α) (c : RawCodec β) : RawCodec α where
   enc a := c.enc (to a)
   dec bs := match c.dec bs with
@@ -271,18 +239,15 @@ def rawMap {α β : Type} (to : α → β) (of : β → Option α) (c : RawCodec
     cases c.readAt b off with
     | none => rfl
     | some p => dsimp only [Option.map]; cases of p.1 <;> rfl
-
 def cMap {α β : Type} (to : α → β) (of : β → Option α) (of_to : ∀ a, of (to a) = some a)
     (c : FastCodec β) : FastCodec α where
   toRawCodec := rawMap to of c.toRawCodec
   roundtrip a rest := by
     simp [rawMap, c.roundtrip, of_to]
-
 def cBool : FastCodec Bool :=
   cMap (fun b => if b then (1 : UInt8) else 0)
     (fun u => if u == 0 then some false else if u == 1 then some true else none)
     (by intro b; cases b <;> rfl) cUInt8
-
 def rawPair {α β : Type} (c1 : RawCodec α) (c2 : RawCodec β) : RawCodec (α × β) where
   enc p := c1.enc p.1 ++ c2.enc p.2
   dec bs := match c1.dec bs with
@@ -305,12 +270,10 @@ def rawPair {α β : Type} (c1 : RawCodec α) (c2 : RawCodec β) : RawCodec (α 
       dsimp only [Option.map]
       rw [c2.readAt_eq b p1.2]
       cases c2.readAt b p1.2 <;> rfl
-
 def cPair {α β : Type} (c1 : FastCodec α) (c2 : FastCodec β) : FastCodec (α × β) where
   toRawCodec := rawPair c1.toRawCodec c2.toRawCodec
   roundtrip p rest := by
     simp [rawPair, List.append_assoc, c1.roundtrip, c2.roundtrip]
-
 def rawOption {α : Type} (c : RawCodec α) : RawCodec (Option α) where
   enc
     | none => [0]
@@ -364,13 +327,11 @@ def rawOption {α : Type} (c : RawCodec α) : RawCodec (Option α) where
             | n + 2, _, _ => rfl
     · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]
       rfl
-
 def cOption {α : Type} (c : FastCodec α) : FastCodec (Option α) where
   toRawCodec := rawOption c.toRawCodec
   roundtrip
     | none, _ => rfl
     | some x, rest => by simp [rawOption, c.roundtrip]
-
 def rawSum {α β : Type} (c1 : RawCodec α) (c2 : RawCodec β) : RawCodec (α ⊕ β) where
   enc
     | .inl x => 0 :: c1.enc x
@@ -432,20 +393,16 @@ def rawSum {α β : Type} (c1 : RawCodec α) (c2 : RawCodec β) : RawCodec (α �
             | n + 2, _, _ => rfl
     · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]
       rfl
-
 def cSum {α β : Type} (c1 : FastCodec α) (c2 : FastCodec β) : FastCodec (α ⊕ β) where
   toRawCodec := rawSum c1.toRawCodec c2.toRawCodec
   roundtrip
     | .inl x, rest => by simp [rawSum, c1.roundtrip]
     | .inr y, rest => by simp [rawSum, c2.roundtrip]
-
 /-! ### Unbounded LEB128 `Nat` Codec -/
-
 def encNat (n : Nat) : Bytes :=
   if n < 128 then [n.toUInt8]
   else (128 + n % 128).toUInt8 :: encNat (n / 128)
 termination_by n
-
 def decNat : Bytes → Option (Nat × Bytes)
   | [] => none
   | b :: rest =>
@@ -453,12 +410,10 @@ def decNat : Bytes → Option (Nat × Bytes)
     else match decNat rest with
       | none => none
       | some (hi, r) => some ((b.toNat - 128) + 128 * hi, r)
-
 def pushNat (acc : ByteArray) (n : Nat) : ByteArray :=
   if n < 128 then acc.push n.toUInt8
   else pushNat (acc.push (128 + n % 128).toUInt8) (n / 128)
 termination_by n
-
 def readNatAt (b : ByteArray) (off : Nat) : Option (Nat × Nat) :=
   if h : off < b.size then
     let x := b[off]'h
@@ -468,10 +423,8 @@ def readNatAt (b : ByteArray) (off : Nat) : Option (Nat × Nat) :=
       | some (hi, o) => some ((x.toNat - 128) + 128 * hi, o)
   else none
 termination_by b.size - off
-
 theorem u8_toNat_lt (n : Nat) (h : n < 256) : n.toUInt8.toNat = n := by
   simp [Nat.toUInt8, UInt8.toNat_ofNat', Nat.mod_eq_of_lt h]
-
 theorem decNat_encNat (n : Nat) (rest : Bytes) : decNat (encNat n ++ rest) = some (n, rest) := by
   rw [encNat]
   by_cases h : n < 128
@@ -485,7 +438,6 @@ theorem decNat_encNat (n : Nat) (rest : Bytes) : decNat (encNat n ++ rest) = som
     simp only [hge, ↓reduceIte, decNat_encNat (n / 128) rest]
     congr 1; congr 1; omega
 termination_by n
-
 theorem pushNat_eq (acc : ByteArray) (n : Nat) :
     (pushNat acc n).data.toList = acc.data.toList ++ encNat n := by
   rw [pushNat, encNat]
@@ -495,7 +447,6 @@ theorem pushNat_eq (acc : ByteArray) (n : Nat) :
     rw [pushNat_eq _ (n / 128), push_u8_data, List.append_assoc]
     rfl
 termination_by n
-
 theorem readNatAt_eq (b : ByteArray) (off : Nat) :
     decNat (b.data.toList.drop off) =
       (readNatAt b off).map (fun p => (p.1, b.data.toList.drop p.2)) := by
@@ -513,7 +464,6 @@ theorem readNatAt_eq (b : ByteArray) (off : Nat) :
       cases readNatAt b (off + 1) <;> rfl
   · rw [dite_eq_right_of_eq_false (eq_false h), List.drop_eq_nil_of_le (by omega)]; rfl
 termination_by b.size - off
-
 theorem readNatAt_le (b : ByteArray) (off n o : Nat) (h : readNatAt b off = some (n, o)) :
     o ≤ b.size := by
   rw [readNatAt] at h
@@ -537,7 +487,6 @@ theorem readNatAt_le (b : ByteArray) (off n o : Nat) (h : readNatAt b off = some
   · rw [dite_eq_right_of_eq_false (eq_false hb)] at h
     contradiction
 termination_by b.size - off
-
 def cNat : FastCodec Nat where
   enc := encNat
   dec := decNat
@@ -546,16 +495,13 @@ def cNat : FastCodec Nat where
   roundtrip := decNat_encNat
   push_eq := pushNat_eq
   readAt_eq := readNatAt_eq
-
 def cInt : FastCodec Int :=
   cMap
     (fun | .ofNat n => .inl n | .negSucc n => .inr n)
     (fun | .inl n => some (.ofNat n) | .inr n => some (.negSucc n))
     (by intro i; cases i <;> rfl)
     (cSum cNat cNat)
-
 /-! ### Length-Prefixed Lists, Arrays, ByteArrays & Strings -/
-
 def decListN {α : Type} (dec : Bytes → Option (α × Bytes)) : Nat → Bytes → Option (List α × Bytes)
   | 0, bs => some ([], bs)
   | n + 1, bs => match dec bs with
@@ -563,14 +509,12 @@ def decListN {α : Type} (dec : Bytes → Option (α × Bytes)) : Nat → Bytes 
     | some (x, r1) => match decListN dec n r1 with
       | none => none
       | some (xs, r2) => some (x :: xs, r2)
-
 def readListN {α : Type} (rd : ByteArray → Nat → Option (α × Nat)) :
     Nat → ByteArray → Nat → Array α → Option (List α × Nat)
   | 0, _, off, acc => some (acc.toList, off)
   | n + 1, b, off, acc => match rd b off with
     | none => none
     | some (x, o1) => readListN rd n b o1 (acc.push x)
-
 theorem readListN_eq {α : Type} (c : RawCodec α) :
     ∀ (n : Nat) (b : ByteArray) (off : Nat) (acc : Array α),
       (decListN c.dec n (b.data.toList.drop off)).map (fun p => (acc.toList ++ p.1, p.2)) =
@@ -586,7 +530,6 @@ theorem readListN_eq {α : Type} (c : RawCodec α) :
         cases hr : readListN c.readAt n b p1.2 (acc.push p1.1) <;>
         simp [hd, hr, Option.map, Array.toList_push, List.append_assoc] at ih ⊢ <;>
         exact ih
-
 theorem foldl_push_eq {α : Type} (c : RawCodec α) :
     ∀ (xs : List α) (acc : ByteArray),
       (xs.foldl c.push acc).data.toList = acc.data.toList ++ xs.flatMap c.enc
@@ -594,7 +537,6 @@ theorem foldl_push_eq {α : Type} (c : RawCodec α) :
   | x :: xs, acc => by
     simp only [List.foldl_cons, List.flatMap_cons, foldl_push_eq c xs (c.push acc x),
       c.push_eq, List.append_assoc]
-
 def rawList {α : Type} (c : RawCodec α) : RawCodec (List α) where
   enc xs := encNat xs.length ++ xs.flatMap c.enc
   dec bs := match decNat bs with
@@ -625,7 +567,6 @@ def rawList {α : Type} (c : RawCodec α) : RawCodec (List α) where
           obtain ⟨ys, o2⟩ := q
           simp [hd, hr, Option.map] at hl ⊢
           exact hl
-
 theorem decListN_enc_mem {α : Type} (c : RawCodec α) :
     ∀ (xs : List α), (∀ x ∈ xs, ∀ rest, c.dec (c.enc x ++ rest) = some (x, rest)) →
       ∀ (rest : Bytes), decListN c.dec xs.length (xs.flatMap c.enc ++ rest) = some (xs, rest)
@@ -633,16 +574,13 @@ theorem decListN_enc_mem {α : Type} (c : RawCodec α) :
   | x :: xs, h, rest => by
     simp only [List.length_cons, List.flatMap_cons, List.append_assoc, decListN,
       h x List.mem_cons_self, decListN_enc_mem c xs (fun y hy => h y (List.mem_cons_of_mem _ hy)) rest]
-
 def cList {α : Type} (c : FastCodec α) : FastCodec (List α) where
   toRawCodec := rawList c.toRawCodec
   roundtrip xs rest := by
     simp only [rawList, List.append_assoc, decNat_encNat]
     exact decListN_enc_mem c.toRawCodec xs (fun x _ r => c.roundtrip x r) rest
-
 def cArray {α : Type} (c : FastCodec α) : FastCodec (Array α) :=
   cMap Array.toList (fun xs => some xs.toArray) (by intro a; simp) (cList c)
-
 def readBytesLoop (b : ByteArray) (i stop : Nat) (acc : Array UInt8) : Bytes :=
   if h : i < stop then
     if hb : i < b.size then
@@ -1435,6 +1373,7 @@ structure NonStoreMeta where
   reasons : Obend.Reasons.State := {}
   checked : List CheckRecord := []
   forkMembers : List (String × String) := []
+  workbook : Option Obend.Doc.WorkbookEngine.Workbook := none
 deriving DecidableEq
 
 def metaOf (w : World) : NonStoreMeta :=
@@ -1456,7 +1395,8 @@ def metaOf (w : World) : NonStoreMeta :=
     forks := w.forks
     reasons := w.reasons
     checked := w.checked
-    forkMembers := w.forkMembers }
+    forkMembers := w.forkMembers
+    workbook := w.workbook }
 
 def withMeta (pages tombs : List Page) (m : NonStoreMeta) : World :=
   { store :=
@@ -1480,21 +1420,67 @@ def withMeta (pages tombs : List Page) (m : NonStoreMeta) : World :=
     forks := m.forks
     reasons := m.reasons
     checked := m.checked
-    forkMembers := m.forkMembers }
+    forkMembers := m.forkMembers
+    workbook := m.workbook }
 
 theorem withMeta_metaOf (w : World) : withMeta w.store.pages w.store.tombs (metaOf w) = w := by
   cases w
-  rename_i st _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+  rename_i st _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
   cases st
   rfl
+
+def cBitVec256 : FastCodec (BitVec 256) :=
+  cMap (fun bv : BitVec 256 => bv.toFin.val) (fun n => if h : n < 2 ^ 256 then some ⟨⟨n, h⟩⟩ else none)
+    (by intro ⟨⟨_, h⟩⟩; exact dif_pos h) cNat
+
+def cOpcode : FastCodec Obend.Doc.Reactive.Opcode :=
+  cMap (fun | .literal => 0 | .input => 1 | .add => 2 | .sub => 3 | .mul => 4 | .div => (5 : UInt8))
+    (fun u => if u == 0 then some .literal else if u == 1 then some .input else if u == 2 then some .add
+      else if u == 3 then some .sub else if u == 4 then some .mul else if u == 5 then some .div else none)
+    (by intro op; cases op <;> rfl) cUInt8
+
+def cInstruction : FastCodec Obend.Doc.Reactive.Instruction :=
+  cMap (fun i => (i.op, i.arg)) (fun (op, a) => some ⟨op, a⟩) (by intro i; cases i; rfl) (cPair cOpcode cInt)
+
+def cStructuredCell : FastCodec StructuredCell :=
+  cMap (fun c => (c.id, c.kind, c.ast, c.pins, c.receipt))
+    (fun (id, k, ast, ps, rc) => some ⟨id, k, ast, ps, rc⟩) (by intro c; cases c; rfl)
+    (cPair cString (cPair cProjectionKind (cPair cData (cPair (cList (cPair cString cByteArray)) (cOption cByteArray)))))
+
+def cReactiveCell : FastCodec Obend.Doc.Reactive.ReactiveCell :=
+  cMap (fun r => (r.id, r.kind, r.reads, r.defs, r.body, r.note))
+    (fun (id, k, rs, ds, b, n) => some ⟨id, k, rs, ds, b, n⟩) (by intro r; cases r; rfl)
+    (cPair cNat (cPair cProjectionKind (cPair (cList cString) (cPair (cList cString)
+      (cPair (cList (cList cInstruction)) cString)))))
+
+def cCellVisibility : FastCodec Obend.Doc.WorkbookEngine.CellVisibility :=
+  cMap (fun | .publicCell => .inl () | .sealedPrivate t s => .inr (t, s))
+    (fun | .inl () => some .publicCell | .inr (t, s) => some (.sealedPrivate t s))
+    (by intro v; cases v <;> rfl) (cSum cUnit (cPair cString cBitVec256))
+
+def cCachedWorkbookCell : FastCodec Obend.Doc.WorkbookEngine.CachedWorkbookCell :=
+  cMap (fun c => ((c.entry.cellKey, c.entry.structured, c.entry.reactive, c.entry.citedKeys, c.entry.visibility),
+      (c.result.values, c.result.receipt)))
+    (fun ((ck, st, rc, ct, vs), (vals, rcp)) => some ⟨⟨ck, st, rc, ct, vs⟩, ⟨vals, rcp⟩⟩)
+    (by intro ⟨⟨_, _, _, _, _⟩, ⟨_, _⟩⟩; rfl)
+    (cPair (cPair cString (cPair cStructuredCell (cPair cReactiveCell (cPair (cList cString) cCellVisibility))))
+      (cPair (cList cInt) cBitVec256))
+
+def cWorkbookSection : FastCodec Obend.Doc.WorkbookEngine.WorkbookSection :=
+  cMap (fun s => (s.sectionKey, s.markdown, s.blocks)) (fun (k, m, b) => some ⟨k, m, b⟩)
+    (by intro s; cases s; rfl) (cPair cString (cPair cString (cList (cPair cString cInt))))
+
+def cWorkbook : FastCodec Obend.Doc.WorkbookEngine.Workbook :=
+  cMap (fun w => (w.title, w.sections, w.cells)) (fun (t, s, c) => some ⟨t, s, c⟩)
+    (by intro w; cases w; rfl) (cPair cString (cPair (cList cWorkbookSection) (cList cCachedWorkbookCell)))
 
 def cNonStoreMeta : FastCodec NonStoreMeta :=
   cMap
     (fun m => (m.members, m.turn, m.environment, m.conflicts, m.journal, m.forms, m.receipts,
       m.received, m.sent, m.issues, m.grants, m.landed, m.outstanding, m.minted, m.retention,
-      m.forks, m.reasons, m.checked, m.forkMembers))
-    (fun (mb, tn, ev, cf, jn, fm, rc, rv, sn, is, gr, ld, ot, mn, rt, fk, rs, ck, fkm) =>
-      some ⟨mb, tn, ev, cf, jn, fm, rc, rv, sn, is, gr, ld, ot, mn, rt, fk, rs, ck, fkm⟩)
+      m.forks, m.reasons, m.checked, m.forkMembers, m.workbook))
+    (fun (mb, tn, ev, cf, jn, fm, rc, rv, sn, is, gr, ld, ot, mn, rt, fk, rs, ck, fkm, wb) =>
+      some ⟨mb, tn, ev, cf, jn, fm, rc, rv, sn, is, gr, ld, ot, mn, rt, fk, rs, ck, fkm, wb⟩)
     (by intro m; cases m; rfl)
     (cPair (cList cMember) (cPair cNat (cPair (cArray cString) (cPair (cList cPageConflict)
       (cPair cJournal (cPair (cList cForm) (cPair (cList cWitnessReceipt)
@@ -1502,7 +1488,8 @@ def cNonStoreMeta : FastCodec NonStoreMeta :=
           (cPair (cList cIssue) (cPair cGrants (cPair (cList cLanding)
             (cPair (cList cObligation) (cPair cNat (cPair (cList cRetContract)
               (cPair (cList cFork) (cPair cReasonsState
-                (cPair (cList cCheckRecord) (cList (cPair cString cString))))))))))))))))))))
+                (cPair (cList cCheckRecord)
+                  (cPair (cList (cPair cString cString)) (cOption cWorkbook))))))))))))))))))))
 
 abbrev ShardPayload := List (Nat × Page) × List (Nat × Page)
 
@@ -2133,7 +2120,8 @@ def nonStoreMetaJson (m : NonStoreMeta) : Json :=
     (if m.forks.isEmpty then [] else [("forks", Json.arr (m.forks.map Retention.forkJson).toArray)]) ++
     (if m.reasons == {} then [] else [("reasons", Obend.Reasons.stateJson m.reasons)]) ++
     (if m.checked.isEmpty then [] else [("checked", Json.arr (m.checked.map Form.checkedJson).toArray)]) ++
-    (if m.forkMembers.isEmpty then [] else [("forkMembers", pairsJsonCW m.forkMembers)]))
+    (if m.forkMembers.isEmpty then [] else [("forkMembers", pairsJsonCW m.forkMembers)]) ++
+    (match m.workbook with | none => [] | some wb => [("workbook", Json.str (bytesToHex (cWorkbook.enc wb)))]))
 
 /-- Canonical binary Merkle manifest of a world (`deployed.encW`):
 `"OBWM0001"` (8-byte magic) ++ `cManifestCore.enc (meta, totalPages, totalTombs, bucketDigests)`

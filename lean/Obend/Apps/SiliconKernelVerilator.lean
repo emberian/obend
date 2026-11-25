@@ -145,6 +145,7 @@ theorem siliconKernelBundle_crossPackage_cone_survives :
       (.get Cc.object target ≈b instantiate Frame (.get Cc.object m)) →
       (.get (linkComposition Cc L).object target ≈b instantiate Frame (.get (linkComposition Cc L).object m)) →
       (linkComposition Cc L).closedB = true →
+      emittedMember (linkComposition Cc L) target = some defItem →
       holdsAt v' (rebindEquivPin cert (memberConePin Cc m)) = true →
       (∀ m' ∈ slotReadCone (linkComposition Cc L) target, m' ≠ m →
         holdsAt v' (memberConePin (linkComposition Cc L) m') = true) →
@@ -165,9 +166,9 @@ theorem siliconKernelBundle_crossPackage_cone_survives :
   refine ⟨coneSupports_linkComposition_of_disjoint Cc Lc ["zone3LutEval", "zone4KernelGate"] hflat_c hdisj_c1,
           coneSupports_linkComposition_of_disjoint Cc zone1BypassOnlyLayer
             (slotReadCone Cc "zone3LutEval") hflat_z1 hdisj_c2, ?_⟩
-  intro objectName target m L defItem v' o c s cert Frame htb htl hcl hpin hrest htu htr
+  intro objectName target m L defItem v' o c s cert Frame htb htl hcl hdef hpin hrest htu htr
   have hreb := @crossPackage_bEquiv_rebinds_slot_usable objectName target m Cc L defItem v' o c s
-    cert Frame htb htl hcl hpin hrest htu htr
+    cert Frame htb htl hcl hdef hpin hrest htu htr
   exact ⟨rebindEquivPin_memberConePin cert, hreb.2.1, hreb.2.2.1, hreb.2.2.2.1, hreb.2.2.2.2⟩
 
 /-! ## 2. Synthesizable `silicon_elab_top` (`emitModuleSV siliconElabRtlModule`) & Verilator Co-Simulation Model -/

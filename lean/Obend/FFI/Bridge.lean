@@ -72,7 +72,6 @@ structure SessionState where
   committedRoots : Array ByteArray := #[]
   committedTurns : List VaultTurn := []
   doc : Graph := Graph.empty
-  workbook : Obend.Doc.WorkbookEngine.Workbook := defaultSessionWorkbook
   scratch : ByteArray := ByteArray.empty
   lastError : Option String := none
   deriving Inhabited
@@ -1059,26 +1058,61 @@ def cellWeaveCertCore (s : SessionState) (certBytes : ByteArray) : SessionState 
           | none => "is not registered"
         ({ s with lastError := some s!"Judge format {w.formatName}@{w.version} {why}" }, ByteArray.empty, -8)
 
-/-- Incremental `.obnb` + reactive + transclusion workbook step over JSON wire bytes (`init`,
-    `editCell`, `editSection`, `exportRedacted`). Fails closed on empty/non-JSON (`-3`) and
-    DAG/schema violations (`-4`); never mutates `committedRoots`. -/
-@[export obend_workbook_step_json]
-def workbookStepJsonCore (s : SessionState) (reqBytes : ByteArray) : SessionState × ByteArray × Int32 :=
-  match stepWorkbookJsonBytes s.workbook reqBytes with
-  | .ok (wb', outBytes) =>
-    ({ s with workbook := wb', scratch := outBytes, lastError := none }, outBytes, 0)
-  | .error (code, errMsg) =>
-    ({ s with lastError := some errMsg }, ByteArray.empty, code)
+open Obend.Doc.WorkbookEngine (Workbook)
 
-/-- Bidirectional Putnam/Foster projection lens scrub over JSON wire bytes (`{cellKey, fieldName, newValue}`).
-    Refuses read-only proof badges (`-5`), unknown/ill-typed fields (`-4`), and malformed JSON (`-3`). -/
+inductive WorkbookCommand where | step | scrub
+
+def WorkbookCommand.isScrub : WorkbookCommand → Bool
+  | .step => false
+  | .scrub => true
+
+def WorkbookCommand.apply (cmd : WorkbookCommand) (wb : Workbook) (req : ByteArray) :=
+  match cmd with
+  | .step => stepWorkbookJsonBytes wb req
+  | .scrub => scrubWorkbookCellJsonBytes wb req
+
+/-- Project the live session workbook directly from `Replay.World` in `O(1)`. -/
+def workbookFromWorld (w : Replay.World) : Workbook :=
+  w.workbook.getD defaultSessionWorkbook
+
+private def workbookFailure (s : SessionState) (code : Int32) (err : String) : SessionState × ByteArray × Int32 :=
+  ({ s with lastError := some err }, ByteArray.empty, code)
+
+def commitWorkbook (s : SessionState) (cmd : WorkbookCommand) (req : ByteArray)
+    (expected : Workbook) (out : ByteArray) : SessionState × ByteArray × Int32 :=
+  let turn := Replay.Turn.ext "workbook" (Replay.encodeWorkbookOp cmd.isScrub req)
+  match Log.Session.admit Replay.logHash Replay.deployed s.replaySession (Replay.encodeTurn turn) with
+  | .error why => workbookFailure s (-4) why
+  | .ok next =>
+    if workbookFromWorld next.world == expected then
+      ({ s with replaySession := next, scratch := out, lastError := none }, out, 0)
+    else workbookFailure s (-4) "Admitted workbook extension turn diverged from engine output"
+
+def WorkbookCommand.isReadOnly : WorkbookCommand → ByteArray → Bool
+  | .scrub, _ => false
+  | .step, req => (do
+      let src ← String.fromUTF8? req
+      let j ← (Json.parse src).toOption
+      (j.getObjValAs? String "op").toOption) == some "exportRedacted"
+
+def runWorkbook (s : SessionState) (cmd : WorkbookCommand) (req : ByteArray) :
+    SessionState × ByteArray × Int32 :=
+  if req.isEmpty then workbookFailure s (-3) (match cmd with
+    | .step => "Empty workbook step payload" | .scrub => "Empty workbook scrub payload") else
+  match cmd.apply (workbookFromWorld s.world) req with
+  | .error (code, why) => workbookFailure s code why
+  | .ok (next, out) =>
+    if cmd.isReadOnly req then ({ s with scratch := out, lastError := none }, out, 0)
+    else commitWorkbook s cmd req next out
+
+/-- Admit an edit into the Vault log. Redacted exports are reads. -/
+@[export obend_workbook_step_json]
+def workbookStepJsonCore (s : SessionState) (req : ByteArray) : SessionState × ByteArray × Int32 :=
+  runWorkbook s .step req
+
 @[export obend_workbook_scrub_cell_json]
-def workbookScrubCellJsonCore (s : SessionState) (reqBytes : ByteArray) : SessionState × ByteArray × Int32 :=
-  match scrubWorkbookCellJsonBytes s.workbook reqBytes with
-  | .ok (wb', outBytes) =>
-    ({ s with workbook := wb', scratch := outBytes, lastError := none }, outBytes, 0)
-  | .error (code, errMsg) =>
-    ({ s with lastError := some errMsg }, ByteArray.empty, code)
+def workbookScrubCellJsonCore (s : SessionState) (req : ByteArray) : SessionState × ByteArray × Int32 :=
+  runWorkbook s .scrub req
 
 /-! ### Lean-Managed C-ABI Marshaling Helpers (`obend-ffi`)
     Delegates all `lean_object*` allocation and refcounting to Lean's compiler. -/
@@ -1389,20 +1423,90 @@ theorem admitFootprint_stale_pin_refused :
 theorem workbookStepJsonCore_empty_refused (s : SessionState) :
     (workbookStepJsonCore s ByteArray.empty).2.2 = -3 ∧
     (workbookStepJsonCore s ByteArray.empty).2.1 = ByteArray.empty := by
-  unfold workbookStepJsonCore; rw [stepWorkbookJsonBytes_empty_refused]; exact ⟨rfl, rfl⟩
+  exact ⟨rfl, rfl⟩
 
 theorem workbookScrubCellJsonCore_empty_refused (s : SessionState) :
     (workbookScrubCellJsonCore s ByteArray.empty).2.2 = -3 ∧
-    (workbookScrubCellJsonCore s ByteArray.empty).2.1 = ByteArray.empty := by
-  unfold workbookScrubCellJsonCore; rw [scrubWorkbookCellJsonBytes_empty_refused]; exact ⟨rfl, rfl⟩
+    (workbookScrubCellJsonCore s ByteArray.empty).2.1 = ByteArray.empty := ⟨rfl, rfl⟩
 
-theorem workbookStepJsonCore_committedRoots_unchanged (s : SessionState) (reqBytes : ByteArray) :
-    (workbookStepJsonCore s reqBytes).1.committedRoots = s.committedRoots := by
-  unfold workbookStepJsonCore; split <;> rfl
+theorem runWorkbook_preserves (s : SessionState) (cmd : WorkbookCommand) (req : ByteArray)
+    (h : Replay.Reachable s.replaySession) :
+    Replay.Reachable (runWorkbook s cmd req).1.replaySession ∧
+    (runWorkbook s cmd req).1.committedRoots = s.committedRoots := by
+  unfold runWorkbook
+  split
+  · exact ⟨h, rfl⟩
+  split
+  · exact ⟨h, rfl⟩
+  split
+  · exact ⟨h, rfl⟩
+  unfold commitWorkbook
+  dsimp only
+  split
+  · exact ⟨h, rfl⟩
+  rename_i next ha
+  split
+  · exact ⟨Log.Reachable.admit h ha, rfl⟩
+  · exact ⟨h, rfl⟩
 
-theorem workbookScrubCellJsonCore_committedRoots_unchanged (s : SessionState) (reqBytes : ByteArray) :
-    (workbookScrubCellJsonCore s reqBytes).1.committedRoots = s.committedRoots := by
-  unfold workbookScrubCellJsonCore; split <;> rfl
+theorem workbookStepJsonCore_preserves_reachable (s : SessionState) (req : ByteArray)
+    (h : Replay.Reachable s.replaySession) :
+    Replay.Reachable (workbookStepJsonCore s req).1.replaySession :=
+  (runWorkbook_preserves s .step req h).1
+
+theorem workbookScrubCellJsonCore_preserves_reachable (s : SessionState) (req : ByteArray)
+    (h : Replay.Reachable s.replaySession) :
+    Replay.Reachable (workbookScrubCellJsonCore s req).1.replaySession :=
+  (runWorkbook_preserves s .scrub req h).1
+
+private theorem runWorkbook_roots (s : SessionState) (cmd : WorkbookCommand) (req : ByteArray) :
+    (runWorkbook s cmd req).1.committedRoots = s.committedRoots := by
+  unfold runWorkbook
+  repeat' first | rfl | split
+  unfold commitWorkbook
+  dsimp only
+  repeat' first | rfl | split
+
+theorem workbookStepJsonCore_committedRoots_unchanged (s : SessionState) (req : ByteArray) :
+    (workbookStepJsonCore s req).1.committedRoots = s.committedRoots := runWorkbook_roots s .step req
+
+theorem workbookScrubCellJsonCore_committedRoots_unchanged (s : SessionState) (req : ByteArray) :
+    (workbookScrubCellJsonCore s req).1.committedRoots = s.committedRoots := runWorkbook_roots s .scrub req
+
+/-- Every successful mutation reconstructs the exact engine result from the admitted log. -/
+theorem commitWorkbook_replays_edit (s : SessionState) (cmd : WorkbookCommand) (req : ByteArray)
+    (expected : Workbook) (out : ByteArray) (h : Replay.Reachable s.replaySession)
+    (ok : (commitWorkbook s cmd req expected out).2.2 = 0) :
+    workbookFromWorld (Log.replay Replay.deployed Replay.genesis
+      (commitWorkbook s cmd req expected out).1.replaySession.log) = expected := by
+  unfold commitWorkbook at ok ⊢
+  dsimp only at ok ⊢
+  cases ha : Log.Session.admit Replay.logHash Replay.deployed s.replaySession
+      (Replay.encodeTurn (Replay.Turn.ext "workbook" (Replay.encodeWorkbookOp cmd.isScrub req))) with
+  | error why => simp only [ha] at ok; exact absurd ok (by decide : (-4 : Int32) ≠ 0)
+  | ok next =>
+    simp only [ha] at ok ⊢
+    cases heq : workbookFromWorld next.world == expected
+    · simp only [heq, Bool.false_eq_true, ↓reduceIte] at ok
+      exact absurd ok (by decide : (-4 : Int32) ≠ 0)
+    · simp only [↓reduceIte]
+      rw [← Replay.state_eq_replay_log (Log.Reachable.admit h ha)]
+      exact beq_iff_eq.mp heq
+
+/-- Connect both ABI entry points to the workbook returned by their engine on an accepted edit. -/
+theorem runWorkbook_replays_edit (s : SessionState) (cmd : WorkbookCommand) (req : ByteArray)
+    (next : Workbook) (out : ByteArray) (reachable : Replay.Reachable s.replaySession)
+    (edit : cmd.apply (workbookFromWorld s.world) req = .ok (next, out))
+    (mutates : cmd.isReadOnly req = false) (ok : (runWorkbook s cmd req).2.2 = 0) :
+    workbookFromWorld (Log.replay Replay.deployed Replay.genesis
+      (runWorkbook s cmd req).1.replaySession.log) = next := by
+  cases he : req.isEmpty with
+  | true =>
+    simp only [runWorkbook, he, ↓reduceIte] at ok
+    exact absurd ok (by decide : (-3 : Int32) ≠ 0)
+  | false =>
+    simp only [runWorkbook, he, edit, mutates, Bool.false_eq_true, ↓reduceIte] at ok ⊢
+    exact commitWorkbook_replays_edit s cmd req next out reachable ok
 
 theorem isHardwareProjectionFormat_cae_pde_formats :
     (["mna-dae@1", "vivado-sta@1", "openpdk-drc-sta@1", "hyperbolic-fvm@1",

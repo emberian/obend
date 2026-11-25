@@ -16,6 +16,8 @@ public import Obend.Run.Durable
 public import Obend.Run.Proofs.Durable
 public import Obend.Core.Ty
 public import Obend.Core.Data
+public import Obend.Doc.WorkbookEngine
+import Obend.FFI.BridgeTypes
 import Obend.Tactic.Tooth
 import all Obend.Run.Durable
 import all Obend.Core.Data
@@ -945,10 +947,56 @@ def fillExt : LawfulTurnExt where
     cases h
     rfl
 
+def encodeWorkbookOp (isScrub : Bool) (req : ByteArray) : Json :=
+  Json.arr #[Json.bool isScrub, Json.str (Obend.Codec.Hex.bytesToHex req.data.toList)]
+
+def stepWorkbookOp (w : World) (isScrub : Bool) (req : ByteArray) : Except String World :=
+  let wb := w.workbook.getD Obend.FFI.defaultSessionWorkbook
+  let res := if isScrub then Obend.FFI.scrubWorkbookCellJsonBytes wb req
+             else Obend.FFI.stepWorkbookJsonBytes wb req
+  match res with
+  | .ok (wb', _) => .ok { w with workbook := some wb' }
+  | .error (_, err) => .error err
+
+/-- **The workbook extension**: steps or scrubs the session `Workbook` (`World.workbook`) via
+`Obend.FFI.stepWorkbookJsonBytes` / `scrubWorkbookCellJsonBytes` with $O(1)$ world-field projection,
+zero markdown page pollution, and zero full-world `.base` replacement. -/
+def workbookExt : LawfulTurnExt where
+  tag := "workbook"
+  Op := Bool × ByteArray
+  encode := fun (isScrub, req) => encodeWorkbookOp isScrub req
+  decode := fun j => match j with
+    | .arr a => match a.toList with
+      | [.bool isScrub, .str hex] =>
+        match Obend.Codec.Hex.hexCharsToBytes? hex.toList with
+        | some bs => .ok (isScrub, ⟨bs.toArray⟩)
+        | none => .error "workbook payload must be lowercase hex"
+      | _ => .error "a workbook turn is [isScrub, hexPayload]"
+    | _ => .error "a workbook turn is [isScrub, hexPayload]"
+  step := fun w (isScrub, req) => stepWorkbookOp w isScrub req
+  footprint := fun _ => []
+  roundtrip := by
+    intro ⟨isScrub, req⟩
+    cases req with
+    | mk data =>
+      simp [encodeWorkbookOp, Obend.Codec.Hex.bytesToHex]
+  conserves := by
+    intro w x w' h
+    dsimp only [stepWorkbookOp] at h
+    split at h
+    · injection h with h'; subst h'; exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+    · cases h
+  frame := by
+    intro w x w' h n _
+    dsimp only [stepWorkbookOp] at h
+    split at h
+    · injection h with h'; subst h'; rfl
+    · cases h
+
 /-- **The registry the deployed machine steps**: the extensions this tree registers. -/
 def LawfulTurnRegistry.core : LawfulTurnRegistry where
-  entries := [fillExt]
-  nodup := by simp
+  entries := [fillExt, workbookExt]
+  nodup := by simp [fillExt, workbookExt]
 
 /-- **The step of a turn**: the store function its command calls, or a refusal (a refused turn is
 never logged). -/
@@ -1225,7 +1273,12 @@ theorem fill_replays (w : World) (name received sent : String) :
     stepTurn w (.ext "fill" (Json.arr #[Json.str name, Json.str received, Json.str sent])) =
       .ok ({ w with received := (w.received.filter (·.1 != name)) ++ [(name, received)],
                     sent := (w.sent.filter (·.1 != name)) ++ [(name, sent)] }, .quiet) :=
-  ext_replays .core (e := fillExt) (List.mem_singleton.mpr rfl) w (name, received, sent)
+  ext_replays .core (e := fillExt) (List.mem_cons_self ..) w (name, received, sent)
+
+theorem workbook_ext_replays (w : World) (isScrub : Bool) (req : ByteArray) :
+    stepTurn w (.ext "workbook" (encodeWorkbookOp isScrub req)) =
+      liftStep (stepWorkbookOp w isScrub req) :=
+  ext_replays .core (e := workbookExt) (List.mem_cons_of_mem _ (List.mem_singleton.mpr rfl)) w (isScrub, req)
 
 /-- The refusal's premise is inhabited: under a registry without extensions every tag is refused. -/
 theorem unregistered_tag_refused_empty (w : World) (tag : String) (op : Json) :
@@ -1297,7 +1350,10 @@ def worldJson (w : World) : Json :=
     (if w.forks.isEmpty then [] else [("forks", Json.arr (w.forks.map Retention.forkJson).toArray)]) ++
     (if w.reasons == {} then [] else [("reasons", Obend.Reasons.stateJson w.reasons)]) ++
     (if w.checked.isEmpty then [] else [("checked", Json.arr (w.checked.map Form.checkedJson).toArray)]) ++
-    (if w.forkMembers.isEmpty then [] else [("forkMembers", pairsJson w.forkMembers)])))
+    (if w.forkMembers.isEmpty then [] else [("forkMembers", pairsJson w.forkMembers)]) ++
+    (match w.workbook with
+     | none => []
+     | some wb => [("workbook", Json.str (Obend.Codec.Hex.bytesToHex (ChunkedWorld.cWorkbook.enc wb)))])))
 
 def worldOf (j : Json) : Except String World := do
   let store ← fullStoreOf (← j.getObjVal? "store")
@@ -1322,8 +1378,13 @@ def worldOf (j : Json) : Except String World := do
   let checked ← opt "checked" [] fun v => do
     (← v.getArr?).toList.mapM Form.checkedOf
   let forkMembers ← opt "forkMembers" [] pairsOf
+  let workbook ← opt "workbook" none fun v => do
+    let hex ← v.getStr?
+    let some bs := Obend.Codec.Hex.hexCharsToBytes? hex.toList | throw "invalid workbook snapshot hex"
+    let some wb := ChunkedWorld.cWorkbook.decodeExact bs | throw "invalid workbook snapshot bytes"
+    return some wb
   return ⟨store, journal, forms, receipts, received, sent, issues, grants, landed, outstanding, minted, retention, forks,
-    reasons, checked, forkMembers⟩
+    reasons, checked, forkMembers, workbook⟩
 
 def turnJson : Turn → Json
   | .base w => Json.mkObj [("turn", "base"), ("world", worldJson w)]

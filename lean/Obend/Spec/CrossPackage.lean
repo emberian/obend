@@ -197,11 +197,11 @@ theorem crossPackage_disjoint_override_preserves_transportedSlot_and_specSlot
   obtain ⟨hj, hall⟩ := (usable_iff specSlot (holdsAt v) (.slotBook objectName member C defItem)).1 hspec_us
   have hall' : ∀ p ∈ (Candidate.slotBook objectName member C defItem).supports, holdsAt v' p = true := by
     intro p hp
-    simp only [Candidate.supports, coneSupports, List.mem_map] at hp
+    simp only [slotBook_supports_of_judge hj, coneSupports, List.mem_map] at hp
     obtain ⟨m, hm, rfl⟩ := hp
     rw [hview_agree m hm]
     exact hall (memberConePin C m) (by
-      simp only [Candidate.supports, coneSupports, List.mem_map]
+      simp only [slotBook_supports_of_judge hj, coneSupports, List.mem_map]
       exact ⟨m, hm, rfl⟩)
   have hspec_us' : specSlot.usable (holdsAt v') (.slotBook objectName member C defItem) = true :=
     (usable_iff specSlot (holdsAt v') (.slotBook objectName member C defItem)).2 ⟨hj, hall'⟩
@@ -221,7 +221,7 @@ theorem crossPackage_intersecting_override_pinpoints_stale
     {objectName member : String} {C : Composition} {L : Layer} {defItem : LeafDef}
     {v' : LeafView} {o : TransportObj} {c : TransportCert} (s : Nat)
     (m provLayer newLayer : String) (f_lean : LExpr) (u : Term)
-    (hcl : C.closedB = true)
+    (hadmit : (Candidate.slotBook objectName member C defItem).judge = true)
     (hm_cone : m ∈ slotReadCone C member)
     (hpin_dead : holdsAt v' (memberConePin C m) = false)
     (hok : transportCheck 0 o c = .ok)
@@ -237,9 +237,9 @@ theorem crossPackage_intersecting_override_pinpoints_stale
         .blocked c deadSupports ∧
       methodSupport m provLayer f_lean ∈ deadSupports) := by
   have hp_mem : memberConePin C m ∈ (Candidate.slotBook objectName member C defItem).supports := by
-    simp only [Candidate.supports, coneSupports, List.mem_map]
+    simp only [slotBook_supports_of_judge hadmit, coneSupports, List.mem_map]
     exact ⟨m, hm_cone, rfl⟩
-  obtain ⟨deadPins, hread, hmem_dead, _⟩ := slotBook_moved_pin_blocks hcl hp_mem hpin_dead
+  obtain ⟨deadPins, hread, hmem_dead, _⟩ := slotBook_moved_pin_blocks hadmit hp_mem hpin_dead
   have htrans_blocked :=
     transportSlot_blocked_on_override (linkComposition C L) s m provLayer newLayer f_lean u
       hok hmem_sup hunf hdiff
@@ -401,6 +401,7 @@ theorem crossPackage_bEquiv_rebinds_slot_usable
     (htarget_link : .get (linkComposition C L).object target ≈b
       instantiate Frame (.get (linkComposition C L).object m))
     (hcl_link : (linkComposition C L).closedB = true)
+    (hdef : emittedMember (linkComposition C L) target = some defItem)
     (hpin_m : holdsAt v' (rebindEquivPin cert (memberConePin C m)) = true)
     (hcone_rest : ∀ m' ∈ slotReadCone (linkComposition C L) target, m' ≠ m →
       holdsAt v' (memberConePin (linkComposition C L) m') = true)
@@ -414,17 +415,18 @@ theorem crossPackage_bEquiv_rebinds_slot_usable
     (.get (linkComposition C L).object target ≈b .get C.object target) := by
   have hpin_m' : holdsAt v' (memberConePin (linkComposition C L) m) = true := by
     rwa [rebindEquivPin_memberConePin cert] at hpin_m
+  have hjSlot := (slotBook_judge_iff objectName target (linkComposition C L) defItem).2 ⟨hcl_link, hdef⟩
   have hspec_all : ∀ p ∈ (rebindEquivSlotCandidate objectName target cert defItem).supports,
       holdsAt v' p = true := by
     intro p hp
-    simp only [rebindEquivSlotCandidate, Candidate.supports, coneSupports, List.mem_map] at hp
+    simp only [rebindEquivSlotCandidate, slotBook_supports_of_judge hjSlot, coneSupports, List.mem_map] at hp
     obtain ⟨m', hm', rfl⟩ := hp
     by_cases heq : m' = m
     · subst heq; exact hpin_m'
     · exact hcone_rest m' hm' heq
   have hspec_us : specSlot.usable (holdsAt v') (rebindEquivSlotCandidate objectName target cert defItem) = true :=
     (usable_iff specSlot (holdsAt v') (rebindEquivSlotCandidate objectName target cert defItem)).2
-      ⟨hcl_link, hspec_all⟩
+      ⟨hjSlot, hspec_all⟩
   obtain ⟨hj, hall⟩ := (usable_iff (transportSlot o) (Support.holds C s) c).1 htrans_us
   have hj' : (transportSlot o).judge (rebindEquivTransportCert cert s c) = true := hj
   have hall' : ∀ sp' ∈ (transportSlot o).supports (rebindEquivTransportCert cert s c),

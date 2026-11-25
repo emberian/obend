@@ -10,6 +10,14 @@ static lean_obj_res io_error(int err) {
 }
 
 static lean_obj_res sync_fd(int fd) {
+#ifdef __APPLE__
+    int frc;
+    do {
+        frc = fcntl(fd, F_FULLFSYNC);
+    } while (frc < 0 && errno == EINTR);
+    if (frc == 0) return lean_io_result_mk_ok(lean_box(0));
+    if (errno != ENOTSUP && errno != EINVAL) return io_error(errno);
+#endif
     int rc;
     do {
         rc = fsync(fd);

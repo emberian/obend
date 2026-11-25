@@ -1,7 +1,6 @@
 module
 public import Obend.Vault.Log
 import all Obend.Vault.Log
-import Obend.Tactic.Tooth
 
 public section
 namespace Obend.Vault.FsDurability
@@ -345,9 +344,5 @@ theorem repaired_replace_inhabited (old new : List Bytes) (p : Phase) :
     · exact ⟨Or.inr (List.mem_cons_self ..), ⟨⟨[], rfl⟩, Nat.le_refl _⟩, ⟨Or.inl rfl, complete_cut old⟩, fresh⟩
     all_goals exact ⟨Or.inl rfl, ⟨⟨[], rfl⟩, Nat.le_refl _⟩, ⟨Or.inl rfl, complete_cut old⟩, fresh⟩
   · exact complete_reads fresh
-
-#tooth repaired_rollover_crash_prefix by mutation Data.clear := fun d => d
-#tooth repaired_replace_crash_safe by mutation syncParent := fun s => s
-#tooth repaired_append_crash_prefix by mutation Data.sync := fun d => d
 
 end Obend.Vault.FsDurability

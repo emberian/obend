@@ -53,7 +53,7 @@ inductive LeafCell where
   | object (name : String)
   deriving Repr
 
-@[expose] instance : DecidableEq LeafCell
+instance : DecidableEq LeafCell
   | .layer a, .layer b =>
     if h : a = b then isTrue (h ▸ rfl) else isFalse fun hc => LeafCell.noConfusion hc h
   | .object a, .object b =>
@@ -74,7 +74,7 @@ structure LeafView where
 /-- The world of the specialization slot: each cell pinned to its code at the view's clock; a step
 moves the clock forward. A support holds when its cell holds the code it pinned (`termEq`, so the
 pin is exact: no collision disjunct is owed). -/
-@[expose] instance : World LeafView LeafPin where
+instance : World LeafView LeafPin where
   Cell := LeafCell
   Pin := Nat × Option Term
   cell := LeafPin.cell
@@ -145,12 +145,26 @@ abbrev viewOf (clock : Nat) (name : String) (C : Composition) : LeafView where
     | .layer k => resolveLayerDecl C k
     | .object n => if n == name then some C.code else none
 
-/-- The read-support cone of a slot `member` in composition `C`: `member` itself together with
-all `self`-fields read by its unfolded body `C.symUnfold member` (and 1-hop transitive reads). -/
-abbrev slotReadCone (C : Composition) (member : String) : List String :=
+/-- Traverse each reachable definition once. The initial queue has one entry and each
+expanded row can enqueue at most its number of projected reads. -/
+@[expose] def collectSlotReads (graph : Std.HashMap String (List String)) :
+    Nat → List String → Std.HashSet String → List String → List String
+  | 0, _, _, acc | _, [], _, acc => acc.reverse
+  | fuel + 1, m :: rest, seen, acc =>
+    if seen.contains m then collectSlotReads graph fuel rest seen acc
+    else collectSlotReads graph fuel (graph.getD m [] ++ rest) (seen.insert m) (m :: acc)
+
+/-- Transitive projected-self dependencies, in first-visit order. As in emittedMember,
+the first vtable entry wins when a name occurs more than once. -/
+@[expose] def slotReadCone (C : Composition) (member : String) : List String :=
   let direct := selfReads 0 (C.symUnfold member)
-  let twoHop := (direct.map (fun r => selfReads 0 (C.symUnfold r))).flatten
-  member :: (direct ++ twoHop)
+  if direct.all (fun m => (selfReads 0 (C.symUnfold m)).isEmpty) then
+    (member :: direct).eraseDups
+  else
+    let (graph, edges) := C.vtable.foldr (fun (m, body) (g, n) =>
+      let reads := selfReads 0 body
+      (g.insert m reads, n + reads.length)) (({} : Std.HashMap String (List String)), 0)
+    collectSlotReads graph (edges + 1) [member] {} []
 
 /-- Pin a single member `m` to its winning provenance layer and symbolic unfolding
 `⟨.layer (C.provenance m ++ "." ++ m), C.symUnfold m⟩`. -/
@@ -699,7 +713,7 @@ def specializedJudgeB (B : Book) (pins : List LeafPin) : Bool :=
 inductive Candidate where
   /-- the whole-object book `emit comp`, for the object `name` -/
   | book (name : String) (comp : Composition)
-  /-- a per-slot specialized definition `defItem` for `member` of `objectName`, pinned ONLY to its read-support cone -/
+  /-- an emitted per-slot definition `defItem` for `member` of `objectName`, pinned ONLY to its read-support cone -/
   | slotBook (objectName : String) (member : String) (comp : Composition) (defItem : LeafDef)
   /-- the whole-object book folded under `pins` (`specializeBook (emit comp) pins`, `Obend.Leaf.Static`),
   for the object `name`; its judge decides that `emit comp`'s dispatcher serves every pin
@@ -715,15 +729,37 @@ inductive Candidate where
 - `.machine`: none. -/
 @[expose] def Candidate.supports : Candidate → List LeafPin
   | .book name C => ⟨.object name, C.code⟩ :: C.layers.map fun L => ⟨.layer L.name, L.code⟩
-  | .slotBook _ member C _ => coneSupports C (slotReadCone C member)
+  | .slotBook _ _ C d => coneSupports C (slotReadCone C d.member)
   | .specialized name C _ => ⟨.object name, C.code⟩ :: C.layers.map fun L => ⟨.layer L.name, L.code⟩
   | .machine => []
+
+/-- Lookup uses the emitted slot order. Static entries have no definition. -/
+def emittedMember (C : Composition) (member : String) : Option LeafDef :=
+  (emit C).defs.find? (·.member == member)
+
+def matchesMember (C : Composition) (member : String) (d : LeafDef) : Bool :=
+  match emittedMember C member with
+  | none => false
+  | some e => e.member == d.member && e.slot == d.slot && decide (e.kind = d.kind) &&
+      e.reads == d.reads && Obend.Law.termEq e.code d.code
+
+private theorem matchesMember_iff (C : Composition) (member : String) (d : LeafDef) :
+    matchesMember C member d = true ↔ emittedMember C member = some d := by
+  cases h : emittedMember C member with
+  | none => simp [matchesMember, h]
+  | some e =>
+    simp only [matchesMember, h, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, Option.some.injEq]
+    constructor
+    · rintro ⟨⟨⟨⟨hm, hs⟩, hk⟩, hr⟩, hc⟩
+      have he := termEq_sound' hc; cases e; cases d; simp_all
+    · rintro rfl
+      exact ⟨⟨⟨⟨rfl, rfl⟩, rfl⟩, rfl⟩, termEq_refl' _⟩
 
 /-- A book or slotBook is admitted for compositions in the scope of `flatten_sound`; a specialized book
 when, besides, its dispatcher serves every pin it folded under (`specializedJudgeB`); the machine always. -/
 @[expose] def Candidate.judge : Candidate → Bool
   | .book _ C => C.closedB
-  | .slotBook _ _ C _ => C.closedB
+  | .slotBook _ member C d => C.closedB && matchesMember C member d
   | .specialized _ C pins => C.closedB && specializedJudgeB (emit C) pins
   | .machine => true
 
@@ -787,10 +823,38 @@ theorem moved_pin_blocks {v : LeafView} {name : String} {C : Composition} (hj : 
   obtain ⟨d, hr, hpd⟩ := hread
   exact ⟨d, hr, hpd, (read_blocked_exact specSlot _ _ _ _ hr).2⟩
 
+theorem slotBook_judge_iff (name member : String) (C : Composition) (d : LeafDef) :
+    (Candidate.slotBook name member C d).judge = true ↔
+      C.closedB = true ∧ emittedMember C member = some d := by
+  simp only [Candidate.judge, Bool.and_eq_true, matchesMember_iff]
+
+theorem slotBook_supports_of_judge {name member : String} {C : Composition} {d : LeafDef}
+    (h : (Candidate.slotBook name member C d).judge = true) :
+    (Candidate.slotBook name member C d).supports = coneSupports C (slotReadCone C member) := by
+  have he := ((slotBook_judge_iff ..).1 h).2
+  have hn : d.member = member := by
+    have hn := List.find?_some (p := fun e : LeafDef => e.member == member) he
+    exact beq_iff_eq.mp hn
+  simp [Candidate.supports, hn]
+
+/-- A usable candidate supplies the complete definition emitted for the requested member. -/
+theorem slotBook_usable_member_eq {name member : String} {C : Composition} {d : LeafDef}
+    {v : LeafView} (h : specSlot.usable (holdsAt v) (.slotBook name member C d) = true) :
+    emittedMember C member = some d := by
+  have hj := ((usable_iff _ _ _).1 h).1
+  exact (matchesMember_iff C member d).1 (Bool.and_eq_true_iff.mp hj).2
+
+theorem slotBook_forged_def_rejected (name member : String) (C : Composition) (d : LeafDef)
+    (h : emittedMember C member ≠ some d) :
+    (Candidate.slotBook name member C d).judge = false := by
+  cases hj : (Candidate.slotBook name member C d).judge with
+  | false => rfl
+  | true => exact False.elim (h ((matchesMember_iff C member d).1 (Bool.and_eq_true_iff.mp hj).2))
+
 /-- **A moved pin blocks a `slotBook` by name**: when a support of an admitted `slotBook` does not
 hold at a view, its read is `.blocked` and names the exact stale cone pins. -/
 theorem slotBook_moved_pin_blocks {v : LeafView} {name member : String} {C : Composition}
-    {defItem : LeafDef} (hj : C.closedB = true)
+    {defItem : LeafDef} (hj : (Candidate.slotBook name member C defItem).judge = true)
     {p : LeafPin} (hp : p ∈ (Candidate.slotBook name member C defItem).supports)
     (hd : holdsAt v p = false) :
     ∃ d, specSlot.read (holdsAt v) (some (.slotBook name member C defItem)) =
@@ -800,7 +864,7 @@ theorem slotBook_moved_pin_blocks {v : LeafView} {name member : String} {C : Com
     (mem_dead_iff _ _ _ _).2 ⟨hp, hd⟩
   have hread : ∃ d, specSlot.read (holdsAt v) (some (.slotBook name member C defItem)) =
       .blocked (.slotBook name member C defItem) d ∧ p ∈ d := by
-    simp only [Slot.read, Candidate.judge, hj, ite_true]
+    simp only [Slot.read, hj, ite_true]
     cases hdd : specSlot.dead (holdsAt v) (.slotBook name member C defItem) with
     | nil => rw [hdd] at hmem; cases hmem
     | cons g t => exact ⟨g :: t, rfl, hdd ▸ hmem⟩
