@@ -132,8 +132,12 @@ import Obend.Apps.SovereignDrex
 import Obend.Apps.ZkNtt
 import Obend.AssertAxioms
 import Obend.AssertCompiled
+import Obend.Category.Chronoport
+import Obend.Category.FiberGrowth
 import Obend.Category.GradedLogic
+import Obend.Category.ObservationDescent
 import Obend.Category.OpenSystem
+import Obend.Category.Projection
 import Obend.Category.Refines
 import Obend.ClusterGov.PhysicalEnvelope
 import Obend.Codec.DetCbor
@@ -550,6 +554,7 @@ import Obend.Repair.CoalgConfig
 import Obend.Repair.CoalgebraicRepair
 import Obend.Repair.DeltaLensRenew
 import Obend.Repair.QuotAssembly
+import Obend.Repair.TrackedFiber
 import Obend.Run.Adapter
 import Obend.Run.Control
 import Obend.Run.Core4
@@ -696,8 +701,11 @@ import Obend.Teeth.Spec.C4Teeth
 import Obend.Teeth.Spec.LawCompileTeeth
 import Obend.Teeth.Spec.TermWire
 import Obend.Teeth.CertifiedPartialViewTeeth
+import Obend.Teeth.ChronoportTeeth
 import Obend.Teeth.GroveAndRepair
 import Obend.Teeth.HeapImageAndUpgradeTeeth
+import Obend.Teeth.ObservationDescent
+import Obend.Teeth.Projection
 import Obend.Teeth.SemidirectGspTeeth
 import Obend.Teeth.ZkCapFoldTeeth
 import Obend.Teeth.Tactic.ToothChecks

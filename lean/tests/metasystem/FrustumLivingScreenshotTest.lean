@@ -294,6 +294,36 @@ example : (Frustum.project world "alice").cells.map (·.1) =
 example : (Frustum.project world "alice").reflect "vault" = none :=
   frustum_unobservable_absent fun h => absurd (canObserve_iff.mpr h) (by decide)
 
+-- Allocation at a genuinely new id wakes Alice's dangling read cap. Her pre-birth cache
+-- decides this case before the cell has any state or outgoing caps.
+example : Frustum.project (world.insertFresh "ghost" { state := .natural 2 } rfl) "alice" ≠
+    Frustum.project world "alice" := by
+  intro eq
+  have refused := (frustum_insertFresh_eq_iff_cached _ _).mp eq
+  revert refused
+  decide
+
+-- An arriving cell can expose an old cell farther along its read chain.
+example : world.canObserve "alice" "vault" = false ∧
+    (world.insertFresh "ghost" { state := .natural 2, caps := [⟨"vault", [.read]⟩] } rfl).canObserve
+      "alice" "vault" = true := by decide
+
+-- Even an empty captured view must watch for the birth of its own viewer id.
+example : (Frustum.project world "newcomer").cells.isEmpty = true ∧
+    (Frustum.project world "newcomer").wakesOnBirth "newcomer" = true := by decide
+
+-- Erasure retains the ledger slot. Filling it again wakes Bob's cap to Carol, two hops away.
+example : (world.erase "carol").canObserve "alice" "carol" = false ∧
+    (Frustum.project (world.erase "carol") "alice").wakesOnBirth "carol" = true ∧
+    ((world.erase "carol").insertFresh "carol" { state := .natural 2 } rfl).canObserve
+      "alice" "carol" = true := by decide
+
+-- A named, write-only destination can be filled again without changing *any* of Alice's view.
+example (r : CellRecord) : Frustum.project
+    ((world.erase "blind").insertFresh "blind" r rfl) "alice" =
+    Frustum.project (world.erase "blind") "alice" :=
+  (frustum_insertFresh_eq_iff_cached _ _).mpr (by decide)
+
 /-- The affordances `alice` may fire: on `bob` what `write` lights (not what `grant` would), on
 the treasury what its state allows. -/
 example : ((Frustum.project world "alice").reflect "bob").map (·.lit) = some ["credit"] ∧
@@ -664,6 +694,15 @@ example (kind : String) (address : ByteArray) (r : MirrorRender)
     match w.pub c with
     | some p => p.caps.map (·.target)
     | none => []
+
+-- Treat only birth of the viewer itself as visible, overlooking previously dangling read caps.
+#tooth Obend.Vault.FrustumMembrane.reach_insertFresh_iff by mutation
+  Obend.Vault.FrustumMembrane.BirthFrontier := fun _ viewer id => viewer = id
+
+-- Invalidate even on a write-only cap to the new name.
+#tooth Obend.Vault.FrustumMembrane.wakesOnBirth_iff by mutation
+  Obend.Vault.FrustumMembrane.Frustum.wakesOnBirth := fun f id =>
+    f.viewer == id || f.cells.any fun cv => cv.2.caps.any fun cap => cap.target == id
 
 -- The seal leaves the salt out of what it hashes.
 #tooth Obend.Vault.FrustumMembrane.sealCommit_binds by mutation

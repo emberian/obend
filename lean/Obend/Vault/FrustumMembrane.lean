@@ -400,33 +400,28 @@ theorem ViewEquiv.reach_iff {w w' : World} {viewer : CellId} (h : ViewEquiv w w'
   ⟨fun hr => h.backward (.refl (h.noBirth _ hr.source_live)) hr,
    fun hr => h.forward (.refl hr.source_live) hr⟩
 
+private theorem look_eq_of_reach_iff {w w' : World} {viewer : CellId}
+    (facts : w'.facts = w.facts)
+    (kept : ∀ c, Reach w viewer c → w'.pub c = w.pub c)
+    (reach : ∀ c, Reach w' viewer c ↔ Reach w viewer c) :
+    w'.look viewer = w.look viewer := by
+  funext c
+  have obs : w'.canObserve viewer c = w.canObserve viewer c :=
+    Bool.eq_iff_iff.mpr (canObserve_iff.trans ((reach c).trans canObserve_iff.symm))
+  unfold World.look
+  rw [obs, facts]
+  split
+  · rename_i hc
+    have hr := canObserve_iff.mp hc
+    simp only [World.heldOn, kept c hr, kept viewer (.refl hr.source_live)]
+  · rfl
+
 /-- **Noninterference of the frustum.** Worlds the viewer cannot tell apart project to the same
 frustum: the same cells, in the same order, with the same views. -/
 theorem frustum_noninterference {w w' : World} {viewer : CellId} (h : ViewEquiv w w' viewer) :
     Frustum.project w' viewer = Frustum.project w viewer := by
-  have hobs : w'.canObserve viewer = w.canObserve viewer := by
-    funext c
-    rw [Bool.eq_iff_iff, canObserve_iff, canObserve_iff]
-    exact h.reach_iff
-  have hheld : ∀ d, w'.heldOn viewer d = w.heldOn viewer d := by
-    intro d
-    unfold World.heldOn
-    cases hv : w.pub viewer with
-    | some p => rw [h.kept viewer (.refl (by simp [hv])), hv]
-    | none =>
-      cases hv' : w'.pub viewer with
-      | none => rfl
-      | some _ => have hb := h.noBirth viewer (by simp [hv']); simp [hv] at hb
-  have hlook : w'.look viewer = w.look viewer := by
-    funext c
-    unfold World.look
-    rw [hobs, h.facts, hheld]
-    split
-    · rename_i hc
-      rw [h.kept c (canObserve_iff.mp hc)]
-    · rfl
   unfold Frustum.project
-  rw [h.ids, hlook]
+  rw [h.ids, look_eq_of_reach_iff h.facts h.kept (fun _ => h.reach_iff)]
 
 /-- Overwrite a cell that exists. -/
 def World.set (w : World) (h : CellId) (r : CellRecord) : World :=
@@ -473,6 +468,161 @@ theorem hidden_cell_mutation_invisible {w : World} {viewer h : CellId}
     by_cases hch : c = h
     · simp [World.pub, World.erase, hch] at hc
     · simpa [World.pub, World.erase, hch] using hc
+
+/-- Allocate a previously absent cell. Reuse an erased cell's position in the id list;
+a new id goes at the front, preserving the relative order of all prior entries. -/
+def World.insertFresh (w : World) (id : CellId) (r : CellRecord) (_ : w.cell id = none) : World :=
+  { ids := if id ∈ w.ids then w.ids else id :: w.ids
+    facts := w.facts
+    cell := fun c => if c = id then some r else w.cell c
+    covered := by
+      intro c live
+      by_cases eq : c = id
+      · subst c
+        split <;> simp_all
+      · have mem := w.covered c (by simpa [eq] using live)
+        split <;> simp_all }
+
+/-- The old viewer can discover a birth at its own id, or by following a read cap held by
+a cell it already reaches. The target need not exist for the cap to be present. -/
+def BirthFrontier (w : World) (viewer id : CellId) : Prop :=
+  viewer = id ∨ ∃ c, Reach w viewer c ∧ ∃ p cap, w.pub c = some p ∧
+    cap ∈ p.caps ∧ capObserves cap = true ∧ cap.target = id
+
+/-- Does allocating this id invalidate the cached frustum? This consults only the viewer
+and the capability lists already in the cache, including targets that were absent at capture. -/
+def Frustum.wakesOnBirth (f : Frustum) (id : CellId) : Bool :=
+  f.viewer == id || f.cells.any fun cv =>
+    cv.2.caps.any fun cap => capObserves cap && cap.target == id
+
+private theorem mem_project_cell_iff {w : World} {viewer c : CellId} {v : CellView} :
+    (c, v) ∈ (Frustum.project w viewer).cells ↔
+      ∃ p, Reach w viewer c ∧ w.pub c = some p ∧ viewCell w.facts (w.heldOn viewer c) p = v := by
+  constructor
+  · intro mem
+    obtain ⟨x, _, found⟩ := List.mem_filterMap.mp mem
+    obtain ⟨u, look, eq⟩ := Option.map_eq_some_iff.mp found
+    cases eq
+    unfold World.look at look
+    split at look
+    · rename_i obs
+      obtain ⟨p, hp, hv⟩ := Option.map_eq_some_iff.mp look
+      exact ⟨p, canObserve_iff.mp obs, hp, hv⟩
+    · contradiction
+  · rintro ⟨p, reach, hp, rfl⟩
+    exact List.mem_filterMap.mpr ⟨c, World.mem_ids_of_pub reach.target_live,
+      by simp [World.look, canObserve_iff.mpr reach, hp]⟩
+
+/-- A cached projection decides the entire pre-allocation read frontier. -/
+theorem wakesOnBirth_iff (w : World) (viewer id : CellId) :
+    (Frustum.project w viewer).wakesOnBirth id = true ↔ BirthFrontier w viewer id := by
+  simp only [Frustum.wakesOnBirth, Bool.or_eq_true, beq_iff_eq, List.any_eq_true,
+    Bool.and_eq_true, BirthFrontier]
+  apply or_congr_right
+  constructor
+  · rintro ⟨⟨c, v⟩, hc, cap, hcap, obs, target⟩
+    obtain ⟨p, reach, hp, rfl⟩ := mem_project_cell_iff.mp hc
+    exact ⟨c, reach, p, cap, hp, hcap, obs, target⟩
+  · rintro ⟨c, reach, p, cap, hp, hcap, obs, target⟩
+    exact ⟨(c, viewCell w.facts (w.heldOn viewer c) p),
+      mem_project_cell_iff.mpr ⟨p, reach, hp, rfl⟩, cap, hcap, obs, target⟩
+
+private theorem live_ne_fresh {w : World} {c id : CellId} (fresh : w.cell id = none)
+    (live : (w.pub c).isSome = true) : c ≠ id := by
+  rintro rfl
+  simp [World.pub, fresh] at live
+
+private theorem pub_insertFresh_ne {w : World} {id c : CellId} (r : CellRecord)
+    (fresh : w.cell id = none) (ne : c ≠ id) : (w.insertFresh id r fresh).pub c = w.pub c := by
+  simp [World.pub, World.insertFresh, ne]
+
+/-- All old read paths survive allocation at an absent id. -/
+theorem Reach.insertFresh {w : World} {id c d : CellId} (r : CellRecord)
+    (fresh : w.cell id = none) (path : Reach w c d) : Reach (w.insertFresh id r fresh) c d := by
+  induction path with
+  | refl live => exact .refl (by rwa [pub_insertFresh_ne r fresh (live_ne_fresh fresh live)])
+  | head e _ ih =>
+    have src := live_ne_fresh fresh e.source_live
+    have dst := live_ne_fresh fresh e.target_live
+    obtain ⟨p, cap, hp, hc, read, target, live⟩ := e
+    exact .head ⟨p, cap, (pub_insertFresh_ne r fresh src).trans hp, hc, read, target,
+      by rwa [pub_insertFresh_ne r fresh dst]⟩ ih
+
+/-- Follow a post-birth path from an old reachable cell. Until the first use of the new
+target every edge was already live. -/
+private theorem old_reach_or_birthFrontier {w : World} {viewer id c d : CellId} {r : CellRecord}
+    {fresh : w.cell id = none} (path : Reach (w.insertFresh id r fresh) c d) :
+    Reach w viewer c → Reach w viewer d ∨ BirthFrontier w viewer id := by
+  induction path with
+  | refl _ => exact Or.inl
+  | @head c m d edge _ ih =>
+    intro old
+    obtain ⟨p, cap, hp, hc, read, target, live⟩ := edge
+    rw [pub_insertFresh_ne r fresh (live_ne_fresh fresh old.target_live)] at hp
+    by_cases eq : m = id
+    · exact .inr (.inr ⟨c, old, p, cap, hp, hc, read, target.trans eq⟩)
+    · exact ih (old.tail ⟨p, cap, hp, hc, read, target, by rwa [pub_insertFresh_ne r fresh eq] at live⟩)
+
+/-- The new cell is observable exactly on the pre-allocation frontier. Its own caps and
+contents can change the extent beyond it but cannot make it the first reachable new cell. -/
+theorem reach_insertFresh_iff {w : World} {viewer id : CellId} (r : CellRecord)
+    (fresh : w.cell id = none) :
+    Reach (w.insertFresh id r fresh) viewer id ↔ BirthFrontier w viewer id := by
+  constructor
+  · intro h
+    by_cases eq : viewer = id
+    · exact .inl eq
+    · have live := h.source_live
+      rw [pub_insertFresh_ne r fresh eq] at live
+      rcases old_reach_or_birthFrontier h (.refl live) with old | found
+      · exact False.elim (live_ne_fresh fresh old.target_live rfl)
+      · exact found
+  · rintro (rfl | ⟨c, old, p, cap, hp, hc, read, target⟩)
+    · exact .refl (by simp [World.pub, World.insertFresh])
+    · exact (old.insertFresh r fresh).tail
+        ⟨p, cap, (pub_insertFresh_ne r fresh (live_ne_fresh fresh old.target_live)).trans hp,
+         hc, read, target, by simp [World.pub, World.insertFresh]⟩
+
+/-- **Exact noninterference under allocation.** The entire ordered frustum survives precisely
+when the old viewer neither occupies the new id nor reaches a read cap that was waiting for it. -/
+theorem frustum_insertFresh_eq_iff {w : World} {viewer id : CellId} (r : CellRecord)
+    (fresh : w.cell id = none) :
+    Frustum.project (w.insertFresh id r fresh) viewer = Frustum.project w viewer ↔
+      ¬ BirthFrontier w viewer id := by
+  have absent : ¬ Reach w viewer id := fun h => live_ne_fresh fresh h.target_live rfl
+  constructor
+  · intro eq found
+    have live := (reach_insertFresh_iff r fresh).mpr found
+    have someView := frustum_observable_present live (r := r) (by simp [World.insertFresh])
+    rw [eq, frustum_unobservable_absent absent] at someView
+    contradiction
+  · intro closed
+    have root : viewer ≠ id := fun eq => closed (.inl eq)
+    have same := look_eq_of_reach_iff (w := w) (w' := w.insertFresh id r fresh) (viewer := viewer) rfl
+      (fun _ old => pub_insertFresh_ne r fresh (live_ne_fresh fresh old.target_live)) (fun _ =>
+        ⟨fun h => by
+          have live := h.source_live
+          rw [pub_insertFresh_ne r fresh root] at live
+          exact (old_reach_or_birthFrontier h (.refl live)).resolve_right closed,
+         fun old => old.insertFresh r fresh⟩)
+    have noView : w.look viewer id = none := by
+      rw [← reflect_project]
+      exact frustum_unobservable_absent absent
+    unfold Frustum.project
+    rw [same]
+    change Frustum.mk viewer ((if id ∈ w.ids then w.ids else id :: w.ids).filterMap _) = _
+    split
+    · rfl
+    · simp [noView]
+
+/-- The cache and the proposed id alone decide whether the *actual* ordered view can
+be reused unchanged after allocating that id, for every payload that could be installed. -/
+theorem frustum_insertFresh_eq_iff_cached {w : World} {viewer id : CellId} (r : CellRecord)
+    (fresh : w.cell id = none) :
+    Frustum.project (w.insertFresh id r fresh) viewer = Frustum.project w viewer ↔
+      (Frustum.project w viewer).wakesOnBirth id = false := by
+  rw [frustum_insertFresh_eq_iff, ← wakesOnBirth_iff]
+  simp
 
 /-- Projection respects equality of commitments. This algebraic lemma asserts no secrecy. -/
 theorem frustum_equal_commitments_project_eq (w : World) (viewer h : CellId) (r : CellRecord)

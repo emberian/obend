@@ -556,6 +556,20 @@ theorem = "sim_preserves_galois"
 description = "Step-indexed lax/oplax simulation refinement composes vertically and transports across Galois abstraction/concretization pairs."
 
 [[apex]]
+id = "category-chronoport-event-reads"
+subsystem = "Category"
+module = "Obend.Category.Chronoport"
+theorem = "all_reads_iff"
+description = "After a successful modeled chronoport, an exact condition on the original source, its updated read, the new copy and the other copies characterizes preservation of every existential and universal event query at a tick."
+
+[[apex]]
+id = "category-observation-descent-copy"
+subsystem = "Category"
+module = "Obend.Category.ObservationDescent"
+theorem = "descends_insert_copy_iff"
+description = "When old answers survive, an extended predicate factors through the observed view exactly when the old predicate did and the new point agrees with its source."
+
+[[apex]]
 id = "category-graded-logic-frame"
 subsystem = "Category"
 module = "Obend.Category.GradedLogic"
@@ -593,6 +607,13 @@ subsystem = "Repair"
 module = "Obend.Repair.QuotAssembly"
 theorem = "doubleModQuotHom_tracker_reduces_rfl"
 description = "Choice-free, `Quot.sound`-free realizability `EffectiveQuotient.liftHom` reduces computational trackers judgmentally (`rfl`)."
+
+[[apex]]
+id = "repair-tracked-fiber-new-obligation"
+subsystem = "Repair"
+module = "Obend.Repair.TrackedFiber"
+theorem = "serves_insert_of_run_iff"
+description = "Given a completed tracker run and acceptance of its output on retained copies, the stored tracker serves the enlarged fiber exactly when the new copy accepts that output."
 
 # ==============================================================================
 # 11. `Crypto` — Dual-Track PCS Spine (Hash + Lattice/SIS) & SameOpening Judge
@@ -1039,6 +1060,13 @@ subsystem = "Vault"
 module = "Obend.Vault.FrustumMembrane"
 theorem = "regraftFrustum_atomic_conserving"
 description = "Capability-gated frustum living screenshots enforce severed-upstream interposition, atomic conserving world regraft, and path-independent membrane negotiation."
+
+[[apex]]
+id = "vault-frustum-cached-birth"
+subsystem = "Vault"
+module = "Obend.Vault.FrustumMembrane"
+theorem = "frustum_insertFresh_eq_iff_cached"
+description = "For a fresh cell ID, the viewer's cached frustum decides exactly whether inserting the new record preserves the entire ordered projection."
 
 [[apex]]
 id = "vault-transclusion-provenance-faithful"

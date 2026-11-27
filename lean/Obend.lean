@@ -297,11 +297,16 @@ public import Obend.Geometry.CochainAndGauge
 public import Obend.Geometry.DeRhamHodgeComplex
 public import Obend.Geometry.DiracDoubleCat
 public import Obend.Category.Refines
+public import Obend.Category.Projection
+public import Obend.Category.FiberGrowth
+public import Obend.Category.ObservationDescent
+public import Obend.Category.Chronoport
 public import Obend.Category.OpenSystem
 public import Obend.Category.GradedLogic
 public import Obend.Repair.AlgConfig
 public import Obend.Repair.CoalgConfig
 public import Obend.Repair.QuotAssembly
+public import Obend.Repair.TrackedFiber
 public import Obend.Repair.DeltaLensRenew
 public import Obend.Core.Cubical2LTT
 public import Obend.Tactic.Compositional
