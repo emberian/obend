@@ -9,6 +9,8 @@ import all Obend.Vault.Replay
 import all Obend.Vault.LiveObject
 import all Obend.Vault.WorldTree.ShardedWorld
 import all Obend.Repair.CoalgebraicRepair
+import all Obend.Repair.TrackedFiber
+import all Obend.Repair.QuotAssembly
 import Obend.Core.Proofs.Adequacy.Run
 import all Obend.Core.Proofs.Preservation
 import all Obend.Core.Machine
@@ -351,6 +353,33 @@ private def gatedWrites : Nat × Nat := Id.run do
 #eval gatedWrites
 
 /-! ## `#tooth` Mutation-Sensitivity Witnesses -/
+
+open Obend.Category.Projection (forallAlong_iff)
+
+/-- Both a retained copy and a fresh copy accept the value actually returned by identity. -/
+example (n : Nat) : TrackedFiber.Serves
+    (Obend.Category.FiberGrowth.insert (fun _ : Unit => ()) ())
+    (fun _ out => out = CanonVal.nat n) () CanonCode.id (CanonVal.nat n) := by
+  apply (TrackedFiber.serves_insert_of_run_iff _ _ _ _ _ (CanonVal.nat n) rfl ?_).mpr rfl
+  exact (forallAlong_iff ..).mpr fun _ _ => rfl
+
+/-- A first, unconstrained copy of a previously empty name forces exactly definedness. -/
+private theorem first_copy_demands_run (code : CanonCode) (input : CanonVal) :
+    TrackedFiber.Serves (Obend.Category.FiberGrowth.insert (fun _ : Empty => ()) ())
+      (fun _ _ => True) () code input ↔ ∃ out, CanonCode.eval code input = some out := by
+  rw [TrackedFiber.serves_insert_iff]
+  exact ⟨fun ⟨out, run, _⟩ => ⟨out, run⟩,
+    fun ⟨out, run⟩ => ⟨out, run, (forallAlong_iff ..).mpr (fun _ _ => trivial), trivial⟩⟩
+
+-- Accepting any one copy would let an old success hide a fresh refusal.
+#tooth TrackedFiber.serves_insert_of_run_iff by mutation TrackedFiber.Serves :=
+  fun p accept b code input => ∃ e, p e = b ∧
+    ∃ out, CodeTracker.eval code input = some out ∧ accept e out
+
+-- Checking only outputs that happen to exist would let an undefined suspension pass.
+#tooth first_copy_demands_run by mutation TrackedFiber.Serves :=
+  fun p accept b code input => ∀ e, p e = b →
+    ∀ out, CodeTracker.eval code input = some out → accept e out
 
 #tooth apply_comm by mutation Obend.Doc.Grove.apply := fun p _ => p
 #tooth evaluate_hole by mutation observe := fun _ limits ticks s => .machine (runBounded limits ticks s)
